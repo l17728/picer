@@ -15,6 +15,7 @@
                 <MenuItem Header="添加文件夹" Command="{Binding AddFolderCommand}"/>
                 <MenuItem Header="存储设置" Click="StorageSettings_Click"/>
                 <Separator/>
+                <MenuItem Header="删除所选" Command="{Binding DeleteSelectedFilesCommand}"/>
                 <MenuItem Header="备份与恢复" Click="DataProtection_Click"/>
             </MenuItem>
             <MenuItem Header="AI 功能(_A)" AutomationProperties.Name="AI 功能菜单">

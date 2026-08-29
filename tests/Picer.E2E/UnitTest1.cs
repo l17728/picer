@@ -109,12 +109,12 @@ public sealed class DesktopSmokeTests
                 new PropertyCondition(AutomationElement.NameProperty, "图片网格")));
             Assert.NotNull(window.FindFirst(TreeScope.Descendants,
                 new PropertyCondition(AutomationElement.NameProperty, "添加文件夹")));
-            foreach (var entry in new[] { "重建索引", "检查缺失", "查找重复", "删除所选" })
+            foreach (var entry in new[] { "重建索引", "检查缺失", "查找重复" })
             {
                 Assert.True(WaitForElement(window, entry, TimeSpan.FromSeconds(5)) is not null,
                     $"主窗口缺少可访问功能入口：{entry}");
             }
-            AssertMenuEntries(window, "文件菜单", "添加文件夹", "存储设置", "备份与恢复");
+            AssertMenuEntries(window, "文件菜单", "添加文件夹", "存储设置", "删除所选", "备份与恢复");
             AssertMenuEntries(window, "AI 功能菜单", "云端分析设置", "描述选中照片", "任务中心",
                 "中文语义检索", "Florence 运行验证", "本地描述任务");
             AssertMenuEntries(window, "工具菜单", "查找重复", "运行组件", "诊断中心", "扫描视频");
