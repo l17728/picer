@@ -111,8 +111,7 @@ public sealed class DesktopSmokeTests
                 new PropertyCondition(AutomationElement.NameProperty, "添加文件夹")));
             foreach (var entry in new[] { "重建索引", "检查缺失", "查找重复", "删除所选" })
             {
-                Assert.True(window.FindFirst(TreeScope.Descendants,
-                    new PropertyCondition(AutomationElement.NameProperty, entry)) is not null,
+                Assert.True(WaitForElement(window, entry, TimeSpan.FromSeconds(5)) is not null,
                     $"主窗口缺少可访问功能入口：{entry}");
             }
             AssertMenuEntries(window, "文件菜单", "添加文件夹", "存储设置", "备份与恢复");
