@@ -17,7 +17,7 @@ jobs:
     env:
       DOTNET_CLI_TELEMETRY_OPTOUT: 1
       DOTNET_NOLOGO: 1
-      PICER_TEST_DATA_ROOT: ${{ runner.temp }}\PicerData
+      PICER_TEST_DATA_ROOT: ${{ github.workspace }}\.test-data
 
     steps:
       - name: Checkout
