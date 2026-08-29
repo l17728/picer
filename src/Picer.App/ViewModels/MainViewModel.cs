@@ -568,6 +568,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
             LoadImages();
             LoadDirectoryTreeCommand.Execute(null);
 
+            if (total.Indexed > 0)
+            {
+                AppendOutput("已启动新增照片的人脸分析和自动归类");
+                _ = People.ProcessNewPhotosAsync();
+            }
+
             if (total.MarkedMissing > 0)
                 await HandleMissingAsync();
         }

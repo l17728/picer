@@ -164,6 +164,60 @@ public sealed class DesktopSmokeTests
         }
     }
 
+    [Fact]
+    public void PeoplePage_ShowsImmediatelyAndExposesClassificationWorkflow()
+    {
+        var isolatedData = Path.Combine(Path.GetTempPath(), "picer-people-ui-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(isolatedData);
+        var databasePath = Path.Combine(isolatedData, "picer.db");
+        SeedLibrary(databasePath, 2);
+        SeedPerson(databasePath);
+        var appDirectory = Path.GetDirectoryName(typeof(Picer.App.App).Assembly.Location)!;
+        using var process = Process.Start(new ProcessStartInfo(Path.Combine(appDirectory, "Picer.App.exe"))
+        {
+            UseShellExecute = false,
+            Environment = { ["PICER_DATA_ROOT"] = isolatedData }
+        })!;
+        try
+        {
+            var window = WaitForWindow(process.Id, TimeSpan.FromSeconds(15));
+            Assert.NotNull(window);
+            var peopleTab = window!.FindAll(TreeScope.Descendants,
+                    new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.TabItem))
+                .Cast<AutomationElement>().First(item => item.Current.Name.Contains("人物"));
+            Assert.True(peopleTab.TryGetCurrentPattern(SelectionItemPattern.Pattern, out var selection));
+            var visible = Stopwatch.StartNew();
+            ((SelectionItemPattern)selection).Select();
+            var pending = WaitForElement(window, "待分类人脸", TimeSpan.FromSeconds(2));
+            Assert.NotNull(pending);
+            Assert.True(visible.Elapsed < TimeSpan.FromSeconds(2), $"人物页骨架显示耗时 {visible.Elapsed}");
+
+            var peopleList = WaitForElement(window, "已命名人物列表", TimeSpan.FromSeconds(5));
+            Assert.NotNull(peopleList);
+            var personItem = peopleList!.FindAll(TreeScope.Descendants,
+                    new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.ListItem))
+                .Cast<AutomationElement>().FirstOrDefault(item => item.Current.Name.Contains("测试人物"));
+            Assert.NotNull(personItem);
+            Assert.True(personItem!.TryGetCurrentPattern(SelectionItemPattern.Pattern, out var personSelection));
+            ((SelectionItemPattern)personSelection).Select();
+
+            var faces = WaitForElement(window, "人物人脸列表", TimeSpan.FromSeconds(5));
+            Assert.NotNull(faces);
+            Assert.Contains("双击打开关联照片", faces!.Current.HelpText);
+            Assert.Contains("右击", faces.Current.HelpText);
+            Assert.NotEmpty(WaitForItems(faces, TimeSpan.FromSeconds(5)).Cast<AutomationElement>());
+        }
+        finally
+        {
+            if (!process.HasExited)
+            {
+                process.CloseMainWindow();
+                if (!process.WaitForExit(3000)) process.Kill(true);
+            }
+            try { Directory.Delete(isolatedData, true); } catch { }
+        }
+    }
+
     private static AutomationElement? WaitForWindow(int processId, TimeSpan timeout)
     {
         var deadline = DateTime.UtcNow + timeout;
@@ -174,6 +228,19 @@ public sealed class DesktopSmokeTests
             if (window is not null) return window;
             Thread.Sleep(100);
         }
+        return null;
+    }
+
+    private static AutomationElement? WaitForElement(AutomationElement root, string name, TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        var condition = new PropertyCondition(AutomationElement.NameProperty, name);
+        do
+        {
+            var element = root.FindFirst(TreeScope.Descendants, condition);
+            if (element is not null) return element;
+            Thread.Sleep(50);
+        } while (DateTime.UtcNow < deadline);
         return null;
     }
 
@@ -225,5 +292,22 @@ public sealed class DesktopSmokeTests
             command.ExecuteNonQuery();
         }
         transaction.Commit();
+    }
+
+    private static void SeedPerson(string path)
+    {
+        using var db = new PicerDatabase(path);
+        using var image = db.Command("SELECT id FROM images ORDER BY id LIMIT 1");
+        var imageId = (long)image.ExecuteScalar()!;
+        using var insert = db.Command("""
+            INSERT INTO detected_faces(image_id,model_version,ordinal,box_x,box_y,box_width,box_height,confidence,created_utc)
+            VALUES($image,'ui-test',0,0.2,0.2,0.3,0.3,0.99,$now);
+            SELECT last_insert_rowid();
+            """);
+        insert.Parameters.AddWithValue("$image", imageId);
+        insert.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("O"));
+        var faceId = (long)insert.ExecuteScalar()!;
+        var people = new Picer.Core.People.PeopleService(db);
+        people.ConfirmFace(faceId, people.Create("测试人物").Id);
     }
 }

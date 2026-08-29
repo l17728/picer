@@ -261,8 +261,8 @@
                     <GroupBox Grid.Row="2" Header="人物分类" Margin="4" Padding="8">
                         <DockPanel>
                             <StackPanel DockPanel.Dock="Top">
-                                <Button Content="待分类人脸" Command="{Binding ShowUnassignedFacesCommand}" HorizontalContentAlignment="Left" Padding="10,7" Margin="0,0,0,3"/>
-                                <Button Content="不分类" Command="{Binding ShowIgnoredFacesCommand}" HorizontalContentAlignment="Left" Padding="10,7" Margin="0,0,0,8"/>
+                                <Button Content="待分类人脸" AutomationProperties.Name="待分类人脸" Command="{Binding ShowUnassignedFacesCommand}" HorizontalContentAlignment="Left" Padding="10,7" Margin="0,0,0,3"/>
+                                <Button Content="不分类" AutomationProperties.Name="不分类" Command="{Binding ShowIgnoredFacesCommand}" HorizontalContentAlignment="Left" Padding="10,7" Margin="0,0,0,8"/>
                                 <TextBlock Text="已命名人物" FontWeight="SemiBold" Margin="2,3"/>
                             </StackPanel>
                             <StackPanel DockPanel.Dock="Bottom" Margin="0,8,0,0">
@@ -280,7 +280,7 @@
                             </StackPanel>
                             <DockPanel>
                                 <Button DockPanel.Dock="Bottom" Content="人物详情 / 重命名 / 合并" Command="{Binding OpenSelectedPersonDetailCommand}" Padding="10,5" Margin="0,6,0,0"/>
-                                <ListBox ItemsSource="{Binding People}" SelectedItem="{Binding SelectedPerson}">
+                                <ListBox ItemsSource="{Binding People}" SelectedItem="{Binding SelectedPerson}" AutomationProperties.Name="已命名人物列表">
                                     <ListBox.ItemTemplate><DataTemplate><DockPanel Margin="3,6">
                                         <TextBlock DockPanel.Dock="Right" Foreground="#666" Text="{Binding ConfirmedFaceCount, StringFormat=' {0} 张脸'}"/>
                                         <TextBlock Text="{Binding DisplayName}" FontWeight="SemiBold"/>
@@ -294,6 +294,7 @@
                         <DockPanel>
                             <TextBlock DockPanel.Dock="Top" Text="双击人脸查看关联原图；右击可移动到人物、待分类或不分类。" Foreground="#555" Margin="4,0,4,8"/>
                             <ListBox x:Name="PeopleFacesList" ItemsSource="{Binding DisplayedFaces}" SelectedItem="{Binding SelectedDisplayedFace}"
+                                     AutomationProperties.Name="人物人脸列表" AutomationProperties.HelpText="双击打开关联照片；右击可移动到已有分类、待分类或不分类"
                                      MouseDoubleClick="PeopleFace_DoubleClick" PreviewMouseRightButtonDown="PeopleFace_PreviewMouseRightButtonDown"
                                      ScrollViewer.HorizontalScrollBarVisibility="Disabled">
                                 <ListBox.ContextMenu><ContextMenu Opened="PeopleFaceMenu_Opened"/></ListBox.ContextMenu>

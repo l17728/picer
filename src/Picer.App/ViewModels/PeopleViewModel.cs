@@ -21,6 +21,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
     private readonly UnknownFaceClusterer _unknownFaceClusterer;
     private readonly string? _unavailableReason;
     private CancellationTokenSource? _analysisCancellation;
+    private readonly SemaphoreSlim _analysisGate = new(1, 1);
     private bool _isLoaded;
 
     public PeopleViewModel(PicerDatabase database, PeopleService peopleService,
@@ -109,11 +110,15 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
     }
 
     [RelayCommand(CanExecute = nameof(CanAnalyzeAll))]
-    private async Task AnalyzeAllAsync()
+    private async Task AnalyzeAllAsync() => await ProcessNewPhotosAsync();
+
+    public async Task ProcessNewPhotosAsync()
     {
+        await _analysisGate.WaitAsync();
         if (_analysisService is null)
         {
             StatusText = _unavailableReason ?? "人脸模型不可用";
+            _analysisGate.Release();
             return;
         }
 
@@ -135,11 +140,16 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         {
             StatusText = "人物分析已取消，已完成结果仍然有效";
         }
+        catch (Exception exception)
+        {
+            StatusText = $"人物自动归类失败：{exception.Message}";
+        }
         finally
         {
             _analysisCancellation.Dispose();
             _analysisCancellation = null;
             IsAnalyzing = false;
+            _analysisGate.Release();
         }
     }
 
