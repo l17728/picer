@@ -1,0 +1,7 @@
+<Project>
+  <!-- OpenCvSharp 4.13 ships an analyzer built for Roslyn 4.14 while the pinned .NET 8 SDK
+       uses Roslyn 4.11. The analyzer is optional and does not affect runtime behavior. -->
+  <ItemGroup>
+    <Analyzer Remove="$(NuGetPackageRoot)opencvsharp4\**\analyzers\**\OpenCvSharp.Analyzers.dll" />
+  </ItemGroup>
+</Project>

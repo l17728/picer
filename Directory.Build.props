@@ -1,0 +1,6 @@
+<Project>
+  <PropertyGroup>
+    <!-- OpenCvSharp's optional analyzer targets a newer Roslyn than the pinned .NET 8 SDK. -->
+    <NoWarn>$(NoWarn);CS9057</NoWarn>
+  </PropertyGroup>
+</Project>

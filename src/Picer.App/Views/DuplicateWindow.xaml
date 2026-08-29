@@ -1,0 +1,103 @@
+﻿<Window x:Class="Picer.App.Views.DuplicateWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vms="clr-namespace:Picer.App.ViewModels"
+        Title="重复与相似图片审阅" Height="720" Width="1100" MinHeight="560" MinWidth="900" WindowStartupLocation="CenterOwner">
+    <Window.Resources>
+        <BooleanToVisibilityConverter x:Key="BoolToVis"/>
+    </Window.Resources>
+    <DockPanel>
+        <!-- Toolbar -->
+        <ToolBarTray DockPanel.Dock="Top" IsLocked="True">
+            <ToolBar>
+                <Button Command="{Binding FindDuplicatesCommand}" Content="查找重复" Padding="12,4"/>
+                <Separator/>
+                <TextBlock Text="相似度阈值:" VerticalAlignment="Center" Margin="4,0"/>
+                <Slider Width="120" Minimum="50" Maximum="99" Value="{Binding SimilarityThreshold}" 
+                        VerticalAlignment="Center" TickFrequency="5" IsSnapToTickEnabled="True"/>
+                <TextBlock Text="{Binding SimilarityThreshold, StringFormat='{}{0}%'}" VerticalAlignment="Center" Width="35"/>
+                <Separator/>
+                <Menu>
+                    <MenuItem Header="生成保留建议">
+                        <MenuItem Header="建议保留最大文件" Command="{Binding RecommendLargestCommand}"/>
+                        <MenuItem Header="建议保留最新拍摄" Command="{Binding RecommendNewestCommand}"/>
+                        <MenuItem Header="建议保留最早拍摄" Command="{Binding RecommendOldestCommand}"/>
+                        <MenuItem Header="建议保留最高分辨率" Command="{Binding RecommendHighestResolutionCommand}"/>
+                    </MenuItem>
+                </Menu>
+                <Separator/>
+                <Button Content="检查删除方案" Command="{Binding ReviewDeletionPlanCommand}" Padding="12,4"
+                        ToolTip="仅处理您明确标记为移到回收站的文件"/>
+                <Separator/>
+                <TextBlock Text="{Binding DecisionSummary}" VerticalAlignment="Center" Margin="4,0,12,0"/>
+                <TextBlock Text="{Binding StatusText}" Foreground="#595959" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+            </ToolBar>
+        </ToolBarTray>
+
+        <!-- Group list with checkboxes -->
+        <DataGrid DockPanel.Dock="Left" Width="320" Margin="4"
+                  ItemsSource="{Binding Groups}" 
+                  SelectedItem="{Binding SelectedGroup}"
+                  AutoGenerateColumns="False"
+                  CanUserAddRows="False"
+                  CanUserDeleteRows="False"
+                  SelectionMode="Single"
+                  GridLinesVisibility="None">
+            <DataGrid.Columns>
+                <DataGridTextColumn Header="文件名" Binding="{Binding RepresentativePath}" IsReadOnly="True" Width="*">
+                    <DataGridTextColumn.ElementStyle>
+                        <Style TargetType="TextBlock">
+                            <Setter Property="TextTrimming" Value="CharacterEllipsis"/>
+                            <Setter Property="ToolTip" Value="{Binding RepresentativePath}"/>
+                        </Style>
+                    </DataGridTextColumn.ElementStyle>
+                </DataGridTextColumn>
+                <DataGridTextColumn Header="重复数" Binding="{Binding Images.Count}" IsReadOnly="True" Width="50"/>
+                <DataGridTextColumn Header="候选" Binding="{Binding InfoText}" IsReadOnly="True" Width="120">
+                    <DataGridTextColumn.ElementStyle>
+                        <Style TargetType="TextBlock">
+                            <Setter Property="Foreground" Value="Gray"/>
+                            <Setter Property="FontSize" Value="10"/>
+                        </Style>
+                    </DataGridTextColumn.ElementStyle>
+                </DataGridTextColumn>
+                <DataGridTextColumn Header="算法" Binding="{Binding AlgorithmText}" IsReadOnly="True" Width="80"/>
+            </DataGrid.Columns>
+        </DataGrid>
+
+        <!-- Group details: thumbnails -->
+        <Grid Margin="8">
+            <TextBlock Text="选择一组重复图片查看详情" Foreground="#595959" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            <ScrollViewer VerticalScrollBarVisibility="Auto">
+                <ItemsControl ItemsSource="{Binding SelectedGroup.Images}" Visibility="{Binding SelectedGroup, Converter={StaticResource BoolToVis}}">
+                    <ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <Border BorderBrush="#AAA" BorderThickness="1" Padding="6" Margin="4">
+                                <StackPanel Width="180">
+                                    <Grid Width="170" Height="150">
+                                        <Border Background="#F0F0F0"/>
+                                        <Image Source="{Binding Thumbnail}" Stretch="Uniform"/>
+                                    </Grid>
+                                    <TextBlock Text="{Binding FileName}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"
+                                               TextAlignment="Center" Margin="0,4,0,0" ToolTip="{Binding Path}"/>
+                                    <TextBlock Text="{Binding InfoText}" FontSize="11" Foreground="#595959" TextAlignment="Center"/>
+                                    <TextBlock Text="{Binding MatchText}" FontSize="11" Foreground="DarkSlateBlue" TextAlignment="Center"/>
+                                    <TextBlock Text="{Binding RecommendationText}" Foreground="DarkGreen" TextAlignment="Center"/>
+                                    <TextBlock Text="{Binding DecisionText}" FontWeight="Bold" TextAlignment="Center" Margin="0,3"/>
+                                    <UniformGrid Columns="3">
+                                        <Button Content="保留" Command="{Binding MarkKeepCommand}" Margin="1"/>
+                                        <Button Content="回收" Command="{Binding MarkDeleteCommand}" Margin="1"/>
+                                        <Button Content="稍后" Command="{Binding MarkDeferCommand}" Margin="1"/>
+                                    </UniformGrid>
+                                </StackPanel>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </ScrollViewer>
+        </Grid>
+    </DockPanel>
+</Window>
+
+

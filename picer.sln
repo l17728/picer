@@ -1,0 +1,59 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{DCEB2E2C-0DAF-46E7-A855-8CF7CA24FA52}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Picer.Core", "src\Picer.Core\Picer.Core.csproj", "{BDE6E17A-F349-4B8D-8A15-DA400A51DA8A}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Picer.App", "src\Picer.App\Picer.App.csproj", "{F242E355-43C2-4AD3-BE97-FC49A7417825}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{12588B76-0CFF-4B98-A166-083159F5ECF7}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Picer.Tests", "tests\Picer.Tests\Picer.Tests.csproj", "{6B718115-EE5D-43E4-BD46-640A3A5541CB}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tools", "tools", "{B2F8354B-F278-4134-A16B-40807263630A}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Picer.Benchmarks", "tools\Picer.Benchmarks\Picer.Benchmarks.csproj", "{47E1FCD7-EFB7-4C86-874F-CFF23C1D8EA6}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Picer.E2E", "tests\Picer.E2E\Picer.E2E.csproj", "{B204E3C6-81DB-47F4-8601-9CE5B57EA3D2}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{BDE6E17A-F349-4B8D-8A15-DA400A51DA8A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{BDE6E17A-F349-4B8D-8A15-DA400A51DA8A}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{BDE6E17A-F349-4B8D-8A15-DA400A51DA8A}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{BDE6E17A-F349-4B8D-8A15-DA400A51DA8A}.Release|Any CPU.Build.0 = Release|Any CPU
+		{F242E355-43C2-4AD3-BE97-FC49A7417825}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{F242E355-43C2-4AD3-BE97-FC49A7417825}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{F242E355-43C2-4AD3-BE97-FC49A7417825}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{F242E355-43C2-4AD3-BE97-FC49A7417825}.Release|Any CPU.Build.0 = Release|Any CPU
+		{6B718115-EE5D-43E4-BD46-640A3A5541CB}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{6B718115-EE5D-43E4-BD46-640A3A5541CB}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{6B718115-EE5D-43E4-BD46-640A3A5541CB}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{6B718115-EE5D-43E4-BD46-640A3A5541CB}.Release|Any CPU.Build.0 = Release|Any CPU
+		{47E1FCD7-EFB7-4C86-874F-CFF23C1D8EA6}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{47E1FCD7-EFB7-4C86-874F-CFF23C1D8EA6}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{47E1FCD7-EFB7-4C86-874F-CFF23C1D8EA6}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{47E1FCD7-EFB7-4C86-874F-CFF23C1D8EA6}.Release|Any CPU.Build.0 = Release|Any CPU
+		{B204E3C6-81DB-47F4-8601-9CE5B57EA3D2}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{B204E3C6-81DB-47F4-8601-9CE5B57EA3D2}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{B204E3C6-81DB-47F4-8601-9CE5B57EA3D2}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{B204E3C6-81DB-47F4-8601-9CE5B57EA3D2}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{BDE6E17A-F349-4B8D-8A15-DA400A51DA8A} = {DCEB2E2C-0DAF-46E7-A855-8CF7CA24FA52}
+		{F242E355-43C2-4AD3-BE97-FC49A7417825} = {DCEB2E2C-0DAF-46E7-A855-8CF7CA24FA52}
+		{6B718115-EE5D-43E4-BD46-640A3A5541CB} = {12588B76-0CFF-4B98-A166-083159F5ECF7}
+		{47E1FCD7-EFB7-4C86-874F-CFF23C1D8EA6} = {B2F8354B-F278-4134-A16B-40807263630A}
+		{B204E3C6-81DB-47F4-8601-9CE5B57EA3D2} = {12588B76-0CFF-4B98-A166-083159F5ECF7}
+	EndGlobalSection
+EndGlobal

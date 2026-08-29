@@ -1,0 +1,17 @@
+<Window x:Class="Picer.App.Views.ClipSemanticWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" Title="中文语义检索（完全离线）" Width="1040" Height="720" WindowStartupLocation="CenterOwner">
+  <DockPanel Margin="12">
+    <Border DockPanel.Dock="Top" Background="#F3F7FC" BorderBrush="#C8D8EA" BorderThickness="1" Padding="10" Margin="0,0,0,8"><StackPanel><TextBlock Text="仅使用发布包内置 Chinese-CLIP；照片和查询文字不会上传。" FontWeight="SemiBold"/><TextBlock x:Name="StatusText" TextWrapping="Wrap" Margin="0,4,0,0"/><ProgressBar x:Name="Progress" Height="12" Minimum="0" Maximum="100" Margin="0,6,0,0"/></StackPanel></Border>
+    <WrapPanel DockPanel.Dock="Top" Margin="0,0,0,8">
+      <Button x:Name="BuildButton" Content="建立/继续语义索引" Click="Build_Click" Padding="12,5"/><Button x:Name="CancelButton" Content="取消" Click="Cancel_Click" Padding="12,5" Margin="6,0" IsEnabled="False"/>
+      <TextBox x:Name="QueryBox" Width="320" Height="28" Margin="16,0,4,0" VerticalContentAlignment="Center" ToolTip="例如：海边看日落、孩子在公园玩"/><Button Content="搜索 Top 20" Click="Search_Click" Padding="12,5"/>
+      <TextBlock Text=" 已知相关总数：" VerticalAlignment="Center" Margin="12,0,0,0"/><TextBox x:Name="ExpectedCount" Width="55" Height="28" ToolTip="用于计算 Recall@20；不知道可留空"/><Button Content="保存标注并计算" Click="Save_Click" Padding="12,5" Margin="6,0"/>
+    </WrapPanel>
+    <TextBlock DockPanel.Dock="Bottom" x:Name="MetricsText" FontWeight="Bold" Margin="0,8,0,0"/>
+    <ListView x:Name="Results"><ListView.View><GridView>
+      <GridViewColumn Header="排名" Width="48" DisplayMemberBinding="{Binding Rank}"/>
+      <GridViewColumn Header="预览" Width="130"><GridViewColumn.CellTemplate><DataTemplate><Image Source="{Binding PreviewPath}" Width="112" Height="76" Stretch="UniformToFill"/></DataTemplate></GridViewColumn.CellTemplate></GridViewColumn>
+      <GridViewColumn Header="相似度" Width="80" DisplayMemberBinding="{Binding ScoreText}"/><GridViewColumn Header="匹配说明" Width="230" DisplayMemberBinding="{Binding Explanation}"/><GridViewColumn Header="文件" Width="360" DisplayMemberBinding="{Binding Path}"/>
+      <GridViewColumn Header="相关" Width="70"><GridViewColumn.CellTemplate><DataTemplate><CheckBox IsChecked="{Binding Relevant, Mode=TwoWay}" HorizontalAlignment="Center"/></DataTemplate></GridViewColumn.CellTemplate></GridViewColumn>
+    </GridView></ListView.View></ListView>
+  </DockPanel>
+</Window>

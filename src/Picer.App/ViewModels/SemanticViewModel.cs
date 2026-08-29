@@ -1,0 +1,310 @@
+using System.Collections.ObjectModel;
+using System.ComponentModel;
+using System.Windows;
+using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.Input;
+using Picer.Core.Data;
+using Picer.Core.Search;
+
+namespace Picer.App.ViewModels;
+
+public partial class SemanticViewModel : ObservableObject
+{
+    [ObservableProperty]
+    private ObservableCollection<TagItemViewModel> _tags = new();
+
+    [ObservableProperty]
+    private TagItemViewModel? _selectedTag;
+
+    [ObservableProperty]
+    private ObservableCollection<AlbumItemViewModel> _albums = new();
+
+    [ObservableProperty]
+    private AlbumItemViewModel? _selectedAlbum;
+
+    [ObservableProperty]
+    private string _newTagName = "";
+
+    [ObservableProperty]
+    private string _newAlbumName = "";
+
+    [ObservableProperty]
+    private bool _isBusy;
+
+    [ObservableProperty]
+    private string _statusText = "就绪";
+
+    [ObservableProperty]
+    private ObservableCollection<SuggestedTagVM> _suggestions = new();
+
+    [ObservableProperty]
+    private long _currentImageId = 0;
+    private IReadOnlyList<long> _selectedImageIds = [];
+    public string SelectionSummary => _selectedImageIds.Count == 0
+        ? "尚未选中可索引图片。请先在“目录浏览”或“搜索结果”中选择图片，再到这里添加标签、查看建议或加入相册。"
+        : $"当前已选择 {_selectedImageIds.Count} 张图片；新标签会批量应用到这些图片。";
+
+    private readonly PicerDatabase _db;
+    private readonly Action? _changed;
+
+    public SemanticViewModel(PicerDatabase db, Action? changed = null)
+    {
+        _db = db;
+        _changed = changed;
+        LoadTags();
+        LoadAlbums();
+    }
+
+    public void SetCurrentImage(long imageId)
+    {
+        CurrentImageId = imageId;
+        Suggestions.Clear();
+        
+        if (imageId > 0)
+        {
+            var suggestions = SemanticEngine.ExtractAISuggestions(_db, imageId);
+            foreach (var s in suggestions)
+            {
+                var item = new SuggestedTagVM(s);
+                item.OnAccept = AcceptSuggestion;
+                item.OnReject = RejectSuggestion;
+                Suggestions.Add(item);
+            }
+            foreach (var tagName in AppServices.CloudVisionRepository.GetSuggestedTags(imageId)
+                         .Where(name => Suggestions.All(existing => !string.Equals(existing.TagName, name, StringComparison.OrdinalIgnoreCase))))
+            {
+                var item = new SuggestedTagVM(new SuggestedTag(tagName, Confidence.Medium));
+                item.OnAccept = AcceptSuggestion;
+                item.OnReject = RejectSuggestion;
+                Suggestions.Add(item);
+            }
+        }
+    }
+
+    public void SetSelection(IEnumerable<long> imageIds)
+    {
+        _selectedImageIds = imageIds.Where(id => id > 0).Distinct().ToArray();
+        OnPropertyChanged(nameof(SelectionSummary));
+        SetCurrentImage(_selectedImageIds.FirstOrDefault());
+    }
+
+    public void LoadTags()
+    {
+        Tags.Clear();
+        foreach (var tag in SemanticEngine.GetTags(_db))
+            Tags.Add(new TagItemViewModel(tag));
+    }
+
+    public void LoadAlbums()
+    {
+        Albums.Clear();
+        foreach (var album in SemanticEngine.GetAlbums(_db))
+            Albums.Add(new AlbumItemViewModel(album));
+    }
+
+    [RelayCommand]
+    private void AddTag()
+    {
+        if (string.IsNullOrWhiteSpace(NewTagName))
+            return;
+
+        try
+        {
+            var tag = SemanticEngine.AddTag(_db, NewTagName);
+            
+            // If there's a current image selected, assign tag to it
+            foreach (var imageId in _selectedImageIds) SemanticEngine.AssignTag(_db, imageId, tag.Id);
+
+            Tags.Add(new TagItemViewModel(tag));
+            NewTagName = "";
+            StatusText = $"已为 {_selectedImageIds.Count} 张图片添加用户标签：{tag.Name}";
+            _changed?.Invoke();
+        }
+        catch (Exception ex) when (ex.Message.Contains("UNIQUE"))
+        {
+            StatusText = "标签已存在";
+        }
+    }
+
+    [RelayCommand]
+    private void AddAlbum()
+    {
+        if (string.IsNullOrWhiteSpace(NewAlbumName))
+        {
+            StatusText = "请输入相册名称";
+            return;
+        }
+        var album = SemanticEngine.AddAlbum(_db, NewAlbumName);
+        var item = new AlbumItemViewModel(album);
+        Albums.Add(item);
+        SelectedAlbum = item;
+        NewAlbumName = "";
+        StatusText = $"已创建相册：{album.Name}";
+    }
+
+    [RelayCommand]
+    private void DeleteSelectedTag()
+    {
+        if (SelectedTag is null)
+            return;
+
+        var result = MessageBox.Show($"确定删除标签 '{SelectedTag.Tag.Name}' 吗？", 
+            "删除标签", MessageBoxButton.YesNo, MessageBoxImage.Question);
+        if (result != MessageBoxResult.Yes)
+            return;
+
+        SemanticEngine.DeleteTag(_db, SelectedTag.Tag.Id);
+        Tags.Remove(SelectedTag);
+        StatusText = "标签已删除";
+    }
+
+    [RelayCommand]
+    private void AddToAlbum()
+    {
+        if (SelectedAlbum is null || CurrentImageId <= 0)
+        {
+            StatusText = "请先选择相册和图片";
+            return;
+        }
+
+        SemanticEngine.AddToAlbum(_db, SelectedAlbum.Album.Id, CurrentImageId);
+        StatusText = $"已将图片添加到'{SelectedAlbum.Album.Name}'";
+    }
+
+    [RelayCommand]
+    private void RemoveFromAlbum()
+    {
+        if (SelectedAlbum is null || CurrentImageId <= 0)
+        {
+            StatusText = "请先选择相册和图片";
+            return;
+        }
+
+        SemanticEngine.RemoveFromAlbum(_db, SelectedAlbum.Album.Id, CurrentImageId);
+        StatusText = $"已从'{SelectedAlbum.Album.Name}'移除图片";
+    }
+
+    [RelayCommand]
+    private void AutoCreateTimeLineAlbums()
+    {
+        IsBusy = true;
+        try
+        {
+            var albums = SemanticEngine.AutoCreateTimeLineAlbums(_db);
+            LoadAlbums();
+            StatusText = $"已自动创建 {albums.Count} 个时间线相册";
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
+
+    [RelayCommand]
+    private void AutoCreateCameraAlbums()
+    {
+        IsBusy = true;
+        try
+        {
+            var albums = SemanticEngine.AutoCreateCameraAlbums(_db, autoTag: true);
+            LoadAlbums();
+            LoadTags();
+            StatusText = $"已按相机品牌自动创建 {albums.Count} 个相册并打标签";
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
+
+    [RelayCommand]
+    private void AcceptSuggestion(string tagName)
+    {
+        var tag = SemanticEngine.GetTags(_db).FirstOrDefault(t => t.Name == tagName);
+        if (tag is null && CurrentImageId > 0)
+        {
+            tag = SemanticEngine.AddTag(_db, tagName);
+            Tags.Add(new TagItemViewModel(tag));
+        }
+
+        if (tag != null && CurrentImageId > 0)
+            SemanticEngine.AssignTag(_db, CurrentImageId, tag.Id);
+
+        StatusText = $"已接受建议并标记: {tagName}";
+        Suggestions.Remove(Suggestions.First(item => item.TagName == tagName));
+        _changed?.Invoke();
+    }
+
+    private void RejectSuggestion(string tagName)
+    {
+        if (CurrentImageId <= 0) return;
+        SemanticEngine.RejectSuggestion(_db, CurrentImageId, tagName);
+        var item = Suggestions.FirstOrDefault(suggestion => suggestion.TagName == tagName);
+        if (item is not null) Suggestions.Remove(item);
+        StatusText = $"已拒绝建议：{tagName}，不会再次自动出现";
+    }
+}
+
+// Supporting ViewModel classes
+public partial class TagItemViewModel : ObservableObject
+{
+    public Tag Tag { get; }
+    
+    [ObservableProperty]
+    private int _albumCount; // Images count
+
+    public TagItemViewModel(Tag tag)
+    {
+        Tag = tag;
+    }
+}
+
+public partial class AlbumItemViewModel : ObservableObject
+{
+    public Album Album { get; }
+    
+    [ObservableProperty]
+    private int _imageCount;
+
+    public AlbumItemViewModel(Album album)
+    {
+        Album = album;
+    }
+    
+    public void UpdateImageCount(int count)
+    {
+        ImageCount = count;
+    }
+}
+
+public partial class SuggestedTagVM : ObservableObject
+{
+    public SuggestedTag SuggestedTag { get; }
+    
+    public string TagName => SuggestedTag.TagName;
+    public Confidence Confidence => SuggestedTag.Confidence;
+    public string ConfidenceLabel => Confidence switch
+    {
+        Confidence.High => "高置信度",
+        Confidence.Medium => "中等",
+        _ => "低置信度"
+    };
+
+    [RelayCommand]
+    private void Accept()
+    {
+        if (OnAccept != null && !string.IsNullOrEmpty(TagName))
+            OnAccept(TagName);
+    }
+
+    public Action<string>? OnAccept { get; set; }
+    public Action<string>? OnReject { get; set; }
+
+    [RelayCommand]
+    private void Reject() => OnReject?.Invoke(TagName);
+    
+    public SuggestedTagVM(SuggestedTag suggestedTag)
+    {
+        SuggestedTag = suggestedTag;
+    }
+}

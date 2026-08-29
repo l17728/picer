@@ -1,0 +1,37 @@
+Picer offline runtime components
+
+YuNet face detector
+Source: https://github.com/opencv/opencv_zoo/tree/main/models/face_detection_yunet
+License: MIT (see YuNet-MIT.txt)
+
+SFace face recognizer
+Source: https://github.com/opencv/opencv_zoo/tree/main/models/face_recognition_sface
+License: Apache License 2.0 (see SFace-Apache-2.0.txt)
+
+whisper.cpp
+Source: https://github.com/ggml-org/whisper.cpp
+License: MIT (see whisper.cpp-MIT.txt)
+
+FFmpeg 9.0.1 essentials build by gyan.dev
+Build reports GPLv3 configuration.
+Binary source: https://www.gyan.dev/ffmpeg/builds/
+Corresponding FFmpeg source: https://github.com/FFmpeg/FFmpeg/tree/n9.0.1
+License: GNU GPL version 3 (see FFmpeg-GPLv3.txt)
+
+Chinese-CLIP ViT-B/16, ONNX int8 conversion
+Model source: https://huggingface.co/OFA-Sys/chinese-clip-vit-base-patch16
+ONNX conversion: https://huggingface.co/Xenova/chinese-clip-vit-base-patch16/tree/f26904860903e70e050b8f48255e5f48401816e9
+License: MIT (see Chinese-CLIP-MIT.txt)
+
+Florence-2-base-ft INT8 ONNX
+Original model: https://huggingface.co/microsoft/Florence-2-base-ft
+ONNX conversion: https://huggingface.co/onnx-community/Florence-2-base-ft/tree/e88a44eaf3791a35eae0c5a47b3dbcd36e67eb6f
+License: MIT (see Florence-2-MIT.txt)
+
+Microsoft DirectML redistributable 1.15.4
+Source: https://www.nuget.org/packages/Microsoft.AI.DirectML/1.15.4
+License: MIT and bundled third-party notices (see DirectML-MIT.txt and DirectML-ThirdPartyNotices.txt)
+
+Microsoft ONNX Runtime DirectML 1.22.1
+Source: https://www.nuget.org/packages/Microsoft.ML.OnnxRuntime.DirectML/1.22.1
+License: MIT and bundled third-party notices (see ONNXRuntime-MIT.txt and ONNXRuntime-ThirdPartyNotices.txt)

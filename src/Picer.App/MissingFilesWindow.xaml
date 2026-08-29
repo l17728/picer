@@ -1,0 +1,27 @@
+<Window x:Class="Picer.App.MissingFilesWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="发现缺失文件" Height="480" Width="800" WindowStartupLocation="CenterOwner"
+        ShowInTaskbar="False">
+    <DockPanel Margin="8">
+        <TextBlock DockPanel.Dock="Top" TextWrapping="Wrap" Margin="0,0,0,8"
+                   Text="以下图片在磁盘上已找不到（可能被移动或删除）。您可以删除其索引记录，或指定文件的新位置以重建索引（图片内容通过哈希校验确保是同一文件）。"/>
+
+        <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,8,0,0">
+            <Button Content="删除记录" Click="Delete_Click" Padding="12,4" Margin="0,0,8,0"/>
+            <Button Content="指定新位置..." Click="Relocate_Click" Padding="12,4" Margin="0,0,8,0"/>
+            <Button Content="指定新根目录..." Click="RelocateRoot_Click" Padding="12,4" Margin="0,0,8,0"/>
+            <Button Content="关闭" Click="Close_Click" Padding="12,4"/>
+        </StackPanel>
+
+        <ListView x:Name="MissingList" SelectionMode="Single">
+            <ListView.View>
+                <GridView>
+                    <GridViewColumn Header="原路径" Width="460" DisplayMemberBinding="{Binding Path}"/>
+                    <GridViewColumn Header="索引时间" Width="150"
+                                    DisplayMemberBinding="{Binding IndexedUtc, StringFormat=yyyy-MM-dd HH:mm}"/>
+                </GridView>
+            </ListView.View>
+        </ListView>
+    </DockPanel>
+</Window>

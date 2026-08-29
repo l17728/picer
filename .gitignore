@@ -1,0 +1,52 @@
+# Build and test output
+**/bin/
+**/obj/
+**/TestResults/
+artifacts/
+publish/
+releases/
+build_*.txt
+
+# IDE and user-local state
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+
+# Picer runtime data (never source-controlled)
+*.db
+*.db-shm
+*.db-wal
+logs/
+thumbs/
+face-thumbs/
+video-keyframes/
+video-audio/
+video-summary-cache/
+remote-cache/
+
+# Downloaded runtime packages and large AI models
+third_party/*.nupkg
+third_party/runtime/ffmpeg/
+third_party/runtime/models/
+third_party/runtime/whisper/
+
+# Credentials and machine-local configuration
+.env
+.env.*
+!.env.example
+*.secret
+*.secrets
+secrets/
+credentials/
+github-token*
+*github*token*
+storage.local.json
+cloud-vision.local.json
+
+# Archives and diagnostics produced by the app
+*.zip
+diagnostic-*.json
+diagnostic-*.csv
+diagnostic-*.zip

@@ -1,0 +1,23 @@
+<Window x:Class="Picer.App.CloudVisionTaskCenterWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="云端分析任务中心" Width="1000" Height="600" WindowStartupLocation="CenterOwner">
+    <DockPanel Margin="12">
+        <DockPanel DockPanel.Dock="Top" Margin="0,0,0,10">
+            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal"><Button Content="重试选中失败任务" Click="Retry_Click" Padding="14,5" Margin="0,0,8,0"/><Button Content="刷新" Click="Refresh_Click" Padding="14,5"/></StackPanel>
+            <TextBlock x:Name="SummaryText" VerticalAlignment="Center" FontWeight="SemiBold"/>
+        </DockPanel>
+        <DataGrid x:Name="TasksGrid" IsReadOnly="True" AutoGenerateColumns="False" SelectionMode="Extended" MouseDoubleClick="TasksGrid_MouseDoubleClick">
+            <DataGrid.Columns>
+                <DataGridTextColumn Header="状态" Binding="{Binding StatusLabel}" Width="85"/>
+                <DataGridTextColumn Header="服务商" Binding="{Binding ProviderLabel}" Width="90"/>
+                <DataGridTextColumn Header="模型" Binding="{Binding ModelVersion}" Width="150"/>
+                <DataGridTextColumn Header="文件" Binding="{Binding ImagePath}" Width="2*"/>
+                <DataGridTextColumn Header="原因" Binding="{Binding ReasonLabel}" Width="120"/>
+                <DataGridTextColumn Header="描述/错误" Binding="{Binding Detail}" Width="2*"/>
+                <DataGridTextColumn Header="Token" Binding="{Binding TokenText}" Width="100"/>
+                <DataGridTextColumn Header="估算费用" Binding="{Binding CostText}" Width="85"/>
+                <DataGridTextColumn Header="更新时间" Binding="{Binding UpdatedLocal}" Width="145"/>
+            </DataGrid.Columns>
+        </DataGrid>
+        <TextBlock DockPanel.Dock="Bottom" Text="双击任务可在资源管理器中定位原照片。任务中心只查看本地任务记录，不会触发上传。" Foreground="#666" Margin="0,8,0,0"/>
+    </DockPanel>
+</Window>
