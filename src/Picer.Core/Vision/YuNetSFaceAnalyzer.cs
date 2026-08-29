@@ -83,8 +83,9 @@ public sealed class YuNetSFaceAnalyzer : IImageFaceAnalyzer, IDisposable
         using var detected = new Mat();
         detector.Detect(input, detected);
 
-        var faces = new List<FaceDetection>(detected.Rows);
-        for (var row = 0; row < detected.Rows; row++)
+        var detectedRows = detected.Rows;
+        var faces = new List<FaceDetection>(detectedRows);
+        for (var row = 0; row < detectedRows; row++)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var x = Math.Clamp(detected.At<float>(row, 0), 0, DetectionSize.Width - 1);
