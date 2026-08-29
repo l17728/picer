@@ -47,6 +47,13 @@ jobs:
         with:
           dotnet-version: 8.0.x
 
+      - name: Download verified offline runtime
+        shell: pwsh
+        run: |
+          gh release download runtime-v1 --repo '${{ github.repository }}' --pattern 'Picer-runtime-win-x64.zip' --dir $env:RUNNER_TEMP
+          New-Item -ItemType Directory -Force third_party/runtime | Out-Null
+          Expand-Archive "$env:RUNNER_TEMP\Picer-runtime-win-x64.zip" third_party/runtime -Force
+
       - name: Restore, build and test
         shell: pwsh
         run: |
@@ -54,13 +61,6 @@ jobs:
           dotnet build picer.sln --configuration Debug --no-restore --warnaserror
           dotnet test tests/Picer.Tests/Picer.Tests.csproj --configuration Debug --no-build --no-restore
           dotnet test tests/Picer.E2E/Picer.E2E.csproj --configuration Debug --no-build --no-restore
-
-      - name: Download verified offline runtime
-        shell: pwsh
-        run: |
-          gh release download runtime-v1 --repo '${{ github.repository }}' --pattern 'Picer-runtime-win-x64.zip' --dir $env:RUNNER_TEMP
-          New-Item -ItemType Directory -Force third_party/runtime | Out-Null
-          Expand-Archive "$env:RUNNER_TEMP\Picer-runtime-win-x64.zip" third_party/runtime -Force
 
       - name: Publish self-contained application
         id: publish

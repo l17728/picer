@@ -37,6 +37,7 @@ public sealed class RuntimeComponentTests
     }
 
     [Fact]
+    [Trait("Category", "RuntimeComponent")]
     public async Task PublishedRuntimeComponents_ArePresentAndMatchPinnedHashes()
     {
         var service = new RuntimeComponentService(Path.Combine(AppContext.BaseDirectory, "runtime"));
@@ -48,6 +49,7 @@ public sealed class RuntimeComponentTests
     }
 
     [Fact]
+    [Trait("Category", "RuntimeComponent")]
     public async Task PublishedRuntimeComponents_PassOfflineSelfTest()
     {
         var service = new RuntimeComponentService(Path.Combine(AppContext.BaseDirectory, "runtime"));

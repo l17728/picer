@@ -10,6 +10,7 @@ namespace Picer.E2E;
 public sealed class FlorenceRuntimeTests
 {
     [Fact]
+    [Trait("Category", "RuntimeComponent")]
     public async Task BundledFlorenceInt8_LoadsAllStagesAndRunsVisionEncoderOnCpu()
     {
         var root = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", ".."));
@@ -21,6 +22,7 @@ public sealed class FlorenceRuntimeTests
     }
 
     [Fact]
+    [Trait("Category", "RuntimeComponent")]
     public async Task DirectMLProbe_ReturnsCompatibilityForEveryStageWithoutCrashing()
     {
         var root = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", ".."));
@@ -30,6 +32,7 @@ public sealed class FlorenceRuntimeTests
     }
 
     [Fact]
+    [Trait("Category", "RuntimeComponent")]
     public async Task FlorencePipeline_GeneratesTokensFromImageOnCpu()
     {
         var root = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", ".."));

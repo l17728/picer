@@ -7,6 +7,7 @@ namespace Picer.Tests;
 public sealed class ClipSemanticTests
 {
     [Fact]
+    [Trait("Category", "RuntimeComponent")]
     public void BundledChineseClip_EncodesChineseTextOffline()
     {
         var root = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", ".."));
@@ -19,6 +20,7 @@ public sealed class ClipSemanticTests
     }
 
     [Fact]
+    [Trait("Category", "RuntimeComponent")]
     public void BundledChineseClip_EncodesImageOffline()
     {
         var root = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", ".."));

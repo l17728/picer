@@ -35,10 +35,10 @@ jobs:
         run: dotnet build picer.sln --configuration Debug --no-restore --warnaserror
 
       - name: Unit and integration tests
-        run: dotnet test tests/Picer.Tests/Picer.Tests.csproj --configuration Debug --no-build --no-restore --logger "trx;LogFileName=unit.trx"
+        run: dotnet test tests/Picer.Tests/Picer.Tests.csproj --configuration Debug --no-build --no-restore --filter "Category!=RuntimeComponent" --logger "trx;LogFileName=unit.trx"
 
       - name: Desktop tests
-        run: dotnet test tests/Picer.E2E/Picer.E2E.csproj --configuration Debug --no-build --no-restore --logger "trx;LogFileName=desktop.trx"
+        run: dotnet test tests/Picer.E2E/Picer.E2E.csproj --configuration Debug --no-build --no-restore --filter "Category!=RuntimeComponent" --logger "trx;LogFileName=desktop.trx"
 
       - name: Upload test reports
         if: always()
