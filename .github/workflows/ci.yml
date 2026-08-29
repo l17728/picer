@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-test:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: 1
+      DOTNET_NOLOGO: 1
+      PICER_TEST_DATA_ROOT: ${{ runner.temp }}\PicerData
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Restore
+        run: dotnet restore picer.sln
+
+      - name: Build
+        run: dotnet build picer.sln --configuration Debug --no-restore --warnaserror
+
+      - name: Unit and integration tests
+        run: dotnet test tests/Picer.Tests/Picer.Tests.csproj --configuration Debug --no-build --no-restore --logger "trx;LogFileName=unit.trx"
+
+      - name: Desktop tests
+        run: dotnet test tests/Picer.E2E/Picer.E2E.csproj --configuration Debug --no-build --no-restore --logger "trx;LogFileName=desktop.trx"
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports
+          path: '**/TestResults/*.trx'
+          if-no-files-found: warn
+          retention-days: 14
