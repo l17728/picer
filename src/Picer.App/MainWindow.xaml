@@ -47,9 +47,36 @@
                     <ComboBoxItem Content="图片" Tag="image"/>
                     <ComboBoxItem Content="视频" Tag="video"/>
                 </ComboBox>
-                <CheckBox Content="AI 问答" IsChecked="{Binding IsQuestionMode}" VerticalAlignment="Center" Margin="4,0"
-                          Click="QuestionMode_Click" AutomationProperties.Name="AI 问答"
-                          ToolTip="当前使用本地规则回答基础问题；后续将在此入口连接已配置的大模型"/>
+                <CheckBox IsChecked="{Binding IsQuestionMode}" VerticalAlignment="Center" Margin="8,0,6,0"
+                          Click="QuestionMode_Click" Cursor="Hand" AutomationProperties.Name="AI 问答开关"
+                          ToolTip="当前使用本地规则回答基础问题；后续将在此入口连接已配置的大模型">
+                    <CheckBox.Template>
+                        <ControlTemplate TargetType="CheckBox">
+                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                <TextBlock Text="AI 问答" VerticalAlignment="Center" Margin="0,0,5,0"/>
+                                <Border x:Name="SwitchTrack" Width="38" Height="20" CornerRadius="10"
+                                        Background="#8A8A8A" BorderBrush="#666" BorderThickness="1">
+                                    <Ellipse x:Name="SwitchThumb" Width="16" Height="16" Margin="1"
+                                             Fill="White" HorizontalAlignment="Left"/>
+                                </Border>
+                                <TextBlock x:Name="SwitchState" Text="关" Width="18" Margin="4,0,0,0"
+                                           VerticalAlignment="Center" Foreground="#555" FontWeight="SemiBold"/>
+                            </StackPanel>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsChecked" Value="True">
+                                    <Setter TargetName="SwitchTrack" Property="Background" Value="#1677D2"/>
+                                    <Setter TargetName="SwitchTrack" Property="BorderBrush" Value="#0D5EA8"/>
+                                    <Setter TargetName="SwitchThumb" Property="HorizontalAlignment" Value="Right"/>
+                                    <Setter TargetName="SwitchState" Property="Text" Value="开"/>
+                                    <Setter TargetName="SwitchState" Property="Foreground" Value="#0D5EA8"/>
+                                </Trigger>
+                                <Trigger Property="IsEnabled" Value="False">
+                                    <Setter Property="Opacity" Value="0.55"/>
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </CheckBox.Template>
+                </CheckBox>
                 <Button Content="清空" Command="{Binding ClearSearchCommand}" Padding="8,3"/>
                 <Button Content="地域搜索" Command="{Binding ResolvePlaceCommand}"
                         CommandParameter="{Binding Text, ElementName=SearchBox}" Padding="8,3"
@@ -59,7 +86,8 @@
                 <Button Command="{Binding AddFolderCommand}" Content="添加文件夹" Padding="10,3"/>
                 <Button Command="{Binding RemoveSourceCommand}" Content="移除源" Padding="8,3"/>
                 <Separator/>
-                <Button Command="{Binding StartIndexCommand}" Content="重建索引" Padding="8,3"/>
+                <Button Command="{Binding StartIndexCommand}" Content="增量更新索引" Padding="8,3"
+                        ToolTip="扫描目录，仅处理新增或发生变化的文件；未变化照片直接跳过"/>
                 <Button Command="{Binding CancelIndexCommand}" Content="取消索引" Padding="8,3"/>
                 <Button Command="{Binding VerifyCommand}" Content="检查缺失" Padding="8,3"/>
                 <Separator/>
@@ -267,7 +295,8 @@
                         <DockPanel>
                             <StackPanel Orientation="Horizontal" DockPanel.Dock="Right">
                                 <Button Content="检查新照片" Command="{Binding AnalyzeAllCommand}" Padding="12,5" Margin="4,0" ToolTip="已分析的照片会使用缓存跳过"/>
-                                <Button Content="重新自动归类" Command="{Binding BuildCandidateClustersCommand}" Padding="12,5" Margin="4,0"/>
+                                <Button Content="更新自动归类" Command="{Binding BuildCandidateClustersCommand}" Padding="12,5" Margin="4,0"
+                                        ToolTip="复用已提取的人脸特征，仅更新待命名候选组"/>
                                 <Button Content="人脸精度验证" Click="FaceValidation_Click" Padding="12,5" Margin="4,0"/>
                                 <Button Content="取消" Command="{Binding CancelAnalysisCommand}" Padding="12,5" Margin="4,0"/>
                                 <Button Content="刷新" Command="{Binding RefreshCommand}" Padding="12,5" Margin="4,0"/>

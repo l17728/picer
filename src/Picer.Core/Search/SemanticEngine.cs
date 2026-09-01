@@ -183,27 +183,29 @@ public static class SemanticEngine
             checkCmd.Parameters.AddWithValue("$name", albumName);
             var existingId = checkCmd.ExecuteScalar() as long?;
 
+            long albumId;
             if (existingId.HasValue && existingId.Value > 0)
             {
-                // Update existing album's description
                 var updateCmd = db.Command("UPDATE albums SET description = $desc WHERE id = $id");
                 updateCmd.Parameters.AddWithValue("$desc", $"时间线相册（自动生成）");
                 updateCmd.Parameters.AddWithValue("$id", existingId.Value);
                 updateCmd.ExecuteNonQuery();
-                continue;
+                albumId = existingId.Value;
+            }
+            else
+            {
+                var album = AddAlbum(db, albumName, "时间线相册（自动生成）", null);
+                albums.Add(album);
+                albumId = album.Id;
             }
 
-            // Create new album
-            var album = AddAlbum(db, albumName, "时间线相册（自动生成）", null);
-            albums.Add(album);
-
-            // Add all images for this month to the album
+            // INSERT OR IGNORE makes repeated runs incremental: only newly indexed images are added.
             var addCmd = db.Command(@"
                 INSERT OR IGNORE INTO album_images (album_id, image_id, added_utc)
                 SELECT $aid, i.id, $ts FROM images i
-                WHERE STRFTIME('%Y', i.taken_utc) = $year AND STRFTIME('%m', i.taken_utc) = $month
+                WHERE i.status='active' AND STRFTIME('%Y', i.taken_utc) = $year AND STRFTIME('%m', i.taken_utc) = $month
             ");
-            addCmd.Parameters.AddWithValue("$aid", album.Id);
+            addCmd.Parameters.AddWithValue("$aid", albumId);
             addCmd.Parameters.AddWithValue("$ts", Fmt(DateTime.UtcNow));
             addCmd.Parameters.AddWithValue("$year", year);
             addCmd.Parameters.AddWithValue("$month", month);
@@ -237,20 +239,23 @@ public static class SemanticEngine
             checkCmd.Parameters.AddWithValue("$name", albumName);
             var existingId = checkCmd.ExecuteScalar() as long?;
 
+            long albumId;
             if (existingId.HasValue && existingId.Value > 0)
-                continue; // Skip existing
+                albumId = existingId.Value;
+            else
+            {
+                var album = AddAlbum(db, albumName, "按相机品牌自动创建", null);
+                albums.Add(album);
+                albumId = album.Id;
+            }
 
-            // Create album
-            var album = AddAlbum(db, albumName, "按相机品牌自动创建", null);
-            albums.Add(album);
-
-            // Add matching images
+            // Existing albums are retained; only new matching image relations are inserted.
             var addCmd = db.Command(@"
                 INSERT OR IGNORE INTO album_images (album_id, image_id, added_utc)
                 SELECT $aid, i.id, $ts FROM images i
-                WHERE i.camera LIKE $pattern
+                WHERE i.status='active' AND i.camera LIKE $pattern
             ");
-            addCmd.Parameters.AddWithValue("$aid", album.Id);
+            addCmd.Parameters.AddWithValue("$aid", albumId);
             addCmd.Parameters.AddWithValue("$ts", Fmt(DateTime.UtcNow));
             addCmd.Parameters.AddWithValue("$pattern", cameraName + "%");
             addCmd.ExecuteNonQuery();
@@ -258,7 +263,7 @@ public static class SemanticEngine
             // Auto-tag if enabled
             if (autoTag)
             {
-                EnsureAndAssignTag(db, cameraName.ToLowerInvariant().Replace(" ", "_"), album.Id);
+                EnsureAndAssignTag(db, cameraName.ToLowerInvariant().Replace(" ", "_"), albumId);
             }
         }
 

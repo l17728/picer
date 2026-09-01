@@ -171,6 +171,32 @@ public sealed class SemanticClassificationTests : IDisposable
     }
 
     [Fact]
+    public void AutomaticAlbums_RepeatedRunAddsOnlyNewlyIndexedPhotos()
+    {
+        _db = new PicerDatabase(Path.Combine(_dataDir, "test.db"));
+        var source = _db.AddSource(_dataDir);
+        ImageRecord Record(string name) => new()
+        {
+            SourceId = source.Id, Path = Path.Combine(_dataDir, name), FileSize = 10,
+            ModifiedUtc = DateTime.UtcNow, IndexedUtc = DateTime.UtcNow, Status = ImageStatus.Active,
+            TakenUtc = new DateTime(2026, 9, 1, 0, 0, 0, DateTimeKind.Utc), Camera = "Canon EOS R5"
+        };
+        _db.UpsertImage(Record("first.jpg"));
+        SemanticEngine.AutoCreateTimeLineAlbums(_db);
+        SemanticEngine.AutoCreateCameraAlbums(_db, autoTag: false);
+
+        _db.UpsertImage(Record("second.jpg"));
+        var newTimeAlbums = SemanticEngine.AutoCreateTimeLineAlbums(_db);
+        var newCameraAlbums = SemanticEngine.AutoCreateCameraAlbums(_db, autoTag: false);
+
+        Assert.Empty(newTimeAlbums);
+        Assert.Empty(newCameraAlbums);
+        var albums = SemanticEngine.GetAlbums(_db);
+        Assert.Equal(2, SemanticEngine.GetAlbumImageCount(_db, albums.Single(album => album.Name == "2026年09月照片").Id));
+        Assert.Equal(2, SemanticEngine.GetAlbumImageCount(_db, albums.Single(album => album.Name == "相机: Canon").Id));
+    }
+
+    [Fact]
     public void Tag_DeleteRemovesAssociatedImageTags()
     {
         _db = new PicerDatabase(Path.Combine(_dataDir, "test.db"));

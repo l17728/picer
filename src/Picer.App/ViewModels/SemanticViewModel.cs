@@ -232,7 +232,7 @@ public partial class SemanticViewModel : ObservableObject
             var albums = await UiWork.RunDatabaseAsync(() => SemanticEngine.AutoCreateTimeLineAlbums(_db));
             var refreshed = await UiWork.RunDatabaseAsync(() => SemanticEngine.GetAlbums(_db).ToArray());
             Albums = new(refreshed.Select(album => new AlbumItemViewModel(album)));
-            StatusText = $"已自动创建 {albums.Count} 个时间线相册";
+            StatusText = $"时间线相册已增量更新；新建 {albums.Count} 个，其余仅补充新增照片";
             _changed?.Invoke();
         }
         finally
@@ -251,7 +251,7 @@ public partial class SemanticViewModel : ObservableObject
             var snapshot = await UiWork.RunDatabaseAsync(() => (Albums: SemanticEngine.GetAlbums(_db).ToArray(), Tags: SemanticEngine.GetTags(_db).ToArray()));
             Albums = new(snapshot.Albums.Select(album => new AlbumItemViewModel(album)));
             Tags = new(snapshot.Tags.Select(tag => new TagItemViewModel(tag)));
-            StatusText = $"已按相机品牌自动创建 {albums.Count} 个相册并打标签";
+            StatusText = $"相机相册已增量更新；新建 {albums.Count} 个，其余仅补充新增照片和标签";
             _changed?.Invoke();
         }
         finally
