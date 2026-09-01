@@ -25,6 +25,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
     private readonly SemaphoreSlim _analysisGate = new(1, 1);
     private CancellationTokenSource? _pageLoadCancellation;
     private CancellationTokenSource? _personLoadCancellation;
+    private CancellationTokenSource? _clusterLoadCancellation;
     private bool _isLoaded;
 
     public PeopleViewModel(PicerDatabase database, PeopleService peopleService,
@@ -103,14 +104,19 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         UnassignedFaces.Clear();
         await UiWork.AddInBatchesAsync(snapshot.Faces, face =>
             {
-                var item = new UnassignedFaceViewModel(face);
+                var item = CreateFaceItem(face);
                 UnassignedFaces.Add(item);
                 _ = LoadFaceThumbnailAsync(item);
             }, cancellation.Token);
         CandidateClusters.Clear();
         foreach (var cluster in snapshot.Clusters)
         {
-            var item = new CandidateClusterViewModel(cluster);
+            var item = new CandidateClusterViewModel(cluster)
+            {
+                RepresentativeThumbnailPath = cluster.Faces.FirstOrDefault() is { } representative
+                    ? _faceThumbnails.GetCachedPath(representative.FaceId)
+                    : null
+            };
             CandidateClusters.Add(item);
             _ = LoadClusterThumbnailAsync(item);
         }
@@ -315,7 +321,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         SelectedPerson = null;
         SelectedCandidateCluster = null;
         var records = await Task.Run(() => _repository.GetIgnoredFaces().ToArray());
-        var faces = records.Select(face => new UnassignedFaceViewModel(face)).ToArray();
+        var faces = records.Select(CreateFaceItem).ToArray();
         DisplayedFacesTitle = $"不分类（{faces.Length}）";
         SetDisplayedFaces(faces);
     }
@@ -352,20 +358,33 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
 
     partial void OnSelectedCandidateClusterChanged(CandidateClusterViewModel? value)
     {
+        _clusterLoadCancellation?.Cancel();
+        _clusterLoadCancellation?.Dispose();
         SelectedClusterFaces.Clear();
         if (value is null) return;
-        foreach (var face in value.Record.Faces)
+        var cancellation = _clusterLoadCancellation = new CancellationTokenSource();
+        SelectedPerson = null;
+        DisplayedFaces.Clear();
+        DisplayedFacesTitle = $"{value.Summary} · 正在加载…";
+        _ = LoadCandidateClusterAsync(value, cancellation.Token);
+    }
+
+    private async Task LoadCandidateClusterAsync(CandidateClusterViewModel cluster, CancellationToken cancellationToken)
+    {
+        try
         {
-            var item = new UnassignedFaceViewModel(face);
-            SelectedClusterFaces.Add(item);
-            _ = LoadClusterMemberThumbnailAsync(item);
+            var faces = cluster.Record.Faces.ToArray();
+            await UiWork.AddInBatchesAsync(faces, face =>
+            {
+                var item = CreateFaceItem(face);
+                SelectedClusterFaces.Add(item);
+                DisplayedFaces.Add(item);
+                _ = LoadDisplayedFaceThumbnailAsync(item);
+                DisplayedFacesTitle = $"候选人物 · {DisplayedFaces.Count} / {faces.Length} 张脸";
+            }, cancellationToken);
+            DisplayedFacesTitle = $"{cluster.Summary}（可输入名称后确认整组）";
         }
-        if (value is not null)
-        {
-            SelectedPerson = null;
-            DisplayedFacesTitle = $"{value.Summary}（可输入名称后确认整组）";
-            SetDisplayedFaces(SelectedClusterFaces);
-        }
+        catch (OperationCanceledException) { }
     }
 
     [RelayCommand]
@@ -386,6 +405,8 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         _pageLoadCancellation?.Dispose();
         _personLoadCancellation?.Cancel();
         _personLoadCancellation?.Dispose();
+        _clusterLoadCancellation?.Cancel();
+        _clusterLoadCancellation?.Dispose();
     }
 
     private async Task LoadFaceThumbnailAsync(UnassignedFaceViewModel item)
@@ -411,10 +432,10 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
 
     partial void OnSelectedPersonChanged(PersonSummary? value)
     {
-        AssignedFaces.Clear();
-        if (value is null) return;
         _personLoadCancellation?.Cancel();
         _personLoadCancellation?.Dispose();
+        AssignedFaces.Clear();
+        if (value is null) return;
         var cancellation = _personLoadCancellation = new CancellationTokenSource();
         SelectedCandidateCluster = null;
         DisplayedFacesTitle = $"{value.DisplayName} · 正在加载…";
@@ -430,10 +451,9 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             if (cancellationToken.IsCancellationRequested || SelectedPerson?.Id != person.Id) return;
             await UiWork.AddInBatchesAsync(faces, face =>
                 {
-                    var item = new UnassignedFaceViewModel(face);
+                    var item = CreateFaceItem(face);
                     AssignedFaces.Add(item);
                     DisplayedFaces.Add(item);
-                    _ = LoadAssignedFaceThumbnailAsync(item);
                     _ = LoadDisplayedFaceThumbnailAsync(item);
                 DisplayedFacesTitle = $"{person.DisplayName} · {AssignedFaces.Count} / {faces.Length} 张人脸";
                 }, cancellationToken);
@@ -447,6 +467,9 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         var path = await _faceThumbnails.GetOrCreateAsync(item.Record);
         if (path is not null && AssignedFaces.Contains(item)) item.FaceThumbnailPath = path;
     }
+
+    private UnassignedFaceViewModel CreateFaceItem(UnassignedFaceRecord record) =>
+        new(record, _faceThumbnails.GetCachedPath(record.FaceId));
 
     private void RefreshDisplayedFaces()
     {
@@ -473,7 +496,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
     }
 }
 
-public partial class UnassignedFaceViewModel(UnassignedFaceRecord record) : ObservableObject
+public partial class UnassignedFaceViewModel(UnassignedFaceRecord record, string? initialThumbnailPath = null) : ObservableObject
 {
     public UnassignedFaceRecord Record { get; } = record;
     public long FaceId => Record.FaceId;
@@ -483,7 +506,7 @@ public partial class UnassignedFaceViewModel(UnassignedFaceRecord record) : Obse
     public string SuggestedText => Record.SuggestedPersonName is null ? "未归类" : $"可能是：{Record.SuggestedPersonName}";
 
     [ObservableProperty]
-    private string? _faceThumbnailPath = record.ThumbnailPath ?? record.ImagePath;
+    private string? _faceThumbnailPath = initialThumbnailPath;
 }
 
 public partial class CandidateClusterViewModel(FaceCandidateClusterRecord record) : ObservableObject
@@ -493,6 +516,5 @@ public partial class CandidateClusterViewModel(FaceCandidateClusterRecord record
     public string Summary => $"候选人物 · {FaceCount} 张脸";
 
     [ObservableProperty]
-    private string? _representativeThumbnailPath = record.Faces.FirstOrDefault()?.ThumbnailPath
-        ?? record.Faces.FirstOrDefault()?.ImagePath;
+    private string? _representativeThumbnailPath;
 }

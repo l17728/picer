@@ -297,9 +297,12 @@
                             <ListBox x:Name="PeopleFacesList" ItemsSource="{Binding DisplayedFaces}" SelectedItem="{Binding SelectedDisplayedFace}"
                                      AutomationProperties.Name="人物人脸列表" AutomationProperties.HelpText="双击打开关联照片；右击可移动到已有分类、待分类或不分类"
                                      MouseDoubleClick="PeopleFace_DoubleClick" PreviewMouseRightButtonDown="PeopleFace_PreviewMouseRightButtonDown"
-                                     ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                                     ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                     ScrollViewer.CanContentScroll="True"
+                                     VirtualizingPanel.IsVirtualizing="True"
+                                     VirtualizingPanel.VirtualizationMode="Recycling">
                                 <ListBox.ContextMenu><ContextMenu Opened="PeopleFaceMenu_Opened"/></ListBox.ContextMenu>
-                                <ListBox.ItemsPanel><ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate></ListBox.ItemsPanel>
+                                <ListBox.ItemsPanel><ItemsPanelTemplate><controls:VirtualizingWrapPanel ItemWidth="155" ItemHeight="184"/></ItemsPanelTemplate></ListBox.ItemsPanel>
                                 <ListBox.ItemTemplate><DataTemplate><Border Width="145" Margin="5" Padding="5" BorderBrush="#CCC" BorderThickness="1">
                                     <StackPanel>
                                         <Image Height="112" Source="{Binding FaceThumbnailPath}" Stretch="UniformToFill"/>

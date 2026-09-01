@@ -7,7 +7,7 @@ public sealed class FaceThumbnailService
 {
     private const int CacheVersion = 1;
     private readonly string _cacheDirectory;
-    private readonly SemaphoreSlim _workers = new(2, 2);
+    private readonly SemaphoreSlim _workers = new(Math.Clamp(Environment.ProcessorCount / 2, 2, 4));
 
     public FaceThumbnailService(string cacheDirectory)
     {
@@ -17,7 +17,7 @@ public sealed class FaceThumbnailService
 
     public async Task<string?> GetOrCreateAsync(UnassignedFaceRecord face, CancellationToken cancellationToken = default)
     {
-        var destination = Path.Combine(_cacheDirectory, $"{face.FaceId}.v{CacheVersion}.jpg");
+        var destination = GetCachePath(face.FaceId);
         if (File.Exists(destination)) return destination;
         await _workers.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
@@ -30,6 +30,14 @@ public sealed class FaceThumbnailService
             _workers.Release();
         }
     }
+
+    public string? GetCachedPath(long faceId)
+    {
+        var path = GetCachePath(faceId);
+        return File.Exists(path) ? path : null;
+    }
+
+    private string GetCachePath(long faceId) => Path.Combine(_cacheDirectory, $"{faceId}.v{CacheVersion}.jpg");
 
     private static string? Create(UnassignedFaceRecord face, string destination, CancellationToken cancellationToken)
     {
