@@ -305,7 +305,9 @@
                                 <ListBox.ItemsPanel><ItemsPanelTemplate><controls:VirtualizingWrapPanel ItemWidth="155" ItemHeight="184"/></ItemsPanelTemplate></ListBox.ItemsPanel>
                                 <ListBox.ItemTemplate><DataTemplate><Border Width="145" Margin="5" Padding="5" BorderBrush="#CCC" BorderThickness="1">
                                     <StackPanel>
-                                        <Image Height="112" Source="{Binding FaceThumbnailPath}" Stretch="UniformToFill"/>
+                                        <Border Height="112" Background="#EEF2F6">
+                                            <Image Source="{Binding FaceThumbnailPath}" Stretch="UniformToFill"/>
+                                        </Border>
                                         <TextBlock Text="{Binding SuggestedText}" Foreground="#8A4B08" FontWeight="SemiBold" Margin="0,4,0,0"/>
                                         <TextBlock Text="{Binding ImagePath}" TextTrimming="CharacterEllipsis" ToolTip="{Binding ImagePath}" Foreground="#666" FontSize="11"/>
                                     </StackPanel>

@@ -44,7 +44,10 @@ public sealed class FaceThumbnailService
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
-            using var image = Image.Load(face.ImagePath);
+            var source = !string.IsNullOrWhiteSpace(face.ThumbnailPath) && File.Exists(face.ThumbnailPath)
+                ? face.ThumbnailPath
+                : face.ImagePath;
+            using var image = Image.Load(source);
             var paddingX = face.Box.Width * 0.25f;
             var paddingY = face.Box.Height * 0.25f;
             var left = Math.Clamp(face.Box.X - paddingX, 0, 1);

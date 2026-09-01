@@ -469,7 +469,12 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
     }
 
     private UnassignedFaceViewModel CreateFaceItem(UnassignedFaceRecord record) =>
-        new(record, _faceThumbnails.GetCachedPath(record.FaceId));
+        new(record, _faceThumbnails.GetCachedPath(record.FaceId) ?? GetSafePreviewPath(record));
+
+    private static string? GetSafePreviewPath(UnassignedFaceRecord record) =>
+        !string.IsNullOrWhiteSpace(record.ThumbnailPath) && File.Exists(record.ThumbnailPath)
+            ? record.ThumbnailPath
+            : null;
 
     private void RefreshDisplayedFaces()
     {
