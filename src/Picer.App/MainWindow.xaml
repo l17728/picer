@@ -129,7 +129,7 @@
 
         <!-- Main content with tabs -->
         <Grid Margin="4">
-        <TabControl x:Name="MainTabs">
+        <TabControl x:Name="MainTabs" SelectedIndex="1">
             <!-- Tab 1: Directory Browser -->
             <TabItem Header="📁 目录浏览">
                 <Grid>
