@@ -33,6 +33,21 @@ public sealed class GeocodingTests : IDisposable
     }
 
     [Theory]
+    [InlineData("澳大利亚")]
+    [InlineData("澳洲")]
+    [InlineData("Australia")]
+    public void AustraliaSearch_IncludesMelbourne(string query)
+    {
+        var bounds = GeoPlaceResolver.Resolve(query);
+        Assert.NotNull(bounds);
+        Assert.Equal("澳大利亚", bounds.Name);
+        Assert.True(GeoPlaceResolver.IsWithin("-37.8136,144.9631",
+            bounds.MinLatitude, bounds.MaxLatitude, bounds.MinLongitude, bounds.MaxLongitude));
+        Assert.False(GeoPlaceResolver.IsWithin("34.3416,108.9398",
+            bounds.MinLatitude, bounds.MaxLatitude, bounds.MinLongitude, bounds.MaxLongitude));
+    }
+
+    [Theory]
     [InlineData("商洛")]
     [InlineData("商洛市")]
     public void ShangluoAliases_ResolveToCityBounds(string query)
