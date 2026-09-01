@@ -201,7 +201,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         await ReloadSourcesAsync();
         await LoadLookupValuesAsync();
         await ApplySearchAndFilterAsync();
-        await LoadDirectoryTreeAsync();
+        _ = LoadDirectoryTreeAsync();
         _ = Video.LoadAsync();
         _ = EnrichLocationHierarchyAsync();
         PicerEventSource.Log.StartupStage("first-page-ready", Stopwatch.GetElapsedTime(started).TotalMilliseconds);

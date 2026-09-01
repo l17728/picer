@@ -48,6 +48,19 @@ public sealed class GeocodingTests : IDisposable
     }
 
     [Theory]
+    [InlineData("陕西")]
+    [InlineData("陕西省")]
+    public void ShaanxiSearch_IncludesIndexedShaanxiCoordinates(string query)
+    {
+        var bounds = GeoPlaceResolver.Resolve(query);
+        Assert.NotNull(bounds);
+        Assert.True(GeoPlaceResolver.IsWithin("34° 4' 26.78\", 109° 16' 15.48\"", bounds.MinLatitude,
+            bounds.MaxLatitude, bounds.MinLongitude, bounds.MaxLongitude));
+        Assert.False(GeoPlaceResolver.IsWithin("-37.8136,144.9631", bounds.MinLatitude,
+            bounds.MaxLatitude, bounds.MinLongitude, bounds.MaxLongitude));
+    }
+
+    [Theory]
     [InlineData("商洛")]
     [InlineData("商洛市")]
     public void ShangluoAliases_ResolveToCityBounds(string query)
