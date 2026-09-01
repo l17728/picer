@@ -90,16 +90,17 @@ public sealed class NominatimReverseGeocoder : IReverseGeocoder, IDisposable
             var delay = TimeSpan.FromSeconds(1) - (DateTime.UtcNow - _lastRequestUtc);
             if (delay > TimeSpan.Zero) await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
 
-            var uri = "https://nominatim.openstreetmap.org/reverse?format=jsonv2&addressdetails=1&zoom=18&layer=address" +
+            var uri = "https://nominatim.openstreetmap.org/reverse?format=jsonv2&addressdetails=1&zoom=18" +
                       $"&accept-language=zh-CN&lat={latitude.ToString("R", CultureInfo.InvariantCulture)}" +
                       $"&lon={longitude.ToString("R", CultureInfo.InvariantCulture)}";
             _lastRequestUtc = DateTime.UtcNow;
             using var response = await _client.GetAsync(uri, cancellationToken).ConfigureAwait(false);
-            if (!response.IsSuccessStatusCode) return null;
+            if (!response.IsSuccessStatusCode)
+                return await ReverseWithGeographicFallbackAsync(latitude, longitude, key, cancellationToken).ConfigureAwait(false);
             await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
             using var json = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken).ConfigureAwait(false);
             if (!json.RootElement.TryGetProperty("display_name", out var displayName) || string.IsNullOrWhiteSpace(displayName.GetString()))
-                return null;
+                return await ReverseWithGeographicFallbackAsync(latitude, longitude, key, cancellationToken).ConfigureAwait(false);
             var attribution = json.RootElement.TryGetProperty("licence", out var licence)
                 ? licence.GetString() ?? "© OpenStreetMap contributors"
                 : "© OpenStreetMap contributors";
@@ -131,6 +132,43 @@ public sealed class NominatimReverseGeocoder : IReverseGeocoder, IDisposable
         {
             RequestGate.Release();
         }
+    }
+
+    private async Task<ReverseGeocodingResult?> ReverseWithGeographicFallbackAsync(
+        double latitude, double longitude, string cacheKey, CancellationToken cancellationToken)
+    {
+        var uri = "https://api.bigdatacloud.net/data/reverse-geocode-client?localityLanguage=zh" +
+                  $"&latitude={latitude.ToString("R", CultureInfo.InvariantCulture)}" +
+                  $"&longitude={longitude.ToString("R", CultureInfo.InvariantCulture)}";
+        using var response = await _client.GetAsync(uri, cancellationToken).ConfigureAwait(false);
+        if (!response.IsSuccessStatusCode) return null;
+        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+        using var json = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken).ConfigureAwait(false);
+        string? Text(string name) => json.RootElement.TryGetProperty(name, out var value) &&
+                                     value.ValueKind == JsonValueKind.String &&
+                                     !string.IsNullOrWhiteSpace(value.GetString()) ? value.GetString() : null;
+
+        var locality = Text("locality");
+        var city = Text("city");
+        var province = Text("principalSubdivision");
+        var country = Text("countryName");
+        if (locality is null && city is null && province is null && country is null) return null;
+
+        var isOcean = country is null && city is null && province is null && locality is not null;
+        var displayParts = new[] { locality, city, province, country }
+            .Where(value => !string.IsNullOrWhiteSpace(value)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        var result = new ReverseGeocodingResult(
+            isOcean ? $"{locality}, 西太平洋（无行政归属）" : string.Join(", ", displayParts),
+            "BigDataCloud reverse geocoding",
+            Country: isOcean ? "海洋" : country,
+            Province: isOcean ? "西太平洋" : province,
+            City: isOcean ? locality : city,
+            District: !isOcean && locality is not null && !string.Equals(locality, city, StringComparison.OrdinalIgnoreCase)
+                ? locality : null,
+            Accuracy: isOcean ? "marine" : "estimated");
+        _cache[cacheKey] = result;
+        SaveCache();
+        return result;
     }
 
     private static ReverseGeocodingResult NormalizeAdministrativeHierarchy(ReverseGeocodingResult value)

@@ -105,6 +105,21 @@ public sealed class GeocodingTests : IDisposable
         Assert.Equal("关中环线, 蓝田县, 西安市, 陕西省, 中国", result?.DisplayName);
     }
 
+    [Fact]
+    public async Task ReverseGeocoder_FallsBackToMarineRegionForOceanCoordinates()
+    {
+        Directory.CreateDirectory(_directory);
+        using var client = new HttpClient(new OceanFallbackHandler());
+        using var geocoder = new NominatimReverseGeocoder(Path.Combine(_directory, "ocean.json"), client);
+
+        var result = await geocoder.ReverseAsync(31.3078167, 124.5158528);
+
+        Assert.Equal("海洋", result?.Country);
+        Assert.Equal("西太平洋", result?.Province);
+        Assert.Equal("东海", result?.City);
+        Assert.Equal("东海, 西太平洋（无行政归属）", result?.DisplayName);
+    }
+
     public void Dispose()
     {
         try { Directory.Delete(_directory, true); } catch { }
@@ -132,6 +147,20 @@ public sealed class GeocodingTests : IDisposable
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             const string json = "{\"display_name\":\"关中环线, 蓝田县, 西安市, 陕西省, 中国\",\"licence\":\"© OpenStreetMap contributors\",\"address\":{\"road\":\"关中环线\",\"city\":\"蓝田县\",\"state\":\"陕西省\",\"country\":\"中国\"}}";
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(json, Encoding.UTF8, "application/json")
+            });
+        }
+    }
+
+    private sealed class OceanFallbackHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var json = request.RequestUri?.Host == "nominatim.openstreetmap.org"
+                ? "{\"error\":\"Unable to geocode\"}"
+                : "{\"locality\":\"东海\",\"city\":\"\",\"principalSubdivision\":\"\",\"countryName\":\"\"}";
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent(json, Encoding.UTF8, "application/json")
