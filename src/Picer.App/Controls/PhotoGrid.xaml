@@ -64,8 +64,7 @@
                     </GroupStyle.HeaderTemplate>
                     <GroupStyle.Panel>
                         <ItemsPanelTemplate>
-                            <local:VirtualizingWrapPanel ItemWidth="{Binding CardWidth, RelativeSource={RelativeSource AncestorType={x:Type local:PhotoGrid}}}"
-                                                         ItemHeight="{Binding CardHeight, RelativeSource={RelativeSource AncestorType={x:Type local:PhotoGrid}}}"/>
+                            <WrapPanel IsItemsHost="True"/>
                         </ItemsPanelTemplate>
                     </GroupStyle.Panel>
                 </GroupStyle>

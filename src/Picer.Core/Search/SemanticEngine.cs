@@ -138,7 +138,7 @@ public static class SemanticEngine
 
     public static List<ImageRecord> GetAlbumImages(PicerDatabase db, long albumId)
     {
-        using var cmd = db.Command("SELECT i.* FROM images i INNER JOIN album_images ai ON ai.image_id = i.id WHERE ai.album_id = $aid ORDER BY i.taken_utc IS NULL, i.taken_utc DESC, i.path LIMIT 1000");
+        using var cmd = db.Command("SELECT i.* FROM images i INNER JOIN album_images ai ON ai.image_id = i.id WHERE ai.album_id = $aid AND i.status='active' ORDER BY i.taken_utc IS NULL, i.taken_utc DESC, i.path");
         cmd.Parameters.AddWithValue("$aid", albumId);
         return ReadRecords(cmd.ExecuteReader());
     }

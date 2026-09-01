@@ -1253,6 +1253,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         var cts = _directoryLoadCts = new CancellationTokenSource();
         var selectedDirectory = SelectedDirectory;
         DirectoryImages.Clear();
+        RefreshDirectoryTimelineView();
         try
         {
             if (selectedDirectory.IsAlbumRoot)
