@@ -129,7 +129,7 @@
 
         <!-- Main content with tabs -->
         <Grid Margin="4">
-        <TabControl x:Name="MainTabs" SelectedIndex="1">
+        <TabControl x:Name="MainTabs" SelectedIndex="1" SelectionChanged="MainTabs_SelectionChanged">
             <!-- Tab 1: Directory Browser -->
             <TabItem Header="📁 目录浏览">
                 <Grid>
@@ -241,7 +241,7 @@
                 </DockPanel>
             </TabItem>
 
-            <TabItem Header="👥 人物" IsVisibleChanged="PeopleTab_IsVisibleChanged">
+            <TabItem Header="👥 人物">
                 <Grid Margin="12" DataContext="{Binding People}">
                     <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
                     <Grid.ColumnDefinitions><ColumnDefinition Width="300"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>

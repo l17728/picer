@@ -120,9 +120,9 @@ public partial class MainWindow : Window
             { Owner = this }.ShowDialog();
     }
 
-    private async void PeopleTab_IsVisibleChanged(object sender, DependencyPropertyChangedEventArgs e)
+    private async void MainTabs_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (e.NewValue is not true || DataContext is not MainViewModel) return;
+        if (!ReferenceEquals(e.Source, MainTabs) || MainTabs.SelectedIndex != 2 || DataContext is not MainViewModel) return;
         await _mainVm.People.InitializePageAsync();
     }
 
