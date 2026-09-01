@@ -25,6 +25,7 @@
         </TextBlock>
         <ListBox x:Name="List" Background="#FAFAFA" ItemsSource="{Binding ItemsSource, ElementName=Root}" SelectionChanged="List_SelectionChanged"
                  AutomationProperties.Name="图片网格"
+                 HorizontalContentAlignment="Stretch"
                  SelectedItem="{Binding SelectedItem, ElementName=Root, Mode=TwoWay}"
                  SelectionMode="Extended" ScrollViewer.CanContentScroll="True"
                  VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling"
@@ -54,6 +55,11 @@
             </ListBox.Style>
             <ListBox.GroupStyle>
                 <GroupStyle>
+                    <GroupStyle.ContainerStyle>
+                        <Style TargetType="GroupItem">
+                            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                        </Style>
+                    </GroupStyle.ContainerStyle>
                     <GroupStyle.HeaderTemplate>
                         <DataTemplate>
                             <Border Background="#E7F0FA" BorderBrush="#BCD0E5" BorderThickness="0,0,0,1"
@@ -64,7 +70,7 @@
                     </GroupStyle.HeaderTemplate>
                     <GroupStyle.Panel>
                         <ItemsPanelTemplate>
-                            <WrapPanel IsItemsHost="True"/>
+                            <WrapPanel IsItemsHost="True" Orientation="Horizontal" HorizontalAlignment="Stretch"/>
                         </ItemsPanelTemplate>
                     </GroupStyle.Panel>
                 </GroupStyle>
