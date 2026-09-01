@@ -5,6 +5,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Picer.Core.Data;
 using Picer.Core.Search;
+using Picer.App.Infrastructure;
 
 namespace Picer.App.ViewModels;
 
@@ -57,7 +58,7 @@ public partial class SemanticViewModel : ObservableObject
 
     private async Task InitializeAsync()
     {
-        var snapshot = await Task.Run(() => (Tags: SemanticEngine.GetTags(_db).ToArray(), Albums: SemanticEngine.GetAlbums(_db).ToArray()));
+        var snapshot = await UiWork.RunDatabaseAsync(() => (Tags: SemanticEngine.GetTags(_db).ToArray(), Albums: SemanticEngine.GetAlbums(_db).ToArray()));
         Tags = new(snapshot.Tags.Select(tag => new TagItemViewModel(tag)));
         Albums = new(snapshot.Albums.Select(album => new AlbumItemViewModel(album)));
     }
@@ -67,7 +68,6 @@ public partial class SemanticViewModel : ObservableObject
         CurrentImageId = imageId;
         Suggestions.Clear();
         _selectionCancellation?.Cancel();
-        _selectionCancellation?.Dispose();
         if (imageId <= 0) return;
         var cancellation = _selectionCancellation = new CancellationTokenSource();
         _ = LoadSuggestionsAsync(imageId, cancellation.Token);
@@ -77,7 +77,7 @@ public partial class SemanticViewModel : ObservableObject
     {
         try
         {
-            var suggestions = await Task.Run(() =>
+            var suggestions = await UiWork.RunDatabaseAsync(() =>
             {
                 var local = SemanticEngine.ExtractAISuggestions(_db, imageId).ToList();
                 foreach (var name in AppServices.CloudVisionRepository.GetSuggestedTags(imageId)
@@ -129,7 +129,7 @@ public partial class SemanticViewModel : ObservableObject
         {
             var name = NewTagName;
             var imageIds = _selectedImageIds.ToArray();
-            var tag = await Task.Run(() =>
+            var tag = await UiWork.RunDatabaseAsync(() =>
             {
                 var created = SemanticEngine.AddTag(_db, name);
                 foreach (var imageId in imageIds) SemanticEngine.AssignTag(_db, imageId, created.Id);
@@ -155,7 +155,7 @@ public partial class SemanticViewModel : ObservableObject
             StatusText = "请输入相册名称";
             return;
         }
-        var album = await Task.Run(() => SemanticEngine.AddAlbum(_db, NewAlbumName));
+        var album = await UiWork.RunDatabaseAsync(() => SemanticEngine.AddAlbum(_db, NewAlbumName));
         var item = new AlbumItemViewModel(album);
         Albums.Add(item);
         SelectedAlbum = item;
@@ -175,7 +175,7 @@ public partial class SemanticViewModel : ObservableObject
             return;
 
         var selected = SelectedTag;
-        await Task.Run(() => SemanticEngine.DeleteTag(_db, selected.Tag.Id));
+        await UiWork.RunDatabaseAsync(() => SemanticEngine.DeleteTag(_db, selected.Tag.Id));
         Tags.Remove(selected);
         StatusText = "标签已删除";
     }
@@ -189,7 +189,7 @@ public partial class SemanticViewModel : ObservableObject
             return;
         }
 
-        await Task.Run(() => SemanticEngine.AddToAlbum(_db, SelectedAlbum.Album.Id, CurrentImageId));
+        await UiWork.RunDatabaseAsync(() => SemanticEngine.AddToAlbum(_db, SelectedAlbum.Album.Id, CurrentImageId));
         StatusText = $"已将图片添加到'{SelectedAlbum.Album.Name}'";
     }
 
@@ -202,7 +202,7 @@ public partial class SemanticViewModel : ObservableObject
             return;
         }
 
-        await Task.Run(() => SemanticEngine.RemoveFromAlbum(_db, SelectedAlbum.Album.Id, CurrentImageId));
+        await UiWork.RunDatabaseAsync(() => SemanticEngine.RemoveFromAlbum(_db, SelectedAlbum.Album.Id, CurrentImageId));
         StatusText = $"已从'{SelectedAlbum.Album.Name}'移除图片";
     }
 
@@ -212,8 +212,8 @@ public partial class SemanticViewModel : ObservableObject
         IsBusy = true;
         try
         {
-            var albums = await Task.Run(() => SemanticEngine.AutoCreateTimeLineAlbums(_db));
-            var refreshed = await Task.Run(() => SemanticEngine.GetAlbums(_db).ToArray());
+            var albums = await UiWork.RunDatabaseAsync(() => SemanticEngine.AutoCreateTimeLineAlbums(_db));
+            var refreshed = await UiWork.RunDatabaseAsync(() => SemanticEngine.GetAlbums(_db).ToArray());
             Albums = new(refreshed.Select(album => new AlbumItemViewModel(album)));
             StatusText = $"已自动创建 {albums.Count} 个时间线相册";
         }
@@ -229,8 +229,8 @@ public partial class SemanticViewModel : ObservableObject
         IsBusy = true;
         try
         {
-            var albums = await Task.Run(() => SemanticEngine.AutoCreateCameraAlbums(_db, autoTag: true));
-            var snapshot = await Task.Run(() => (Albums: SemanticEngine.GetAlbums(_db).ToArray(), Tags: SemanticEngine.GetTags(_db).ToArray()));
+            var albums = await UiWork.RunDatabaseAsync(() => SemanticEngine.AutoCreateCameraAlbums(_db, autoTag: true));
+            var snapshot = await UiWork.RunDatabaseAsync(() => (Albums: SemanticEngine.GetAlbums(_db).ToArray(), Tags: SemanticEngine.GetTags(_db).ToArray()));
             Albums = new(snapshot.Albums.Select(album => new AlbumItemViewModel(album)));
             Tags = new(snapshot.Tags.Select(tag => new TagItemViewModel(tag)));
             StatusText = $"已按相机品牌自动创建 {albums.Count} 个相册并打标签";
@@ -245,7 +245,7 @@ public partial class SemanticViewModel : ObservableObject
     private async Task AcceptSuggestionAsync(string tagName)
     {
         var imageId = CurrentImageId;
-        var tag = await Task.Run(() =>
+        var tag = await UiWork.RunDatabaseAsync(() =>
         {
             var existing = SemanticEngine.GetTags(_db).FirstOrDefault(t => t.Name == tagName);
             if (existing is null && imageId > 0) existing = SemanticEngine.AddTag(_db, tagName);
@@ -262,7 +262,7 @@ public partial class SemanticViewModel : ObservableObject
     private async Task RejectSuggestionAsync(string tagName)
     {
         if (CurrentImageId <= 0) return;
-        await Task.Run(() => SemanticEngine.RejectSuggestion(_db, CurrentImageId, tagName));
+        await UiWork.RunDatabaseAsync(() => SemanticEngine.RejectSuggestion(_db, CurrentImageId, tagName));
         var item = Suggestions.FirstOrDefault(suggestion => suggestion.TagName == tagName);
         if (item is not null) Suggestions.Remove(item);
         StatusText = $"已拒绝建议：{tagName}，不会再次自动出现";
