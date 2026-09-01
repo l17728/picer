@@ -692,7 +692,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 StatusText = $"正在构建位置索引 {value.CompletedGroups}/{value.TotalGroups}，已更新 {value.SavedImages} 张";
                 if (value.CompletedGroups % 10 == 0) _ = LoadDirectoryTreeAsync();
             });
-            var result = await AppServices.LocationHierarchy.EnrichPendingAsync(progress, _locationEnrichmentCts.Token);
+            var result = await Task.Run(
+                () => AppServices.LocationHierarchy.EnrichPendingAsync(progress, _locationEnrichmentCts.Token),
+                _locationEnrichmentCts.Token);
             if (result.CoordinateGroups == 0) return;
 
             AppendOutput($"位置索引完成：更新 {result.SavedImages} 张，失败位置 {result.FailedGroups} 个");
