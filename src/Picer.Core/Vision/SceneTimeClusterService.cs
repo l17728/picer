@@ -90,7 +90,7 @@ public sealed class SceneTimeClusterService(PicerDatabase database)
                 try
                 {
                     var value = JsonSerializer.Deserialize<CloudVisionResult>(reader.GetString(1), new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
-                    var scene = value?.Scenes.FirstOrDefault() ?? value?.Activities.FirstOrDefault();
+                    var scene = value?.Scenes?.FirstOrDefault() ?? value?.Activities?.FirstOrDefault();
                     if (!string.IsNullOrWhiteSpace(scene)) result[id] = Localize(scene);
                 }
                 catch (JsonException) { }

@@ -157,6 +157,20 @@ public sealed class CloudVisionTests : IDisposable
     }
 
     [Fact]
+    public void SceneTimeClusters_TolerateLegacyResultsWithNullSceneArrays()
+    {
+        _image.CreatedUtc = DateTime.UtcNow;
+        _database.UpdateImage(_image);
+        new CloudVisionRepository(_database).Save(_image, new FakeCloudAnalyzer(), "none", "legacy",
+            new CloudVisionResult("旧记录", null!, null!, [], [], null, "none"));
+
+        var cluster = Assert.Single(new SceneTimeClusterService(_database).Build([_image]));
+
+        Assert.Equal("未分类场景", cluster.SceneName);
+        Assert.Equal(_image.Id, Assert.Single(cluster.ImageIds));
+    }
+
+    [Fact]
     public async Task CompatibleAnalyzer_SanitizesImageAndSendsStructuredGpsContext()
     {
         var path = Path.Combine(_root, "valid.png");

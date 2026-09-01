@@ -14,6 +14,7 @@ using Picer.Core.Diagnostics;
 using Picer.Core.Indexing;
 using Picer.Core.Geocoding;
 using Picer.Core.Models;
+using Picer.Core.Logging;
 using Picer.Core.Search;
 using Picer.Core.Vision;
 using Picer.App.Infrastructure;
@@ -1199,11 +1200,23 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         if(node.IsSceneAnchor)return;
         if(node.SceneAnchorsLoaded&&!force)return;
-        foreach(var anchor in node.Children.Where(child=>child.IsSceneAnchor).ToList())node.Children.Remove(anchor);
-        var recursive=_directoryClassification.IncludesDescendants(node.FullPath);node.ClassificationIncludesDescendants=recursive;
-        var clusters=await UiWork.RunDatabaseAsync(()=>new SceneTimeClusterService(_db).Build(node.FullPath,recursive));
-        foreach(var cluster in clusters)node.Children.Add(new DirectoryNodeViewModel{Name=cluster.DisplayName,FullPath=node.FullPath,Icon="⚓",ImageCount=cluster.ImageIds.Count,IsSceneAnchor=true,SceneName=cluster.SceneName,AnchorImageIds=cluster.ImageIds});
-        node.SceneAnchorsLoaded=true;
+        StatusText = force ? $"正在重新生成 {node.Name} 的场景分类…" : $"正在加载 {node.Name} 的场景分类…";
+        try
+        {
+            var recursive=_directoryClassification.IncludesDescendants(node.FullPath);node.ClassificationIncludesDescendants=recursive;
+            var clusters=await UiWork.RunDatabaseAsync(()=>new SceneTimeClusterService(_db).Build(node.FullPath,recursive));
+            foreach(var anchor in node.Children.Where(child=>child.IsSceneAnchor).ToList())node.Children.Remove(anchor);
+            foreach(var cluster in clusters)node.Children.Add(new DirectoryNodeViewModel{Name=cluster.DisplayName,FullPath=node.FullPath,Icon="⚓",ImageCount=cluster.ImageIds.Count,IsSceneAnchor=true,SceneName=cluster.SceneName,AnchorImageIds=cluster.ImageIds});
+            node.SceneAnchorsLoaded=true;
+            node.IsExpanded=true;
+            StatusText = clusters.Count == 0 ? $"{node.Name} 没有可分类的照片" : $"{node.Name} 已生成 {clusters.Count} 个场景";
+        }
+        catch(Exception ex)
+        {
+            node.SceneAnchorsLoaded=false;
+            StatusText=$"{node.Name} 场景分类失败：{ex.Message}";
+            AppLogger.Error($"场景分类失败：{node.FullPath}", ex);
+        }
     }
 
     public async Task SetDirectoryClassificationModeAsync(DirectoryNodeViewModel node,bool includeDescendants)
