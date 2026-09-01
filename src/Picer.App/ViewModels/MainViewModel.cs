@@ -228,9 +228,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
     partial void OnIsQuestionModeChanged(bool value)
     {
         QuestionAnswerText = value
-            ? "本地规则问答已开启（不使用大模型）。可输入：“有多少张照片？”或“这些照片用了什么相机？”。仅查询 D 盘本地索引，不会外发内容。"
-            : "本地问答已关闭。";
-        StatusText = value ? "本地问答已开启，请在搜索框输入问题" : "本地问答已关闭";
+            ? "AI 问答入口已开启。当前尚未连接大模型，可先输入：“有多少张照片？”或“这些照片用了什么相机？”。"
+            : "AI 问答已关闭。";
+        StatusText = value ? "AI 问答已开启（当前为本地基础问答）" : "AI 问答已关闭";
         _ = ApplySearchAndFilterAsync();
     }
     partial void OnSortByChanged(SortField value) => _ = ApplySearchAndFilterAsync();
@@ -373,7 +373,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             };
         }
         StatusText = IsQuestionMode && string.IsNullOrWhiteSpace(SearchQuery)
-            ? "本地问答已开启，请输入照片数量或相机相关问题"
+            ? "AI 问答已开启；当前支持照片数量或相机相关问题"
             : SearchQuery.Length > 0
             ? (MatchedCount > TotalCount
                 ? $"搜索「{SearchQuery}」：显示 {TotalCount} / 共 {MatchedCount} 条"
