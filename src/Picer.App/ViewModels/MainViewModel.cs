@@ -200,9 +200,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
         var started = Stopwatch.GetTimestamp();
         await Application.Current.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
         await ReloadSourcesAsync();
+        await ApplySearchAndFilterAsync();
         await LoadLookupValuesAsync();
         await LoadDirectoryTreeAsync();
-        await ApplySearchAndFilterAsync();
         _ = Video.LoadAsync();
         _ = EnrichLocationHierarchyAsync();
         PicerEventSource.Log.StartupStage("first-page-ready", Stopwatch.GetElapsedTime(started).TotalMilliseconds);
@@ -360,8 +360,26 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _searchCursor = page.NextCursor;
         HasMoreResults = _searchCursor is not null;
         Images.Clear();
-        foreach (var rec in page.Items)
-            Images.Add(new ImageItemViewModel(rec));
+        try
+        {
+            var rendered = 0;
+            foreach (var row in page.Items.Chunk(8))
+            {
+                cts.Token.ThrowIfCancellationRequested();
+                if (version != _searchVersion) return;
+                foreach (var record in row) Images.Add(new ImageItemViewModel(record));
+                rendered += row.Length;
+                OnPropertyChanged(nameof(TotalCount));
+                OnPropertyChanged(nameof(ResultsSummary));
+                if (rendered < page.Items.Count)
+                    StatusText = $"正在渐进显示照片：{rendered} / {page.Items.Count}";
+                await Dispatcher.Yield(DispatcherPriority.Background);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
         OnPropertyChanged(nameof(TotalCount));
         OnPropertyChanged(nameof(ResultsSummary));
         if (question is not null)
@@ -470,7 +488,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         if (_searchCursor is null) return;
         var page = await IndexSearchEngine.SearchPagedAsync(_db, BuildSearchFilters(), cursor: _searchCursor);
-        foreach (var rec in page.Items) Images.Add(new ImageItemViewModel(rec));
+        await UiWork.AddInBatchesAsync(page.Items, record => Images.Add(new ImageItemViewModel(record)), batchSize: 8);
         _searchCursor = page.NextCursor;
         HasMoreResults = _searchCursor is not null;
         OnPropertyChanged(nameof(TotalCount));
