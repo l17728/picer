@@ -1372,6 +1372,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
             DirectoryImagesView.Filter = null;
         }
         UpdateTimelineNavigationState();
+        if (IsTimelineAlbumSelected)
+            RequestTimelineScroll(CurrentTimelineAnchor);
     }
 
     [RelayCommand]
@@ -1391,8 +1393,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         var target = current + offset;
         if (target < 0 || target >= _timelineAnchors.Length) return;
         CurrentTimelineAnchor = _timelineAnchors[target];
-        TimelineScrollTarget = DirectoryTimelineItems.OfType<TimelineAnchorItemViewModel>()
-            .FirstOrDefault(anchor => anchor.Label == CurrentTimelineAnchor);
+        RequestTimelineScroll(CurrentTimelineAnchor);
         UpdateTimelineNavigationState();
     }
 
@@ -1411,6 +1412,14 @@ public partial class MainViewModel : ObservableObject, IDisposable
         if (previous is null || previous.TimelineAnchor != image.TimelineAnchor)
             DirectoryTimelineItems.Add(new TimelineAnchorItemViewModel(image.TimelineAnchor));
         DirectoryTimelineItems.Add(image);
+    }
+
+    private void RequestTimelineScroll(string anchorLabel)
+    {
+        var target = DirectoryTimelineItems.OfType<TimelineAnchorItemViewModel>()
+            .FirstOrDefault(anchor => anchor.Label == anchorLabel);
+        TimelineScrollTarget = null;
+        TimelineScrollTarget = target;
     }
 
     private async Task HandleMissingAsync()

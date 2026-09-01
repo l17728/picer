@@ -142,6 +142,13 @@ public sealed class VirtualizingWrapPanel : VirtualizingPanel, IScrollInfo
         return finalSize;
     }
 
+    protected override void BringIndexIntoView(int index)
+    {
+        if (index < 0 || index >= _layouts.Length) return;
+        SetVerticalOffset(_layouts[index].Top);
+        InvalidateMeasure();
+    }
+
     public bool CanHorizontallyScroll { get; set; }
     public bool CanVerticallyScroll { get; set; } = true;
     public double ExtentWidth => _extent.Width;
