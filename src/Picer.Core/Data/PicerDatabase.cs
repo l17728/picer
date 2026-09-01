@@ -657,6 +657,33 @@ public sealed class PicerDatabase : IDisposable
         return list;
     }
 
+    public List<ImageLocationHierarchyRow> GetImageLocationHierarchyRows()
+    {
+        using var connection = OpenReadConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT i.id, CASE WHEN i.gps IS NOT NULL AND i.gps<>'' THEN 1 ELSE 0 END,
+                   l.country,l.province,l.city,l.county,l.district,l.town,l.village
+            FROM images i
+            LEFT JOIN image_locations l ON l.image_id=i.id
+            WHERE i.status='active'
+            ORDER BY COALESCE(l.country,''),COALESCE(l.province,''),COALESCE(l.city,''),i.id
+            """;
+        var rows = new List<ImageLocationHierarchyRow>();
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+            rows.Add(new(
+                reader.GetInt64(0), reader.GetInt64(1) == 1,
+                reader.IsDBNull(2) ? null : reader.GetString(2),
+                reader.IsDBNull(3) ? null : reader.GetString(3),
+                reader.IsDBNull(4) ? null : reader.GetString(4),
+                reader.IsDBNull(5) ? null : reader.GetString(5),
+                reader.IsDBNull(6) ? null : reader.GetString(6),
+                reader.IsDBNull(7) ? null : reader.GetString(7),
+                reader.IsDBNull(8) ? null : reader.GetString(8)));
+        return rows;
+    }
+
     public SourceFolder? GetSource(long id)
     {
         using var cmd = Command("SELECT id, path, added_utc FROM sources WHERE id = $id");

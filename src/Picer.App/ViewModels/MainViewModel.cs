@@ -682,6 +682,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 ? $"位置索引已更新 {result.SavedImages} 张照片"
                 : $"位置索引更新 {result.SavedImages} 张，{result.FailedGroups} 个位置稍后重试";
             await ApplySearchAndFilterAsync();
+            await LoadDirectoryTreeAsync();
         }
         catch (OperationCanceledException)
         {
@@ -947,7 +948,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
         var snapshot = await UiWork.RunDatabaseAsync(() => (
             Sources: _db.GetSources().ToArray(),
             Albums: SemanticEngine.GetAlbums(_db)
-                .Select(album => (Album: album, Count: SemanticEngine.GetAlbumImageCount(_db, album.Id))).ToArray()));
+                .Select(album => (Album: album, Count: SemanticEngine.GetAlbumImageCount(_db, album.Id))).ToArray(),
+            Locations: _db.GetImageLocationHierarchyRows().ToArray()));
         DirectoryTree.Clear();
         foreach (var source in snapshot.Sources)
         {
@@ -974,11 +976,55 @@ public partial class MainViewModel : ObservableObject, IDisposable
             });
         DirectoryTree.Add(albumsRoot);
 
+        DirectoryTree.Add(BuildGeographyTree(snapshot.Locations));
+
         SelectedDirectory = selectedAlbumId is not null
             ? albumsRoot.Children.FirstOrDefault(node => node.AlbumId == selectedAlbumId)
             : DirectoryTree.FirstOrDefault(node => !node.IsAlbumRoot &&
                 string.Equals(node.FullPath, selectedPath, StringComparison.OrdinalIgnoreCase)) ??
               DirectoryTree.FirstOrDefault(node => !node.IsAlbumRoot);
+    }
+
+    private static DirectoryNodeViewModel BuildGeographyTree(IReadOnlyList<ImageLocationHierarchyRow> rows)
+    {
+        var earth = new DirectoryNodeViewModel
+        {
+            Name = "太阳系第三行星（地球）", Icon = "🌍", IsGeoNode = true, IsGeoRoot = true,
+            IsExpanded = false, ImageCount = rows.Count, AnchorImageIds = rows.Select(row => row.ImageId).ToArray()
+        };
+        var childMaps = new Dictionary<DirectoryNodeViewModel, Dictionary<string, DirectoryNodeViewModel>>();
+        foreach (var row in rows)
+        {
+            var levels = new[] { row.Country, row.Province, row.City, row.County, row.District, row.Town, row.Village }
+                .Where(value => !string.IsNullOrWhiteSpace(value)).Select(value => value!.Trim()).ToArray();
+            if (levels.Length == 0) levels = [row.HasGps ? "待解析位置" : "未知位置"];
+
+            var parent = earth;
+            foreach (var level in levels)
+            {
+                if (!childMaps.TryGetValue(parent, out var children))
+                    childMaps[parent] = children = new(StringComparer.OrdinalIgnoreCase);
+                if (!children.TryGetValue(level, out var child))
+                {
+                    child = new DirectoryNodeViewModel { Name = level, Icon = "📍", IsGeoNode = true };
+                    children[level] = child;
+                    parent.Children.Add(child);
+                }
+                child.MutableAnchorImageIds.Add(row.ImageId);
+                child.ImageCount = child.MutableAnchorImageIds.Count;
+                parent = child;
+            }
+        }
+        foreach (var node in FlattenGeoNodes(earth).Skip(1))
+            if (node.MutableAnchorImageIds.Count > 0) node.AnchorImageIds = node.MutableAnchorImageIds.ToArray();
+        return earth;
+    }
+
+    private static IEnumerable<DirectoryNodeViewModel> FlattenGeoNodes(DirectoryNodeViewModel node)
+    {
+        yield return node;
+        foreach (var child in node.Children)
+            foreach (var descendant in FlattenGeoNodes(child)) yield return descendant;
     }
 
     [RelayCommand]
@@ -1106,7 +1152,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 StatusText = "请选择“我的相册”下的一个相册";
                 return;
             }
-            var records = await UiWork.RunDatabaseAsync(() => selectedDirectory.IsSceneAnchor
+            var records = await UiWork.RunDatabaseAsync(() => selectedDirectory.IsSceneAnchor || selectedDirectory.IsGeoNode
                 ? selectedDirectory.AnchorImageIds.Select(id => _db.GetImage(id)).Where(image => image is not null).Cast<ImageRecord>()
                     .OrderBy(SceneTimeClusterService.EffectiveTime).ThenBy(image => image.Id).ToList()
                 : selectedDirectory.AlbumId is { } albumId
@@ -1118,7 +1164,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             OnPropertyChanged(nameof(DirectoryImageCount));
             StatusText = $"[{selectedDirectory.Name}] 已显示 {DirectoryImages.Count} 张索引照片";
 
-            var unindexedFiles = selectedDirectory.IsSceneAnchor || selectedDirectory.AlbumId is not null ? [] : await Task.Run(() =>
+            var unindexedFiles = selectedDirectory.IsSceneAnchor || selectedDirectory.IsGeoNode || selectedDirectory.AlbumId is not null ? [] : await Task.Run(() =>
             {
                 var options = new EnumerationOptions
                 {
@@ -1210,6 +1256,9 @@ public partial class DirectoryNodeViewModel : ObservableObject
     public bool IsSceneAnchor { get; set; }
     public bool IsAlbumRoot { get; set; }
     public long? AlbumId { get; set; }
+    public bool IsGeoNode { get; set; }
+    public bool IsGeoRoot { get; set; }
+    internal List<long> MutableAnchorImageIds { get; } = [];
     public string SceneName { get; set; } = "";
     public bool SceneAnchorsLoaded { get; set; }
     [ObservableProperty][NotifyPropertyChangedFor(nameof(ClassificationModeLabel))] private bool _classificationIncludesDescendants;

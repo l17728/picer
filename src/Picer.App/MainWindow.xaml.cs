@@ -190,7 +190,7 @@ public partial class MainWindow : Window
         if (e.NewValue is DirectoryNodeViewModel node)
         {
             _mainVm.SelectedDirectory = node;
-            if (!node.IsSceneAnchor && !node.IsAlbumRoot && node.AlbumId is null)
+            if (!node.IsSceneAnchor && !node.IsAlbumRoot && !node.IsGeoNode && node.AlbumId is null)
             {
                 await _mainVm.ExpandDirectoryCommand.ExecuteAsync(node);
                 await _mainVm.LoadSceneAnchorsAsync(node);
@@ -208,7 +208,7 @@ public partial class MainWindow : Window
     {
         if (sender is not ContextMenu menu) return;
         var selected = DirectoryTreeView.SelectedItem as DirectoryNodeViewModel;
-        var mode = selected switch { { AlbumId: not null } => "album", { IsAlbumRoot: false } => "directory", _ => null };
+        var mode = selected switch { { AlbumId: not null } => "album", { IsAlbumRoot: false, IsGeoNode: false } => "directory", _ => null };
         foreach (var item in menu.Items.OfType<FrameworkElement>())
             item.Visibility = string.Equals(item.Tag as string, mode, StringComparison.Ordinal)
                 ? Visibility.Visible : Visibility.Collapsed;
