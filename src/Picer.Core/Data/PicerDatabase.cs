@@ -684,6 +684,54 @@ public sealed class PicerDatabase : IDisposable
         return rows;
     }
 
+    public List<LocationHierarchyChoice> GetLocationHierarchyChoices()
+    {
+        var choices = new Dictionary<string, LocationHierarchyChoice>(StringComparer.OrdinalIgnoreCase);
+        foreach (var row in GetImageLocationHierarchyRows().Where(row => !string.IsNullOrWhiteSpace(row.Country)))
+        {
+            string?[] values = [row.Country, row.Province, row.City, row.County, row.District, row.Town, row.Village];
+            var current = new string?[7];
+            for (var index = 0; index < values.Length; index++)
+            {
+                if (string.IsNullOrWhiteSpace(values[index])) continue;
+                current[index] = values[index]!.Trim();
+                var display = string.Join(" / ", current.Where(value => !string.IsNullOrWhiteSpace(value)));
+                choices.TryAdd(display, new(display, current[0], current[1], current[2], current[3], current[4], current[5], current[6]));
+            }
+        }
+        return choices.Values.OrderBy(choice => choice.DisplayName, StringComparer.CurrentCultureIgnoreCase).ToList();
+    }
+
+    public void SetImageLocation(long imageId, LocationHierarchyChoice location)
+    {
+        var image = GetImage(imageId) ?? throw new InvalidOperationException("照片索引不存在");
+        var latitude = 0d;
+        var longitude = 0d;
+        GeoPlaceResolver.TryParseCoordinates(image.Gps, out latitude, out longitude);
+        var display = string.Join("，", new[] { location.Village, location.Town, location.District, location.County,
+            location.City, location.Province, location.Country }.Where(value => !string.IsNullOrWhiteSpace(value)));
+        using var command = Command("""
+            INSERT INTO image_locations(image_id,latitude,longitude,country,province,city,county,district,town,village,display_name,search_text,resolved_utc)
+            VALUES($image,$latitude,$longitude,$country,$province,$city,$county,$district,$town,$village,$display,$display,$now)
+            ON CONFLICT(image_id) DO UPDATE SET country=excluded.country,province=excluded.province,city=excluded.city,
+                county=excluded.county,district=excluded.district,town=excluded.town,village=excluded.village,
+                display_name=excluded.display_name,search_text=excluded.search_text,resolved_utc=excluded.resolved_utc
+            """);
+        command.Parameters.AddWithValue("$image", imageId);
+        command.Parameters.AddWithValue("$latitude", latitude);
+        command.Parameters.AddWithValue("$longitude", longitude);
+        command.Parameters.AddWithValue("$country", (object?)location.Country ?? DBNull.Value);
+        command.Parameters.AddWithValue("$province", (object?)location.Province ?? DBNull.Value);
+        command.Parameters.AddWithValue("$city", (object?)location.City ?? DBNull.Value);
+        command.Parameters.AddWithValue("$county", (object?)location.County ?? DBNull.Value);
+        command.Parameters.AddWithValue("$district", (object?)location.District ?? DBNull.Value);
+        command.Parameters.AddWithValue("$town", (object?)location.Town ?? DBNull.Value);
+        command.Parameters.AddWithValue("$village", (object?)location.Village ?? DBNull.Value);
+        command.Parameters.AddWithValue("$display", display);
+        command.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("o"));
+        command.ExecuteNonQuery();
+    }
+
     public SourceFolder? GetSource(long id)
     {
         using var cmd = Command("SELECT id, path, added_utc FROM sources WHERE id = $id");

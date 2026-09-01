@@ -149,6 +149,7 @@
                             <Separator Tag="directory"/><MenuItem Tag="directory" Header="描述此未分类场景…" Click="DescribeUnclassifiedScene_Click"/>
                             <MenuItem Tag="directory" Header="重新生成分类锚点" Click="RegenerateDirectoryClassification_Click"/>
                             <MenuItem Tag="album" Header="删除相册…" Click="DeleteAlbum_Click" Foreground="#A00000"/>
+                            <MenuItem Tag="pending-location" Header="解析位置" Click="ParsePendingLocations_Click"/>
                         </ContextMenu></TreeView.ContextMenu>
                         <TreeView.ItemContainerStyle>
                             <Style TargetType="TreeViewItem">
@@ -193,6 +194,7 @@
                                         SelectedInfoText="{Binding SelectedPhotoContext}"
                                         OpenCommand="{Binding OpenSelectedCommand}"
                                         ShowDetailsCommand="{Binding ShowImageInfoCommand}"
+                                        EditLocationCommand="{Binding EditSelectedLocationCommand}"
                                         ShowInExplorerCommand="{Binding ShowInExplorerCommand}"/>
                 </Grid>
             </TabItem>
@@ -239,6 +241,7 @@
                                     SelectedInfoText="{Binding SelectedPhotoContext}"
                                     OpenCommand="{Binding OpenSelectedCommand}"
                                     ShowDetailsCommand="{Binding ShowImageInfoCommand}"
+                                    EditLocationCommand="{Binding EditSelectedLocationCommand}"
                                     ShowInExplorerCommand="{Binding ShowInExplorerCommand}"/>
                 </DockPanel>
             </TabItem>

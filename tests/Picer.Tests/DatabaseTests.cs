@@ -251,6 +251,27 @@ public sealed class DatabaseTests : IDisposable
             Assert.Single(IndexSearchEngine.Search(_db, new SearchFilters { Query = query }));
     }
 
+    [Fact]
+    public void ManualLocation_MoveAndAddChild_PreservesPhotoIndex()
+    {
+        var source = _db.AddSource(@"D:\Photos");
+        var image = _db.UpsertImage(new ImageRecord
+        {
+            SourceId = source.Id, Path = @"D:\Photos\manual.jpg", FileSize = 100,
+            ModifiedUtc = DateTime.UtcNow, IndexedUtc = DateTime.UtcNow,
+            Status = ImageStatus.Active, Gps = "34.34,108.94"
+        });
+        var city = new LocationHierarchyChoice("中国 / 陕西省 / 西安市", "中国", "陕西省", "西安市");
+        var district = city.AddChild("雁塔区");
+
+        _db.SetImageLocation(image.Id, district);
+
+        Assert.NotNull(_db.GetImage(image.Id));
+        Assert.Equal(ImageStatus.Active, _db.GetImage(image.Id)!.Status);
+        Assert.Contains(_db.GetLocationHierarchyChoices(), choice => choice.DisplayName == "中国 / 陕西省 / 西安市 / 雁塔区");
+        Assert.Single(IndexSearchEngine.Search(_db, new SearchFilters { Query = "雁塔区" }));
+    }
+
     private sealed class HierarchyGeocoder : IReverseGeocoder
     {
         public int RequestCount { get; private set; }

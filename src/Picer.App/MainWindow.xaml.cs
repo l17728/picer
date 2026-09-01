@@ -208,7 +208,13 @@ public partial class MainWindow : Window
     {
         if (sender is not ContextMenu menu) return;
         var selected = DirectoryTreeView.SelectedItem as DirectoryNodeViewModel;
-        var mode = selected switch { { AlbumId: not null } => "album", { IsAlbumRoot: false, IsGeoNode: false } => "directory", _ => null };
+        var mode = selected switch
+        {
+            { IsPendingLocation: true } => "pending-location",
+            { AlbumId: not null } => "album",
+            { IsAlbumRoot: false, IsGeoNode: false } => "directory",
+            _ => null
+        };
         foreach (var item in menu.Items.OfType<FrameworkElement>())
             item.Visibility = string.Equals(item.Tag as string, mode, StringComparison.Ordinal)
                 ? Visibility.Visible : Visibility.Collapsed;
@@ -218,6 +224,8 @@ public partial class MainWindow : Window
         if (DirectoryTreeView.SelectedItem is DirectoryNodeViewModel { AlbumId: not null } album)
             await _mainVm.DeleteAlbumAsync(album);
     }
+    private async void ParsePendingLocations_Click(object sender, RoutedEventArgs e) =>
+        await _mainVm.ParsePendingLocationsAsync();
     private async void DirectoryLocalClassification_Click(object sender,RoutedEventArgs e){if(DirectoryTreeView.SelectedItem is DirectoryNodeViewModel node)await _mainVm.SetDirectoryClassificationModeAsync(node,false);}
     private async void DirectoryRecursiveClassification_Click(object sender,RoutedEventArgs e){if(DirectoryTreeView.SelectedItem is DirectoryNodeViewModel node)await _mainVm.SetDirectoryClassificationModeAsync(node,true);}
     private async void RegenerateDirectoryClassification_Click(object sender,RoutedEventArgs e){if(DirectoryTreeView.SelectedItem is DirectoryNodeViewModel node)await _mainVm.LoadSceneAnchorsAsync(node,true);}

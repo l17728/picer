@@ -697,6 +697,37 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
     }
 
+    public async Task ParsePendingLocationsAsync()
+    {
+        if (Volatile.Read(ref _locationEnrichmentRunning) != 0)
+        {
+            StatusText = "位置解析正在后台进行，请稍候；完成后目录树会自动刷新";
+            return;
+        }
+        StatusText = "正在解析“待解析位置”中的照片…";
+        await EnrichLocationHierarchyAsync();
+    }
+
+    [RelayCommand]
+    private async Task EditSelectedLocationAsync()
+    {
+        if (SelectedImage is null) return;
+        var image = SelectedImage;
+        var choices = await UiWork.RunDatabaseAsync(() => _db.GetLocationHierarchyChoices().ToArray());
+        if (choices.Length == 0)
+        {
+            MessageBox.Show("当前还没有可选的地理节点，请先解析位置。", "编辑地点",
+                MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+        var dialog = new EditLocationWindow(choices) { Owner = Application.Current.MainWindow };
+        if (dialog.ShowDialog() != true || dialog.Result is null) return;
+        await UiWork.RunDatabaseAsync(() => _db.SetImageLocation(image.Record.Id, dialog.Result));
+        await LoadDirectoryTreeAsync();
+        await ApplySearchAndFilterAsync();
+        StatusText = $"已更新“{image.FileName}”的地点：{dialog.Result.DisplayName}";
+    }
+
     partial void OnIsIndexingChanged(bool value) => CancelIndexCommand.NotifyCanExecuteChanged();
 
     [RelayCommand]
@@ -1006,7 +1037,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     childMaps[parent] = children = new(StringComparer.OrdinalIgnoreCase);
                 if (!children.TryGetValue(level, out var child))
                 {
-                    child = new DirectoryNodeViewModel { Name = level, Icon = "📍", IsGeoNode = true };
+                    child = new DirectoryNodeViewModel
+                    {
+                        Name = level, Icon = "📍", IsGeoNode = true,
+                        IsPendingLocation = parent.IsGeoRoot && string.Equals(level, "待解析位置", StringComparison.Ordinal)
+                    };
                     children[level] = child;
                     parent.Children.Add(child);
                 }
@@ -1258,6 +1293,7 @@ public partial class DirectoryNodeViewModel : ObservableObject
     public long? AlbumId { get; set; }
     public bool IsGeoNode { get; set; }
     public bool IsGeoRoot { get; set; }
+    public bool IsPendingLocation { get; set; }
     internal List<long> MutableAnchorImageIds { get; } = [];
     public string SceneName { get; set; } = "";
     public bool SceneAnchorsLoaded { get; set; }
