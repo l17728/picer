@@ -228,7 +228,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     partial void OnIsQuestionModeChanged(bool value)
     {
         QuestionAnswerText = value
-            ? "本地问答已开启。可输入：“有多少张照片？”或“这些照片用了什么相机？”。仅查询 D 盘本地索引，不会外发内容。"
+            ? "本地规则问答已开启（不使用大模型）。可输入：“有多少张照片？”或“这些照片用了什么相机？”。仅查询 D 盘本地索引，不会外发内容。"
             : "本地问答已关闭。";
         StatusText = value ? "本地问答已开启，请在搜索框输入问题" : "本地问答已关闭";
         _ = ApplySearchAndFilterAsync();
