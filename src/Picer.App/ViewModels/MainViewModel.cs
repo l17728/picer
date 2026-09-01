@@ -1258,9 +1258,26 @@ public partial class MainViewModel : ObservableObject, IDisposable
             $"搜索词：{string.Join("、", summary.SearchTerms)}\n\n接受后将显示在目录树中，是否应用？",
             "审核场景总结", MessageBoxButton.YesNo, MessageBoxImage.Question);
         if (accept != MessageBoxResult.Yes) return;
+        var parent = EnumerateDirectoryNodes(DirectoryTree).FirstOrDefault(candidate => candidate.Children.Contains(node));
         await UiWork.RunDatabaseAsync(() => service.SaveAccepted(plan, summary));
         StatusText = $"已应用场景描述：{summary.SceneName}";
-        await LoadDirectoryTreeAsync();
+        if (parent is null) return;
+        await LoadSceneAnchorsAsync(parent, true);
+        var refreshed = parent.Children.FirstOrDefault(candidate => candidate.IsSceneAnchor &&
+            candidate.AnchorImageIds.Count == node.AnchorImageIds.Count &&
+            candidate.AnchorImageIds.Order().SequenceEqual(node.AnchorImageIds.Order()));
+        parent.IsExpanded = true;
+        SelectedDirectory = refreshed ?? parent;
+        if (refreshed is not null) refreshed.IsSelected = true;
+    }
+
+    private static IEnumerable<DirectoryNodeViewModel> EnumerateDirectoryNodes(IEnumerable<DirectoryNodeViewModel> nodes)
+    {
+        foreach (var node in nodes)
+        {
+            yield return node;
+            foreach (var child in EnumerateDirectoryNodes(node.Children)) yield return child;
+        }
     }
 
     private async void LoadImagesForSelectedDirectory()
@@ -1467,7 +1484,7 @@ public partial class DirectoryNodeViewModel : ObservableObject
     public int ImageCount { get; set; }
     public bool IsLoaded { get; set; }
     public bool IsExpanded { get; set; }
-    public bool IsSelected { get; set; }
+    [ObservableProperty] private bool _isSelected;
     public bool IsSceneAnchor { get; set; }
     public bool IsAlbumRoot { get; set; }
     public long? AlbumId { get; set; }

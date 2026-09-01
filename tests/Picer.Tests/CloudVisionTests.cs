@@ -120,6 +120,43 @@ public sealed class CloudVisionTests : IDisposable
     }
 
     [Fact]
+    public void SceneTimeClusters_KeepPartiallyAnalyzedGroupsUnclassifiedAndPreserveAcceptedGroup()
+    {
+        var start = DateTime.UtcNow.AddHours(-2);
+        _image.CreatedUtc = start;
+        _database.UpdateImage(_image);
+        var images = new List<ImageRecord> { _image };
+        for (var index = 1; index <= 2; index++)
+        {
+            var path = Path.Combine(_root, $"scene-{index}.jpg");
+            File.WriteAllBytes(path, [1, 2, (byte)index]);
+            images.Add(_database.UpsertImage(new ImageRecord
+            {
+                SourceId = _image.SourceId, Path = path, FileSize = 3,
+                ModifiedUtc = File.GetLastWriteTimeUtc(path), CreatedUtc = start.AddMinutes(index * 20),
+                Status = ImageStatus.Active, IndexedUtc = DateTime.UtcNow
+            }));
+        }
+        var analyzer = new FakeCloudAnalyzer();
+        new CloudVisionRepository(_database).Save(images[1], analyzer, "none", "representative",
+            new CloudVisionResult("山景", ["mountain"], [], [], [], null, "none"));
+
+        var clusterService = new SceneTimeClusterService(_database);
+        var partial = Assert.Single(clusterService.Build(images));
+        Assert.Equal("未分类场景", partial.SceneName);
+        Assert.Equal(3, partial.ImageIds.Count);
+
+        var descriptions = new SceneGroupDescriptionService(_database, new CloudVisionRepository(_database));
+        var plan = descriptions.BuildPlan(_root, images);
+        descriptions.SaveAccepted(plan, new SceneGroupDescription(plan.Fingerprint, "秦岭旅行", "旅行场景",
+            ["秦岭"], "fake", "test", "photo-v1", "accepted"));
+
+        var accepted = Assert.Single(clusterService.Build(images));
+        Assert.Equal("秦岭旅行", accepted.SceneName);
+        Assert.Equal(3, accepted.ImageIds.Count);
+    }
+
+    [Fact]
     public async Task CompatibleAnalyzer_SanitizesImageAndSendsStructuredGpsContext()
     {
         var path = Path.Combine(_root, "valid.png");
