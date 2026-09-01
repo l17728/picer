@@ -28,7 +28,7 @@ public sealed class PicerDatabase : IDisposable
         using (var currentVersion = _conn.CreateCommand())
         {
             currentVersion.CommandText = "PRAGMA user_version";
-            if (Convert.ToInt32(currentVersion.ExecuteScalar()) >= 19)
+            if (Convert.ToInt32(currentVersion.ExecuteScalar()) >= 20)
                 return;
         }
 
@@ -540,6 +540,36 @@ public sealed class PicerDatabase : IDisposable
                 PRAGMA user_version = 19;
                 """;
             faceReviewMigration.ExecuteNonQuery();
+        }
+        if (schemaVersion < 20)
+        {
+            using var locationHierarchyMigration = _conn.CreateCommand();
+            locationHierarchyMigration.CommandText = """
+                CREATE TABLE IF NOT EXISTS image_locations(
+                    image_id INTEGER PRIMARY KEY REFERENCES images(id) ON DELETE CASCADE,
+                    latitude REAL NOT NULL,
+                    longitude REAL NOT NULL,
+                    country TEXT,
+                    province TEXT,
+                    city TEXT,
+                    county TEXT,
+                    district TEXT,
+                    town TEXT,
+                    village TEXT,
+                    display_name TEXT NOT NULL,
+                    search_text TEXT NOT NULL,
+                    resolved_utc TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_image_locations_country ON image_locations(country);
+                CREATE INDEX IF NOT EXISTS idx_image_locations_province ON image_locations(province);
+                CREATE INDEX IF NOT EXISTS idx_image_locations_city ON image_locations(city);
+                CREATE INDEX IF NOT EXISTS idx_image_locations_county ON image_locations(county);
+                CREATE INDEX IF NOT EXISTS idx_image_locations_district ON image_locations(district);
+                CREATE INDEX IF NOT EXISTS idx_image_locations_town ON image_locations(town);
+                CREATE INDEX IF NOT EXISTS idx_image_locations_village ON image_locations(village);
+                PRAGMA user_version = 20;
+                """;
+            locationHierarchyMigration.ExecuteNonQuery();
         }
     }
 

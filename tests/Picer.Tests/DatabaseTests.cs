@@ -1,7 +1,9 @@
 using System.IO;
 using Picer.Core.Data;
+using Picer.Core.Geocoding;
 using Picer.Core.Logging;
 using Picer.Core.Models;
+using Picer.Core.Search;
 
 namespace Picer.Tests;
 
@@ -212,12 +214,57 @@ public sealed class DatabaseTests : IDisposable
     }
 
     [Fact]
-    public void Schema_IsMigratedToVersionSixWithSuggestionRejections()
+    public void Schema_IsMigratedToLatestVersionWithLocationHierarchy()
     {
         using var version = _db.Command("PRAGMA user_version");
-        Assert.Equal(19L, (long)version.ExecuteScalar()!);
+        Assert.Equal(20L, (long)version.ExecuteScalar()!);
         using var table = _db.Command("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='rejected_suggestions'");
         Assert.Equal(1L, (long)table.ExecuteScalar()!);
+        using var locationTable = _db.Command("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='image_locations'");
+        Assert.Equal(1L, (long)locationTable.ExecuteScalar()!);
+    }
+
+    [Fact]
+    public async Task LocationHierarchy_EnrichesExistingImageAndMatchesEveryAdministrativeLevel()
+    {
+        var source = _db.AddSource(@"D:\Photos");
+        _db.UpsertImage(new ImageRecord
+        {
+            SourceId = source.Id,
+            Path = @"D:\Photos\melbourne.jpg",
+            FileSize = 100,
+            ModifiedUtc = DateTime.UtcNow,
+            Gps = "-37.8136,144.9631",
+            Status = ImageStatus.Active,
+            IndexedUtc = DateTime.UtcNow
+        });
+        var geocoder = new HierarchyGeocoder();
+        var service = new LocationHierarchyService(_db, geocoder);
+
+        var first = await service.EnrichPendingAsync();
+        var second = await service.EnrichPendingAsync();
+
+        Assert.Equal(1, first.SavedImages);
+        Assert.Equal(0, second.CoordinateGroups);
+        Assert.Equal(1, geocoder.RequestCount);
+        foreach (var query in new[] { "澳大利亚", "维多利亚州", "墨尔本", "中央商务区" })
+            Assert.Single(IndexSearchEngine.Search(_db, new SearchFilters { Query = query }));
+    }
+
+    private sealed class HierarchyGeocoder : IReverseGeocoder
+    {
+        public int RequestCount { get; private set; }
+
+        public Task<ReverseGeocodingResult?> ReverseAsync(double latitude, double longitude, CancellationToken cancellationToken = default)
+        {
+            RequestCount++;
+            return Task.FromResult<ReverseGeocodingResult?>(new(
+                "中央商务区，墨尔本，维多利亚州，澳大利亚", "test",
+                Country: "澳大利亚", Province: "维多利亚州", City: "墨尔本", District: "中央商务区"));
+        }
+
+        public Task<GeoBounds?> ResolvePlaceAsync(string query, CancellationToken cancellationToken = default) =>
+            Task.FromResult<GeoBounds?>(null);
     }
 
     [Fact]

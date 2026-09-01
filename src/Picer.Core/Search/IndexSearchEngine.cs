@@ -322,6 +322,8 @@ public static class IndexSearchEngine
                           AND (cv.summary LIKE $cloudQuery OR cv.result_json LIKE $cloudQuery))
              OR EXISTS (SELECT 1 FROM florence_image_results fr
                         WHERE fr.image_id=t.id AND fr.state='accepted' AND fr.result_text LIKE $cloudQuery)
+             OR EXISTS (SELECT 1 FROM image_locations il
+                        WHERE il.image_id=t.id AND il.search_text LIKE $cloudQuery)
              OR EXISTS (SELECT 1 FROM scene_group_descriptions sg, json_each(sg.image_ids_json) member
                         WHERE member.value=t.id AND sg.state='accepted'
                           AND (sg.scene_name LIKE $cloudQuery OR sg.summary LIKE $cloudQuery OR sg.search_terms_json LIKE $cloudQuery)))

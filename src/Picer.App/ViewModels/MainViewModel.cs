@@ -35,6 +35,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private CancellationTokenSource? _directoryLoadCts;
     private CancellationTokenSource? _cloudCts;
     private CancellationTokenSource? _photoContextCts;
+    private readonly CancellationTokenSource _locationEnrichmentCts = new();
+    private int _locationEnrichmentRunning;
     private long _searchVersion;
     private string? _resolvedGeoQuery;
     private readonly DirectoryClassificationPreferences _directoryClassification = new(AppPaths.DirectoryClassificationSettingsPath);
@@ -201,6 +203,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         await ApplySearchAndFilterAsync();
         await LoadDirectoryTreeAsync();
         _ = Video.LoadAsync();
+        _ = EnrichLocationHierarchyAsync();
         PicerEventSource.Log.StartupStage("first-page-ready", Stopwatch.GetElapsedTime(started).TotalMilliseconds);
     }
 
@@ -599,6 +602,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 _ = People.ProcessNewPhotosAsync();
             }
 
+            _ = EnrichLocationHierarchyAsync();
+
             if (total.MarkedMissing > 0)
                 await HandleMissingAsync();
         }
@@ -626,6 +631,37 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private void CancelIndex() => _indexCts?.Cancel();
 
     private bool CanCancelIndex() => IsIndexing && _indexCts is not null;
+
+    private async Task EnrichLocationHierarchyAsync()
+    {
+        if (Interlocked.CompareExchange(ref _locationEnrichmentRunning, 1, 0) != 0) return;
+        try
+        {
+            var progress = new Progress<LocationEnrichmentProgress>(value =>
+            {
+                StatusText = $"正在构建位置索引 {value.CompletedGroups}/{value.TotalGroups}，已更新 {value.SavedImages} 张";
+            });
+            var result = await AppServices.LocationHierarchy.EnrichPendingAsync(progress, _locationEnrichmentCts.Token);
+            if (result.CoordinateGroups == 0) return;
+
+            AppendOutput($"位置索引完成：更新 {result.SavedImages} 张，失败位置 {result.FailedGroups} 个");
+            StatusText = result.FailedGroups == 0
+                ? $"位置索引已更新 {result.SavedImages} 张照片"
+                : $"位置索引更新 {result.SavedImages} 张，{result.FailedGroups} 个位置稍后重试";
+            await ApplySearchAndFilterAsync();
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception exception)
+        {
+            AppendOutput($"位置索引构建失败：{exception.Message}");
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _locationEnrichmentRunning, 0);
+        }
+    }
 
     partial void OnIsIndexingChanged(bool value) => CancelIndexCommand.NotifyCanExecuteChanged();
 
@@ -1066,11 +1102,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     public void Dispose()
     {
+        _locationEnrichmentCts.Cancel();
         _searchCts?.Cancel();
         _directoryLoadCts?.Cancel();
         _indexCts?.Cancel();
         _cloudCts?.Cancel();
         _cloudCts?.Dispose();
+        _locationEnrichmentCts.Dispose();
         People.Dispose();
     }
 }

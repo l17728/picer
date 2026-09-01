@@ -24,6 +24,7 @@ public static class AppServices
     public static IndexEngine Index { get; private set; } = null!;
     public static IUserAuthorizedFileOperation FileOperations { get; private set; } = null!;
     public static IReverseGeocoder Geocoder { get; private set; } = null!;
+    public static LocationHierarchyService LocationHierarchy { get; private set; } = null!;
     public static StorageConfig Config { get; private set; } = null!;
     public static VisionAnalysisRepository VisionRepository { get; private set; } = null!;
     public static PeopleService People { get; private set; } = null!;
@@ -69,6 +70,7 @@ public static class AppServices
         Index = new IndexEngine(Db, Storage, Thumbnails);
         FileOperations = new WindowsRecycleBinFileOperation();
         Geocoder = new NominatimReverseGeocoder(Path.Combine(AppPaths.DataRoot, "geocoding-cache.json"));
+        LocationHierarchy = new LocationHierarchyService(Db, Geocoder);
         VisionRepository = new VisionAnalysisRepository(Db);
         People = new PeopleService(Db);
         FaceThumbnails = new FaceThumbnailService(AppPaths.FaceThumbnailDir);

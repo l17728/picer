@@ -14,7 +14,10 @@ public sealed record ReverseGeocodingResult(
     string? District = null,
     string? Poi = null,
     IReadOnlyList<Picer.Core.Vision.LocationLandmark>? NearbyLandmarks = null,
-    string Accuracy = "estimated");
+    string Accuracy = "estimated",
+    string? County = null,
+    string? Town = null,
+    string? Village = null);
 
 public interface IReverseGeocoder
 {
@@ -109,10 +112,16 @@ public sealed class NominatimReverseGeocoder : IReverseGeocoder, IDisposable
                         return value.GetString();
                 return null;
             }
-            var result = new ReverseGeocodingResult(displayName.GetString()!, attribution,
-                Address("country"), Address("state", "province"), Address("city", "town", "municipality"),
-                Address("county", "city_district", "district"),
-                Address("tourism", "attraction", "amenity", "historic", "leisure"));
+            var result = new ReverseGeocodingResult(
+                displayName.GetString()!, attribution,
+                Country: Address("country"),
+                Province: Address("state", "province", "region"),
+                City: Address("city"),
+                District: Address("city_district", "district", "borough", "suburb"),
+                Poi: Address("tourism", "attraction", "amenity", "historic", "leisure"),
+                County: Address("county"),
+                Town: Address("town", "municipality", "township"),
+                Village: Address("village", "hamlet", "neighbourhood", "quarter"));
             _cache[key] = result;
             SaveCache();
             return result;
