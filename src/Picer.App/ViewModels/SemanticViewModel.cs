@@ -175,6 +175,7 @@ public partial class SemanticViewModel : ObservableObject
         SelectedAlbum = item;
         NewAlbumName = "";
         StatusText = $"已创建相册：{album.Name}";
+        _changed?.Invoke();
     }
 
     [RelayCommand]
@@ -205,6 +206,7 @@ public partial class SemanticViewModel : ObservableObject
 
         await UiWork.RunDatabaseAsync(() => SemanticEngine.AddToAlbum(_db, SelectedAlbum.Album.Id, CurrentImageId));
         StatusText = $"已将图片添加到'{SelectedAlbum.Album.Name}'";
+        _changed?.Invoke();
     }
 
     [RelayCommand]
@@ -218,6 +220,7 @@ public partial class SemanticViewModel : ObservableObject
 
         await UiWork.RunDatabaseAsync(() => SemanticEngine.RemoveFromAlbum(_db, SelectedAlbum.Album.Id, CurrentImageId));
         StatusText = $"已从'{SelectedAlbum.Album.Name}'移除图片";
+        _changed?.Invoke();
     }
 
     [RelayCommand]
@@ -230,6 +233,7 @@ public partial class SemanticViewModel : ObservableObject
             var refreshed = await UiWork.RunDatabaseAsync(() => SemanticEngine.GetAlbums(_db).ToArray());
             Albums = new(refreshed.Select(album => new AlbumItemViewModel(album)));
             StatusText = $"已自动创建 {albums.Count} 个时间线相册";
+            _changed?.Invoke();
         }
         finally
         {
@@ -248,6 +252,7 @@ public partial class SemanticViewModel : ObservableObject
             Albums = new(snapshot.Albums.Select(album => new AlbumItemViewModel(album)));
             Tags = new(snapshot.Tags.Select(tag => new TagItemViewModel(tag)));
             StatusText = $"已按相机品牌自动创建 {albums.Count} 个相册并打标签";
+            _changed?.Invoke();
         }
         finally
         {

@@ -190,7 +190,7 @@ public partial class MainWindow : Window
         if (e.NewValue is DirectoryNodeViewModel node)
         {
             _mainVm.SelectedDirectory = node;
-            if (!node.IsSceneAnchor)
+            if (!node.IsSceneAnchor && !node.IsAlbumRoot && node.AlbumId is null)
             {
                 await _mainVm.ExpandDirectoryCommand.ExecuteAsync(node);
                 await _mainVm.LoadSceneAnchorsAsync(node);

@@ -178,6 +178,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         {
             LoadTags();
             _ = ApplySearchAndFilterAsync();
+            _ = LoadDirectoryTreeAsync();
         });
         SelectedImages.CollectionChanged += (_, _) => Semantic.SetSelection(SelectedImages.Select(image => image.Record.Id));
 
@@ -924,9 +925,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private async Task LoadDirectoryTreeAsync()
     {
         var selectedPath = SelectedDirectory?.FullPath;
-        var sources = await UiWork.RunDatabaseAsync(() => _db.GetSources().ToArray());
+        var selectedAlbumId = SelectedDirectory?.AlbumId;
+        var snapshot = await UiWork.RunDatabaseAsync(() => (
+            Sources: _db.GetSources().ToArray(),
+            Albums: SemanticEngine.GetAlbums(_db)
+                .Select(album => (Album: album, Count: SemanticEngine.GetAlbumImageCount(_db, album.Id))).ToArray()));
         DirectoryTree.Clear();
-        foreach (var source in sources)
+        foreach (var source in snapshot.Sources)
         {
             var node = new DirectoryNodeViewModel
             {
@@ -939,8 +944,23 @@ public partial class MainViewModel : ObservableObject, IDisposable
             DirectoryTree.Add(node);
             _ = ExpandDirectoryAsync(node);
         }
-        SelectedDirectory = DirectoryTree.FirstOrDefault(node =>
-            string.Equals(node.FullPath, selectedPath, StringComparison.OrdinalIgnoreCase)) ?? DirectoryTree.FirstOrDefault();
+        var albumsRoot = new DirectoryNodeViewModel
+        {
+            Name = "我的相册", Icon = "📚", IsAlbumRoot = true, IsExpanded = true,
+            ImageCount = snapshot.Albums.Sum(item => item.Count)
+        };
+        foreach (var item in snapshot.Albums)
+            albumsRoot.Children.Add(new DirectoryNodeViewModel
+            {
+                Name = item.Album.Name, Icon = "🖼", AlbumId = item.Album.Id, ImageCount = item.Count
+            });
+        DirectoryTree.Add(albumsRoot);
+
+        SelectedDirectory = selectedAlbumId is not null
+            ? albumsRoot.Children.FirstOrDefault(node => node.AlbumId == selectedAlbumId)
+            : DirectoryTree.FirstOrDefault(node => !node.IsAlbumRoot &&
+                string.Equals(node.FullPath, selectedPath, StringComparison.OrdinalIgnoreCase)) ??
+              DirectoryTree.FirstOrDefault(node => !node.IsAlbumRoot);
     }
 
     [RelayCommand]
@@ -1045,9 +1065,17 @@ public partial class MainViewModel : ObservableObject, IDisposable
         DirectoryImages.Clear();
         try
         {
+            if (selectedDirectory.IsAlbumRoot)
+            {
+                OnPropertyChanged(nameof(DirectoryImageCount));
+                StatusText = "请选择“我的相册”下的一个相册";
+                return;
+            }
             var records = await UiWork.RunDatabaseAsync(() => selectedDirectory.IsSceneAnchor
                 ? selectedDirectory.AnchorImageIds.Select(id => _db.GetImage(id)).Where(image => image is not null).Cast<ImageRecord>()
                     .OrderBy(SceneTimeClusterService.EffectiveTime).ThenBy(image => image.Id).ToList()
+                : selectedDirectory.AlbumId is { } albumId
+                    ? SemanticEngine.GetAlbumImages(_db, albumId)
                 : _db.GetActiveImagesUnderDirectory(selectedDirectory.FullPath), cts.Token);
             var indexedPaths = records.Select(record => record.Path).ToHashSet(StringComparer.OrdinalIgnoreCase);
             await UiWork.AddInBatchesAsync(records.Where(image => image.Status == ImageStatus.Active),
@@ -1055,7 +1083,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             OnPropertyChanged(nameof(DirectoryImageCount));
             StatusText = $"[{selectedDirectory.Name}] 已显示 {DirectoryImages.Count} 张索引照片";
 
-            var unindexedFiles = selectedDirectory.IsSceneAnchor ? [] : await Task.Run(() =>
+            var unindexedFiles = selectedDirectory.IsSceneAnchor || selectedDirectory.AlbumId is not null ? [] : await Task.Run(() =>
             {
                 var options = new EnumerationOptions
                 {
@@ -1145,6 +1173,8 @@ public partial class DirectoryNodeViewModel : ObservableObject
     public bool IsExpanded { get; set; }
     public bool IsSelected { get; set; }
     public bool IsSceneAnchor { get; set; }
+    public bool IsAlbumRoot { get; set; }
+    public long? AlbumId { get; set; }
     public string SceneName { get; set; } = "";
     public bool SceneAnchorsLoaded { get; set; }
     [ObservableProperty][NotifyPropertyChangedFor(nameof(ClassificationModeLabel))] private bool _classificationIncludesDescendants;
