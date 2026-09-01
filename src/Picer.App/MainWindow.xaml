@@ -48,7 +48,8 @@
                     <ComboBoxItem Content="视频" Tag="video"/>
                 </ComboBox>
                 <CheckBox Content="本地问答" IsChecked="{Binding IsQuestionMode}" VerticalAlignment="Center" Margin="4,0"
-                          ToolTip="仅查询本地索引，不外发内容"/>
+                          Click="QuestionMode_Click"
+                          ToolTip="仅查询本地索引，不外发内容；目前支持照片数量和相机汇总"/>
                 <Button Content="清空" Command="{Binding ClearSearchCommand}" Padding="8,3"/>
                 <Button Content="地域搜索" Command="{Binding ResolvePlaceCommand}"
                         CommandParameter="{Binding Text, ElementName=SearchBox}" Padding="8,3"

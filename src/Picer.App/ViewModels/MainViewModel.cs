@@ -225,7 +225,14 @@ public partial class MainViewModel : ObservableObject, IDisposable
             _searchDebounce.Start();
         }
     }
-    partial void OnIsQuestionModeChanged(bool value) => _ = ApplySearchAndFilterAsync();
+    partial void OnIsQuestionModeChanged(bool value)
+    {
+        QuestionAnswerText = value
+            ? "本地问答已开启。可输入：“有多少张照片？”或“这些照片用了什么相机？”。仅查询 D 盘本地索引，不会外发内容。"
+            : "本地问答已关闭。";
+        StatusText = value ? "本地问答已开启，请在搜索框输入问题" : "本地问答已关闭";
+        _ = ApplySearchAndFilterAsync();
+    }
     partial void OnSortByChanged(SortField value) => _ = ApplySearchAndFilterAsync();
     partial void OnSortDirChanged(SortDirection value) => _ = ApplySearchAndFilterAsync();
     partial void OnFilterTakenAfterChanged(DateTime? value) => _ = ApplySearchAndFilterAsync();
@@ -365,7 +372,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 _ => $"暂不支持这个问题。{question.Explanation}。未将内容发送到外部服务。"
             };
         }
-        StatusText = SearchQuery.Length > 0
+        StatusText = IsQuestionMode && string.IsNullOrWhiteSpace(SearchQuery)
+            ? "本地问答已开启，请输入照片数量或相机相关问题"
+            : SearchQuery.Length > 0
             ? (MatchedCount > TotalCount
                 ? $"搜索「{SearchQuery}」：显示 {TotalCount} / 共 {MatchedCount} 条"
                 : $"搜索「{SearchQuery}」：找到 {MatchedCount} 条")

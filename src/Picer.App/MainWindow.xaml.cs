@@ -50,6 +50,13 @@ public partial class MainWindow : Window
         MainTabs.SelectedIndex = 1;
     }
 
+    private void QuestionMode_Click(object sender, RoutedEventArgs e)
+    {
+        MainTabs.SelectedIndex = 1;
+        SearchBox.Focus();
+        SearchBox.CaretIndex = SearchBox.Text.Length;
+    }
+
     private void MediaTypeBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (MainTabs is null || MediaTypeBox is null) return;
