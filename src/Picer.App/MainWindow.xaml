@@ -77,6 +77,27 @@
                         </ControlTemplate>
                     </CheckBox.Template>
                 </CheckBox>
+                <CheckBox IsChecked="{Binding IsChronologicalAscending}" VerticalAlignment="Center" Margin="6,0"
+                          Cursor="Hand" Content="{Binding ChronologicalOrderLabel}"
+                          AutomationProperties.Name="全局照片时间顺序开关"
+                          ToolTip="开启：最早在上、最新在下；关闭：最新在上、最早在下">
+                    <CheckBox.Template>
+                        <ControlTemplate TargetType="CheckBox">
+                            <StackPanel Orientation="Horizontal">
+                                <Border x:Name="OrderTrack" Width="34" Height="18" CornerRadius="9" Background="#777">
+                                    <Ellipse x:Name="OrderThumb" Width="14" Height="14" Margin="1" Fill="White" HorizontalAlignment="Left"/>
+                                </Border>
+                                <TextBlock Text="{TemplateBinding Content}" Margin="5,0,0,0" VerticalAlignment="Center"/>
+                            </StackPanel>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsChecked" Value="True">
+                                    <Setter TargetName="OrderTrack" Property="Background" Value="#1677D2"/>
+                                    <Setter TargetName="OrderThumb" Property="HorizontalAlignment" Value="Right"/>
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </CheckBox.Template>
+                </CheckBox>
                 <Button Content="清空" Command="{Binding ClearSearchCommand}" Padding="8,3"/>
                 <Button Content="地域搜索" Command="{Binding ResolvePlaceCommand}"
                         CommandParameter="{Binding Text, ElementName=SearchBox}" Padding="8,3"
@@ -229,7 +250,18 @@
 
                     <GridSplitter Grid.Column="1" Width="4" HorizontalAlignment="Stretch" Background="#DDD"/>
 
-                    <controls:PhotoGrid Grid.Column="2" ItemsSource="{Binding DirectoryImages}"
+                    <DockPanel Grid.Column="2">
+                    <Border DockPanel.Dock="Top" Margin="4" Padding="10,7" Background="#F3F7FC" BorderBrush="#C8D8EA" BorderThickness="1"
+                            Visibility="{Binding IsTimelineAlbumSelected, Converter={StaticResource BoolToVis}}">
+                        <Grid>
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="220"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                            <TextBlock Text="时间锚点粒度" VerticalAlignment="Center" FontWeight="SemiBold" Margin="0,0,12,0"/>
+                            <Slider Grid.Column="1" Minimum="0" Maximum="3" TickFrequency="1" IsSnapToTickEnabled="True"
+                                    Value="{Binding TimelineGranularityIndex}" AutoToolTipPlacement="TopLeft"/>
+                            <TextBlock Grid.Column="2" Text="日　　周　　月　　年" VerticalAlignment="Center" Margin="12,0,0,0" Foreground="#506579"/>
+                        </Grid>
+                    </Border>
+                    <controls:PhotoGrid ItemsSource="{Binding DirectoryImagesView}"
                                         SelectedItem="{Binding SelectedImage}"
                                         SelectedItemsTarget="{Binding SelectedImages}"
                                         SelectedInfoText="{Binding SelectedPhotoContext}"
@@ -237,6 +269,7 @@
                                         ShowDetailsCommand="{Binding ShowImageInfoCommand}"
                                         EditLocationCommand="{Binding EditSelectedLocationCommand}"
                                         ShowInExplorerCommand="{Binding ShowInExplorerCommand}"/>
+                    </DockPanel>
                 </Grid>
             </TabItem>
 

@@ -4,6 +4,8 @@ using System.IO;
 using System.Text;
 using System.Windows;
 using System.Windows.Threading;
+using System.Windows.Data;
+using System.ComponentModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Picer.Core;
@@ -48,6 +50,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     public ObservableCollection<AlbumItemViewModel> Albums { get; } = new();
     public ObservableCollection<DirectoryNodeViewModel> DirectoryTree { get; } = new();
     public ObservableCollection<ImageItemViewModel> DirectoryImages { get; } = new();
+    public ListCollectionView DirectoryImagesView { get; }
     public ObservableCollection<ImageItemViewModel> SelectedImages { get; } = new();
     public SemanticViewModel Semantic { get; }
     public PeopleViewModel People { get; }
@@ -108,6 +111,15 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     [ObservableProperty]
     private SortDirection _sortDir = SortDirection.Ascending;
+
+    [ObservableProperty]
+    private bool _isChronologicalAscending = true;
+
+    [ObservableProperty]
+    private bool _isTimelineAlbumSelected;
+
+    [ObservableProperty]
+    private int _timelineGranularityIndex;
 
     [ObservableProperty]
     private bool _showFilterPanel = true;
@@ -193,6 +205,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             _ = LoadDirectoryTreeAsync();
         });
         SelectedImages.CollectionChanged += (_, _) => Semantic.SetSelection(SelectedImages.Select(image => image.Record.Id));
+        DirectoryImagesView = (ListCollectionView)CollectionViewSource.GetDefaultView(DirectoryImages);
 
         _searchDebounce = new DispatcherTimer
         {
@@ -248,6 +261,15 @@ public partial class MainViewModel : ObservableObject, IDisposable
     }
     partial void OnSortByChanged(SortField value) => _ = ApplySearchAndFilterAsync();
     partial void OnSortDirChanged(SortDirection value) => _ = ApplySearchAndFilterAsync();
+    partial void OnIsChronologicalAscendingChanged(bool value)
+    {
+        SortBy = SortField.TakenDate;
+        SortDir = value ? SortDirection.Ascending : SortDirection.Descending;
+        LoadImagesForSelectedDirectory();
+        OnPropertyChanged(nameof(ChronologicalOrderLabel));
+    }
+    public string ChronologicalOrderLabel => IsChronologicalAscending ? "时间升序（最新在下）" : "时间降序（最新在上）";
+    partial void OnTimelineGranularityIndexChanged(int value) => RefreshDirectoryTimelineView();
     partial void OnFilterTakenAfterChanged(DateTime? value) => _ = ApplySearchAndFilterAsync();
     partial void OnFilterTakenBeforeChanged(DateTime? value) => _ = ApplySearchAndFilterAsync();
     partial void OnFilterMinWidthChanged(int? value) => _ = ApplySearchAndFilterAsync();
@@ -259,7 +281,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
     partial void OnSelectedCameraBrandChanged(string? value) => _ = ApplySearchAndFilterAsync();
     partial void OnSelectedTagChanged(TagItemViewModel? value) => _ = ApplySearchAndFilterAsync();
     partial void OnIncludeMissingChanged(bool value) => _ = ApplySearchAndFilterAsync();
-    partial void OnSelectedDirectoryChanged(DirectoryNodeViewModel? value) => LoadImagesForSelectedDirectory();
+    partial void OnSelectedDirectoryChanged(DirectoryNodeViewModel? value)
+    {
+        IsTimelineAlbumSelected = value?.IsTimelineAlbum == true;
+        LoadImagesForSelectedDirectory();
+    }
     partial void OnSelectedImageChanged(ImageItemViewModel? value)
     {
         Semantic.SetSelection(SelectedImages.Count > 0 ? SelectedImages.Select(image => image.Record.Id) : value is null ? [] : [value.Record.Id]);
@@ -1047,7 +1073,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
         foreach (var item in timelineAlbums)
             lightConeRoot.Children.Add(new DirectoryNodeViewModel
             {
-                Name = item.Album.Name, Icon = "🕰", AlbumId = item.Album.Id, ImageCount = item.Count
+                Name = item.Album.Name, Icon = "🕰", AlbumId = item.Album.Id, ImageCount = item.Count,
+                IsTimelineAlbum = true
             });
         DirectoryTree.Add(lightConeRoot);
 
@@ -1240,9 +1267,19 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 : selectedDirectory.AlbumId is { } albumId
                     ? SemanticEngine.GetAlbumImages(_db, albumId)
                 : _db.GetActiveImagesUnderDirectory(selectedDirectory.FullPath), cts.Token);
+            records = (IsChronologicalAscending
+                    ? records.OrderBy(SceneTimeClusterService.EffectiveTime).ThenBy(image => image.Id)
+                    : records.OrderByDescending(SceneTimeClusterService.EffectiveTime).ThenByDescending(image => image.Id))
+                .ToList();
             var indexedPaths = records.Select(record => record.Path).ToHashSet(StringComparer.OrdinalIgnoreCase);
             await UiWork.AddInBatchesAsync(records.Where(image => image.Status == ImageStatus.Active),
-                image => DirectoryImages.Add(new ImageItemViewModel(image)), cts.Token, batchSize: 8);
+                image =>
+                {
+                    var item = new ImageItemViewModel(image);
+                    item.SetTimelineGranularity(TimelineGranularityIndex);
+                    DirectoryImages.Add(item);
+                }, cts.Token, batchSize: 8);
+            RefreshDirectoryTimelineView();
             OnPropertyChanged(nameof(DirectoryImageCount));
             StatusText = $"[{selectedDirectory.Name}] 已显示 {DirectoryImages.Count} 张索引照片";
 
@@ -1285,6 +1322,17 @@ public partial class MainViewModel : ObservableObject, IDisposable
         catch (OperationCanceledException) { }
         catch (UnauthorizedAccessException) { }
         catch (Exception exception) { StatusText = $"目录照片加载失败：{exception.Message}"; }
+    }
+
+    private void RefreshDirectoryTimelineView()
+    {
+        foreach (var image in DirectoryImages) image.SetTimelineGranularity(TimelineGranularityIndex);
+        using (DirectoryImagesView.DeferRefresh())
+        {
+            DirectoryImagesView.GroupDescriptions.Clear();
+            if (IsTimelineAlbumSelected)
+                DirectoryImagesView.GroupDescriptions.Add(new PropertyGroupDescription(nameof(ImageItemViewModel.TimelineAnchor)));
+        }
     }
 
     private async Task HandleMissingAsync()
@@ -1338,6 +1386,7 @@ public partial class DirectoryNodeViewModel : ObservableObject
     public bool IsSceneAnchor { get; set; }
     public bool IsAlbumRoot { get; set; }
     public long? AlbumId { get; set; }
+    public bool IsTimelineAlbum { get; set; }
     public bool IsGeoNode { get; set; }
     public bool IsGeoRoot { get; set; }
     public bool IsPendingLocation { get; set; }

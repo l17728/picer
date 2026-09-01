@@ -1,4 +1,5 @@
 using System.IO;
+using System.Globalization;
 using System.Windows;
 using System.Windows.Media.Imaging;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -24,6 +25,22 @@ public partial class ImageItemViewModel : ObservableObject
     public string Path => _record.Path;
     public string FileName => System.IO.Path.GetFileName(_record.Path);
     public bool IsMissing => _record.Status == ImageStatus.Missing;
+    public DateTime EffectiveTime => (_record.TakenUtc ?? _record.CreatedUtc ?? _record.ModifiedUtc).ToLocalTime();
+
+    [ObservableProperty]
+    private string _timelineAnchor = "";
+
+    public void SetTimelineGranularity(int granularity)
+    {
+        var time = EffectiveTime;
+        TimelineAnchor = granularity switch
+        {
+            1 => $"{ISOWeek.GetYear(time)} 年 第 {ISOWeek.GetWeekOfYear(time):00} 周",
+            2 => time.ToString("yyyy 年 MM 月"),
+            3 => time.ToString("yyyy 年"),
+            _ => time.ToString("yyyy 年 MM 月 dd 日")
+        };
+    }
 
     public string InfoText
     {

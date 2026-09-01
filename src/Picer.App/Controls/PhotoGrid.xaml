@@ -30,6 +30,24 @@
                  VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling"
                  MouseDoubleClick="List_MouseDoubleClick" KeyDown="List_KeyDown"
                  PreviewMouseRightButtonDown="List_PreviewMouseRightButtonDown">
+            <ListBox.GroupStyle>
+                <GroupStyle>
+                    <GroupStyle.HeaderTemplate>
+                        <DataTemplate>
+                            <Border Background="#E7F0FA" BorderBrush="#BCD0E5" BorderThickness="0,0,0,1"
+                                    Padding="10,7" Margin="3,8,3,3">
+                                <TextBlock Text="{Binding Name}" FontSize="15" FontWeight="SemiBold" Foreground="#294A69"/>
+                            </Border>
+                        </DataTemplate>
+                    </GroupStyle.HeaderTemplate>
+                    <GroupStyle.Panel>
+                        <ItemsPanelTemplate>
+                            <local:VirtualizingWrapPanel ItemWidth="{Binding CardWidth, RelativeSource={RelativeSource AncestorType={x:Type local:PhotoGrid}}}"
+                                                         ItemHeight="{Binding CardHeight, RelativeSource={RelativeSource AncestorType={x:Type local:PhotoGrid}}}"/>
+                        </ItemsPanelTemplate>
+                    </GroupStyle.Panel>
+                </GroupStyle>
+            </ListBox.GroupStyle>
             <ListBox.ItemsPanel>
                 <ItemsPanelTemplate>
                     <local:VirtualizingWrapPanel ItemWidth="{Binding CardWidth, RelativeSource={RelativeSource AncestorType={x:Type local:PhotoGrid}}}"
