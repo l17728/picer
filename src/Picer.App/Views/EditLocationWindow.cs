@@ -10,16 +10,20 @@ public sealed class EditLocationWindow : Window
     private readonly TextBox _childName;
     public LocationHierarchyChoice? Result { get; private set; }
 
-    public EditLocationWindow(IReadOnlyList<LocationHierarchyChoice> choices)
+    public EditLocationWindow(IReadOnlyList<LocationHierarchyChoice> choices, int photoCount = 1)
     {
-        Title = "编辑照片地点";
+        Title = photoCount > 1 ? $"批量编辑 {photoCount} 张照片的地点" : "编辑照片地点";
         Width = 560;
         Height = 245;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
         ResizeMode = ResizeMode.NoResize;
 
         var panel = new StackPanel { Margin = new Thickness(18) };
-        panel.Children.Add(new TextBlock { Text = "归入已有地理节点", FontWeight = FontWeights.SemiBold });
+        panel.Children.Add(new TextBlock
+        {
+            Text = photoCount > 1 ? $"将选中的 {photoCount} 张照片统一归入已有地理节点" : "归入已有地理节点",
+            FontWeight = FontWeights.SemiBold
+        });
         _locations = new ComboBox
         {
             ItemsSource = choices, DisplayMemberPath = nameof(LocationHierarchyChoice.DisplayName),
@@ -38,7 +42,7 @@ public sealed class EditLocationWindow : Window
         var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
         var cancel = new Button { Content = "取消", Padding = new Thickness(16, 5, 16, 5), Margin = new Thickness(6, 0, 0, 0) };
         cancel.Click += (_, _) => DialogResult = false;
-        var save = new Button { Content = "保存地点", Padding = new Thickness(16, 5, 16, 5), IsDefault = true };
+        var save = new Button { Content = photoCount > 1 ? $"应用到 {photoCount} 张照片" : "保存地点", Padding = new Thickness(16, 5, 16, 5), IsDefault = true };
         save.Click += Save;
         buttons.Children.Add(save);
         buttons.Children.Add(cancel);

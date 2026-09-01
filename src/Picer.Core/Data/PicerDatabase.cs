@@ -18,7 +18,8 @@ public sealed class PicerDatabase : IDisposable
         _connectionString = new SqliteConnectionStringBuilder
         {
             DataSource = dbPath,
-            ForeignKeys = true
+            ForeignKeys = true,
+            DefaultTimeout = 30
         }.ToString();
 
         _conn = new SqliteConnection(_connectionString);
@@ -704,32 +705,54 @@ public sealed class PicerDatabase : IDisposable
 
     public void SetImageLocation(long imageId, LocationHierarchyChoice location)
     {
-        var image = GetImage(imageId) ?? throw new InvalidOperationException("照片索引不存在");
-        var latitude = 0d;
-        var longitude = 0d;
-        GeoPlaceResolver.TryParseCoordinates(image.Gps, out latitude, out longitude);
+        SetImageLocations([imageId], location);
+    }
+
+    public void SetImageLocations(IEnumerable<long> imageIds, LocationHierarchyChoice location)
+    {
+        var ids = imageIds.Distinct().ToArray();
+        if (ids.Length == 0) return;
+        using var connection = new SqliteConnection(_connectionString);
+        connection.Open();
+        using var transaction = connection.BeginTransaction();
         var display = string.Join("，", new[] { location.Village, location.Town, location.District, location.County,
             location.City, location.Province, location.Country }.Where(value => !string.IsNullOrWhiteSpace(value)));
-        using var command = Command("""
-            INSERT INTO image_locations(image_id,latitude,longitude,country,province,city,county,district,town,village,display_name,search_text,resolved_utc)
-            VALUES($image,$latitude,$longitude,$country,$province,$city,$county,$district,$town,$village,$display,$display,$now)
-            ON CONFLICT(image_id) DO UPDATE SET country=excluded.country,province=excluded.province,city=excluded.city,
-                county=excluded.county,district=excluded.district,town=excluded.town,village=excluded.village,
-                display_name=excluded.display_name,search_text=excluded.search_text,resolved_utc=excluded.resolved_utc
-            """);
-        command.Parameters.AddWithValue("$image", imageId);
-        command.Parameters.AddWithValue("$latitude", latitude);
-        command.Parameters.AddWithValue("$longitude", longitude);
-        command.Parameters.AddWithValue("$country", (object?)location.Country ?? DBNull.Value);
-        command.Parameters.AddWithValue("$province", (object?)location.Province ?? DBNull.Value);
-        command.Parameters.AddWithValue("$city", (object?)location.City ?? DBNull.Value);
-        command.Parameters.AddWithValue("$county", (object?)location.County ?? DBNull.Value);
-        command.Parameters.AddWithValue("$district", (object?)location.District ?? DBNull.Value);
-        command.Parameters.AddWithValue("$town", (object?)location.Town ?? DBNull.Value);
-        command.Parameters.AddWithValue("$village", (object?)location.Village ?? DBNull.Value);
-        command.Parameters.AddWithValue("$display", display);
-        command.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("o"));
-        command.ExecuteNonQuery();
+        foreach (var imageId in ids)
+        {
+            using var coordinates = connection.CreateCommand();
+            coordinates.Transaction = transaction;
+            coordinates.CommandText = "SELECT COALESCE(gps,'') FROM images WHERE id=$image";
+            coordinates.Parameters.AddWithValue("$image", imageId);
+            var gpsValue = coordinates.ExecuteScalar();
+            if (gpsValue is null) throw new InvalidOperationException($"照片索引不存在：{imageId}");
+            var gps = (string)gpsValue;
+            var latitude = 0d;
+            var longitude = 0d;
+            GeoPlaceResolver.TryParseCoordinates(gps, out latitude, out longitude);
+            using var command = connection.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandText = """
+                INSERT INTO image_locations(image_id,latitude,longitude,country,province,city,county,district,town,village,display_name,search_text,resolved_utc)
+                VALUES($image,$latitude,$longitude,$country,$province,$city,$county,$district,$town,$village,$display,$display,$now)
+                ON CONFLICT(image_id) DO UPDATE SET country=excluded.country,province=excluded.province,city=excluded.city,
+                    county=excluded.county,district=excluded.district,town=excluded.town,village=excluded.village,
+                    display_name=excluded.display_name,search_text=excluded.search_text,resolved_utc=excluded.resolved_utc
+                """;
+            command.Parameters.AddWithValue("$image", imageId);
+            command.Parameters.AddWithValue("$latitude", latitude);
+            command.Parameters.AddWithValue("$longitude", longitude);
+            command.Parameters.AddWithValue("$country", (object?)location.Country ?? DBNull.Value);
+            command.Parameters.AddWithValue("$province", (object?)location.Province ?? DBNull.Value);
+            command.Parameters.AddWithValue("$city", (object?)location.City ?? DBNull.Value);
+            command.Parameters.AddWithValue("$county", (object?)location.County ?? DBNull.Value);
+            command.Parameters.AddWithValue("$district", (object?)location.District ?? DBNull.Value);
+            command.Parameters.AddWithValue("$town", (object?)location.Town ?? DBNull.Value);
+            command.Parameters.AddWithValue("$village", (object?)location.Village ?? DBNull.Value);
+            command.Parameters.AddWithValue("$display", display);
+            command.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("o"));
+            command.ExecuteNonQuery();
+        }
+        transaction.Commit();
     }
 
     public SourceFolder? GetSource(long id)

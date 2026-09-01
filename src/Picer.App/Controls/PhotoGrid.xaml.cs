@@ -55,7 +55,11 @@ public partial class PhotoGrid : UserControl
         DependencyObject? element = e.OriginalSource as DependencyObject;
         while (element is not null && element is not ListBoxItem)
             element = System.Windows.Media.VisualTreeHelper.GetParent(element);
-        if (element is ListBoxItem item) item.IsSelected = true;
+        if (element is ListBoxItem item && !item.IsSelected)
+        {
+            ((ListBox)sender).SelectedItems.Clear();
+            item.IsSelected = true;
+        }
     }
     private void List_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {

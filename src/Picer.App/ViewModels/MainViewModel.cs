@@ -735,8 +735,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [RelayCommand]
     private async Task EditSelectedLocationAsync()
     {
-        if (SelectedImage is null) return;
-        var image = SelectedImage;
+        var images = (SelectedImages.Count > 0
+                ? SelectedImages.ToArray()
+                : SelectedImage is null ? [] : [SelectedImage])
+            .DistinctBy(image => image.Record.Id).ToArray();
+        if (images.Length == 0) return;
         var choices = await UiWork.RunDatabaseAsync(() => _db.GetLocationHierarchyChoices().ToArray());
         if (choices.Length == 0)
         {
@@ -744,12 +747,15 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
-        var dialog = new EditLocationWindow(choices) { Owner = Application.Current.MainWindow };
+        var dialog = new EditLocationWindow(choices, images.Length) { Owner = Application.Current.MainWindow };
         if (dialog.ShowDialog() != true || dialog.Result is null) return;
-        await UiWork.RunDatabaseAsync(() => _db.SetImageLocation(image.Record.Id, dialog.Result));
+        StatusText = images.Length == 1 ? "正在更新照片地点…" : $"正在批量更新 {images.Length} 张照片的地点…";
+        await UiWork.RunDatabaseAsync(() => _db.SetImageLocations(images.Select(image => image.Record.Id), dialog.Result));
         await LoadDirectoryTreeAsync();
         await ApplySearchAndFilterAsync();
-        StatusText = $"已更新“{image.FileName}”的地点：{dialog.Result.DisplayName}";
+        StatusText = images.Length == 1
+            ? $"已更新“{images[0].FileName}”的地点：{dialog.Result.DisplayName}"
+            : $"已批量更新 {images.Length} 张照片的地点：{dialog.Result.DisplayName}";
     }
 
     partial void OnIsIndexingChanged(bool value) => CancelIndexCommand.NotifyCanExecuteChanged();
@@ -1019,26 +1025,43 @@ public partial class MainViewModel : ObservableObject, IDisposable
             DirectoryTree.Add(node);
             _ = ExpandDirectoryAsync(node);
         }
+        var regularAlbums = snapshot.Albums.Where(item => !IsTimelineAlbum(item.Album)).ToArray();
+        var timelineAlbums = snapshot.Albums.Where(item => IsTimelineAlbum(item.Album)).ToArray();
         var albumsRoot = new DirectoryNodeViewModel
         {
             Name = "我的相册", Icon = "📚", IsAlbumRoot = true, IsExpanded = true,
-            ImageCount = snapshot.Albums.Sum(item => item.Count)
+            ImageCount = regularAlbums.Sum(item => item.Count)
         };
-        foreach (var item in snapshot.Albums)
+        foreach (var item in regularAlbums)
             albumsRoot.Children.Add(new DirectoryNodeViewModel
             {
                 Name = item.Album.Name, Icon = "🖼", AlbumId = item.Album.Id, ImageCount = item.Count
             });
         DirectoryTree.Add(albumsRoot);
 
+        var lightConeRoot = new DirectoryNodeViewModel
+        {
+            Name = "光锥之内", Icon = "⌛", IsAlbumRoot = true, IsExpanded = true,
+            ImageCount = timelineAlbums.Sum(item => item.Count)
+        };
+        foreach (var item in timelineAlbums)
+            lightConeRoot.Children.Add(new DirectoryNodeViewModel
+            {
+                Name = item.Album.Name, Icon = "🕰", AlbumId = item.Album.Id, ImageCount = item.Count
+            });
+        DirectoryTree.Add(lightConeRoot);
+
         DirectoryTree.Add(BuildGeographyTree(snapshot.Locations));
 
         SelectedDirectory = selectedAlbumId is not null
-            ? albumsRoot.Children.FirstOrDefault(node => node.AlbumId == selectedAlbumId)
+            ? albumsRoot.Children.Concat(lightConeRoot.Children).FirstOrDefault(node => node.AlbumId == selectedAlbumId)
             : DirectoryTree.FirstOrDefault(node => !node.IsAlbumRoot &&
                 string.Equals(node.FullPath, selectedPath, StringComparison.OrdinalIgnoreCase)) ??
               DirectoryTree.FirstOrDefault(node => !node.IsAlbumRoot);
     }
+
+    private static bool IsTimelineAlbum(Album album) =>
+        string.Equals(album.Description, "时间线相册（自动生成）", StringComparison.Ordinal);
 
     private static DirectoryNodeViewModel BuildGeographyTree(IReadOnlyList<ImageLocationHierarchyRow> rows)
     {
@@ -1208,7 +1231,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             if (selectedDirectory.IsAlbumRoot)
             {
                 OnPropertyChanged(nameof(DirectoryImageCount));
-                StatusText = "请选择“我的相册”下的一个相册";
+                StatusText = $"请选择“{selectedDirectory.Name}”下的一个相册";
                 return;
             }
             var records = await UiWork.RunDatabaseAsync(() => selectedDirectory.IsSceneAnchor || selectedDirectory.IsGeoNode
