@@ -9,14 +9,17 @@ public sealed record VideoFaceTimelineRecord(double TimestampSeconds, string Key
 
 public sealed class VideoFaceTimelineService(PicerDatabase database, IImageFaceAnalyzer analyzer, VisionAnalysisRepository photoFaces)
 {
-    public async Task<int> AnalyzeAsync(VideoRecord video, CancellationToken cancellationToken=default)
+    public async Task<int> AnalyzeAsync(VideoRecord video,
+        IProgress<(int Completed, int Total)>? progress = null, CancellationToken cancellationToken=default)
     {
         var known=photoFaces.GetEmbeddingsForMatching().Where(item=>item.PersonId is not null&&item.AssignmentState=="confirmed").ToArray();
         using var select=database.Command("SELECT id,timestamp_seconds,path FROM video_keyframes WHERE video_id=$video ORDER BY timestamp_seconds");
         select.Parameters.AddWithValue("$video",video.Id); using var reader=select.ExecuteReader();
         var frames=new List<(long Id,double Time,string Path)>();while(reader.Read())frames.Add((reader.GetInt64(0),reader.GetDouble(1),reader.GetString(2)));
         var total=0;
-        foreach(var frame in frames){cancellationToken.ThrowIfCancellationRequested();if(!File.Exists(frame.Path))continue;
+        var completed = 0;
+        progress?.Report((0, frames.Count));
+        foreach(var frame in frames){cancellationToken.ThrowIfCancellationRequested();if(!File.Exists(frame.Path)){progress?.Report((++completed,frames.Count));continue;}
             var info=new FileInfo(frame.Path);var result=await analyzer.AnalyzeAsync(new ImageRecord{Path=frame.Path,FileSize=info.Length,ModifiedUtc=info.LastWriteTimeUtc},cancellationToken);
             using var transaction=database.BeginTransaction();using(var clear=database.Command("DELETE FROM video_detected_faces WHERE keyframe_id=$frame")){clear.Transaction=transaction;clear.Parameters.AddWithValue("$frame",frame.Id);clear.ExecuteNonQuery();}
             for(var ordinal=0;ordinal<result.Faces.Count;ordinal++){var face=result.Faces[ordinal];var match=BestMatch(face.Embedding,known);
@@ -26,7 +29,7 @@ public sealed class VideoFaceTimelineService(PicerDatabase database, IImageFaceA
                     """);insert.Transaction=transaction;insert.Parameters.AddWithValue("$video",video.Id);insert.Parameters.AddWithValue("$frame",frame.Id);insert.Parameters.AddWithValue("$time",frame.Time);insert.Parameters.AddWithValue("$ordinal",ordinal);
                 insert.Parameters.AddWithValue("$x",face.Box.X);insert.Parameters.AddWithValue("$y",face.Box.Y);insert.Parameters.AddWithValue("$w",face.Box.Width);insert.Parameters.AddWithValue("$h",face.Box.Height);insert.Parameters.AddWithValue("$confidence",face.Confidence);
                 insert.Parameters.AddWithValue("$embedding",face.Embedding is null?DBNull.Value:ToBytes(face.Embedding));insert.Parameters.AddWithValue("$person",match.PersonId is null?DBNull.Value:match.PersonId);insert.Parameters.AddWithValue("$match",match.Score is null?DBNull.Value:match.Score);insert.Parameters.AddWithValue("$now",DateTime.UtcNow.ToString("o"));insert.ExecuteNonQuery();total++;}
-            transaction.Commit();}
+            transaction.Commit();progress?.Report((++completed,frames.Count));}
         return total;
     }
 

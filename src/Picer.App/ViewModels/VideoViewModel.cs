@@ -6,6 +6,7 @@ using System.Windows;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Picer.Core.Video;
+using Picer.Core.Logging;
 using Picer.App.Infrastructure;
 
 namespace Picer.App.ViewModels;
@@ -18,7 +19,13 @@ public partial class VideoViewModel(VideoRepository repository, VideoIndexServic
     public ObservableCollection<VideoItemViewModel> Videos { get; } = new();
     public ObservableCollection<VideoKeyframeItemViewModel> Frames { get; } = new();
     [ObservableProperty] private VideoItemViewModel? _selectedVideo;
-    [ObservableProperty] private bool _isBusy;
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(ScanCommand))]
+    [NotifyCanExecuteChangedFor(nameof(GenerateKeyframesCommand))]
+    [NotifyCanExecuteChangedFor(nameof(TranscribeCommand))]
+    [NotifyCanExecuteChangedFor(nameof(AnalyzePeopleCommand))]
+    [NotifyCanExecuteChangedFor(nameof(GenerateSummaryCommand))]
+    private bool _isBusy;
     [ObservableProperty] private string _statusText = keyframes is null ? "FFmpeg尚未就绪" : "就绪";
     [ObservableProperty] private string _transcriptText = "尚未转写";
     [ObservableProperty] private string _peopleTimelineText = "尚未分析视频人物";
@@ -65,7 +72,7 @@ public partial class VideoViewModel(VideoRepository repository, VideoIndexServic
         await UiWork.AddInBatchesAsync(snapshot.Frames, frame => Frames.Add(new VideoKeyframeItemViewModel(frame)), batchSize: 30);
     }
 
-    [RelayCommand]
+    [RelayCommand(CanExecute = nameof(CanStartOperation))]
     private async Task ScanAsync()
     {
         IsBusy = true;
@@ -79,7 +86,7 @@ public partial class VideoViewModel(VideoRepository repository, VideoIndexServic
         finally { IsBusy = false; }
     }
 
-    [RelayCommand]
+    [RelayCommand(CanExecute = nameof(CanStartOperation))]
     private async Task GenerateKeyframesAsync()
     {
         if (SelectedVideo is null) { StatusText = "请先选择视频"; return; }
@@ -90,16 +97,28 @@ public partial class VideoViewModel(VideoRepository repository, VideoIndexServic
         try
         {
             StatusText = "正在读取视频信息…";
-            var probe = await keyframes.ProbeAsync(SelectedVideo.Record.Path);
-            await UiWork.RunDatabaseAsync(() => repository.SaveProbe(SelectedVideo.Record.Id, probe));
+            try
+            {
+                var probe = await keyframes.ProbeAsync(SelectedVideo.Record.Path);
+                await UiWork.RunDatabaseAsync(() => repository.SaveProbe(SelectedVideo.Record.Id, probe));
+            }
+            catch (FileNotFoundException ex)
+            {
+                AppLogger.Info($"跳过视频元数据探测，继续生成关键帧：{ex.Message}");
+            }
             StatusText = "正在识别镜头并生成关键帧…";
             var frames = await keyframes.ExtractAsync(SelectedVideo.Record);
+            if (frames.Count == 0) throw new InvalidOperationException("FFmpeg 未能从该视频提取任何画面");
             await UiWork.RunDatabaseAsync(() => repository.SaveKeyframes(SelectedVideo.Record.Id, frames));
             var selectedId = SelectedVideo.Record.Id;
             await LoadAsync(); SelectedVideo = Videos.FirstOrDefault(item => item.Record.Id == selectedId);
             StatusText = $"关键帧完成：{frames.Count} 张";
         }
-        catch (Exception ex) { StatusText = $"关键帧失败：{ex.Message}"; }
+        catch (Exception ex)
+        {
+            AppLogger.Error($"关键帧生成失败：{SelectedVideo?.Record.Path}", ex);
+            StatusText = $"关键帧失败：{CompactError(ex.Message)}；详细信息已写入日志";
+        }
         finally { IsBusy = false; }
     }
 
@@ -112,31 +131,45 @@ public partial class VideoViewModel(VideoRepository repository, VideoIndexServic
         catch (Exception exception) { StatusText = $"无法打开视频：{exception.Message}"; }
     }
 
-    [RelayCommand]
+    [RelayCommand(CanExecute = nameof(CanStartOperation))]
     private async Task TranscribeAsync()
     {
         if (SelectedVideo is null) { StatusText="请先选择视频"; return; }
         if (transcription is null) { StatusText="本地转写组件尚未就绪"; return; }
         var cached=await UiWork.RunDatabaseAsync(()=>repository.GetTranscript(SelectedVideo.Record.Id));
-        if(cached is not null){ TranscriptText=ExtractTranscriptText(cached); StatusText="已复用本地转写缓存"; return; }
+        if(cached is not null && IsUsableTranscript(cached)){ TranscriptText=ExtractTranscriptText(cached); StatusText="已复用本地转写缓存"; return; }
         IsBusy=true;
-        try { StatusText="正在本地提取音频并转写…"; var json=await transcription.TranscribeAsync(SelectedVideo.Record);
+        try { StatusText=cached is null?"正在本地提取音频并转写…":"旧转写质量异常，正在重新识别…"; var json=await transcription.TranscribeAsync(SelectedVideo.Record);
+            if (!IsUsableTranscript(json))
+            {
+                TranscriptText = "模型未能可靠识别出语音；未保存本次结果。音频可能以音乐、噪声或过短语音为主。";
+                StatusText = "本地转写完成，但结果为空或存在明显重复幻觉，已拒绝缓存";
+                return;
+            }
             await UiWork.RunDatabaseAsync(()=>repository.SaveTranscript(SelectedVideo.Record.Id,transcription.ModelVersion,json)); TranscriptText=ExtractTranscriptText(json); StatusText="本地转写完成"; }
-        catch(Exception ex){StatusText=$"转写失败：{ex.Message}";} finally{IsBusy=false;}
+        catch(Exception ex){AppLogger.Error($"本地音频转写失败：{SelectedVideo?.Record.Path}",ex);StatusText=$"转写失败：{CompactError(ex.Message)}";} finally{IsBusy=false;}
     }
 
-    [RelayCommand]
+    [RelayCommand(CanExecute = nameof(CanStartOperation))]
     private async Task AnalyzePeopleAsync()
     {
         if(SelectedVideo is null){StatusText="请先选择视频";return;} if(faceTimeline is null){StatusText="人脸模型尚未就绪";return;}
         if(await UiWork.RunDatabaseAsync(()=>repository.GetKeyframes(SelectedVideo.Record.Id).Count)==0){StatusText="请先生成关键帧";return;} IsBusy=true;
-        try{StatusText="正在建立视频人物时间轴…";var count=await faceTimeline.AnalyzeAsync(SelectedVideo.Record);PeopleTimelineText=FormatTimeline(await UiWork.RunDatabaseAsync(()=>faceTimeline.GetTimeline(SelectedVideo.Record.Id)));StatusText=$"人物时间轴完成：{count} 个人脸片段";}
-        catch(Exception ex){StatusText=$"人物时间轴失败：{ex.Message}";}finally{IsBusy=false;}
+        try
+        {
+            StatusText="正在准备视频人物分析…";
+            var progress = new Progress<(int Completed, int Total)>(value =>
+                StatusText = $"正在分析视频人物：关键帧 {value.Completed}/{value.Total}");
+            var count=await faceTimeline.AnalyzeAsync(SelectedVideo.Record, progress: progress);
+            PeopleTimelineText=FormatTimeline(await UiWork.RunDatabaseAsync(()=>faceTimeline.GetTimeline(SelectedVideo.Record.Id)));
+            StatusText=$"人物时间轴完成：{count} 个人脸片段";
+        }
+        catch(Exception ex){AppLogger.Error($"视频人物分析失败：{SelectedVideo?.Record.Path}", ex);StatusText=$"人物时间轴失败：{CompactError(ex.Message)}";}finally{IsBusy=false;}
     }
 
     private static string FormatTimeline(IReadOnlyList<VideoFaceTimelineRecord>? faces)=>faces is null||faces.Count==0?"尚未识别到人物":string.Join(Environment.NewLine,faces.Select(face=>$"{TimeSpan.FromSeconds(face.TimestampSeconds):hh\\:mm\\:ss}  {face.SuggestedPersonName??"未知人物"}  {(face.MatchConfidence is null?"":$"匹配 {face.MatchConfidence:P0}")}"));
 
-    [RelayCommand]
+    [RelayCommand(CanExecute = nameof(CanStartOperation))]
     private async Task GenerateSummaryAsync()
     {
         if (SelectedVideo is null) { StatusText = "请先选择视频"; return; }
@@ -170,6 +203,26 @@ public partial class VideoViewModel(VideoRepository repository, VideoIndexServic
             else if(element.ValueKind==JsonValueKind.Array)foreach(var child in element.EnumerateArray())Collect(child,texts);
         }
     }
+
+    private static bool IsUsableTranscript(string? json)
+    {
+        var text = ExtractTranscriptText(json);
+        if (string.IsNullOrWhiteSpace(text) || text.StartsWith("尚未", StringComparison.Ordinal) ||
+            text.StartsWith("转写完成，但没有", StringComparison.Ordinal)) return false;
+        var significant = text.Where(character => !char.IsWhiteSpace(character) && !char.IsPunctuation(character)).ToArray();
+        if (significant.Length < 2) return false;
+        var dominant = significant.GroupBy(character => character).Max(group => group.Count());
+        return significant.Length < 12 || dominant < significant.Length * 0.65;
+    }
+
+    private static string CompactError(string message)
+    {
+        var firstLine = message.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries).FirstOrDefault()
+            ?? "未知错误";
+        return firstLine.Length <= 180 ? firstLine : firstLine[..180] + "…";
+    }
+
+    private bool CanStartOperation() => !IsBusy;
 }
 
 public sealed class VideoItemViewModel

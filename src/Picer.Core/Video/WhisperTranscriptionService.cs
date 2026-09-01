@@ -11,7 +11,7 @@ public sealed class WhisperTranscriptionService(string ffmpegPath, string whispe
         var directory = Path.Combine(workRoot, video.Id.ToString()); Directory.CreateDirectory(directory);
         var wave = Path.Combine(directory, "audio-16k.wav"); var outputPrefix = Path.Combine(directory, "transcript");
         if (!File.Exists(wave)) await RunAsync(ffmpegPath, ["-hide_banner","-loglevel","error","-y","-i",video.Path,"-vn","-ac","1","-ar","16000","-c:a","pcm_s16le",wave], cancellationToken);
-        await RunAsync(whisperPath, ["-m",modelPath,"-f",wave,"-l","zh","-oj","-of",outputPrefix,"-np"], cancellationToken);
+        await RunAsync(whisperPath, ["-m",modelPath,"-f",wave,"-l","auto","-sns","-nf","-oj","-of",outputPrefix,"-np"], cancellationToken);
         var jsonPath = outputPrefix + ".json";
         if (!File.Exists(jsonPath)) throw new InvalidOperationException("Whisper未生成转写结果。");
         return await File.ReadAllTextAsync(jsonPath, cancellationToken);

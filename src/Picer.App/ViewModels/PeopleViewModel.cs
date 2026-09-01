@@ -23,6 +23,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
     private readonly string? _unavailableReason;
     private CancellationTokenSource? _analysisCancellation;
     private readonly SemaphoreSlim _analysisGate = new(1, 1);
+    private readonly SemaphoreSlim _thumbnailGate = new(6, 6);
     private CancellationTokenSource? _pageLoadCancellation;
     private CancellationTokenSource? _personLoadCancellation;
     private CancellationTokenSource? _clusterLoadCancellation;
@@ -51,6 +52,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
     public ObservableCollection<UnassignedFaceViewModel> DisplayedFaces { get; } = [];
 
     [ObservableProperty] private PersonSummary? _selectedPerson;
+    [ObservableProperty] private PersonSummary? _candidateTargetPerson;
     [ObservableProperty] private UnassignedFaceViewModel? _selectedFace;
     [ObservableProperty] private CandidateClusterViewModel? _selectedCandidateCluster;
     [ObservableProperty] private UnassignedFaceViewModel? _selectedClusterFace;
@@ -236,12 +238,15 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         StatusText = $"候选匹配完成：检查 {result.Considered} 张脸，新增建议 {result.Suggested}，低于阈值 {result.BelowThreshold}；使用阈值 {result.AppliedThreshold:F3}";
     }
 
+    [RelayCommand]
     private async Task OrganizeFacesAsync(CancellationToken cancellationToken = default)
     {
+        StatusText = "正在使用最新标准更新自动归类…";
         var suggestions = await UiWork.RunDatabaseAsync(() => _suggestionEngine.Suggest(), cancellationToken);
-        var clusters = await UiWork.RunDatabaseAsync(() => _unknownFaceClusterer.Rebuild(), cancellationToken);
+        var clusters = await UiWork.RunDatabaseAsync(
+            () => _unknownFaceClusterer.Rebuild(suggestions.AppliedThreshold), cancellationToken);
         await RefreshAsync();
-        StatusText = $"自动归类完成：匹配已有分类 {suggestions.Suggested} 张，待命名 {clusters.ClusterCount} 组";
+        StatusText = $"自动归类完成：使用阈值 {suggestions.AppliedThreshold:F3}，匹配已有分类 {suggestions.Suggested} 张，待命名 {clusters.ClusterCount} 组";
     }
 
     [RelayCommand]
@@ -285,23 +290,47 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
     }
 
     public async Task MoveFaceToPersonAsync(UnassignedFaceViewModel face, PersonSummary person)
+        => await MoveFacesToPersonAsync([face], person);
+
+    public async Task MoveFacesToPersonAsync(IReadOnlyCollection<UnassignedFaceViewModel> faces, PersonSummary person)
     {
-        await UiWork.RunDatabaseAsync(() => _peopleService.MoveFace(face.FaceId, person.Id));
-        StatusText = $"已将人脸移到“{person.DisplayName}”";
+        var faceIds = faces.Select(face => face.FaceId).Distinct().ToArray();
+        if (faceIds.Length == 0) return;
+        await UiWork.RunDatabaseAsync(() =>
+        {
+            foreach (var faceId in faceIds) _peopleService.MoveFace(faceId, person.Id);
+        });
+        StatusText = $"已将 {faceIds.Length} 张人脸移到“{person.DisplayName}”";
         await RefreshAsync();
     }
 
     public async Task MoveFaceToUnassignedAsync(UnassignedFaceViewModel face)
+        => await MoveFacesToUnassignedAsync([face]);
+
+    public async Task MoveFacesToUnassignedAsync(IReadOnlyCollection<UnassignedFaceViewModel> faces)
     {
-        await UiWork.RunDatabaseAsync(() => _peopleService.MoveFaceToUnassigned(face.FaceId));
-        StatusText = "已移到待分类人脸";
+        var faceIds = faces.Select(face => face.FaceId).Distinct().ToArray();
+        if (faceIds.Length == 0) return;
+        await UiWork.RunDatabaseAsync(() =>
+        {
+            foreach (var faceId in faceIds) _peopleService.MoveFaceToUnassigned(faceId);
+        });
+        StatusText = $"已将 {faceIds.Length} 张人脸移到待分类";
         await RefreshAsync();
     }
 
     public async Task IgnoreFaceAsync(UnassignedFaceViewModel face)
+        => await IgnoreFacesAsync([face]);
+
+    public async Task IgnoreFacesAsync(IReadOnlyCollection<UnassignedFaceViewModel> faces)
     {
-        await UiWork.RunDatabaseAsync(() => _peopleService.IgnoreFace(face.FaceId));
-        StatusText = "已标记为不分类；后续自动归类会跳过这张脸";
+        var faceIds = faces.Select(face => face.FaceId).Distinct().ToArray();
+        if (faceIds.Length == 0) return;
+        await UiWork.RunDatabaseAsync(() =>
+        {
+            foreach (var faceId in faceIds) _peopleService.IgnoreFace(faceId);
+        });
+        StatusText = $"已将 {faceIds.Length} 张人脸标记为不分类；后续自动归类会跳过";
         await RefreshAsync();
     }
 
@@ -355,6 +384,25 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         StatusText = $"已将候选组确认为“{person.DisplayName}”，可继续逐脸纠错";
     }
 
+    [RelayCommand]
+    private async Task AssignCandidateClusterToSelectedPersonAsync()
+    {
+        if (SelectedCandidateCluster is null || CandidateTargetPerson is null)
+        {
+            StatusText = "请先选择一个待命名人物组和目标已命名人物";
+            return;
+        }
+        var person = CandidateTargetPerson;
+        var faceIds = SelectedCandidateCluster.Record.Faces.Select(face => face.FaceId).Distinct().ToArray();
+        await UiWork.RunDatabaseAsync(() =>
+        {
+            foreach (var faceId in faceIds) _peopleService.MoveFace(faceId, person.Id);
+        });
+        await RefreshAsync();
+        SelectedPerson = People.FirstOrDefault(value => value.Id == person.Id);
+        StatusText = $"已将候选组中的 {faceIds.Length} 张人脸归入“{person.DisplayName}”";
+    }
+
     partial void OnSelectedCandidateClusterChanged(CandidateClusterViewModel? value)
     {
         _clusterLoadCancellation?.Cancel();
@@ -377,7 +425,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
                 var item = CreateFaceItem(face);
                 SelectedClusterFaces.Add(item);
                 DisplayedFaces.Add(item);
-                _ = LoadDisplayedFaceThumbnailAsync(item);
+                LoadDisplayedFaceThumbnailAsync(item, cancellationToken).Forget();
                 DisplayedFacesTitle = $"候选人物 · {DisplayedFaces.Count} / {faces.Length} 张脸";
             }, cancellationToken);
             DisplayedFacesTitle = $"{cluster.Summary}（可输入名称后确认整组）";
@@ -451,7 +499,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
                     var item = CreateFaceItem(face);
                     AssignedFaces.Add(item);
                     DisplayedFaces.Add(item);
-                    _ = LoadDisplayedFaceThumbnailAsync(item);
+                    LoadDisplayedFaceThumbnailAsync(item, cancellationToken).Forget();
                 DisplayedFacesTitle = $"{person.DisplayName} · {AssignedFaces.Count} / {faces.Length} 张人脸";
                 }, cancellationToken);
             DisplayedFacesTitle = $"{person.DisplayName} · {AssignedFaces.Count} 张人脸";
@@ -491,10 +539,17 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         }
     }
 
-    private async Task LoadDisplayedFaceThumbnailAsync(UnassignedFaceViewModel item)
+    private async Task LoadDisplayedFaceThumbnailAsync(UnassignedFaceViewModel item, CancellationToken cancellationToken = default)
     {
-        var path = await _faceThumbnails.GetOrCreateAsync(item.Record);
-        if (path is not null && DisplayedFaces.Contains(item)) item.FaceThumbnailPath = path;
+        await _thumbnailGate.WaitAsync(cancellationToken);
+        try
+        {
+            if (!DisplayedFaces.Contains(item)) return;
+            var path = await _faceThumbnails.GetOrCreateAsync(item.Record);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (path is not null && DisplayedFaces.Contains(item)) item.FaceThumbnailPath = path;
+        }
+        finally { _thumbnailGate.Release(); }
     }
 }
 

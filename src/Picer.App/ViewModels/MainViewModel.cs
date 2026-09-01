@@ -1246,6 +1246,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     public async Task DescribeUnclassifiedSceneAsync(DirectoryNodeViewModel node)
     {
+        if (!node.IsSceneAnchor)
+        {
+            await DescribeUnclassifiedScenesInDirectoryAsync(node);
+            return;
+        }
         if (!node.IsSceneAnchor || !string.Equals(node.SceneName, "未分类场景", StringComparison.Ordinal))
         {
             MessageBox.Show("请在目录树中右键选择一个“未分类场景”节点。", "场景描述", MessageBoxButton.OK, MessageBoxImage.Information);
@@ -1302,6 +1307,83 @@ public partial class MainViewModel : ObservableObject, IDisposable
         parent.IsExpanded = true;
         SelectedDirectory = refreshed ?? parent;
         if (refreshed is not null) refreshed.IsSelected = true;
+    }
+
+    private async Task DescribeUnclassifiedScenesInDirectoryAsync(DirectoryNodeViewModel directory)
+    {
+        StatusText = $"正在读取“{directory.Name}”中的未分类场景…";
+        if (!directory.SceneAnchorsLoaded) await LoadSceneAnchorsAsync(directory, false);
+        var anchors = directory.Children.Where(child => child.IsSceneAnchor &&
+            string.Equals(child.SceneName, "未分类场景", StringComparison.Ordinal)).ToArray();
+        if (anchors.Length == 0)
+        {
+            StatusText = $"“{directory.Name}”中没有待描述的未分类场景";
+            MessageBox.Show(StatusText, "场景描述", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        var service = new SceneGroupDescriptionService(_db, AppServices.CloudVisionRepository);
+        var plans = new List<SceneGroupPlan>();
+        foreach (var anchor in anchors)
+        {
+            var images = await UiWork.RunDatabaseAsync(() => anchor.AnchorImageIds.Select(id => _db.GetImage(id))
+                .Where(image => image is { Status: ImageStatus.Active } && File.Exists(image.Path)).Cast<ImageRecord>().ToArray());
+            if (images.Length == 0) continue;
+            plans.Add(await UiWork.RunDatabaseAsync(() => service.BuildPlan(anchor.FullPath, images,
+                maximumSubgroups: 5, maximumRepresentatives: 3)));
+        }
+        if (plans.Count == 0)
+        {
+            StatusText = "未分类场景中的照片当前均不可读取";
+            MessageBox.Show(StatusText, "场景描述", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        var missing = await UiWork.RunDatabaseAsync(() => plans.SelectMany(plan => plan.Representatives)
+            .GroupBy(image => image.Id).Select(group => group.First())
+            .Where(image => AppServices.CloudVisionRepository.GetLatestCompleted(image.Id) is null).ToArray());
+        var preview = $"目录“{directory.Name}”中有 {plans.Count} 个尚未描述的场景，" +
+            $"将使用 {plans.Sum(plan => plan.Representatives.Count)} 张代表照片；其中 {missing.Length} 张需要调用已配置的视觉模型。\n\n" +
+            "生成成功的场景名称和摘要将直接应用；已有照片描述会增量复用。是否继续？";
+        if (MessageBox.Show(preview, "批量描述未分类场景", MessageBoxButton.YesNo,
+            MessageBoxImage.Question, MessageBoxResult.No) != MessageBoxResult.Yes) return;
+
+        if (missing.Length > 0)
+            await AnalyzeImagesWithCloudAsync(missing, AiFeatureIds.SceneDescription,
+                refreshDirectoryTree: false, showCompletionDialog: false);
+        using var summarizer = AppServices.CreateSceneGroupSummarizer();
+        if (summarizer is null)
+        {
+            MessageBox.Show("场景总结模型尚未配置。请在“AI 模型设置”中为“未分类场景描述”选择服务商和模型。",
+                "场景描述", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        var completed = 0;
+        var failed = 0;
+        foreach (var plan in plans)
+        {
+            try
+            {
+                StatusText = $"正在描述“{directory.Name}”中的未分类场景：{completed + failed + 1}/{plans.Count}";
+                var summary = await service.SummarizeWithAiAsync(plan, summarizer);
+                if (summary is null) { failed++; continue; }
+                await UiWork.RunDatabaseAsync(() => service.SaveAccepted(plan, summary));
+                completed++;
+            }
+            catch (Exception ex)
+            {
+                failed++;
+                AppLogger.Error($"批量场景描述失败：{plan.Fingerprint}", ex);
+            }
+        }
+        await LoadSceneAnchorsAsync(directory, true);
+        directory.IsExpanded = true;
+        SelectedDirectory = directory;
+        directory.IsSelected = true;
+        StatusText = $"“{directory.Name}”场景描述完成：成功 {completed}，失败 {failed}，共 {plans.Count} 个";
+        MessageBox.Show(StatusText, "批量场景描述", MessageBoxButton.OK,
+            failed == 0 ? MessageBoxImage.Information : MessageBoxImage.Warning);
     }
 
     private static IEnumerable<DirectoryNodeViewModel> EnumerateDirectoryNodes(IEnumerable<DirectoryNodeViewModel> nodes)

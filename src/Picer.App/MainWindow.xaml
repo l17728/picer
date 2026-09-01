@@ -197,7 +197,8 @@
                         <TreeView.ContextMenu><ContextMenu Opened="DirectoryContextMenu_Opened">
                             <MenuItem Tag="directory" Header="分类：仅本目录照片（默认）" Click="DirectoryLocalClassification_Click"/>
                             <MenuItem Tag="directory" Header="分类：包含本目录及所有子目录" Click="DirectoryRecursiveClassification_Click"/>
-                            <Separator Tag="directory"/><MenuItem Tag="directory" Header="描述此未分类场景…" Click="DescribeUnclassifiedScene_Click"/>
+                            <Separator Tag="directory"/><MenuItem Tag="directory" Header="描述未分类场景…" Click="DescribeUnclassifiedScene_Click"
+                                                                 ToolTip="批量描述所选目录中尚未描述的未分类场景；在场景节点上使用时只描述当前场景"/>
                             <MenuItem Tag="directory" Header="重新生成分类锚点" Click="RegenerateDirectoryClassification_Click"/>
                             <MenuItem Tag="album" Header="删除相册…" Click="DeleteAlbum_Click" Foreground="#A00000"/>
                             <MenuItem Tag="pending-location" Header="解析位置" Click="ParsePendingLocations_Click"/>
@@ -342,8 +343,8 @@
                         <DockPanel>
                             <StackPanel Orientation="Horizontal" DockPanel.Dock="Right">
                                 <Button Content="检查新照片" Command="{Binding AnalyzeAllCommand}" Padding="12,5" Margin="4,0" ToolTip="已分析的照片会使用缓存跳过"/>
-                                <Button Content="更新自动归类" Command="{Binding BuildCandidateClustersCommand}" Padding="12,5" Margin="4,0"
-                                        ToolTip="复用已提取的人脸特征，仅更新待命名候选组"/>
+                                <Button Content="更新自动归类" Command="{Binding OrganizeFacesCommand}" Padding="12,5" Margin="4,0"
+                                        ToolTip="使用最新已应用阈值匹配已命名人物，并重建待命名候选组；保留人工确认与排除结果"/>
                                 <Button Content="人脸精度验证" Click="FaceValidation_Click" Padding="12,5" Margin="4,0"/>
                                 <Button Content="取消" Command="{Binding CancelAnalysisCommand}" Padding="12,5" Margin="4,0"/>
                                 <Button Content="刷新" Command="{Binding RefreshCommand}" Padding="12,5" Margin="4,0"/>
@@ -369,8 +370,19 @@
                                     </DockPanel></DataTemplate></ListBox.ItemTemplate>
                                 </ListBox>
                                 <DockPanel Margin="0,6,0,0">
-                                    <Button DockPanel.Dock="Right" Content="命名整组" Command="{Binding NameCandidateClusterCommand}" Padding="8,4" Margin="5,0,0,0"/>
-                                    <TextBox Text="{Binding NewPersonName, UpdateSourceTrigger=PropertyChanged}" ToolTip="输入姓名后，将所选待命名组归入该人物"/>
+                                    <Button DockPanel.Dock="Right" Content="创建为新人物" Command="{Binding NameCandidateClusterCommand}" Padding="8,4" Margin="5,0,0,0"/>
+                                    <TextBox Text="{Binding NewPersonName, UpdateSourceTrigger=PropertyChanged}" ToolTip="输入姓名后，将所选待命名组确认为新人物"/>
+                                </DockPanel>
+                                <DockPanel Margin="0,6,0,0">
+                                    <Button DockPanel.Dock="Right" Content="归入已有人物" Command="{Binding AssignCandidateClusterToSelectedPersonCommand}"
+                                            Padding="8,4" Margin="5,0,0,0"/>
+                                    <ComboBox ItemsSource="{Binding People}" SelectedItem="{Binding CandidateTargetPerson}"
+                                              DisplayMemberPath="DisplayName" ToolTip="选择该候选组应归入的已命名人物"/>
+                                </DockPanel>
+                                <DockPanel Margin="0,6,0,0">
+                                    <Button DockPanel.Dock="Right" Content="只新建人物" Command="{Binding CreatePersonCommand}" Padding="8,4" Margin="5,0,0,0"
+                                            ToolTip="建立一个空人物分类，之后可在右侧多选人脸并移动过去"/>
+                                    <TextBlock Text="单张或跨组整理" VerticalAlignment="Center" Foreground="#666"/>
                                 </DockPanel>
                             </StackPanel>
                             <DockPanel>
@@ -389,6 +401,7 @@
                         <DockPanel>
                             <TextBlock DockPanel.Dock="Top" Text="双击人脸查看关联原图；右击可移动到人物、待分类或不分类。" Foreground="#555" Margin="4,0,4,8"/>
                             <ListBox x:Name="PeopleFacesList" ItemsSource="{Binding DisplayedFaces}" SelectedItem="{Binding SelectedDisplayedFace}"
+                                     SelectionMode="Extended"
                                      AutomationProperties.Name="人物人脸列表" AutomationProperties.HelpText="双击打开关联照片；右击可移动到已有分类、待分类或不分类"
                                      MouseDoubleClick="PeopleFace_DoubleClick" PreviewMouseRightButtonDown="PeopleFace_PreviewMouseRightButtonDown"
                                      ScrollViewer.HorizontalScrollBarVisibility="Disabled"

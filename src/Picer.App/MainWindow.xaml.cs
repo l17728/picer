@@ -151,27 +151,30 @@ public partial class MainWindow : Window
         if (sender is not ContextMenu menu) return;
         menu.Items.Clear();
         if (_mainVm.People.SelectedDisplayedFace is not { } face) return;
+        var faces = PeopleFacesList.SelectedItems.Cast<UnassignedFaceViewModel>().ToArray();
+        if (faces.Length == 0) faces = [face];
+        var countText = faces.Length > 1 ? $"（{faces.Length} 张）" : "";
 
         var open = new MenuItem { Header = "打开关联照片" };
         open.Click += async (_, _) => await _mainVm.People.OpenFacePhotoAsync(face);
         menu.Items.Add(open);
 
-        var move = new MenuItem { Header = "移到已有分类" };
+        var move = new MenuItem { Header = $"移到已有分类{countText}" };
         foreach (var person in _mainVm.People.People)
         {
             var target = person;
             var item = new MenuItem { Header = target.DisplayName };
-            item.Click += async (_, _) => await _mainVm.People.MoveFaceToPersonAsync(face, target);
+            item.Click += async (_, _) => await _mainVm.People.MoveFacesToPersonAsync(faces, target);
             move.Items.Add(item);
         }
         if (move.Items.Count == 0) move.IsEnabled = false;
         menu.Items.Add(move);
 
-        var unassigned = new MenuItem { Header = "移到待分类" };
-        unassigned.Click += async (_, _) => await _mainVm.People.MoveFaceToUnassignedAsync(face);
+        var unassigned = new MenuItem { Header = $"移到待分类{countText}" };
+        unassigned.Click += async (_, _) => await _mainVm.People.MoveFacesToUnassignedAsync(faces);
         menu.Items.Add(unassigned);
-        var ignored = new MenuItem { Header = "标记为不分类" };
-        ignored.Click += async (_, _) => await _mainVm.People.IgnoreFaceAsync(face);
+        var ignored = new MenuItem { Header = $"标记为不分类{countText}" };
+        ignored.Click += async (_, _) => await _mainVm.People.IgnoreFacesAsync(faces);
         menu.Items.Add(ignored);
     }
 

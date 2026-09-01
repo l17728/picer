@@ -15,6 +15,8 @@ public sealed class FfmpegKeyframeService(string ffmpegPath, string cacheRoot)
 
     public async Task<VideoProbeResult> ProbeAsync(string videoPath, CancellationToken cancellationToken = default)
     {
+        if (!File.Exists(_ffprobePath))
+            throw new FileNotFoundException("FFprobe 未随程序安装，已跳过视频时长和分辨率探测。", _ffprobePath);
         var output = await RunAsync(_ffprobePath,
             ["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height:format=duration", "-of", "json", videoPath], cancellationToken);
         using var json = JsonDocument.Parse(output.StdOut);
