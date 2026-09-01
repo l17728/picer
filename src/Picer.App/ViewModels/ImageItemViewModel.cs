@@ -14,10 +14,12 @@ public partial class ImageItemViewModel : ObservableObject
     private BitmapImage? _thumbnail;
     private bool _isLoadingThumbnail;
     private CancellationTokenSource? _thumbnailCts;
+    private readonly CancellationToken _pageCancellation;
 
-    public ImageItemViewModel(ImageRecord record)
+    public ImageItemViewModel(ImageRecord record, CancellationToken pageCancellation = default)
     {
         _record = record;
+        _pageCancellation = pageCancellation;
     }
 
     public long Id => _record.Id;
@@ -75,7 +77,7 @@ public partial class ImageItemViewModel : ObservableObject
         if (_isLoadingThumbnail) return;
         _isLoadingThumbnail = true;
         _thumbnailCts?.Dispose();
-        var cts = _thumbnailCts = new CancellationTokenSource();
+        var cts = _thumbnailCts = CancellationTokenSource.CreateLinkedTokenSource(_pageCancellation);
         var acquired = false;
 
         try

@@ -33,7 +33,11 @@ internal static class UiWork
         foreach (var batch in items.Chunk(batchSize))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            foreach (var item in batch) add(item);
+            foreach (var item in batch)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                add(item);
+            }
             await Dispatcher.Yield(DispatcherPriority.Background);
         }
     }

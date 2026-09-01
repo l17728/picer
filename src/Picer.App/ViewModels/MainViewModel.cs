@@ -36,6 +36,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private SearchCursor? _searchCursor;
     private CancellationTokenSource? _searchCts;
     private CancellationTokenSource? _directoryLoadCts;
+    private int _directoryLoadVersion;
     private CancellationTokenSource? _cloudCts;
     private CancellationTokenSource? _photoContextCts;
     private readonly CancellationTokenSource _locationEnrichmentCts = new();
@@ -1315,9 +1316,15 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private async void LoadImagesForSelectedDirectory()
     {
         if (SelectedDirectory is null) return;
-        _directoryLoadCts?.Cancel();
+        var version = Interlocked.Increment(ref _directoryLoadVersion);
+        var previousCancellation = _directoryLoadCts;
+        previousCancellation?.Cancel();
+        foreach (var item in DirectoryImages) item.CancelThumbnailLoad();
+        previousCancellation?.Dispose();
         var cts = _directoryLoadCts = new CancellationTokenSource();
         var selectedDirectory = SelectedDirectory;
+        bool IsCurrentLoad() => !cts.IsCancellationRequested && version == Volatile.Read(ref _directoryLoadVersion) &&
+            ReferenceEquals(SelectedDirectory, selectedDirectory);
         DirectoryImages.Clear();
         DirectoryTimelineItems.Clear();
         PrepareDirectoryTimelineForLoading();
@@ -1335,6 +1342,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 : selectedDirectory.AlbumId is { } albumId
                     ? SemanticEngine.GetAlbumImages(_db, albumId)
                 : _db.GetActiveImagesUnderDirectory(selectedDirectory.FullPath), cts.Token);
+            if (!IsCurrentLoad()) return;
             records = (IsChronologicalAscending
                     ? records.OrderBy(SceneTimeClusterService.EffectiveTime).ThenBy(image => image.Id)
                     : records.OrderByDescending(SceneTimeClusterService.EffectiveTime).ThenByDescending(image => image.Id))
@@ -1343,11 +1351,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
             await UiWork.AddInBatchesAsync(records.Where(image => image.Status == ImageStatus.Active),
                 image =>
                 {
-                    var item = new ImageItemViewModel(image);
+                    if (!IsCurrentLoad()) return;
+                    var item = new ImageItemViewModel(image, cts.Token);
                     item.SetTimelineGranularity(TimelineGranularityIndex);
                     DirectoryImages.Add(item);
                     AddTimelineItem(item);
                 }, cts.Token, batchSize: 8);
+            if (!IsCurrentLoad()) return;
             RefreshDirectoryTimelineView(resetPosition: true);
             OnPropertyChanged(nameof(DirectoryImageCount));
             StatusText = $"[{selectedDirectory.Name}] 已显示 {DirectoryImages.Count} 张索引照片";
@@ -1361,7 +1371,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     AttributesToSkip = FileAttributes.Hidden | FileAttributes.System
                 };
                 return Directory.EnumerateFiles(selectedDirectory.FullPath, "*", options)
-                    .Where(SupportedFormats.IsSupported)
+                    .Where(path => { cts.Token.ThrowIfCancellationRequested(); return SupportedFormats.IsSupported(path); })
                     .Where(path => !indexedPaths.Contains(path))
                     .Select(path =>
                     {
@@ -1378,10 +1388,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     .ToList();
             }, cts.Token);
 
-            if (cts.IsCancellationRequested || !ReferenceEquals(SelectedDirectory, selectedDirectory))
-                return;
+            if (!IsCurrentLoad()) return;
             await UiWork.AddInBatchesAsync(unindexedFiles,
-                rec => DirectoryImages.Add(new ImageItemViewModel(rec)), cts.Token, batchSize: 8);
+                rec => { if (IsCurrentLoad()) DirectoryImages.Add(new ImageItemViewModel(rec, cts.Token)); }, cts.Token, batchSize: 8);
+
+            if (!IsCurrentLoad()) return;
 
             if (selectedDirectory.IsSceneAnchor && DirectoryImages.Count > 0) SelectedImage = DirectoryImages[0];
 
@@ -1500,6 +1511,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _locationEnrichmentCts.Cancel();
         _searchCts?.Cancel();
         _directoryLoadCts?.Cancel();
+        foreach (var item in DirectoryImages) item.CancelThumbnailLoad();
+        _directoryLoadCts?.Dispose();
         _indexCts?.Cancel();
         _cloudCts?.Cancel();
         _cloudCts?.Dispose();
