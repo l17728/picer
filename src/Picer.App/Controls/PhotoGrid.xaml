@@ -28,8 +28,30 @@
                  SelectedItem="{Binding SelectedItem, ElementName=Root, Mode=TwoWay}"
                  SelectionMode="Extended" ScrollViewer.CanContentScroll="True"
                  VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling"
+                 VirtualizingPanel.IsVirtualizingWhenGrouping="True" ScrollViewer.IsDeferredScrollingEnabled="True"
                  MouseDoubleClick="List_MouseDoubleClick" KeyDown="List_KeyDown"
                  PreviewMouseRightButtonDown="List_PreviewMouseRightButtonDown">
+            <ListBox.Style>
+                <Style TargetType="ListBox">
+                    <Setter Property="ItemsPanel">
+                        <Setter.Value>
+                            <ItemsPanelTemplate>
+                                <local:VirtualizingWrapPanel ItemWidth="{Binding CardWidth, RelativeSource={RelativeSource AncestorType={x:Type local:PhotoGrid}}}"
+                                                             ItemHeight="{Binding CardHeight, RelativeSource={RelativeSource AncestorType={x:Type local:PhotoGrid}}}"/>
+                            </ItemsPanelTemplate>
+                        </Setter.Value>
+                    </Setter>
+                    <Style.Triggers>
+                        <DataTrigger Binding="{Binding TimelineMode, ElementName=Root}" Value="True">
+                            <Setter Property="ItemsPanel">
+                                <Setter.Value>
+                                    <ItemsPanelTemplate><VirtualizingStackPanel/></ItemsPanelTemplate>
+                                </Setter.Value>
+                            </Setter>
+                        </DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </ListBox.Style>
             <ListBox.GroupStyle>
                 <GroupStyle>
                     <GroupStyle.HeaderTemplate>
@@ -48,12 +70,6 @@
                     </GroupStyle.Panel>
                 </GroupStyle>
             </ListBox.GroupStyle>
-            <ListBox.ItemsPanel>
-                <ItemsPanelTemplate>
-                    <local:VirtualizingWrapPanel ItemWidth="{Binding CardWidth, RelativeSource={RelativeSource AncestorType={x:Type local:PhotoGrid}}}"
-                                                 ItemHeight="{Binding CardHeight, RelativeSource={RelativeSource AncestorType={x:Type local:PhotoGrid}}}"/>
-                </ItemsPanelTemplate>
-            </ListBox.ItemsPanel>
             <ListBox.ItemTemplate>
                 <DataTemplate>
                     <Border BorderBrush="#CCC" BorderThickness="1" Padding="4" Margin="3">

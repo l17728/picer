@@ -261,7 +261,7 @@
                             <TextBlock Grid.Column="2" Text="日　　周　　月　　年" VerticalAlignment="Center" Margin="12,0,0,0" Foreground="#506579"/>
                         </Grid>
                     </Border>
-                    <controls:PhotoGrid ItemsSource="{Binding DirectoryImagesView}"
+                    <controls:PhotoGrid ItemsSource="{Binding DirectoryImagesView}" TimelineMode="{Binding IsTimelineAlbumSelected}"
                                         SelectedItem="{Binding SelectedImage}"
                                         SelectedItemsTarget="{Binding SelectedImages}"
                                         SelectedInfoText="{Binding SelectedPhotoContext}"

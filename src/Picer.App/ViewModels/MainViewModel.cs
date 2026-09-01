@@ -110,10 +110,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private SortField _sortBy = SortField.TakenDate;
 
     [ObservableProperty]
-    private SortDirection _sortDir = SortDirection.Ascending;
+    private SortDirection _sortDir = SortDirection.Descending;
 
     [ObservableProperty]
-    private bool _isChronologicalAscending = true;
+    private bool _isChronologicalAscending;
 
     [ObservableProperty]
     private bool _isTimelineAlbumSelected;
