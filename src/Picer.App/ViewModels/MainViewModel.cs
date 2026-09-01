@@ -994,7 +994,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         StatusText = "正在扫描视频文件…";
         try
         {
-            var count = await AppServices.VideoIndex.ScanLocalSourcesAsync();
+            var count = await UiWork.RunDatabaseAsync(() => AppServices.VideoIndex.ScanLocalSources());
             StatusText = $"视频索引完成：发现 {count} 个视频；FFmpeg " +
                          (AppServices.VideoKeyframes is null ? "尚未就绪" : "已就绪");
             MessageBox.Show(StatusText, "视频索引", MessageBoxButton.OK, MessageBoxImage.Information);

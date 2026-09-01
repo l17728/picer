@@ -69,7 +69,12 @@ public partial class VideoViewModel(VideoRepository repository, VideoIndexServic
     private async Task ScanAsync()
     {
         IsBusy = true;
-        try { var count = await index.ScanLocalSourcesAsync(); await LoadAsync(); StatusText = $"扫描完成，共发现 {count} 个视频"; }
+        try
+        {
+            var count = await UiWork.RunDatabaseAsync(() => index.ScanLocalSources());
+            await LoadAsync();
+            StatusText = $"扫描完成，共发现 {count} 个视频";
+        }
         catch (Exception ex) { StatusText = $"扫描失败：{ex.Message}"; }
         finally { IsBusy = false; }
     }

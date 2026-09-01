@@ -18,6 +18,17 @@ public sealed class VideoRepository(PicerDatabase database)
     public VideoRecord Upsert(long sourceId, string path)
     {
         var info = new FileInfo(path);
+        var fullPath = Path.GetFullPath(path);
+        using (var current = database.Command("SELECT id,file_size,modified_utc,status FROM videos WHERE path=$path"))
+        {
+            current.Parameters.AddWithValue("$path", fullPath);
+            using var reader = current.ExecuteReader();
+            if (reader.Read() && reader.GetInt64(1) == info.Length &&
+                DateTime.Parse(reader.GetString(2), null, System.Globalization.DateTimeStyles.RoundtripKind) == info.LastWriteTimeUtc &&
+                reader.GetString(3) == "active")
+                return new VideoRecord(reader.GetInt64(0), sourceId, fullPath, info.Length, info.LastWriteTimeUtc,
+                    null, 0, 0, null, null, "active");
+        }
         using var command = database.Command("""
             INSERT INTO videos(source_id,path,file_size,modified_utc,status,indexed_utc)
             VALUES($source,$path,$size,$modified,'active',$now)
@@ -25,11 +36,11 @@ public sealed class VideoRepository(PicerDatabase database)
               modified_utc=excluded.modified_utc,status='active',indexed_utc=excluded.indexed_utc
             RETURNING id
             """);
-        command.Parameters.AddWithValue("$source", sourceId); command.Parameters.AddWithValue("$path", Path.GetFullPath(path));
+        command.Parameters.AddWithValue("$source", sourceId); command.Parameters.AddWithValue("$path", fullPath);
         command.Parameters.AddWithValue("$size", info.Length); command.Parameters.AddWithValue("$modified", info.LastWriteTimeUtc.ToString("o"));
         command.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("o"));
         var id = (long)command.ExecuteScalar()!;
-        return new VideoRecord(id, sourceId, Path.GetFullPath(path), info.Length, info.LastWriteTimeUtc, null, 0, 0, null, null, "active");
+        return new VideoRecord(id, sourceId, fullPath, info.Length, info.LastWriteTimeUtc, null, 0, 0, null, null, "active");
     }
 
     public IReadOnlyList<VideoRecord> GetAll()
@@ -122,21 +133,32 @@ public sealed class VideoRepository(PicerDatabase database)
 
 public sealed class VideoIndexService(PicerDatabase database, VideoRepository repository)
 {
-    public Task<int> ScanLocalSourcesAsync(CancellationToken cancellationToken = default)
+    public int ScanLocalSources(CancellationToken cancellationToken = default)
     {
         var count = 0;
         foreach (var source in database.GetSources())
         {
             if (!Directory.Exists(source.Path)) continue;
-            foreach (var path in Directory.EnumerateFiles(source.Path, "*", SearchOption.AllDirectories))
+            var options = new EnumerationOptions
+            {
+                RecurseSubdirectories = true,
+                IgnoreInaccessible = true,
+                AttributesToSkip = FileAttributes.Hidden | FileAttributes.System
+            };
+            foreach (var path in Directory.EnumerateFiles(source.Path, "*", options))
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 if (!VideoFormats.IsSupported(path)) continue;
-                repository.Upsert(source.Id, path); count++;
+                try { repository.Upsert(source.Id, path); count++; }
+                catch (IOException) { }
+                catch (UnauthorizedAccessException) { }
             }
         }
-        return Task.FromResult(count);
+        return count;
     }
+
+    public Task<int> ScanLocalSourcesAsync(CancellationToken cancellationToken = default) =>
+        Task.Run(() => ScanLocalSources(cancellationToken), cancellationToken);
 }
 
 public sealed class FfmpegLocator(string? applicationBaseDirectory = null)
