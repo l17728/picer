@@ -24,20 +24,52 @@ public sealed class VirtualizingWrapPanel : VirtualizingPanel, IScrollInfo
     private Point _offset;
     private int _itemsPerRow = 1;
     private bool _generatorRetryScheduled;
+    private int _progressiveItemLimit;
+    private bool _progressiveMeasureScheduled;
 
     protected override Size MeasureOverride(Size availableSize)
     {
         var owner = ItemsControl.GetItemsOwner(this);
         var count = owner?.Items.Count ?? 0;
-        var width = double.IsInfinity(availableSize.Width) ? ItemWidth : Math.Max(ItemWidth, availableSize.Width);
+        var ownerWidth = owner?.ActualWidth ?? 0;
+        var width = double.IsFinite(availableSize.Width)
+            ? Math.Max(ItemWidth, availableSize.Width)
+            : Math.Max(ItemWidth, double.IsFinite(ownerWidth) ? ownerWidth : ItemWidth);
         _itemsPerRow = Math.Max(1, (int)Math.Floor(width / ItemWidth));
-        _viewport = new Size(width, double.IsInfinity(availableSize.Height) ? ItemHeight : availableSize.Height);
         _extent = new Size(width, Math.Ceiling((double)count / _itemsPerRow) * ItemHeight);
+        var groupedMeasure = !double.IsFinite(availableSize.Height);
+        var height = groupedMeasure ? _extent.Height : availableSize.Height;
+        _viewport = new Size(width, height);
         ScrollOwner?.InvalidateScrollInfo();
 
-        var range = VirtualizationMath.VisibleRange(count, width, _viewport.Height, _offset.Y, ItemWidth, ItemHeight);
-        RealizeRange(range.FirstIndex, range.LastIndex, availableSize);
-        return availableSize;
+        (int FirstIndex, int LastIndex) range;
+        if (groupedMeasure)
+        {
+            if (_progressiveItemLimit <= 0 || _progressiveItemLimit > count)
+                _progressiveItemLimit = Math.Min(count, _itemsPerRow * 3);
+            range = (0, _progressiveItemLimit - 1);
+            ScheduleProgressiveMeasure(count);
+        }
+        else
+        {
+            _progressiveItemLimit = 0;
+            var visible = VirtualizationMath.VisibleRange(count, width, _viewport.Height, _offset.Y, ItemWidth, ItemHeight);
+            range = (visible.FirstIndex, visible.LastIndex);
+        }
+        RealizeRange(range.FirstIndex, range.LastIndex, new Size(width, height));
+        return new Size(width, _extent.Height);
+    }
+
+    private void ScheduleProgressiveMeasure(int count)
+    {
+        if (_progressiveMeasureScheduled || _progressiveItemLimit >= count) return;
+        _progressiveMeasureScheduled = true;
+        Dispatcher.BeginInvoke(DispatcherPriority.Background, () =>
+        {
+            _progressiveMeasureScheduled = false;
+            _progressiveItemLimit = Math.Min(count, _progressiveItemLimit + Math.Max(1, _itemsPerRow));
+            InvalidateMeasure();
+        });
     }
 
     private void RealizeRange(int firstIndex, int lastIndex, Size availableSize)
