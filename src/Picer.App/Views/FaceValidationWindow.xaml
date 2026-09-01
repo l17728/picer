@@ -12,7 +12,7 @@
                     <TextBlock Margin="0,8,0,12" TextWrapping="Wrap"
                                Text="先在人物页完成至少 5 位成员、每人至少 20 张不同照片的逐脸确认。程序只使用已确认归属，不使用自动建议作为真值。"/>
                     <StackPanel Orientation="Horizontal">
-                        <Button Content="计算推荐阈值与误识率" Click="CalibrateSFace_Click" Padding="14,7"/>
+                        <Button x:Name="CalibrateSFaceButton" Content="计算推荐阈值与误识率" Click="CalibrateSFace_Click" Padding="14,7"/>
                         <Button x:Name="ApplySFaceThreshold" Content="应用到人物自动匹配" Click="ApplySFaceThreshold_Click"
                                 Padding="14,7" Margin="8,0,0,0" IsEnabled="False"/>
                     </StackPanel>
@@ -27,10 +27,10 @@
                     <TextBlock TextWrapping="Wrap" Margin="2,2,2,8"
                                Text="为每张照片填写人工确认的人脸数；场景可填写侧脸、儿童、合影、弱光、旧照片等，多个标签用逗号分隔。建议累计标注 500–1000 张。"/>
                     <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,8">
-                        <Button Content="加载最多 1000 张" Click="LoadYuNet_Click" Padding="10,5" Margin="2"/>
-                        <Button Content="扫描已加载照片" Click="AnalyzeYuNet_Click" Padding="10,5" Margin="2"/>
-                        <Button Content="保存人工标注" Click="SaveYuNet_Click" Padding="10,5" Margin="2"/>
-                        <Button Content="计算漏检率" Click="EvaluateYuNet_Click" Padding="10,5" Margin="2"/>
+                        <Button x:Name="LoadYuNetButton" Content="加载最多 1000 张" Click="LoadYuNet_Click" Padding="10,5" Margin="2"/>
+                        <Button x:Name="AnalyzeYuNetButton" Content="扫描已加载照片" Click="AnalyzeYuNet_Click" Padding="10,5" Margin="2"/>
+                        <Button x:Name="SaveYuNetButton" Content="保存人工标注" Click="SaveYuNet_Click" Padding="10,5" Margin="2"/>
+                        <Button x:Name="EvaluateYuNetButton" Content="计算漏检率" Click="EvaluateYuNet_Click" Padding="10,5" Margin="2"/>
                     </StackPanel>
                     <DataGrid Grid.Row="2" x:Name="YuNetGrid" AutoGenerateColumns="False" CanUserAddRows="False"
                               IsReadOnly="False" SelectionMode="Extended" EnableRowVirtualization="True">
