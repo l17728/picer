@@ -20,6 +20,7 @@ public partial class PhotoGrid : UserControl
     public static readonly DependencyProperty CardHeightProperty = DependencyProperty.Register(nameof(CardHeight), typeof(double), typeof(PhotoGrid), new PropertyMetadata(205d));
     public static readonly DependencyProperty SelectedInfoTextProperty = DependencyProperty.Register(nameof(SelectedInfoText), typeof(string), typeof(PhotoGrid), new PropertyMetadata("未选择照片"));
     public static readonly DependencyProperty TimelineModeProperty = DependencyProperty.Register(nameof(TimelineMode), typeof(bool), typeof(PhotoGrid), new PropertyMetadata(false));
+    public static readonly DependencyProperty ScrollToItemProperty = DependencyProperty.Register(nameof(ScrollToItem), typeof(object), typeof(PhotoGrid), new PropertyMetadata(null, OnScrollToItemChanged));
 
     public IEnumerable? ItemsSource { get => (IEnumerable?)GetValue(ItemsSourceProperty); set => SetValue(ItemsSourceProperty, value); }
     public object? SelectedItem { get => GetValue(SelectedItemProperty); set => SetValue(SelectedItemProperty, value); }
@@ -33,8 +34,14 @@ public partial class PhotoGrid : UserControl
     public double CardHeight { get => (double)GetValue(CardHeightProperty); private set => SetValue(CardHeightProperty, value); }
     public string SelectedInfoText { get => (string)GetValue(SelectedInfoTextProperty); set => SetValue(SelectedInfoTextProperty, value); }
     public bool TimelineMode { get => (bool)GetValue(TimelineModeProperty); set => SetValue(TimelineModeProperty, value); }
+    public object? ScrollToItem { get => GetValue(ScrollToItemProperty); set => SetValue(ScrollToItemProperty, value); }
 
     public PhotoGrid() => InitializeComponent();
+    private static void OnScrollToItemChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+    {
+        if (d is not PhotoGrid grid || e.NewValue is null) return;
+        grid.Dispatcher.BeginInvoke(() => grid.List.ScrollIntoView(e.NewValue), System.Windows.Threading.DispatcherPriority.Loaded);
+    }
     private static void OnSizeChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
     {
         var grid = (PhotoGrid)d;

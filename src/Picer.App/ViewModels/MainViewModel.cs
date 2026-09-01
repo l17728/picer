@@ -39,6 +39,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private CancellationTokenSource? _photoContextCts;
     private readonly CancellationTokenSource _locationEnrichmentCts = new();
     private int _locationEnrichmentRunning;
+    private string[] _timelineAnchors = [];
     private long _searchVersion;
     private string? _resolvedGeoQuery;
     private readonly DirectoryClassificationPreferences _directoryClassification = new(AppPaths.DirectoryClassificationSettingsPath);
@@ -120,6 +121,21 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     [ObservableProperty]
     private int _timelineGranularityIndex;
+
+    [ObservableProperty]
+    private string _currentTimelineAnchor = "";
+
+    [ObservableProperty]
+    private string _timelinePositionText = "";
+
+    [ObservableProperty]
+    private bool _canNavigatePreviousTimeline;
+
+    [ObservableProperty]
+    private bool _canNavigateNextTimeline;
+
+    [ObservableProperty]
+    private ImageItemViewModel? _timelineScrollTarget;
 
     [ObservableProperty]
     private bool _showFilterPanel = true;
@@ -269,7 +285,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         OnPropertyChanged(nameof(ChronologicalOrderLabel));
     }
     public string ChronologicalOrderLabel => IsChronologicalAscending ? "时间升序（最新在下）" : "时间降序（最新在上）";
-    partial void OnTimelineGranularityIndexChanged(int value) => RefreshDirectoryTimelineView();
+    partial void OnTimelineGranularityIndexChanged(int value) => RefreshDirectoryTimelineView(resetPosition: true);
     partial void OnFilterTakenAfterChanged(DateTime? value) => _ = ApplySearchAndFilterAsync();
     partial void OnFilterTakenBeforeChanged(DateTime? value) => _ = ApplySearchAndFilterAsync();
     partial void OnFilterMinWidthChanged(int? value) => _ = ApplySearchAndFilterAsync();
@@ -1253,7 +1269,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         var cts = _directoryLoadCts = new CancellationTokenSource();
         var selectedDirectory = SelectedDirectory;
         DirectoryImages.Clear();
-        RefreshDirectoryTimelineView();
+        PrepareDirectoryTimelineForLoading();
         try
         {
             if (selectedDirectory.IsAlbumRoot)
@@ -1280,7 +1296,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     item.SetTimelineGranularity(TimelineGranularityIndex);
                     DirectoryImages.Add(item);
                 }, cts.Token, batchSize: 8);
-            RefreshDirectoryTimelineView();
+            RefreshDirectoryTimelineView(resetPosition: true);
             OnPropertyChanged(nameof(DirectoryImageCount));
             StatusText = $"[{selectedDirectory.Name}] 已显示 {DirectoryImages.Count} 张索引照片";
 
@@ -1325,15 +1341,66 @@ public partial class MainViewModel : ObservableObject, IDisposable
         catch (Exception exception) { StatusText = $"目录照片加载失败：{exception.Message}"; }
     }
 
-    private void RefreshDirectoryTimelineView()
+    private void PrepareDirectoryTimelineForLoading()
     {
-        foreach (var image in DirectoryImages) image.SetTimelineGranularity(TimelineGranularityIndex);
+        _timelineAnchors = [];
+        CurrentTimelineAnchor = "";
+        TimelinePositionText = IsTimelineAlbumSelected ? "正在准备时间轴…" : "";
+        CanNavigatePreviousTimeline = false;
+        CanNavigateNextTimeline = false;
         using (DirectoryImagesView.DeferRefresh())
         {
             DirectoryImagesView.GroupDescriptions.Clear();
+            DirectoryImagesView.Filter = null;
             if (IsTimelineAlbumSelected)
                 DirectoryImagesView.GroupDescriptions.Add(new PropertyGroupDescription(nameof(ImageItemViewModel.TimelineAnchor)));
         }
+    }
+
+    private void RefreshDirectoryTimelineView(bool resetPosition = false)
+    {
+        foreach (var image in DirectoryImages) image.SetTimelineGranularity(TimelineGranularityIndex);
+        _timelineAnchors = DirectoryImages.Select(image => image.TimelineAnchor)
+            .Where(anchor => !string.IsNullOrWhiteSpace(anchor)).Distinct().ToArray();
+        if (resetPosition || !_timelineAnchors.Contains(CurrentTimelineAnchor, StringComparer.Ordinal))
+            CurrentTimelineAnchor = _timelineAnchors.FirstOrDefault() ?? "";
+        using (DirectoryImagesView.DeferRefresh())
+        {
+            DirectoryImagesView.GroupDescriptions.Clear();
+            DirectoryImagesView.Filter = null;
+            if (IsTimelineAlbumSelected)
+                DirectoryImagesView.GroupDescriptions.Add(new PropertyGroupDescription(nameof(ImageItemViewModel.TimelineAnchor)));
+        }
+        UpdateTimelineNavigationState();
+    }
+
+    [RelayCommand]
+    private void NavigatePreviousTimeline() => NavigateTimeline(-1);
+
+    [RelayCommand]
+    private void NavigateNextTimeline() => NavigateTimeline(1);
+
+    [RelayCommand] private void SetTimelineDay() => TimelineGranularityIndex = 0;
+    [RelayCommand] private void SetTimelineWeek() => TimelineGranularityIndex = 1;
+    [RelayCommand] private void SetTimelineMonth() => TimelineGranularityIndex = 2;
+    [RelayCommand] private void SetTimelineYear() => TimelineGranularityIndex = 3;
+
+    private void NavigateTimeline(int offset)
+    {
+        var current = Array.IndexOf(_timelineAnchors, CurrentTimelineAnchor);
+        var target = current + offset;
+        if (target < 0 || target >= _timelineAnchors.Length) return;
+        CurrentTimelineAnchor = _timelineAnchors[target];
+        TimelineScrollTarget = DirectoryImages.FirstOrDefault(image => image.TimelineAnchor == CurrentTimelineAnchor);
+        UpdateTimelineNavigationState();
+    }
+
+    private void UpdateTimelineNavigationState()
+    {
+        var index = Array.IndexOf(_timelineAnchors, CurrentTimelineAnchor);
+        TimelinePositionText = index < 0 ? "没有照片" : $"{index + 1} / {_timelineAnchors.Length}";
+        CanNavigatePreviousTimeline = index > 0;
+        CanNavigateNextTimeline = index >= 0 && index < _timelineAnchors.Length - 1;
     }
 
     private async Task HandleMissingAsync()
