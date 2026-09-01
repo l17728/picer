@@ -14,7 +14,10 @@ public static class VirtualizationMath
         if (itemWidth <= 0 || itemHeight <= 0) throw new ArgumentOutOfRangeException(nameof(itemWidth));
         var columns = Math.Max(1, (int)Math.Floor(Math.Max(itemWidth, viewportWidth) / itemWidth));
         var firstRow = Math.Max(0, (int)Math.Floor(Math.Max(0, verticalOffset) / itemHeight));
-        var visibleRows = Math.Max(1, (int)Math.Ceiling(viewportHeight / itemHeight) + 1);
-        return new(Math.Min(itemCount, firstRow * columns), Math.Min(itemCount - 1, (firstRow + visibleRows) * columns - 1));
+        var visibleRows = Math.Max(1, (int)Math.Ceiling(viewportHeight / itemHeight));
+        // Realize the viewport plus one full screen ahead. Containers outside this
+        // window remain virtualized, so large albums do not build their entire UI.
+        var realizedRows = visibleRows * 2;
+        return new(Math.Min(itemCount, firstRow * columns), Math.Min(itemCount - 1, (firstRow + realizedRows) * columns - 1));
     }
 }

@@ -12,8 +12,17 @@ public sealed class VirtualizationMathTests
     {
         var range = VirtualizationMath.VisibleRange(100_000, 1200, 800, offset, 170, 208);
 
-        Assert.InRange(range.Count, 1, 42);
+        Assert.InRange(range.Count, 1, 70);
         Assert.InRange(range.FirstIndex, 0, 99_999);
         Assert.InRange(range.LastIndex, range.FirstIndex, 99_999);
+    }
+
+    [Fact]
+    public void VisibleRange_PrefetchesExactlyOneAdditionalScreen()
+    {
+        var range = VirtualizationMath.VisibleRange(100, 680, 416, 0, 170, 208);
+
+        Assert.Equal(0, range.FirstIndex);
+        Assert.Equal(15, range.LastIndex);
     }
 }

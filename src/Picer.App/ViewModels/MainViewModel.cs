@@ -1096,7 +1096,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 : _db.GetActiveImagesUnderDirectory(selectedDirectory.FullPath), cts.Token);
             var indexedPaths = records.Select(record => record.Path).ToHashSet(StringComparer.OrdinalIgnoreCase);
             await UiWork.AddInBatchesAsync(records.Where(image => image.Status == ImageStatus.Active),
-                image => DirectoryImages.Add(new ImageItemViewModel(image)), cts.Token);
+                image => DirectoryImages.Add(new ImageItemViewModel(image)), cts.Token, batchSize: 8);
             OnPropertyChanged(nameof(DirectoryImageCount));
             StatusText = $"[{selectedDirectory.Name}] 已显示 {DirectoryImages.Count} 张索引照片";
 
@@ -1129,7 +1129,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             if (cts.IsCancellationRequested || !ReferenceEquals(SelectedDirectory, selectedDirectory))
                 return;
             await UiWork.AddInBatchesAsync(unindexedFiles,
-                rec => DirectoryImages.Add(new ImageItemViewModel(rec)), cts.Token);
+                rec => DirectoryImages.Add(new ImageItemViewModel(rec)), cts.Token, batchSize: 8);
 
             if (selectedDirectory.IsSceneAnchor && DirectoryImages.Count > 0) SelectedImage = DirectoryImages[0];
 

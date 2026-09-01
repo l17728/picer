@@ -8,7 +8,7 @@ namespace Picer.App.ViewModels;
 
 public partial class ImageItemViewModel : ObservableObject
 {
-    private static readonly SemaphoreSlim ThumbnailLoadGate = new(4, 4);
+    private static readonly SemaphoreSlim ThumbnailLoadGate = new(8, 8);
     private readonly ImageRecord _record;
     private BitmapImage? _thumbnail;
     private bool _isLoadingThumbnail;
