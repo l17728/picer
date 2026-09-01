@@ -5,7 +5,13 @@
              x:Name="Root">
     <DockPanel>
         <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" HorizontalAlignment="Right" Margin="4">
-            <TextBlock Text="{Binding SelectedInfoText, ElementName=Root}" VerticalAlignment="Center" Margin="0,0,18,0" Foreground="#444" TextTrimming="CharacterEllipsis" MaxWidth="650"/>
+            <TextBlock Text="{Binding SelectedInfoText, ElementName=Root}" VerticalAlignment="Center" Margin="0,0,18,0" Foreground="#444" TextTrimming="CharacterEllipsis" MaxWidth="650">
+                <TextBlock.ToolTip>
+                    <ToolTip MaxWidth="700" Placement="Mouse">
+                        <TextBlock Text="{Binding PlacementTarget.Text, RelativeSource={RelativeSource AncestorType={x:Type ToolTip}}}" TextWrapping="Wrap"/>
+                    </ToolTip>
+                </TextBlock.ToolTip>
+            </TextBlock>
             <TextBlock Text="缩略图" VerticalAlignment="Center" Margin="0,0,6,0"/>
             <Slider Width="120" Minimum="96" Maximum="220" Value="{Binding ThumbnailSize, ElementName=Root}"
                     TickFrequency="16" ToolTip="调整缩略图大小"/>

@@ -213,7 +213,8 @@
                                                       ItemsSource="{Binding Children}">
                                 <StackPanel Orientation="Horizontal" Margin="0,1">
                                     <TextBlock Text="{Binding Icon}" Margin="0,0,4,0" FontSize="12"/>
-                                    <TextBlock Text="{Binding Name}" TextTrimming="CharacterEllipsis" MaxWidth="180"/>
+                                    <TextBlock Text="{Binding Name}" TextTrimming="CharacterEllipsis" MaxWidth="180"
+                                               ToolTip="{Binding Name}"/>
                                     <TextBlock Text="{Binding ImageCount, StringFormat='  ({0})'}" Foreground="#595959" FontSize="10"/>
                                     <TextBlock Text="{Binding ClassificationModeLabel}" Foreground="#9C4A00" FontSize="10"/>
                                 </StackPanel>
