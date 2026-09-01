@@ -14,10 +14,16 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
+    <ApplicationIcon>Assets\Picer.ico</ApplicationIcon>
     <PlatformTarget>x64</PlatformTarget>
     <RuntimeIdentifier Condition="'$(Configuration)' == 'Release'">win-x64</RuntimeIdentifier>
     <SelfContained Condition="'$(Configuration)' == 'Release'">true</SelfContained>
   </PropertyGroup>
+
+  <ItemGroup>
+    <Resource Include="Assets\Picer.ico" />
+    <Resource Include="Assets\Picer.png" />
+  </ItemGroup>
 
   <ItemGroup>
     <Content Include="..\..\third_party\runtime\**\*">

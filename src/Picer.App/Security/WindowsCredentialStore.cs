@@ -8,6 +8,7 @@ public static class PicerCredentialTargets
     public const string Bailian = "Picer/CloudVision/Bailian";
     public const string Zhipu = "Picer/CloudVision/Zhipu";
     public const string WebDav = "Picer/Storage/WebDAV";
+    public static string AiProvider(string providerId) => $"Picer/AI/{providerId.Trim()}";
 }
 
 public interface ICredentialStore

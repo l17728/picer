@@ -141,7 +141,7 @@ public partial class VideoViewModel(VideoRepository repository, VideoIndexServic
     {
         if (SelectedVideo is null) { StatusText = "请先选择视频"; return; }
         if (summaryService is null) { StatusText = "视频摘要组件尚未就绪"; return; }
-        var configured = AppServices.CreateCloudVisionService(useComplexModel: true);
+        var configured = AppServices.CreateCloudVisionService(AiFeatureIds.VideoSummary);
         if (configured is null) { StatusText = "请先在云端分析设置中启用并配置国内视觉 API"; return; }
         if (await UiWork.RunDatabaseAsync(() => repository.GetKeyframes(SelectedVideo.Record.Id).Count) == 0) { StatusText = "请先生成关键帧"; return; }
         var transcriptNotice = await UiWork.RunDatabaseAsync(() => repository.GetTranscript(SelectedVideo.Record.Id)) is null ? "不含语音转写" : "包含本地语音转写文本";

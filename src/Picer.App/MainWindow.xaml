@@ -3,7 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vms="clr-namespace:Picer.App.ViewModels"
         xmlns:controls="clr-namespace:Picer.App.Controls"
-        Title="Picer - 图片管理" Height="720" Width="1200" MinHeight="560" MinWidth="900"
+        Title="Picer - 图片管理" Icon="Assets/Picer.ico" Height="720" Width="1200" MinHeight="560" MinWidth="900"
         WindowStartupLocation="CenterScreen" Loaded="MainWindow_Loaded" PreviewKeyDown="MainWindow_PreviewKeyDown">
     <Window.Resources>
         <BooleanToVisibilityConverter x:Key="BoolToVis"/>
@@ -19,7 +19,7 @@
                 <MenuItem Header="备份与恢复" Click="DataProtection_Click"/>
             </MenuItem>
             <MenuItem Header="AI 功能(_A)" AutomationProperties.Name="AI 功能菜单">
-                <MenuItem Header="云端分析设置" Click="CloudVisionSettings_Click"/>
+                <MenuItem Header="AI 模型设置" Click="CloudVisionSettings_Click"/>
                 <MenuItem Header="描述选中照片" Command="{Binding AnalyzeSelectedWithCloudCommand}"/>
                 <MenuItem Header="任务中心" Click="CloudVisionTasks_Click"/>
                 <Separator/>

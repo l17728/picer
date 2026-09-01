@@ -925,16 +925,14 @@ public partial class MainViewModel : ObservableObject, IDisposable
         return AnalyzeImagesWithCloudAsync(selected);
     }
 
-    public async Task AnalyzeImagesWithCloudAsync(IReadOnlyList<ImageRecord> selected)
+    public async Task AnalyzeImagesWithCloudAsync(IReadOnlyList<ImageRecord> selected, string featureId = AiFeatureIds.PhotoAnalysis)
     {
         if (selected.Count == 0)
         {
             MessageBox.Show("请先选择要描述的照片。", "云端照片分析", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
-        var useComplexModel = await UiWork.RunDatabaseAsync(() => selected.Any(image => AppServices.VisionRepository.GetFaceCount(image.Id) > 1 ||
-            AppServices.VisualConceptRepository.GetScores(image.Id).Any(score => score.Confidence < .65f)));
-        var configured = AppServices.CreateCloudVisionService(useComplexModel);
+        var configured = AppServices.CreateCloudVisionService(featureId);
         if (configured is null)
         {
             MessageBox.Show("云端分析尚未启用，或尚未保存API Key。请先打开“云端分析设置”。", "云端照片分析",
@@ -1249,7 +1247,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             $"并从前、中、后均匀选择 {plan.Representatives.Count} 张代表照片。\n" +
             $"其中 {missing.Length} 张需要调用已配置的云端视觉 API，其余将复用已有描述。\n\n是否继续？";
         if (MessageBox.Show(preview, "描述未分类场景", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
-        if (missing.Length > 0) await AnalyzeImagesWithCloudAsync(missing);
+        if (missing.Length > 0) await AnalyzeImagesWithCloudAsync(missing, AiFeatureIds.SceneDescription);
         var summary = await UiWork.RunDatabaseAsync(() => service.Summarize(plan));
         if (summary is null)
         {

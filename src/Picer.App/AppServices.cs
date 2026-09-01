@@ -147,24 +147,28 @@ public static class AppServices
             ? Path.GetFullPath(configured)
             : Path.Combine(AppPaths.DataRoot, "cache");
 
-    public static (CloudVisionAnalysisService Service, OpenAiCompatibleCloudVisionAnalyzer Analyzer, CloudVisionRunPolicy Policy, string ProviderLabel)? CreateCloudVisionService(bool? useComplexModel = null)
+    public static (CloudVisionAnalysisService Service, OpenAiCompatibleCloudVisionAnalyzer Analyzer, CloudVisionRunPolicy Policy, string ProviderLabel)? CreateCloudVisionService(string featureId = AiFeatureIds.PhotoAnalysis)
     {
         var settings = CloudVisionSettings.Load(AppPaths.CloudVisionSettingsPath);
         if (!settings.Enabled) return null;
+        var resolved = settings.Resolve(featureId);
+        if (resolved is null) return null;
+        var provider = resolved.Value.Provider;
+        var model = resolved.Value.Model;
         var credentials = new WindowsCredentialStore();
-        var target = settings.Provider == DomesticVisionProvider.BailianQwen
-            ? PicerCredentialTargets.Bailian : PicerCredentialTargets.Zhipu;
-        var key = credentials.Read(target);
+        var key = credentials.Read(PicerCredentialTargets.AiProvider(provider.Id));
+        if (string.IsNullOrWhiteSpace(key) && provider.Id.Equals("bailian", StringComparison.OrdinalIgnoreCase)) key = credentials.Read(PicerCredentialTargets.Bailian);
+        if (string.IsNullOrWhiteSpace(key) && provider.Id.Equals("zhipu", StringComparison.OrdinalIgnoreCase)) key = credentials.Read(PicerCredentialTargets.Zhipu);
         if (string.IsNullOrWhiteSpace(key)) return null;
-        var options = settings.Provider == DomesticVisionProvider.BailianQwen
-            ? DomesticCloudVisionProviders.Bailian(key, useComplexModel ?? settings.UseComplexModel)
-            : DomesticCloudVisionProviders.ZhipuFree(key);
+        var baseUrl = provider.BaseUrl.TrimEnd('/');
+        var endpointText = baseUrl.EndsWith("/chat/completions", StringComparison.OrdinalIgnoreCase) ? baseUrl : baseUrl + "/chat/completions";
+        if (!Uri.TryCreate(endpointText, UriKind.Absolute, out var endpoint)) return null;
+        var options = new CloudVisionApiOptions(endpoint, key, model.Id, provider.Id, PromptVersion: "picer-photo-v1");
         var analyzer = new OpenAiCompatibleCloudVisionAnalyzer(options);
         return (new CloudVisionAnalysisService(CloudVisionRepository, analyzer, Geocoder), analyzer,
             new CloudVisionRunPolicy(true, settings.MaximumImagesPerRun, settings.IncludePreciseGps,
                 settings.DailyBudgetYuan, settings.MonthlyBudgetYuan),
-            settings.Provider == DomesticVisionProvider.BailianQwen
-                ? (useComplexModel ?? settings.UseComplexModel ? "阿里云百炼 Plus（复杂场景）" : "阿里云百炼 8B") : "智谱 GLM");
+            $"{provider.Name} / {model.Name}");
     }
 
     public static void Shutdown()
