@@ -886,11 +886,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
             ?? (record.ModifiedUtc == DateTime.MinValue ? "未知" : record.ModifiedUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss") + "（文件修改时间）");
         var locationText = "无 GPS 信息";
         var attribution = "";
-        var cloud = await UiWork.RunDatabaseAsync(() => AppServices.CloudVisionRepository.Get(record.Id, "bailian")
-                    ?? AppServices.CloudVisionRepository.Get(record.Id, "zhipu"));
-        var cloudText = cloud is { Status: "completed", Summary: not null }
-            ? $"\n\n云端描述：{cloud.Value.Summary}"
-            : cloud is not null ? $"\n\n云端分析状态：{cloud.Value.Status}" : "\n\n云端描述：尚未分析";
+        var cloud = await UiWork.RunDatabaseAsync(() => AppServices.CloudVisionRepository.GetLatestCompleted(record.Id));
+        var cloudText = cloud is not null
+            ? $"\n\n云端描述（{cloud.Value.Provider} / {cloud.Value.ModelVersion}）：{cloud.Value.Result.Summary}"
+            : "\n\n云端描述：尚未分析";
 
         if (GeoPlaceResolver.TryParseCoordinates(record.Gps, out var latitude, out var longitude))
         {
@@ -926,7 +925,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
         return AnalyzeImagesWithCloudAsync(selected);
     }
 
-    public async Task AnalyzeImagesWithCloudAsync(IReadOnlyList<ImageRecord> selected, string featureId = AiFeatureIds.PhotoAnalysis)
+    public async Task AnalyzeImagesWithCloudAsync(IReadOnlyList<ImageRecord> selected, string featureId = AiFeatureIds.PhotoAnalysis,
+        bool refreshDirectoryTree = true, bool showCompletionDialog = true)
     {
         if (selected.Count == 0)
         {
@@ -968,8 +968,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 StatusText = $"云端描述：{value.Completed}/{value.Total}");
             var result = await configured.Value.Service.AnalyzeAsync(candidates, progress, _cloudCts.Token, configured.Value.Policy);
             StatusText = $"云端描述完成：成功 {result.Completed}，缓存跳过 {result.Skipped}，失败 {result.Failed}，预算拦截 {result.BudgetBlocked}";
-            await LoadDirectoryTreeAsync();
-            MessageBox.Show(StatusText, "云端照片分析", MessageBoxButton.OK,
+            if (refreshDirectoryTree) await LoadDirectoryTreeAsync();
+            if (showCompletionDialog) MessageBox.Show(StatusText, "云端照片分析", MessageBoxButton.OK,
                 result.Failed == 0 ? MessageBoxImage.Information : MessageBoxImage.Warning);
         }
         catch (OperationCanceledException) { StatusText = "云端照片分析已取消"; }
@@ -1260,7 +1260,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
             $"并从前、中、后均匀选择 {plan.Representatives.Count} 张代表照片。\n" +
             $"其中 {missing.Length} 张需要调用已配置的云端视觉 API，其余将复用已有描述。\n\n是否继续？";
         if (MessageBox.Show(preview, "描述未分类场景", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
-        if (missing.Length > 0) await AnalyzeImagesWithCloudAsync(missing, AiFeatureIds.SceneDescription);
+        if (missing.Length > 0) await AnalyzeImagesWithCloudAsync(missing, AiFeatureIds.SceneDescription,
+            refreshDirectoryTree: false, showCompletionDialog: false);
         var summary = await UiWork.RunDatabaseAsync(() => service.Summarize(plan));
         if (summary is null)
         {
