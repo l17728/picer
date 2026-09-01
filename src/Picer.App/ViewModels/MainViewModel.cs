@@ -83,6 +83,18 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private double _progressValue;
 
     [ObservableProperty]
+    private bool _isLocationEnriching;
+
+    [ObservableProperty]
+    private double _locationProgressValue;
+
+    [ObservableProperty]
+    private double _locationProgressMaximum = 1;
+
+    [ObservableProperty]
+    private string _locationProgressText = "";
+
+    [ObservableProperty]
     private bool _isBusy;
 
     [ObservableProperty]
@@ -668,11 +680,17 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private async Task EnrichLocationHierarchyAsync()
     {
         if (Interlocked.CompareExchange(ref _locationEnrichmentRunning, 1, 0) != 0) return;
+        IsLocationEnriching = true;
+        LocationProgressText = "正在读取带 GPS 的照片…";
         try
         {
             var progress = new Progress<LocationEnrichmentProgress>(value =>
             {
+                LocationProgressMaximum = Math.Max(1, value.TotalGroups);
+                LocationProgressValue = value.CompletedGroups;
+                LocationProgressText = $"GPS 反查 {value.CompletedGroups}/{value.TotalGroups}，已更新 {value.SavedImages} 张\n{value.CurrentPlace}";
                 StatusText = $"正在构建位置索引 {value.CompletedGroups}/{value.TotalGroups}，已更新 {value.SavedImages} 张";
+                if (value.CompletedGroups % 10 == 0) _ = LoadDirectoryTreeAsync();
             });
             var result = await AppServices.LocationHierarchy.EnrichPendingAsync(progress, _locationEnrichmentCts.Token);
             if (result.CoordinateGroups == 0) return;
@@ -681,6 +699,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
             StatusText = result.FailedGroups == 0
                 ? $"位置索引已更新 {result.SavedImages} 张照片"
                 : $"位置索引更新 {result.SavedImages} 张，{result.FailedGroups} 个位置稍后重试";
+            LocationProgressText = result.FailedGroups == 0
+                ? $"位置解析完成，已更新 {result.SavedImages} 张"
+                : $"本轮更新 {result.SavedImages} 张，{result.FailedGroups} 个地点未查到，可再次解析";
             await ApplySearchAndFilterAsync();
             await LoadDirectoryTreeAsync();
         }
@@ -693,6 +714,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
         finally
         {
+            IsLocationEnriching = false;
             Interlocked.Exchange(ref _locationEnrichmentRunning, 0);
         }
     }

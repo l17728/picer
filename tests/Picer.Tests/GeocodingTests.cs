@@ -91,6 +91,20 @@ public sealed class GeocodingTests : IDisposable
         Assert.True(File.Exists(cachePath));
     }
 
+    [Fact]
+    public async Task ReverseGeocoder_RestoresChineseCityAboveDistrict()
+    {
+        Directory.CreateDirectory(_directory);
+        using var client = new HttpClient(new ChineseDistrictHandler());
+        using var geocoder = new NominatimReverseGeocoder(Path.Combine(_directory, "china.json"), client);
+
+        var result = await geocoder.ReverseAsync(34.0741, 109.2710);
+
+        Assert.Equal("西安市", result?.City);
+        Assert.Equal("蓝田县", result?.County);
+        Assert.Equal("关中环线, 蓝田县, 西安市, 陕西省, 中国", result?.DisplayName);
+    }
+
     public void Dispose()
     {
         try { Directory.Delete(_directory, true); } catch { }
@@ -106,6 +120,18 @@ public sealed class GeocodingTests : IDisposable
             RequestCount++;
             UserAgent = request.Headers.UserAgent.ToString();
             const string json = "{\"display_name\":\"西安市, 陕西省, 中国\",\"licence\":\"© OpenStreetMap contributors\"}";
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(json, Encoding.UTF8, "application/json")
+            });
+        }
+    }
+
+    private sealed class ChineseDistrictHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            const string json = "{\"display_name\":\"关中环线, 蓝田县, 西安市, 陕西省, 中国\",\"licence\":\"© OpenStreetMap contributors\",\"address\":{\"road\":\"关中环线\",\"city\":\"蓝田县\",\"state\":\"陕西省\",\"country\":\"中国\"}}";
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent(json, Encoding.UTF8, "application/json")

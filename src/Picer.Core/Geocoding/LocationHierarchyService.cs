@@ -37,7 +37,12 @@ public sealed class LocationHierarchyService(PicerDatabase database, IReverseGeo
                     var location = ReadEmbeddedLocation(group) ??
                         await geocoder.ReverseAsync(representative.Latitude, representative.Longitude, cancellationToken)
                             .ConfigureAwait(false);
-                    if (location is null) { failed++; continue; }
+                    if (location is null)
+                    {
+                        failed++;
+                        progress?.Report(new(index + 1, groups.Length, saved, "未查询到地点，稍后可重试"));
+                        continue;
+                    }
                     Save(group, location);
                     saved += group.Length;
                     progress?.Report(new(index + 1, groups.Length, saved, location.DisplayName));
@@ -63,7 +68,8 @@ public sealed class LocationHierarchyService(PicerDatabase database, IReverseGeo
         command.CommandText = """
             SELECT i.id,i.gps,i.path FROM images i
             LEFT JOIN image_locations l ON l.image_id=i.id
-            WHERE i.status='active' AND i.gps IS NOT NULL AND i.gps<>'' AND l.image_id IS NULL
+            WHERE i.status='active' AND i.gps IS NOT NULL AND i.gps<>''
+              AND (l.image_id IS NULL OR ((l.city LIKE '%区' OR l.city LIKE '%县') AND l.display_name LIKE '%市%'))
             ORDER BY i.id
             """;
         var values = new List<PendingLocation>();

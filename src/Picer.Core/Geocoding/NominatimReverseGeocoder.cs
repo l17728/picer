@@ -81,12 +81,12 @@ public sealed class NominatimReverseGeocoder : IReverseGeocoder, IDisposable
     public async Task<ReverseGeocodingResult?> ReverseAsync(double latitude, double longitude, CancellationToken cancellationToken = default)
     {
         var key = FormattableString.Invariant($"{latitude:F4},{longitude:F4}");
-        if (_cache.TryGetValue(key, out var cached)) return cached;
+        if (_cache.TryGetValue(key, out var cached)) return NormalizeAdministrativeHierarchy(cached);
 
         await RequestGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            if (_cache.TryGetValue(key, out cached)) return cached;
+            if (_cache.TryGetValue(key, out cached)) return NormalizeAdministrativeHierarchy(cached);
             var delay = TimeSpan.FromSeconds(1) - (DateTime.UtcNow - _lastRequestUtc);
             if (delay > TimeSpan.Zero) await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
 
@@ -122,6 +122,7 @@ public sealed class NominatimReverseGeocoder : IReverseGeocoder, IDisposable
                 County: Address("county"),
                 Town: Address("town", "municipality", "township"),
                 Village: Address("village", "hamlet", "neighbourhood", "quarter"));
+            result = NormalizeAdministrativeHierarchy(result);
             _cache[key] = result;
             SaveCache();
             return result;
@@ -130,6 +131,25 @@ public sealed class NominatimReverseGeocoder : IReverseGeocoder, IDisposable
         {
             RequestGate.Release();
         }
+    }
+
+    private static ReverseGeocodingResult NormalizeAdministrativeHierarchy(ReverseGeocodingResult value)
+    {
+        if (!string.Equals(value.Country, "中国", StringComparison.OrdinalIgnoreCase) ||
+            string.IsNullOrWhiteSpace(value.City) ||
+            (!value.City.EndsWith('区') && !value.City.EndsWith('县')))
+            return value;
+
+        var administrativeCity = value.DisplayName.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+            .FirstOrDefault(part => part.EndsWith('市') && !string.Equals(part, value.City, StringComparison.OrdinalIgnoreCase));
+        if (string.IsNullOrWhiteSpace(administrativeCity)) return value;
+
+        return value with
+        {
+            City = administrativeCity,
+            County = value.City.EndsWith('县') ? value.City : value.County,
+            District = value.City.EndsWith('区') ? value.City : value.District
+        };
     }
 
     private static Dictionary<string, ReverseGeocodingResult> LoadCache(string path)

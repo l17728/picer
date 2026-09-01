@@ -140,7 +140,9 @@
                         <ColumnDefinition Width="*"/>
                     </Grid.ColumnDefinitions>
 
-                    <TreeView x:Name="DirectoryTreeView" Grid.Column="0" Margin="4"
+                    <Grid Grid.Column="0">
+                        <Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                    <TreeView x:Name="DirectoryTreeView" Grid.Row="0" Margin="4"
                               ItemsSource="{Binding DirectoryTree}"
                               SelectedItemChanged="DirectoryTree_SelectedItemChanged" PreviewMouseRightButtonDown="DirectoryTree_PreviewMouseRightButtonDown">
                         <TreeView.ContextMenu><ContextMenu Opened="DirectoryContextMenu_Opened">
@@ -168,6 +170,17 @@
                             </HierarchicalDataTemplate>
                         </TreeView.Resources>
                     </TreeView>
+
+                    <Border Grid.Row="1" Margin="4" Padding="8" CornerRadius="4" Background="#EEF5FC"
+                            Visibility="{Binding IsLocationEnriching, Converter={StaticResource BoolToVis}}">
+                        <StackPanel>
+                            <TextBlock Text="正在通过 GPS 构建地点目录" FontWeight="SemiBold"/>
+                            <ProgressBar Height="8" Margin="0,6,0,5" Minimum="0"
+                                         Maximum="{Binding LocationProgressMaximum}" Value="{Binding LocationProgressValue}"/>
+                            <TextBlock Text="{Binding LocationProgressText}" TextWrapping="Wrap" Foreground="#435466" FontSize="11"/>
+                        </StackPanel>
+                    </Border>
+                    </Grid>
 
                     <TextBlock Grid.Column="0" Margin="24" TextAlignment="Center"
                                VerticalAlignment="Center" TextWrapping="Wrap"
