@@ -272,7 +272,7 @@
                                     IsEnabled="{Binding CanNavigateNextTimeline}" Padding="10,4" Margin="4,0,0,0"/>
                         </Grid>
                     </Border>
-                    <controls:PhotoGrid ItemsSource="{Binding DirectoryImagesView}" TimelineMode="{Binding IsTimelineAlbumSelected}"
+                    <controls:PhotoGrid ItemsSource="{Binding DirectoryDisplayItems}" TimelineMode="{Binding IsTimelineAlbumSelected}"
                                         ScrollToItem="{Binding TimelineScrollTarget}"
                                         SelectedItem="{Binding SelectedImage}"
                                         SelectedItemsTarget="{Binding SelectedImages}"

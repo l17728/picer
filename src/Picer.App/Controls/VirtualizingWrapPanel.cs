@@ -3,7 +3,7 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Media;
 using System.Windows.Threading;
-using Picer.Core.Diagnostics;
+using Picer.App.ViewModels;
 
 namespace Picer.App.Controls;
 
@@ -24,6 +24,7 @@ public sealed class VirtualizingWrapPanel : VirtualizingPanel, IScrollInfo
     private Point _offset;
     private int _itemsPerRow = 1;
     private bool _generatorRetryScheduled;
+    private Rect[] _layouts = [];
 
     protected override Size MeasureOverride(Size availableSize)
     {
@@ -34,15 +35,40 @@ public sealed class VirtualizingWrapPanel : VirtualizingPanel, IScrollInfo
             ? Math.Max(ItemWidth, availableSize.Width)
             : Math.Max(ItemWidth, double.IsFinite(ownerWidth) ? ownerWidth : ItemWidth);
         _itemsPerRow = Math.Max(1, (int)Math.Floor(width / ItemWidth));
-        _extent = new Size(width, Math.Ceiling((double)count / _itemsPerRow) * ItemHeight);
+        _layouts = BuildLayouts(owner, count, width);
+        var extentHeight = _layouts.Length == 0 ? 0 : _layouts.Max(rect => rect.Bottom);
+        _extent = new Size(width, extentHeight);
         var height = double.IsFinite(availableSize.Height) ? availableSize.Height : _extent.Height;
         _viewport = new Size(width, height);
         ScrollOwner?.InvalidateScrollInfo();
 
-        var visible = VirtualizationMath.VisibleRange(count, width, _viewport.Height, _offset.Y, ItemWidth, ItemHeight);
-        var range = (visible.FirstIndex, visible.LastIndex);
+        var first = Array.FindIndex(_layouts, rect => rect.Bottom >= _offset.Y - ItemHeight);
+        var last = Array.FindLastIndex(_layouts, rect => rect.Top <= _offset.Y + _viewport.Height + ItemHeight);
+        var range = (FirstIndex: Math.Max(0, first), LastIndex: last);
         RealizeRange(range.FirstIndex, range.LastIndex, new Size(width, height));
         return new Size(width, _extent.Height);
+    }
+
+    private Rect[] BuildLayouts(ItemsControl? owner, int count, double width)
+    {
+        var layouts = new Rect[count];
+        var rowTop = 0d;
+        var column = 0;
+        const double anchorHeight = 48d;
+        for (var index = 0; index < count; index++)
+        {
+            if (owner?.Items[index] is TimelineAnchorItemViewModel)
+            {
+                if (column > 0) { rowTop += ItemHeight; column = 0; }
+                layouts[index] = new Rect(0, rowTop, width, anchorHeight);
+                rowTop += anchorHeight;
+                continue;
+            }
+            layouts[index] = new Rect(column * ItemWidth, rowTop, ItemWidth, ItemHeight);
+            column++;
+            if (column >= _itemsPerRow) { column = 0; rowTop += ItemHeight; }
+        }
+        return layouts;
     }
 
     private void RealizeRange(int firstIndex, int lastIndex, Size availableSize)
@@ -83,7 +109,8 @@ public sealed class VirtualizingWrapPanel : VirtualizingPanel, IScrollInfo
                     else InsertInternalChild(childIndex, child);
                     generator.PrepareItemContainer(child);
                 }
-                child.Measure(new Size(ItemWidth, ItemHeight));
+                var layout = itemIndex < _layouts.Length ? _layouts[itemIndex] : new Rect(0, 0, ItemWidth, ItemHeight);
+                child.Measure(layout.Size);
             }
         }
     }
@@ -106,9 +133,11 @@ public sealed class VirtualizingWrapPanel : VirtualizingPanel, IScrollInfo
         foreach (UIElement child in InternalChildren)
         {
             var index = IndexFromContainer(child);
-            var row = index / _itemsPerRow;
-            var column = index % _itemsPerRow;
-            child.Arrange(new Rect(column * ItemWidth, row * ItemHeight - _offset.Y, ItemWidth, ItemHeight));
+            if (index >= 0 && index < _layouts.Length)
+            {
+                var layout = _layouts[index];
+                child.Arrange(new Rect(layout.X, layout.Y - _offset.Y, layout.Width, layout.Height));
+            }
         }
         return finalSize;
     }
@@ -150,8 +179,9 @@ public sealed class VirtualizingWrapPanel : VirtualizingPanel, IScrollInfo
             var index = IndexFromContainer(element);
             if (index >= 0)
             {
-                var itemTop = index / _itemsPerRow * ItemHeight;
-                var itemBottom = itemTop + ItemHeight;
+                var layout = index < _layouts.Length ? _layouts[index] : Rect.Empty;
+                var itemTop = layout.Top;
+                var itemBottom = layout.Bottom;
                 if (itemTop < VerticalOffset)
                     SetVerticalOffset(itemTop);
                 else if (itemBottom > VerticalOffset + ViewportHeight)

@@ -51,7 +51,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
     public ObservableCollection<AlbumItemViewModel> Albums { get; } = new();
     public ObservableCollection<DirectoryNodeViewModel> DirectoryTree { get; } = new();
     public ObservableCollection<ImageItemViewModel> DirectoryImages { get; } = new();
+    public ObservableCollection<object> DirectoryTimelineItems { get; } = new();
     public ListCollectionView DirectoryImagesView { get; }
+    public System.Collections.IEnumerable DirectoryDisplayItems => IsTimelineAlbumSelected ? DirectoryTimelineItems : DirectoryImagesView;
     public ObservableCollection<ImageItemViewModel> SelectedImages { get; } = new();
     public SemanticViewModel Semantic { get; }
     public PeopleViewModel People { get; }
@@ -135,7 +137,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private bool _canNavigateNextTimeline;
 
     [ObservableProperty]
-    private ImageItemViewModel? _timelineScrollTarget;
+    private object? _timelineScrollTarget;
 
     [ObservableProperty]
     private bool _showFilterPanel = true;
@@ -300,6 +302,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     partial void OnSelectedDirectoryChanged(DirectoryNodeViewModel? value)
     {
         IsTimelineAlbumSelected = value?.IsTimelineAlbum == true;
+        OnPropertyChanged(nameof(DirectoryDisplayItems));
         LoadImagesForSelectedDirectory();
     }
     partial void OnSelectedImageChanged(ImageItemViewModel? value)
@@ -1269,6 +1272,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         var cts = _directoryLoadCts = new CancellationTokenSource();
         var selectedDirectory = SelectedDirectory;
         DirectoryImages.Clear();
+        DirectoryTimelineItems.Clear();
         PrepareDirectoryTimelineForLoading();
         try
         {
@@ -1295,6 +1299,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     var item = new ImageItemViewModel(image);
                     item.SetTimelineGranularity(TimelineGranularityIndex);
                     DirectoryImages.Add(item);
+                    AddTimelineItem(item);
                 }, cts.Token, batchSize: 8);
             RefreshDirectoryTimelineView(resetPosition: true);
             OnPropertyChanged(nameof(DirectoryImageCount));
@@ -1348,13 +1353,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
         TimelinePositionText = IsTimelineAlbumSelected ? "正在准备时间轴…" : "";
         CanNavigatePreviousTimeline = false;
         CanNavigateNextTimeline = false;
-        using (DirectoryImagesView.DeferRefresh())
-        {
-            DirectoryImagesView.GroupDescriptions.Clear();
-            DirectoryImagesView.Filter = null;
-            if (IsTimelineAlbumSelected)
-                DirectoryImagesView.GroupDescriptions.Add(new PropertyGroupDescription(nameof(ImageItemViewModel.TimelineAnchor)));
-        }
+        DirectoryImagesView.GroupDescriptions.Clear();
+        DirectoryImagesView.Filter = null;
     }
 
     private void RefreshDirectoryTimelineView(bool resetPosition = false)
@@ -1364,12 +1364,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
             .Where(anchor => !string.IsNullOrWhiteSpace(anchor)).Distinct().ToArray();
         if (resetPosition || !_timelineAnchors.Contains(CurrentTimelineAnchor, StringComparer.Ordinal))
             CurrentTimelineAnchor = _timelineAnchors.FirstOrDefault() ?? "";
+        DirectoryTimelineItems.Clear();
+        foreach (var image in DirectoryImages) AddTimelineItem(image);
         using (DirectoryImagesView.DeferRefresh())
         {
             DirectoryImagesView.GroupDescriptions.Clear();
             DirectoryImagesView.Filter = null;
-            if (IsTimelineAlbumSelected)
-                DirectoryImagesView.GroupDescriptions.Add(new PropertyGroupDescription(nameof(ImageItemViewModel.TimelineAnchor)));
         }
         UpdateTimelineNavigationState();
     }
@@ -1391,7 +1391,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
         var target = current + offset;
         if (target < 0 || target >= _timelineAnchors.Length) return;
         CurrentTimelineAnchor = _timelineAnchors[target];
-        TimelineScrollTarget = DirectoryImages.FirstOrDefault(image => image.TimelineAnchor == CurrentTimelineAnchor);
+        TimelineScrollTarget = DirectoryTimelineItems.OfType<TimelineAnchorItemViewModel>()
+            .FirstOrDefault(anchor => anchor.Label == CurrentTimelineAnchor);
         UpdateTimelineNavigationState();
     }
 
@@ -1401,6 +1402,15 @@ public partial class MainViewModel : ObservableObject, IDisposable
         TimelinePositionText = index < 0 ? "没有照片" : $"{index + 1} / {_timelineAnchors.Length}";
         CanNavigatePreviousTimeline = index > 0;
         CanNavigateNextTimeline = index >= 0 && index < _timelineAnchors.Length - 1;
+    }
+
+    private void AddTimelineItem(ImageItemViewModel image)
+    {
+        if (!IsTimelineAlbumSelected) return;
+        var previous = DirectoryTimelineItems.LastOrDefault() as ImageItemViewModel;
+        if (previous is null || previous.TimelineAnchor != image.TimelineAnchor)
+            DirectoryTimelineItems.Add(new TimelineAnchorItemViewModel(image.TimelineAnchor));
+        DirectoryTimelineItems.Add(image);
     }
 
     private async Task HandleMissingAsync()

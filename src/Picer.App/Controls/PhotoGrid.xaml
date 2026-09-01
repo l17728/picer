@@ -43,43 +43,23 @@
                             </ItemsPanelTemplate>
                         </Setter.Value>
                     </Setter>
+                </Style>
+            </ListBox.Style>
+            <ListBox.ItemContainerStyle>
+                <Style TargetType="ListBoxItem">
+                    <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
                     <Style.Triggers>
-                        <DataTrigger Binding="{Binding TimelineMode, ElementName=Root}" Value="True">
-                            <Setter Property="ItemsPanel">
-                                <Setter.Value>
-                                    <ItemsPanelTemplate><VirtualizingStackPanel/></ItemsPanelTemplate>
-                                </Setter.Value>
-                            </Setter>
+                        <DataTrigger Binding="{Binding IsTimelineAnchor}" Value="True">
+                            <Setter Property="Focusable" Value="False"/>
+                            <Setter Property="IsHitTestVisible" Value="False"/>
                         </DataTrigger>
                     </Style.Triggers>
                 </Style>
-            </ListBox.Style>
-            <ListBox.GroupStyle>
-                <GroupStyle>
-                    <GroupStyle.ContainerStyle>
-                        <Style TargetType="GroupItem">
-                            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
-                            <Setter Property="Width" Value="{Binding ActualWidth, RelativeSource={RelativeSource AncestorType={x:Type ListBox}}}"/>
-                        </Style>
-                    </GroupStyle.ContainerStyle>
-                    <GroupStyle.HeaderTemplate>
-                        <DataTemplate>
-                            <Border Background="#E7F0FA" BorderBrush="#BCD0E5" BorderThickness="0,0,0,1"
-                                    Padding="10,7" Margin="3,8,3,3">
-                                <TextBlock Text="{Binding Name}" FontSize="15" FontWeight="SemiBold" Foreground="#294A69"/>
-                            </Border>
-                        </DataTemplate>
-                    </GroupStyle.HeaderTemplate>
-                    <GroupStyle.Panel>
-                        <ItemsPanelTemplate>
-                            <WrapPanel IsItemsHost="True" Orientation="Horizontal" HorizontalAlignment="Stretch"/>
-                        </ItemsPanelTemplate>
-                    </GroupStyle.Panel>
-                </GroupStyle>
-            </ListBox.GroupStyle>
+            </ListBox.ItemContainerStyle>
             <ListBox.ItemTemplate>
                 <DataTemplate>
-                    <Border BorderBrush="#CCC" BorderThickness="1" Padding="4" Margin="3">
+                    <Grid>
+                    <Border x:Name="PhotoCard" BorderBrush="#CCC" BorderThickness="1" Padding="4" Margin="3">
                         <StackPanel Width="{Binding ThumbnailSize, RelativeSource={RelativeSource AncestorType={x:Type local:PhotoGrid}}}">
                             <Grid Width="{Binding ThumbnailSize, RelativeSource={RelativeSource AncestorType={x:Type local:PhotoGrid}}}"
                                   Height="{Binding ThumbnailSize, RelativeSource={RelativeSource AncestorType={x:Type local:PhotoGrid}}}">
@@ -92,6 +72,17 @@
                             <TextBlock Text="{Binding InfoText}" Foreground="#555" FontSize="11" TextAlignment="Center"/>
                         </StackPanel>
                     </Border>
+                    <Border x:Name="TimelineAnchor" Visibility="Collapsed" Background="#E7F0FA" BorderBrush="#BCD0E5"
+                            BorderThickness="0,0,0,1" Padding="12,8" Margin="3,7,3,3">
+                        <TextBlock Text="{Binding Label}" FontSize="15" FontWeight="SemiBold" Foreground="#294A69"/>
+                    </Border>
+                    </Grid>
+                    <DataTemplate.Triggers>
+                        <DataTrigger Binding="{Binding IsTimelineAnchor}" Value="True">
+                            <Setter TargetName="PhotoCard" Property="Visibility" Value="Collapsed"/>
+                            <Setter TargetName="TimelineAnchor" Property="Visibility" Value="Visible"/>
+                        </DataTrigger>
+                    </DataTemplate.Triggers>
                 </DataTemplate>
             </ListBox.ItemTemplate>
             <ListBox.ContextMenu>

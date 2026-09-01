@@ -25,6 +25,7 @@ public partial class ImageItemViewModel : ObservableObject
     public string Path => _record.Path;
     public string FileName => System.IO.Path.GetFileName(_record.Path);
     public bool IsMissing => _record.Status == ImageStatus.Missing;
+    public bool IsTimelineAnchor => false;
     public DateTime EffectiveTime => (_record.TakenUtc ?? _record.CreatedUtc ?? _record.ModifiedUtc).ToLocalTime();
 
     [ObservableProperty]
