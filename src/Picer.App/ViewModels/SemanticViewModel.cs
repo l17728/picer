@@ -46,39 +46,56 @@ public partial class SemanticViewModel : ObservableObject
 
     private readonly PicerDatabase _db;
     private readonly Action? _changed;
+    private CancellationTokenSource? _selectionCancellation;
 
     public SemanticViewModel(PicerDatabase db, Action? changed = null)
     {
         _db = db;
         _changed = changed;
-        LoadTags();
-        LoadAlbums();
+        _ = InitializeAsync();
+    }
+
+    private async Task InitializeAsync()
+    {
+        var snapshot = await Task.Run(() => (Tags: SemanticEngine.GetTags(_db).ToArray(), Albums: SemanticEngine.GetAlbums(_db).ToArray()));
+        Tags = new(snapshot.Tags.Select(tag => new TagItemViewModel(tag)));
+        Albums = new(snapshot.Albums.Select(album => new AlbumItemViewModel(album)));
     }
 
     public void SetCurrentImage(long imageId)
     {
         CurrentImageId = imageId;
         Suggestions.Clear();
-        
-        if (imageId > 0)
+        _selectionCancellation?.Cancel();
+        _selectionCancellation?.Dispose();
+        if (imageId <= 0) return;
+        var cancellation = _selectionCancellation = new CancellationTokenSource();
+        _ = LoadSuggestionsAsync(imageId, cancellation.Token);
+    }
+
+    private async Task LoadSuggestionsAsync(long imageId, CancellationToken cancellationToken)
+    {
+        try
         {
-            var suggestions = SemanticEngine.ExtractAISuggestions(_db, imageId);
+            var suggestions = await Task.Run(() =>
+            {
+                var local = SemanticEngine.ExtractAISuggestions(_db, imageId).ToList();
+                foreach (var name in AppServices.CloudVisionRepository.GetSuggestedTags(imageId)
+                             .Where(name => local.All(existing => !string.Equals(existing.TagName, name, StringComparison.OrdinalIgnoreCase))))
+                    local.Add(new SuggestedTag(name, Confidence.Medium));
+                return local;
+            }, cancellationToken);
+            if (cancellationToken.IsCancellationRequested || CurrentImageId != imageId) return;
             foreach (var s in suggestions)
             {
                 var item = new SuggestedTagVM(s);
-                item.OnAccept = AcceptSuggestion;
-                item.OnReject = RejectSuggestion;
+                item.OnAccept = AcceptSuggestionAsync;
+                item.OnReject = RejectSuggestionAsync;
                 Suggestions.Add(item);
-            }
-            foreach (var tagName in AppServices.CloudVisionRepository.GetSuggestedTags(imageId)
-                         .Where(name => Suggestions.All(existing => !string.Equals(existing.TagName, name, StringComparison.OrdinalIgnoreCase))))
-            {
-                var item = new SuggestedTagVM(new SuggestedTag(tagName, Confidence.Medium));
-                item.OnAccept = AcceptSuggestion;
-                item.OnReject = RejectSuggestion;
-                Suggestions.Add(item);
+                await Task.Yield();
             }
         }
+        catch (OperationCanceledException) { }
     }
 
     public void SetSelection(IEnumerable<long> imageIds)
@@ -103,17 +120,21 @@ public partial class SemanticViewModel : ObservableObject
     }
 
     [RelayCommand]
-    private void AddTag()
+    private async Task AddTagAsync()
     {
         if (string.IsNullOrWhiteSpace(NewTagName))
             return;
 
         try
         {
-            var tag = SemanticEngine.AddTag(_db, NewTagName);
-            
-            // If there's a current image selected, assign tag to it
-            foreach (var imageId in _selectedImageIds) SemanticEngine.AssignTag(_db, imageId, tag.Id);
+            var name = NewTagName;
+            var imageIds = _selectedImageIds.ToArray();
+            var tag = await Task.Run(() =>
+            {
+                var created = SemanticEngine.AddTag(_db, name);
+                foreach (var imageId in imageIds) SemanticEngine.AssignTag(_db, imageId, created.Id);
+                return created;
+            });
 
             Tags.Add(new TagItemViewModel(tag));
             NewTagName = "";
@@ -127,14 +148,14 @@ public partial class SemanticViewModel : ObservableObject
     }
 
     [RelayCommand]
-    private void AddAlbum()
+    private async Task AddAlbumAsync()
     {
         if (string.IsNullOrWhiteSpace(NewAlbumName))
         {
             StatusText = "请输入相册名称";
             return;
         }
-        var album = SemanticEngine.AddAlbum(_db, NewAlbumName);
+        var album = await Task.Run(() => SemanticEngine.AddAlbum(_db, NewAlbumName));
         var item = new AlbumItemViewModel(album);
         Albums.Add(item);
         SelectedAlbum = item;
@@ -143,7 +164,7 @@ public partial class SemanticViewModel : ObservableObject
     }
 
     [RelayCommand]
-    private void DeleteSelectedTag()
+    private async Task DeleteSelectedTagAsync()
     {
         if (SelectedTag is null)
             return;
@@ -153,13 +174,14 @@ public partial class SemanticViewModel : ObservableObject
         if (result != MessageBoxResult.Yes)
             return;
 
-        SemanticEngine.DeleteTag(_db, SelectedTag.Tag.Id);
-        Tags.Remove(SelectedTag);
+        var selected = SelectedTag;
+        await Task.Run(() => SemanticEngine.DeleteTag(_db, selected.Tag.Id));
+        Tags.Remove(selected);
         StatusText = "标签已删除";
     }
 
     [RelayCommand]
-    private void AddToAlbum()
+    private async Task AddToAlbumAsync()
     {
         if (SelectedAlbum is null || CurrentImageId <= 0)
         {
@@ -167,12 +189,12 @@ public partial class SemanticViewModel : ObservableObject
             return;
         }
 
-        SemanticEngine.AddToAlbum(_db, SelectedAlbum.Album.Id, CurrentImageId);
+        await Task.Run(() => SemanticEngine.AddToAlbum(_db, SelectedAlbum.Album.Id, CurrentImageId));
         StatusText = $"已将图片添加到'{SelectedAlbum.Album.Name}'";
     }
 
     [RelayCommand]
-    private void RemoveFromAlbum()
+    private async Task RemoveFromAlbumAsync()
     {
         if (SelectedAlbum is null || CurrentImageId <= 0)
         {
@@ -180,18 +202,19 @@ public partial class SemanticViewModel : ObservableObject
             return;
         }
 
-        SemanticEngine.RemoveFromAlbum(_db, SelectedAlbum.Album.Id, CurrentImageId);
+        await Task.Run(() => SemanticEngine.RemoveFromAlbum(_db, SelectedAlbum.Album.Id, CurrentImageId));
         StatusText = $"已从'{SelectedAlbum.Album.Name}'移除图片";
     }
 
     [RelayCommand]
-    private void AutoCreateTimeLineAlbums()
+    private async Task AutoCreateTimeLineAlbumsAsync()
     {
         IsBusy = true;
         try
         {
-            var albums = SemanticEngine.AutoCreateTimeLineAlbums(_db);
-            LoadAlbums();
+            var albums = await Task.Run(() => SemanticEngine.AutoCreateTimeLineAlbums(_db));
+            var refreshed = await Task.Run(() => SemanticEngine.GetAlbums(_db).ToArray());
+            Albums = new(refreshed.Select(album => new AlbumItemViewModel(album)));
             StatusText = $"已自动创建 {albums.Count} 个时间线相册";
         }
         finally
@@ -201,14 +224,15 @@ public partial class SemanticViewModel : ObservableObject
     }
 
     [RelayCommand]
-    private void AutoCreateCameraAlbums()
+    private async Task AutoCreateCameraAlbumsAsync()
     {
         IsBusy = true;
         try
         {
-            var albums = SemanticEngine.AutoCreateCameraAlbums(_db, autoTag: true);
-            LoadAlbums();
-            LoadTags();
+            var albums = await Task.Run(() => SemanticEngine.AutoCreateCameraAlbums(_db, autoTag: true));
+            var snapshot = await Task.Run(() => (Albums: SemanticEngine.GetAlbums(_db).ToArray(), Tags: SemanticEngine.GetTags(_db).ToArray()));
+            Albums = new(snapshot.Albums.Select(album => new AlbumItemViewModel(album)));
+            Tags = new(snapshot.Tags.Select(tag => new TagItemViewModel(tag)));
             StatusText = $"已按相机品牌自动创建 {albums.Count} 个相册并打标签";
         }
         finally
@@ -218,27 +242,27 @@ public partial class SemanticViewModel : ObservableObject
     }
 
     [RelayCommand]
-    private void AcceptSuggestion(string tagName)
+    private async Task AcceptSuggestionAsync(string tagName)
     {
-        var tag = SemanticEngine.GetTags(_db).FirstOrDefault(t => t.Name == tagName);
-        if (tag is null && CurrentImageId > 0)
+        var imageId = CurrentImageId;
+        var tag = await Task.Run(() =>
         {
-            tag = SemanticEngine.AddTag(_db, tagName);
-            Tags.Add(new TagItemViewModel(tag));
-        }
-
-        if (tag != null && CurrentImageId > 0)
-            SemanticEngine.AssignTag(_db, CurrentImageId, tag.Id);
+            var existing = SemanticEngine.GetTags(_db).FirstOrDefault(t => t.Name == tagName);
+            if (existing is null && imageId > 0) existing = SemanticEngine.AddTag(_db, tagName);
+            if (existing is not null && imageId > 0) SemanticEngine.AssignTag(_db, imageId, existing.Id);
+            return existing;
+        });
+        if (tag is not null && Tags.All(item => item.Tag.Id != tag.Id)) Tags.Add(new TagItemViewModel(tag));
 
         StatusText = $"已接受建议并标记: {tagName}";
         Suggestions.Remove(Suggestions.First(item => item.TagName == tagName));
         _changed?.Invoke();
     }
 
-    private void RejectSuggestion(string tagName)
+    private async Task RejectSuggestionAsync(string tagName)
     {
         if (CurrentImageId <= 0) return;
-        SemanticEngine.RejectSuggestion(_db, CurrentImageId, tagName);
+        await Task.Run(() => SemanticEngine.RejectSuggestion(_db, CurrentImageId, tagName));
         var item = Suggestions.FirstOrDefault(suggestion => suggestion.TagName == tagName);
         if (item is not null) Suggestions.Remove(item);
         StatusText = $"已拒绝建议：{tagName}，不会再次自动出现";
@@ -291,17 +315,20 @@ public partial class SuggestedTagVM : ObservableObject
     };
 
     [RelayCommand]
-    private void Accept()
+    private async Task AcceptAsync()
     {
         if (OnAccept != null && !string.IsNullOrEmpty(TagName))
-            OnAccept(TagName);
+            await OnAccept(TagName);
     }
 
-    public Action<string>? OnAccept { get; set; }
-    public Action<string>? OnReject { get; set; }
+    public Func<string, Task>? OnAccept { get; set; }
+    public Func<string, Task>? OnReject { get; set; }
 
     [RelayCommand]
-    private void Reject() => OnReject?.Invoke(TagName);
+    private async Task RejectAsync()
+    {
+        if (OnReject is not null) await OnReject(TagName);
+    }
     
     public SuggestedTagVM(SuggestedTag suggestedTag)
     {

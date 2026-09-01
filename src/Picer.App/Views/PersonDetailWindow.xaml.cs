@@ -18,17 +18,27 @@ public partial class PersonDetailWindow : Window
 
     public PersonDetailWindow(long personId, PicerDatabase database, PeopleService people, VisionAnalysisRepository faces)
     {
-        InitializeComponent(); _personId = personId; _database = database; _people = people; _faces = faces; Refresh();
+        InitializeComponent(); _personId = personId; _database = database; _people = people; _faces = faces;
+        Loaded += async (_, _) => await RefreshAsync();
     }
 
     public bool PeopleChanged { get; private set; }
 
-    private void Refresh()
+    private async Task RefreshAsync()
     {
-        var person = _people.Get(_personId);
-        if (person is null) { Close(); return; }
-        var images = _people.GetImageIds(_personId).Select(_database.GetImage).Where(x => x is not null).Cast<ImageRecord>()
-            .OrderBy(SceneTimeClusterService.EffectiveTime).ThenBy(x => x.Id).ToArray();
+        var snapshot = await Task.Run(() =>
+        {
+            var person = _people.Get(_personId);
+            if (person is null) return null;
+            var images = _people.GetImageIds(_personId).Select(_database.GetImage).Where(x => x is not null).Cast<ImageRecord>()
+                .OrderBy(SceneTimeClusterService.EffectiveTime).ThenBy(x => x.Id).ToArray();
+            var clusters = new SceneTimeClusterService(_database).Build(images).ToArray();
+            var targets = _people.GetAll().Where(x => x.Id != _personId).ToArray();
+            return new { Person = person, Images = images, Clusters = clusters, Targets = targets };
+        });
+        if (snapshot is null) { Close(); return; }
+        var person = snapshot.Person;
+        var images = snapshot.Images;
         Heading.Text = person.DisplayName; NameBox.Text = person.DisplayName;
         DescriptionBox.Text = person.Description;
         Summary.Text = $"{images.Length} 张照片；双击照片可逐脸确认或纠错";
@@ -38,14 +48,14 @@ public partial class PersonDetailWindow : Window
         {
             new("全部照片", images.Select(image => new PersonPhotoItem(image)).ToArray(), null)
         };
-        foreach (var cluster in new SceneTimeClusterService(_database).Build(images))
+        foreach (var cluster in snapshot.Clusters)
         {
             var photos = cluster.ImageIds.Where(byId.ContainsKey).Select(id => new PersonPhotoItem(byId[id])).ToArray();
             groups.Add(new PersonSceneGroup(cluster.DisplayName, photos, cluster));
         }
         SceneGroups.ItemsSource = groups;
         SceneGroups.SelectedIndex = 0;
-        MergeTarget.ItemsSource = _people.GetAll().Where(x => x.Id != _personId).ToArray();
+        MergeTarget.ItemsSource = snapshot.Targets;
     }
 
     private void SceneGroups_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -53,38 +63,38 @@ public partial class PersonDetailWindow : Window
         if (SceneGroups.SelectedItem is PersonSceneGroup group) Photos.ItemsSource = group.Photos;
     }
 
-    private void Rename_Click(object sender, RoutedEventArgs e)
+    private async void Rename_Click(object sender, RoutedEventArgs e)
     {
-        try { _people.Rename(_personId, NameBox.Text); PeopleChanged = true; Status.Text = "人物名称已更新。"; Refresh(); }
+        try { var name = NameBox.Text; await Task.Run(() => _people.Rename(_personId, name)); PeopleChanged = true; Status.Text = "人物名称已更新。"; await RefreshAsync(); }
         catch (Exception ex) { Status.Text = ex.Message; }
     }
 
-    private void AddAlias_Click(object sender, RoutedEventArgs e)
+    private async void AddAlias_Click(object sender, RoutedEventArgs e)
     {
-        try { _people.AddAlias(_personId, AliasBox.Text); AliasBox.Clear(); PeopleChanged = true; Status.Text = "别名已加入检索。"; Refresh(); }
+        try { var alias = AliasBox.Text; await Task.Run(() => _people.AddAlias(_personId, alias)); AliasBox.Clear(); PeopleChanged = true; Status.Text = "别名已加入检索。"; await RefreshAsync(); }
         catch (Exception ex) { Status.Text = ex.Message; }
     }
 
-    private void SaveDescription_Click(object sender, RoutedEventArgs e)
+    private async void SaveDescription_Click(object sender, RoutedEventArgs e)
     {
-        try { _people.SetDescription(_personId, DescriptionBox.Text); PeopleChanged = true; Status.Text = "人物描述已保存。"; }
+        try { var description = DescriptionBox.Text; await Task.Run(() => _people.SetDescription(_personId, description)); PeopleChanged = true; Status.Text = "人物描述已保存。"; }
         catch (Exception ex) { Status.Text = ex.Message; }
     }
 
-    private void Merge_Click(object sender, RoutedEventArgs e)
+    private async void Merge_Click(object sender, RoutedEventArgs e)
     {
         if (MergeTarget.SelectedItem is not PersonSummary target) { Status.Text = "请选择合并目标。"; return; }
         if (MessageBox.Show($"将“{Heading.Text}”的全部已确认人脸和别名合并到“{target.DisplayName}”。当前人物条目随后移除。是否继续？",
                 "确认合并人物", MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No) != MessageBoxResult.Yes) return;
-        try { _people.Merge(_personId, target.Id); _personId = target.Id; PeopleChanged = true; Status.Text = "人物已合并，可在照片中继续逐脸纠错。"; Refresh(); }
+        try { await Task.Run(() => _people.Merge(_personId, target.Id)); _personId = target.Id; PeopleChanged = true; Status.Text = "人物已合并，可在照片中继续逐脸纠错。"; await RefreshAsync(); }
         catch (Exception ex) { Status.Text = ex.Message; }
     }
 
-    private void Photos_DoubleClick(object sender, MouseButtonEventArgs e)
+    private async void Photos_DoubleClick(object sender, MouseButtonEventArgs e)
     {
         if (Photos.SelectedItem is not PersonPhotoItem item || !File.Exists(item.Record.Path)) return;
         new FaceDetailWindow(item.Record, _faces, _people) { Owner = this }.ShowDialog();
-        PeopleChanged = true; Refresh();
+        PeopleChanged = true; await RefreshAsync();
     }
 
     private sealed class PersonPhotoItem

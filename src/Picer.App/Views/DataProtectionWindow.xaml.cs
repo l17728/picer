@@ -7,7 +7,7 @@ namespace Picer.App.Views;
 public partial class DataProtectionWindow : Window
 {
     private readonly DataProtectionService _service;
-    public DataProtectionWindow(DataProtectionService service) { InitializeComponent(); _service = service; RootText.Text = service.DataRoot; RefreshAreas(); }
+    public DataProtectionWindow(DataProtectionService service) { InitializeComponent(); _service = service; RootText.Text = service.DataRoot; StatusText.Text = "正在后台统计空间…"; Loaded += async (_, _) => await RefreshAreasAsync(); }
     private async void Backup_Click(object sender, RoutedEventArgs e)
     {
         var dialog = new SaveFileDialog { Title = "保存 Picer 备份", Filter = "Picer 备份 (*.picer-backup)|*.picer-backup", FileName = $"Picer-{DateTime.Now:yyyyMMdd-HHmm}.picer-backup", AddExtension = true };
@@ -43,8 +43,8 @@ public partial class DataProtectionWindow : Window
         }
         catch (Exception ex) { StatusText.Text = $"无法安排迁移：{ex.Message}"; }
     }
-    private void Refresh_Click(object sender, RoutedEventArgs e) => RefreshAreas();
-    private void RefreshAreas() { Areas.ItemsSource = _service.GetAreaSizes().Select(x => new AreaRow(x.Name, x.Path, FormatBytes(x.Bytes))).ToArray(); StatusText.Text = "空间占用已刷新。"; }
+    private async void Refresh_Click(object sender, RoutedEventArgs e) => await RefreshAreasAsync();
+    private async Task RefreshAreasAsync() { Areas.ItemsSource = await Task.Run(() => _service.GetAreaSizes().Select(x => new AreaRow(x.Name, x.Path, FormatBytes(x.Bytes))).ToArray()); StatusText.Text = "空间占用已刷新。"; }
     private void SetBusy(bool value) { BackupButton.IsEnabled = !value; RestoreButton.IsEnabled = !value; MigrateButton.IsEnabled = !value; Progress.IsIndeterminate = value; }
     private static string FormatBytes(long bytes) { string[] units = ["B", "KB", "MB", "GB", "TB"]; var size = (double)bytes; var index = 0; while (size >= 1024 && index < units.Length - 1) { size /= 1024; index++; } return $"{size:F1} {units[index]}"; }
     private sealed record AreaRow(string Name, string Path, string SizeText);

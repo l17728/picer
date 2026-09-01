@@ -39,7 +39,7 @@ public partial class MainWindow : Window
         if (MainTabs is null || sender is not TextBox box) return;
         if (MediaTypeBox?.SelectedIndex == 1)
         {
-            _mainVm.Video.ApplySearch(box.Text);
+            _ = _mainVm.Video.ApplySearchAsync(box.Text);
             MainTabs.SelectedIndex = 4;
         }
         else if (box.Text.Length > 0) MainTabs.SelectedIndex = 1;
@@ -56,7 +56,7 @@ public partial class MainWindow : Window
         if (MediaTypeBox.SelectedIndex == 1)
         {
             MainTabs.SelectedIndex = 4;
-            _mainVm.Video.Load();
+            _ = _mainVm.Video.LoadAsync();
         }
         else if (MainTabs.SelectedIndex == 4)
         {
@@ -126,10 +126,10 @@ public partial class MainWindow : Window
         await _mainVm.People.InitializePageAsync();
     }
 
-    private void PeopleFace_DoubleClick(object sender, MouseButtonEventArgs e)
+    private async void PeopleFace_DoubleClick(object sender, MouseButtonEventArgs e)
     {
         if (FindDataContext<UnassignedFaceViewModel>(e.OriginalSource as DependencyObject) is { } face)
-            _mainVm.People.OpenFacePhoto(face);
+            await _mainVm.People.OpenFacePhotoAsync(face);
     }
 
     private void PeopleFace_PreviewMouseRightButtonDown(object sender, MouseButtonEventArgs e)
@@ -145,7 +145,7 @@ public partial class MainWindow : Window
         if (_mainVm.People.SelectedDisplayedFace is not { } face) return;
 
         var open = new MenuItem { Header = "打开关联照片" };
-        open.Click += (_, _) => _mainVm.People.OpenFacePhoto(face);
+        open.Click += async (_, _) => await _mainVm.People.OpenFacePhotoAsync(face);
         menu.Items.Add(open);
 
         var move = new MenuItem { Header = "移到已有分类" };
@@ -153,17 +153,17 @@ public partial class MainWindow : Window
         {
             var target = person;
             var item = new MenuItem { Header = target.DisplayName };
-            item.Click += (_, _) => _mainVm.People.MoveFaceToPerson(face, target);
+            item.Click += async (_, _) => await _mainVm.People.MoveFaceToPersonAsync(face, target);
             move.Items.Add(item);
         }
         if (move.Items.Count == 0) move.IsEnabled = false;
         menu.Items.Add(move);
 
         var unassigned = new MenuItem { Header = "移到待分类" };
-        unassigned.Click += (_, _) => _mainVm.People.MoveFaceToUnassigned(face);
+        unassigned.Click += async (_, _) => await _mainVm.People.MoveFaceToUnassignedAsync(face);
         menu.Items.Add(unassigned);
         var ignored = new MenuItem { Header = "标记为不分类" };
-        ignored.Click += (_, _) => _mainVm.People.IgnoreFace(face);
+        ignored.Click += async (_, _) => await _mainVm.People.IgnoreFaceAsync(face);
         menu.Items.Add(ignored);
     }
 
