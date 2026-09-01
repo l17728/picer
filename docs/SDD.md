@@ -1,8 +1,8 @@
 # Picer 软件设计说明（SDD）
 
-版本：1.1  
-状态：核心功能完成，数据库 v14；模型规模评测持续进行  
-更新时间：2026-08-27
+版本：1.2
+状态：核心功能完成，数据库 v14；AI 问答检索层进入设计阶段
+更新时间：2026-09-01
 
 ## 1. 目的与范围
 
@@ -398,3 +398,207 @@ public sealed record CompositePhotoQuery(
 - 候选组只是一种建议；用户可先拆出错误成员，再确认剩余整组。
 - 人物合并必须二次确认，迁移已确认人脸和别名并记录纠错历史，不修改任何原照片。
 - 所有人物云端分析上下文保持匿名，不发送本地姓名或亲属关系。
+
+## 12. AI 问答文本检索与完整记录取回（规划）
+
+### 12.1 组件边界
+
+新增以下本地组件：
+
+- `AiTextProjectionService`：从照片、场景、视频、相册、人物、地点等规范业务表投影可检索文档。
+- `AiTextRepository`：保存文档正文、来源、状态、内容哈希和稳定定位符。
+- `Bm25TextIndex`：管理 SQLite FTS5 文本索引、中文词法规范化和 BM25 查询。
+- `AiEvidenceHydrator`：根据命中文档定位符，从规范业务表取回完整记录及有限关联上下文。
+- `LocalQuestionAnsweringService`：调用本地语言模型进行候选复排、事实判断和答案生成。
+- `QuestionEvidenceNavigator`：把回答依据映射回照片、场景节点、视频、相册或人物 UI。
+
+索引层只保存可重建投影；完整照片描述、场景总结和用户确认结果仍以现有业务表为事实来源。大模型不得直接执行 SQL，也不得接收数据库路径或本地文件系统路径。
+
+### 12.2 统一文档模型
+
+建议新增规范表：
+
+```sql
+CREATE TABLE ai_text_documents (
+    id INTEGER PRIMARY KEY,
+    source_type TEXT NOT NULL,       -- photo/scene/video/transcript/album/person/location/ocr/note
+    source_id TEXT NOT NULL,         -- 来源表稳定主键或稳定指纹
+    parent_type TEXT,                -- image/scene/video/album/person/source
+    parent_id TEXT,
+    title TEXT NOT NULL DEFAULT '',
+    body TEXT NOT NULL,
+    keywords TEXT NOT NULL DEFAULT '',
+    lexical_text TEXT NOT NULL,      -- 使用当前 tokenizer_version 预处理后的检索文本
+    state TEXT NOT NULL,             -- active/rejected/stale/deleted
+    provider TEXT,
+    model_version TEXT,
+    prompt_version TEXT,
+    content_hash TEXT NOT NULL,
+    tokenizer_version TEXT NOT NULL,
+    created_utc TEXT NOT NULL,
+    updated_utc TEXT NOT NULL,
+    UNIQUE(source_type, source_id)
+);
+
+CREATE VIRTUAL TABLE ai_text_fts USING fts5(
+    title, lexical_text, keywords,
+    content='ai_text_documents', content_rowid='id',
+    tokenize='unicode61 remove_diacritics 2'
+);
+
+CREATE INDEX idx_ai_text_source ON ai_text_documents(source_type, source_id, state);
+CREATE INDEX idx_ai_text_parent ON ai_text_documents(parent_type, parent_id, state);
+CREATE INDEX idx_ai_text_hash ON ai_text_documents(content_hash, tokenizer_version);
+```
+
+`source_id` 必须足以重新取回一条完整规范记录。例如照片使用 `image_id + provider + model_version` 或当前有效描述 ID，场景使用稳定 fingerprint，视频使用 `video_id + summary_version`。不得使用列表序号、树节点对象地址或可能变化的显示名称定位。
+
+每个媒体文档还需要规范化的结构化标签投影，不能只把标签拼接成不可解释的正文。建议增加：
+
+```sql
+CREATE TABLE ai_document_facets (
+    document_id INTEGER NOT NULL REFERENCES ai_text_documents(id) ON DELETE CASCADE,
+    facet_type TEXT NOT NULL,       -- person/scene/geo/time/directory/album/media/device/tag
+    facet_key TEXT NOT NULL,        -- 稳定ID或受控层级键
+    facet_value TEXT NOT NULL,      -- 用于显示和词法检索的值
+    state TEXT NOT NULL,            -- confirmed/accepted/derived/rejected/stale
+    confidence REAL,
+    origin TEXT NOT NULL,           -- user/metadata/model/system
+    PRIMARY KEY(document_id, facet_type, facet_key, facet_value)
+);
+
+CREATE INDEX idx_ai_facets_lookup
+ON ai_document_facets(facet_type, facet_key, state, document_id);
+```
+
+照片文档至少投影以下 facet：
+
+- `person`：已确认 `person_id`、规范名称和别名；候选人物不进入 confirmed 事实；
+- `scene`：照片场景、已接受场景 fingerprint、场景名称；
+- `geo`：国家到村镇的每一级稳定层级键，以及用户修正地点；
+- `time`：年、月、日、ISO 周、季节、时间线相册和时间锚点；
+- `directory/album`：来源、目录层级、普通相册和时间相册；
+- `media/device/tag`：照片类型、相机设备、格式、用户标签和已接受模型标签。
+
+视频文档采用同一 facet 模型：
+
+- 视频文件本身的时间、地域、目录、设备和用户标签；
+- 关键帧已确认人物，汇总为视频级 `person` facet，同时保留关键帧 ID 和时间码关联；
+- 关键帧场景、视频整体场景、视频摘要和转写关键词；
+- 视频所属相册、时间线与场景分类。
+
+为支持精确依据定位，视频关键帧关联建议单独保存：
+
+```sql
+CREATE TABLE ai_video_evidence_points (
+    document_id INTEGER NOT NULL REFERENCES ai_text_documents(id) ON DELETE CASCADE,
+    video_id INTEGER NOT NULL,
+    keyframe_id INTEGER,
+    timestamp_ms INTEGER NOT NULL,
+    evidence_type TEXT NOT NULL,    -- person/scene/transcript/description
+    evidence_key TEXT NOT NULL,
+    PRIMARY KEY(document_id, timestamp_ms, evidence_type, evidence_key)
+);
+```
+
+FTS 表使用触发器或同事务显式维护。业务表更新、统一文档更新和 FTS 更新必须处于同一短事务；崩溃后通过内容哈希审计和投影重建恢复一致性。
+
+### 12.3 中文词法与 BM25
+
+SQLite `unicode61` 不提供完整中文分词，因此写入 `lexical_text` 前由应用执行确定性的中文切词与规范化：
+
+- 中文词、行政区划、人物别名、相机型号、日期和文件名分别保留；
+- 英文统一大小写，连字符和下划线同时保留原词与拆分词；
+- 查询必须使用与文档相同的 `tokenizer_version`；
+- 分词器升级时后台增量重建 `lexical_text` 和 FTS，不修改规范正文；
+- 用户输入必须转义为参数化 FTS 查询，禁止拼接未受控 `MATCH` 表达式。
+
+首阶段查询使用 FTS5 `bm25(ai_text_fts, ...)` 取 Top-K。SQLite BM25 分数越小相关性越高，排序实现和测试必须固定这一语义。建议默认召回 50 条，经来源状态、用户筛选和父对象去重后，向本地模型提供 8–20 条完整证据；具体数字由性能基准调整。
+
+### 12.4 检索增强问答数据流
+
+```text
+question
+  -> 本地意图/过滤条件解析
+  -> 人物/地域/时间线/目录/相册/媒体类型 facet 过滤
+  -> 查询词规范化与中文分词
+  -> FTS5 BM25 Top-K
+  -> 状态、人物、时间、地点、目录等结构化过滤
+  -> 按 source_type/source_id 取回完整规范记录
+  -> 按 parent_id 补充有限场景/视频上下文并去重
+  -> 本地语言模型复排、判断和生成答案
+  -> 带稳定定位符的 AnswerEvidence[]
+  -> UI 点击定位
+```
+
+建议的数据契约：
+
+```csharp
+public sealed record AiTextHit(
+    long DocumentId, string SourceType, string SourceId,
+    string? ParentType, string? ParentId, double Bm25Score);
+
+public sealed record AiEvidence(
+    string SourceType, string SourceId, string Title, string FullText,
+    DateTime? EffectiveTime, IReadOnlyDictionary<string, string> Metadata);
+
+public sealed record AiAnswer(
+    string Text, IReadOnlyList<AiEvidenceReference> Evidence,
+    IReadOnlyList<string> UnsupportedClauses);
+```
+
+BM25 命中片段只用于调试和 UI 高亮，不得代替 `FullText`。`AiEvidenceHydrator` 必须重新查询来源表，确认记录仍有效，并返回完整正文。场景证据可包含场景完整总结及代表照片引用；照片证据包含完整照片描述；视频证据包含完整视频摘要并按预算选择转写片段。
+
+查询计划应区分结构化标签与自由文本：人物、行政区划、时间、目录、相册和媒体类型优先解析为 facet 条件；场景描述、活动、物体、摘要和转写内容进入 BM25。无法唯一解析的人物别名或地域名称必须返回歧义供用户选择，不得让本地模型猜测稳定 ID。
+
+照片和视频统一返回 `AiEvidence`，但导航目标不同：照片定位到 `image_id`；场景定位到 fingerprint 及其照片集合；视频定位到 `video_id`，若命中关键帧人物、场景或转写片段则同时返回 `timestamp_ms`。
+
+### 12.5 投影与增量更新
+
+各业务服务在成功提交规范数据后发布本地领域事件，例如：
+
+- `PhotoDescriptionChanged`
+- `SceneDescriptionAccepted`
+- `VideoSummaryChanged`
+- `TranscriptChanged`
+- `AlbumChanged`
+- `PersonNameChanged`
+- `LocationHierarchyChanged`
+- `DerivedTextRejectedOrDeleted`
+- `FaceAssignmentConfirmedOrMoved`
+- `SceneClassificationChanged`
+- `TimelineAnchorChanged`
+- `MediaTagChanged`
+- `VideoKeyframeEvidenceChanged`
+
+事件处理器按 `(source_type, source_id)` 幂等 upsert。计算规范化正文的 SHA-256；哈希和 tokenizer 版本均未变化时跳过 FTS 写入。应用异常退出后，启动审计只处理业务表 `updated_utc` 晚于投影的记录，不阻塞首窗显示。提供“重建 AI 文本索引”维护任务，可取消、可显示进度，并且不重新调用任何视觉或语言模型。
+
+facet 与正文投影必须在同一个文档更新事务内替换。人物纠错、照片移出场景、地点批量编辑、相册删除或时间修正后，旧 facet 必须立即失效。关键帧人物移动到其他人物类别时，同时更新关键帧证据点和视频级人物汇总；只有视频中不再存在该人物的已确认关键帧时，才移除视频级人物 facet。
+
+### 12.6 本地模型上下文与隐私
+
+- AI 问答最终判断使用本地语言模型，默认断网可运行。
+- 只向模型提供检索命中的有限完整证据，不发送整库文本。
+- 人物名称、别名和人脸关联属于敏感本地数据；只在用户问题确实需要且本地模型运行时加入上下文。
+- 日志只记录文档 ID、来源类型、候选数、耗时和错误码，不记录问题全文、人物名称或完整证据正文。
+- 若未来增加云端问答，必须作为独立功能重新授权，不得复用云端照片分析授权。
+
+### 12.7 性能与并发
+
+- 10 万条文本投影 BM25 查询 p95 目标小于 150 ms，100 万条小于 350 ms。
+- 完整证据取回 p95 目标小于 100 ms；本地模型首 token 时间单独统计。
+- FTS 写入按小批次短事务执行，优先级低于当前可见照片加载和用户发起查询。
+- 新问题取消旧问题的 BM25、证据取回和本地推理；旧任务不得覆盖新问题 UI。
+- 上下文按字符/token 预算截断关联记录，但单条被选中的规范正文不得静默截断；超长正文应分段索引并保留指向完整来源的定位符。
+
+### 12.8 测试与迁移
+
+- 单元测试：中文分词版本、FTS 转义、BM25 排序方向、内容哈希、状态过滤、稳定定位符解析。
+- 集成测试：照片描述、场景总结、视频摘要新增/更新/拒绝/删除后的增量投影与 FTS 一致性。
+- 标签投影测试：人物确认与移动、场景重分类、地域层级修正、时间线变化、相册删除后，新旧 facet 与照片/视频结果一致。
+- 视频测试：摘要、转写和关键帧人物/场景均可召回同一视频，去重后保留最佳证据点和正确时间码。
+- 回归测试：BM25 命中后取回完整正文而非截断片段；回答证据可以定位原 UI 对象。
+- 隐私测试：断网问答成功；日志和异常包不包含问题全文、人物名称或完整正文。
+- 性能测试：10 万/100 万文档查询、并发索引更新、快速连续提问取消和峰值内存。
+
+该功能需要新的数据库 schema 版本。迁移只创建可重建派生表并从现有业务表后台回填；迁移失败时删除新表并恢复旧版本号，不修改或删除照片、现有描述、场景总结、视频摘要及用户数据。
