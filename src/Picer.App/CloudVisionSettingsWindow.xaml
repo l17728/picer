@@ -22,9 +22,9 @@
                     <TextBlock x:Name="FeatureTitle" FontSize="18" FontWeight="SemiBold"/>
                     <Grid Grid.Row="1" Margin="0,15,0,0"><Grid.ColumnDefinitions><ColumnDefinition Width="90"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><TextBlock Text="服务商" VerticalAlignment="Center"/><ComboBox Grid.Column="1" x:Name="ProviderBox" DisplayMemberPath="Name" SelectionChanged="ProviderBox_SelectionChanged"/></Grid>
                     <StackPanel Grid.Row="2" Margin="90,7,0,7"><TextBlock x:Name="EndpointText" Foreground="#666" FontSize="11" TextWrapping="Wrap"/><TextBlock x:Name="KeyStatusText" FontSize="11" FontWeight="SemiBold" Margin="0,3,0,0"/></StackPanel>
-                    <StackPanel Grid.Row="3" Margin="0,8,0,0"><TextBlock Text="支持的模型（单选）" FontWeight="SemiBold"/><ListBox x:Name="ModelBox" Margin="0,7,0,0" SelectionMode="Single">
+                    <StackPanel Grid.Row="3" Margin="0,8,0,0"><TextBlock Text="该服务商配置的模型（单选）" FontWeight="SemiBold"/><TextBlock Text="OpenCode 未声明输入类型的模型仍会显示；用于多模态功能前请确认模型支持图片输入。" Foreground="#86620B" FontSize="11" TextWrapping="Wrap" Margin="0,3,0,0"/><ListBox x:Name="ModelBox" Margin="0,7,0,0" SelectionMode="Single">
                         <ListBox.ItemTemplate><DataTemplate><RadioButton Content="{Binding DisplayName}" IsHitTestVisible="False" IsChecked="{Binding RelativeSource={RelativeSource AncestorType=ListBoxItem},Path=IsSelected}" Padding="4"/></DataTemplate></ListBox.ItemTemplate>
-                    </ListBox><TextBlock x:Name="NoModelText" Text="此服务商没有符合当前功能类型的模型。可同步 OpenCode，或检查模型能力分类。" Foreground="#A0442E" TextWrapping="Wrap" Margin="0,8,0,0" Visibility="Collapsed"/></StackPanel>
+                    </ListBox><TextBlock x:Name="NoModelText" Text="此服务商没有配置模型，请先从 OpenCode 同步。" Foreground="#A0442E" TextWrapping="Wrap" Margin="0,8,0,0" Visibility="Collapsed"/></StackPanel>
                     <StackPanel Grid.Row="4"><TextBlock Text="替换当前服务商的 API Key（留空表示不修改）"/><PasswordBox x:Name="ApiKeyBox" Margin="0,5,0,0"/><Button Content="删除当前服务商密钥" Click="DeleteKey_Click" HorizontalAlignment="Left" Padding="10,4" Margin="0,8,0,0"/></StackPanel>
                 </Grid>
             </Border>

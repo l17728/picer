@@ -34,7 +34,7 @@ public partial class CloudVisionSettingsWindow : Window
     private void LoadModels(string? selectedModel)
     {
         var provider=ProviderBox.SelectedItem as AiProviderDefinition;_currentProviderId=provider?.Id;EndpointText.Text=provider is null?"未选择服务商":$"接口：{provider.BaseUrl}";
-        var models=provider?.Models.Where(x=>x.Capability==_currentFeature?.Capability).Select(x=>new ModelItem(x)).ToArray()??[];ModelBox.ItemsSource=models;
+        var models=provider?.Models.Select(x=>new ModelItem(x,_currentFeature?.Capability)).ToArray()??[];ModelBox.ItemsSource=models;
         ModelBox.SelectedItem=models.FirstOrDefault(x=>x.Model.Id.Equals(selectedModel,StringComparison.OrdinalIgnoreCase))??models.FirstOrDefault();NoModelText.Visibility=models.Length==0?Visibility.Visible:Visibility.Collapsed;ApiKeyBox.Clear();RefreshKeyStatus();
     }
     private void SaveCurrentSelection()
@@ -69,5 +69,9 @@ public partial class CloudVisionSettingsWindow : Window
     }
     private void Warn(string message)=>MessageBox.Show(this,message,"AI 模型设置",MessageBoxButton.OK,MessageBoxImage.Warning);
     private sealed record FeatureItem(string Id,string Name,string TypeLabel,string Description,AiModelCapability Capability);
-    private sealed record ModelItem(AiModelDefinition Model){public string DisplayName=>$"{Model.Name}  ({Model.Id})";}
+    private sealed record ModelItem(AiModelDefinition Model,AiModelCapability? RequiredCapability)
+    {
+        private string CapabilityLabel=>Model.Capability==AiModelCapability.Multimodal?"多模态":RequiredCapability==AiModelCapability.Multimodal?"OpenCode 未声明图片输入能力":"语言模型";
+        public string DisplayName=>$"{Model.Name}  ({Model.Id})  · {CapabilityLabel}";
+    }
 }
