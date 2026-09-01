@@ -27,6 +27,25 @@ public sealed record SceneGroupDescription(
 
 public sealed class SceneGroupDescriptionService(PicerDatabase database, CloudVisionRepository cloud)
 {
+    public async Task<SceneGroupDescription?> SummarizeWithAiAsync(SceneGroupPlan plan,
+        ISceneGroupSummarizer summarizer, CancellationToken cancellationToken = default)
+    {
+        var descriptions = plan.Representatives.Select((image, index) =>
+        {
+            var completed = cloud.GetLatestCompleted(image.Id);
+            return completed is null ? null : new SceneRepresentativeDescription(index + 1,
+                SceneTimeClusterService.EffectiveTime(image), completed.Value.Result.Summary,
+                completed.Value.Result.Scenes ?? [], completed.Value.Result.Activities ?? [],
+                completed.Value.Result.Objects ?? []);
+        }).Where(item => item is not null).Cast<SceneRepresentativeDescription>().ToArray();
+        if (descriptions.Length == 0) return null;
+        var result = await summarizer.SummarizeAsync(descriptions, cancellationToken).ConfigureAwait(false);
+        return new(plan.Fingerprint, result.SceneName.Trim(), result.Summary.Trim(),
+            result.SearchTerms.Where(term => !string.IsNullOrWhiteSpace(term)).Select(term => term.Trim())
+                .Distinct(StringComparer.CurrentCultureIgnoreCase).Take(20).ToArray(),
+            summarizer.Provider, summarizer.ModelVersion, summarizer.PromptVersion, "accepted");
+    }
+
     public SceneGroupPlan BuildPlan(string directoryPath, IReadOnlyList<ImageRecord> images,
         int maximumSubgroups = 5, int maximumRepresentatives = 3)
     {

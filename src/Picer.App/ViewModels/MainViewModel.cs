@@ -1262,7 +1262,25 @@ public partial class MainViewModel : ObservableObject, IDisposable
         if (MessageBox.Show(preview, "描述未分类场景", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
         if (missing.Length > 0) await AnalyzeImagesWithCloudAsync(missing, AiFeatureIds.SceneDescription,
             refreshDirectoryTree: false, showCompletionDialog: false);
-        var summary = await UiWork.RunDatabaseAsync(() => service.Summarize(plan));
+        using var summarizer = AppServices.CreateSceneGroupSummarizer();
+        if (summarizer is null)
+        {
+            MessageBox.Show("场景总结模型尚未配置。请在“AI 模型设置”中为“未分类场景描述”选择服务商和模型。",
+                "场景描述", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+        SceneGroupDescription? summary;
+        try
+        {
+            StatusText = $"正在通过 {summarizer.Provider} / {summarizer.ModelVersion} 总结代表照片描述…";
+            summary = await service.SummarizeWithAiAsync(plan, summarizer);
+        }
+        catch (Exception ex)
+        {
+            StatusText = $"场景总结失败：{ex.Message}";
+            MessageBox.Show(StatusText, "场景描述", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
         if (summary is null)
         {
             MessageBox.Show("代表照片没有可用描述。请在任务中心查看失败原因后重试。", "场景描述", MessageBoxButton.OK, MessageBoxImage.Warning);

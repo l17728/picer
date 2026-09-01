@@ -171,6 +171,25 @@ public static class AppServices
             $"{provider.Name} / {model.Name}");
     }
 
+    public static OpenAiCompatibleSceneSummarizer? CreateSceneGroupSummarizer()
+    {
+        var settings = CloudVisionSettings.Load(AppPaths.CloudVisionSettingsPath);
+        if (!settings.Enabled) return null;
+        var resolved = settings.Resolve(AiFeatureIds.SceneDescription);
+        if (resolved is null) return null;
+        var provider = resolved.Value.Provider;
+        var model = resolved.Value.Model;
+        var credentials = new WindowsCredentialStore();
+        var key = credentials.Read(PicerCredentialTargets.AiProvider(provider.Id));
+        if (string.IsNullOrWhiteSpace(key) && provider.Id.Equals("bailian", StringComparison.OrdinalIgnoreCase)) key = credentials.Read(PicerCredentialTargets.Bailian);
+        if (string.IsNullOrWhiteSpace(key) && provider.Id.Equals("zhipu", StringComparison.OrdinalIgnoreCase)) key = credentials.Read(PicerCredentialTargets.Zhipu);
+        if (string.IsNullOrWhiteSpace(key)) return null;
+        var baseUrl = provider.BaseUrl.TrimEnd('/');
+        var endpointText = baseUrl.EndsWith("/chat/completions", StringComparison.OrdinalIgnoreCase) ? baseUrl : baseUrl + "/chat/completions";
+        if (!Uri.TryCreate(endpointText, UriKind.Absolute, out var endpoint)) return null;
+        return new OpenAiCompatibleSceneSummarizer(new CloudVisionApiOptions(endpoint, key, model.Id, provider.Id));
+    }
+
     public static void Shutdown()
     {
         AppLogger.Info("AppServices 关闭");

@@ -171,6 +171,39 @@ public sealed class CloudVisionTests : IDisposable
     }
 
     [Fact]
+    public async Task SceneDescription_SendsRepresentativeDescriptionsToModelInTimeOrder()
+    {
+        var start = DateTime.UtcNow.AddHours(-3);
+        var images = new List<ImageRecord>();
+        for (var index = 0; index < 3; index++)
+        {
+            var path = Path.Combine(_root, $"ordered-{index}.jpg");
+            File.WriteAllBytes(path, [7, 8, (byte)index]);
+            images.Add(_database.UpsertImage(new ImageRecord
+            {
+                SourceId = _image.SourceId, Path = path, FileSize = 3,
+                ModifiedUtc = File.GetLastWriteTimeUtc(path), CreatedUtc = start.AddHours(2 - index),
+                Status = ImageStatus.Active, IndexedUtc = DateTime.UtcNow
+            }));
+        }
+        var repository = new CloudVisionRepository(_database);
+        var analyzer = new FakeCloudAnalyzer();
+        foreach (var image in images)
+            repository.Save(image, analyzer, "none", "representative",
+                new CloudVisionResult(Path.GetFileNameWithoutExtension(image.Path), ["travel"], [], [], [], null, "none"));
+        var service = new SceneGroupDescriptionService(_database, repository);
+        var plan = service.BuildPlan(_root, images, maximumSubgroups: 3, maximumRepresentatives: 3);
+        var summarizer = new FakeSceneSummarizer();
+
+        var summary = await service.SummarizeWithAiAsync(plan, summarizer);
+
+        Assert.Equal("旅行场景", summary!.SceneName);
+        Assert.Equal(["ordered-2", "ordered-1", "ordered-0"], summarizer.Descriptions.Select(item => item.Summary));
+        Assert.True(summarizer.Descriptions.Select(item => item.TakenUtc).SequenceEqual(
+            summarizer.Descriptions.Select(item => item.TakenUtc).Order()));
+    }
+
+    [Fact]
     public async Task CompatibleAnalyzer_SanitizesImageAndSendsStructuredGpsContext()
     {
         var path = Path.Combine(_root, "valid.png");
@@ -215,6 +248,20 @@ public sealed class CloudVisionTests : IDisposable
             return Task.FromResult(new CloudVisionResult("在九寨沟景区附近拍摄的山地照片",
                 ["mountain"], [], ["trees"], ["九寨沟", "山景"],
                 request.Location?.DisplayName, "gps_reverse_geocoding"));
+        }
+    }
+
+    private sealed class FakeSceneSummarizer : ISceneGroupSummarizer
+    {
+        public string Provider => "fake";
+        public string ModelVersion => "text-test";
+        public string PromptVersion => "scene-test";
+        public IReadOnlyList<SceneRepresentativeDescription> Descriptions { get; private set; } = [];
+        public Task<SceneSummaryResult> SummarizeAsync(IReadOnlyList<SceneRepresentativeDescription> descriptions,
+            CancellationToken cancellationToken = default)
+        {
+            Descriptions = descriptions;
+            return Task.FromResult(new SceneSummaryResult("旅行场景", "按顺序生成的整体总结", ["旅行"]));
         }
     }
 
