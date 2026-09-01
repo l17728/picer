@@ -127,6 +127,27 @@ public sealed class SemanticClassificationTests : IDisposable
     }
 
     [Fact]
+    public void Album_DeletePreservesImageAndIndex()
+    {
+        _db = new PicerDatabase(Path.Combine(_dataDir, "test.db"));
+        var source = _db.AddSource(Path.Combine(_dataDir, "photos"));
+        var image = _db.UpsertImage(new ImageRecord
+        {
+            SourceId = source.Id, Path = Path.Combine(source.Path, "kept.jpg"), FileSize = 100,
+            ModifiedUtc = DateTime.UtcNow, IndexedUtc = DateTime.UtcNow, Status = ImageStatus.Active
+        });
+        var album = SemanticEngine.AddAlbum(_db, "Temporary Album");
+        SemanticEngine.AddToAlbum(_db, album.Id, image.Id);
+
+        SemanticEngine.DeleteAlbum(_db, album.Id);
+
+        Assert.Empty(SemanticEngine.GetAlbums(_db));
+        Assert.NotNull(_db.GetImage(image.Id));
+        Assert.Equal(ImageStatus.Active, _db.GetImage(image.Id)!.Status);
+        Assert.Single(_db.GetImages(source.Id));
+    }
+
+    [Fact]
     public void AutoCreateTimeLineAlbums_CreatesAlbumsWithImages()
     {
         // This test verifies that auto-time-line album creation runs without errors

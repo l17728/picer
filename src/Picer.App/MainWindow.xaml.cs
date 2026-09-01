@@ -204,6 +204,20 @@ public partial class MainWindow : Window
         while(element is not null&&element is not TreeViewItem)element=System.Windows.Media.VisualTreeHelper.GetParent(element);
         if(element is TreeViewItem item)item.IsSelected=true;
     }
+    private void DirectoryContextMenu_Opened(object sender, RoutedEventArgs e)
+    {
+        if (sender is not ContextMenu menu) return;
+        var selected = DirectoryTreeView.SelectedItem as DirectoryNodeViewModel;
+        var mode = selected switch { { AlbumId: not null } => "album", { IsAlbumRoot: false } => "directory", _ => null };
+        foreach (var item in menu.Items.OfType<FrameworkElement>())
+            item.Visibility = string.Equals(item.Tag as string, mode, StringComparison.Ordinal)
+                ? Visibility.Visible : Visibility.Collapsed;
+    }
+    private async void DeleteAlbum_Click(object sender, RoutedEventArgs e)
+    {
+        if (DirectoryTreeView.SelectedItem is DirectoryNodeViewModel { AlbumId: not null } album)
+            await _mainVm.DeleteAlbumAsync(album);
+    }
     private async void DirectoryLocalClassification_Click(object sender,RoutedEventArgs e){if(DirectoryTreeView.SelectedItem is DirectoryNodeViewModel node)await _mainVm.SetDirectoryClassificationModeAsync(node,false);}
     private async void DirectoryRecursiveClassification_Click(object sender,RoutedEventArgs e){if(DirectoryTreeView.SelectedItem is DirectoryNodeViewModel node)await _mainVm.SetDirectoryClassificationModeAsync(node,true);}
     private async void RegenerateDirectoryClassification_Click(object sender,RoutedEventArgs e){if(DirectoryTreeView.SelectedItem is DirectoryNodeViewModel node)await _mainVm.LoadSceneAnchorsAsync(node,true);}

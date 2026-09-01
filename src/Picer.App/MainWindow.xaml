@@ -143,11 +143,12 @@
                     <TreeView x:Name="DirectoryTreeView" Grid.Column="0" Margin="4"
                               ItemsSource="{Binding DirectoryTree}"
                               SelectedItemChanged="DirectoryTree_SelectedItemChanged" PreviewMouseRightButtonDown="DirectoryTree_PreviewMouseRightButtonDown">
-                        <TreeView.ContextMenu><ContextMenu>
-                            <MenuItem Header="分类：仅本目录照片（默认）" Click="DirectoryLocalClassification_Click"/>
-                            <MenuItem Header="分类：包含本目录及所有子目录" Click="DirectoryRecursiveClassification_Click"/>
-                            <Separator/><MenuItem Header="描述此未分类场景…" Click="DescribeUnclassifiedScene_Click"/>
-                            <MenuItem Header="重新生成分类锚点" Click="RegenerateDirectoryClassification_Click"/>
+                        <TreeView.ContextMenu><ContextMenu Opened="DirectoryContextMenu_Opened">
+                            <MenuItem Tag="directory" Header="分类：仅本目录照片（默认）" Click="DirectoryLocalClassification_Click"/>
+                            <MenuItem Tag="directory" Header="分类：包含本目录及所有子目录" Click="DirectoryRecursiveClassification_Click"/>
+                            <Separator Tag="directory"/><MenuItem Tag="directory" Header="描述此未分类场景…" Click="DescribeUnclassifiedScene_Click"/>
+                            <MenuItem Tag="directory" Header="重新生成分类锚点" Click="RegenerateDirectoryClassification_Click"/>
+                            <MenuItem Tag="album" Header="删除相册…" Click="DeleteAlbum_Click" Foreground="#A00000"/>
                         </ContextMenu></TreeView.ContextMenu>
                         <TreeView.ItemContainerStyle>
                             <Style TargetType="TreeViewItem">

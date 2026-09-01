@@ -1023,6 +1023,23 @@ public partial class MainViewModel : ObservableObject, IDisposable
         Reset(node);await LoadSceneAnchorsAsync(node,true);
     }
 
+    public async Task DeleteAlbumAsync(DirectoryNodeViewModel node)
+    {
+        if (node.AlbumId is not { } albumId) return;
+        var answer = MessageBox.Show(
+            $"确定删除相册“{node.Name}”吗？\n\n只会删除相册及其照片关联，不会删除照片文件、缩略图或图片索引。",
+            "删除相册", MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No);
+        if (answer != MessageBoxResult.Yes) return;
+
+        await UiWork.RunDatabaseAsync(() => SemanticEngine.DeleteAlbum(_db, albumId));
+        Semantic.LoadAlbums();
+        SelectedDirectory = null;
+        DirectoryImages.Clear();
+        OnPropertyChanged(nameof(DirectoryImageCount));
+        await LoadDirectoryTreeAsync();
+        StatusText = $"已删除相册“{node.Name}”；照片和索引未受影响";
+    }
+
     public async Task DescribeUnclassifiedSceneAsync(DirectoryNodeViewModel node)
     {
         if (!node.IsSceneAnchor || !string.Equals(node.SceneName, "未分类场景", StringComparison.Ordinal))
