@@ -200,8 +200,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
         await Application.Current.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
         await ReloadSourcesAsync();
         await LoadLookupValuesAsync();
+        await LoadDirectoryTreeAsync();
         await ApplySearchAndFilterAsync();
-        _ = LoadDirectoryTreeAsync();
         _ = Video.LoadAsync();
         _ = EnrichLocationHierarchyAsync();
         PicerEventSource.Log.StartupStage("first-page-ready", Stopwatch.GetElapsedTime(started).TotalMilliseconds);
@@ -914,6 +914,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [RelayCommand]
     private async Task LoadDirectoryTreeAsync()
     {
+        var selectedPath = SelectedDirectory?.FullPath;
         var sources = await UiWork.RunDatabaseAsync(() => _db.GetSources().ToArray());
         DirectoryTree.Clear();
         foreach (var source in sources)
@@ -929,6 +930,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
             DirectoryTree.Add(node);
             _ = ExpandDirectoryAsync(node);
         }
+        SelectedDirectory = DirectoryTree.FirstOrDefault(node =>
+            string.Equals(node.FullPath, selectedPath, StringComparison.OrdinalIgnoreCase)) ?? DirectoryTree.FirstOrDefault();
     }
 
     [RelayCommand]
@@ -1038,6 +1041,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     .OrderBy(SceneTimeClusterService.EffectiveTime).ThenBy(image => image.Id).ToList()
                 : _db.GetActiveImagesUnderDirectory(selectedDirectory.FullPath), cts.Token);
             var indexedPaths = records.Select(record => record.Path).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            await UiWork.AddInBatchesAsync(records.Where(image => image.Status == ImageStatus.Active),
+                image => DirectoryImages.Add(new ImageItemViewModel(image)), cts.Token);
+            OnPropertyChanged(nameof(DirectoryImageCount));
+            StatusText = $"[{selectedDirectory.Name}] 已显示 {DirectoryImages.Count} 张索引照片";
+
             var unindexedFiles = selectedDirectory.IsSceneAnchor ? [] : await Task.Run(() =>
             {
                 var options = new EnumerationOptions
@@ -1066,8 +1074,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
             if (cts.IsCancellationRequested || !ReferenceEquals(SelectedDirectory, selectedDirectory))
                 return;
-            records.AddRange(unindexedFiles);
-            await UiWork.AddInBatchesAsync(records.Where(i => i.Status == ImageStatus.Active),
+            await UiWork.AddInBatchesAsync(unindexedFiles,
                 rec => DirectoryImages.Add(new ImageItemViewModel(rec)), cts.Token);
 
             if (selectedDirectory.IsSceneAnchor && DirectoryImages.Count > 0) SelectedImage = DirectoryImages[0];
@@ -1077,6 +1084,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
         catch (OperationCanceledException) { }
         catch (UnauthorizedAccessException) { }
+        catch (Exception exception) { StatusText = $"目录照片加载失败：{exception.Message}"; }
     }
 
     private async Task HandleMissingAsync()
