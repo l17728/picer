@@ -513,7 +513,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
         else
         {
             var dialog = new Microsoft.Win32.OpenFolderDialog { Title = "选择要索引的图片文件夹" };
-            if (dialog.ShowDialog() != true) return;
+            StatusText = "请选择要添加的照片文件夹";
+            if (dialog.ShowDialog(Application.Current.MainWindow) != true)
+            {
+                StatusText = "已取消添加文件夹";
+                return;
+            }
             sourcePath = dialog.FolderName;
         }
 

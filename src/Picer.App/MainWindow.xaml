@@ -175,7 +175,7 @@
                             <Style TargetType="TextBlock">
                                 <Setter Property="Visibility" Value="Collapsed"/>
                                 <Style.Triggers>
-                                    <DataTrigger Binding="{Binding ElementName=DirectoryTreeView, Path=Items.Count}" Value="0">
+                                    <DataTrigger Binding="{Binding Sources.Count}" Value="0">
                                         <Setter Property="Visibility" Value="Visible"/>
                                     </DataTrigger>
                                 </Style.Triggers>
