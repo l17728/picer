@@ -1,5 +1,6 @@
 using Microsoft.Data.Sqlite;
 using Picer.Core.Data;
+using Picer.Core.Metadata;
 using Picer.Core.Search;
 
 namespace Picer.Core.Geocoding;
@@ -20,7 +21,7 @@ public sealed class LocationHierarchyService(PicerDatabase database, IReverseGeo
             var candidates = LoadPending();
             var groups = candidates
                 .Select(candidate => GeoPlaceResolver.TryParseCoordinates(candidate.Gps, out var latitude, out var longitude)
-                    ? new LocatedCandidate(candidate.ImageId, latitude, longitude)
+                    ? new LocatedCandidate(candidate.ImageId, latitude, longitude, candidate.Path)
                     : null)
                 .Where(candidate => candidate is not null).Cast<LocatedCandidate>()
                 .GroupBy(candidate => CoordinateKey(candidate.Latitude, candidate.Longitude)).ToArray();
@@ -33,8 +34,9 @@ public sealed class LocationHierarchyService(PicerDatabase database, IReverseGeo
                 var representative = group[0];
                 try
                 {
-                    var location = await geocoder.ReverseAsync(representative.Latitude, representative.Longitude, cancellationToken)
-                        .ConfigureAwait(false);
+                    var location = ReadEmbeddedLocation(group) ??
+                        await geocoder.ReverseAsync(representative.Latitude, representative.Longitude, cancellationToken)
+                            .ConfigureAwait(false);
                     if (location is null) { failed++; continue; }
                     Save(group, location);
                     saved += group.Length;
@@ -59,14 +61,14 @@ public sealed class LocationHierarchyService(PicerDatabase database, IReverseGeo
         using var connection = database.OpenReadConnection();
         using var command = connection.CreateCommand();
         command.CommandText = """
-            SELECT i.id,i.gps FROM images i
+            SELECT i.id,i.gps,i.path FROM images i
             LEFT JOIN image_locations l ON l.image_id=i.id
             WHERE i.status='active' AND i.gps IS NOT NULL AND i.gps<>'' AND l.image_id IS NULL
             ORDER BY i.id
             """;
         var values = new List<PendingLocation>();
         using var reader = command.ExecuteReader();
-        while (reader.Read()) values.Add(new(reader.GetInt64(0), reader.GetString(1)));
+        while (reader.Read()) values.Add(new(reader.GetInt64(0), reader.GetString(1), reader.GetString(2)));
         return values;
     }
 
@@ -109,8 +111,29 @@ public sealed class LocationHierarchyService(PicerDatabase database, IReverseGeo
             .Where(text => !string.IsNullOrWhiteSpace(text)).Distinct(StringComparer.OrdinalIgnoreCase));
 
     private static object Db(string? value) => string.IsNullOrWhiteSpace(value) ? DBNull.Value : value.Trim();
+    private static ReverseGeocodingResult? ReadEmbeddedLocation(IEnumerable<LocatedCandidate> candidates)
+    {
+        foreach (var candidate in candidates)
+        {
+            try
+            {
+                if (!File.Exists(candidate.Path)) continue;
+                var metadata = ImageMetadataReader.Read(candidate.Path);
+                var parts = new[] { metadata.LocationDistrict, metadata.LocationCity, metadata.LocationProvince, metadata.LocationCountry }
+                    .Where(value => !string.IsNullOrWhiteSpace(value)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+                if (parts.Length == 0) continue;
+                return new(string.Join("，", parts), "embedded IPTC metadata",
+                    Country: metadata.LocationCountry, Province: metadata.LocationProvince,
+                    City: metadata.LocationCity, District: metadata.LocationDistrict, Accuracy: "embedded");
+            }
+            catch
+            {
+            }
+        }
+        return null;
+    }
     private static string CoordinateKey(double latitude, double longitude) =>
         FormattableString.Invariant($"{Math.Round(latitude, 3):F3},{Math.Round(longitude, 3):F3}");
-    private sealed record PendingLocation(long ImageId, string Gps);
-    private sealed record LocatedCandidate(long ImageId, double Latitude, double Longitude);
+    private sealed record PendingLocation(long ImageId, string Gps, string Path);
+    private sealed record LocatedCandidate(long ImageId, double Latitude, double Longitude, string Path);
 }

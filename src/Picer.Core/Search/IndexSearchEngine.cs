@@ -355,6 +355,17 @@ public static class IndexSearchEngine
     private static void AddGeoConditions(SearchFilters filters, List<string> conditions, List<(string Name, object Value)> parameters)
     {
         if (filters.GeoBounds is not { } bounds) return;
+        if (bounds.AreaKey is not null)
+        {
+            conditions.Add("""
+                (EXISTS (SELECT 1 FROM image_locations il WHERE il.image_id=t.id AND il.search_text LIKE $geoName)
+                 OR (NOT EXISTS (SELECT 1 FROM image_locations il WHERE il.image_id=t.id)
+                     AND gps_in_area(t.gps, $areaKey) = 1))
+                """);
+            parameters.Add(("geoName", "%" + bounds.Name + "%"));
+            parameters.Add(("areaKey", bounds.AreaKey));
+            return;
+        }
         conditions.Add("gps_in_bounds(t.gps, $minLat, $maxLat, $minLon, $maxLon) = 1");
         parameters.Add(("minLat", bounds.MinLatitude));
         parameters.Add(("maxLat", bounds.MaxLatitude));

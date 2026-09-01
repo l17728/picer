@@ -913,10 +913,14 @@ public sealed class PicerDatabase : IDisposable
         return connection;
     }
 
-    private static void RegisterFunctions(SqliteConnection connection) =>
+    private static void RegisterFunctions(SqliteConnection connection)
+    {
         connection.CreateFunction<string?, double, double, double, double, int>(
             "gps_in_bounds",
             (gps, minLat, maxLat, minLon, maxLon) => GeoPlaceResolver.IsWithin(gps, minLat, maxLat, minLon, maxLon) ? 1 : 0);
+        connection.CreateFunction<string?, string, int>("gps_in_area",
+            (gps, areaKey) => GeoPlaceResolver.IsWithinArea(gps, areaKey) ? 1 : 0);
+    }
 
     public void UpsertImageInTransaction(ImageRecord rec, SqliteTransaction tx)
     {

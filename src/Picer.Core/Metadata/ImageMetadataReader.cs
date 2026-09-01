@@ -1,5 +1,6 @@
 using MetadataExtractor;
 using MetadataExtractor.Formats.Exif;
+using MetadataExtractor.Formats.Iptc;
 using System.Globalization;
 using Picer.Core.Models;
 using SixLabors.ImageSharp;
@@ -41,6 +42,7 @@ public static class ImageMetadataReader
         DateTime? taken = null;
         string? camera = null;
         string? gps = null;
+        string? locationCountry = null, locationProvince = null, locationCity = null, locationDistrict = null;
 
         try
         {
@@ -70,6 +72,14 @@ public static class ImageMetadataReader
                     if (location is { } coordinates && !coordinates.IsZero)
                         gps = string.Create(CultureInfo.InvariantCulture, $"{coordinates.Latitude:F7},{coordinates.Longitude:F7}");
                 }
+
+                if (dir is IptcDirectory iptc)
+                {
+                    locationCountry ??= iptc.GetString(IptcDirectory.TagCountryOrPrimaryLocationName);
+                    locationProvince ??= iptc.GetString(IptcDirectory.TagProvinceOrState);
+                    locationCity ??= iptc.GetString(IptcDirectory.TagCity);
+                    locationDistrict ??= iptc.GetString(IptcDirectory.TagSubLocation);
+                }
             }
         }
         catch (Exception)
@@ -82,7 +92,11 @@ public static class ImageMetadataReader
             Height = height,
             TakenUtc = taken,
             Camera = camera,
-            Gps = gps
+            Gps = gps,
+            LocationCountry = locationCountry,
+            LocationProvince = locationProvince,
+            LocationCity = locationCity,
+            LocationDistrict = locationDistrict
         };
     }
 }

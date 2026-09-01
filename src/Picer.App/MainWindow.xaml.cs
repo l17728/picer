@@ -122,8 +122,9 @@ public partial class MainWindow : Window
 
     private async void MainTabs_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (!ReferenceEquals(e.Source, MainTabs) || MainTabs.SelectedIndex != 2 || DataContext is not MainViewModel) return;
-        await _mainVm.People.InitializePageAsync();
+        if (!ReferenceEquals(e.Source, MainTabs) || DataContext is not MainViewModel) return;
+        if (MainTabs.SelectedIndex == 2) await _mainVm.People.InitializePageAsync();
+        else if (MainTabs.SelectedIndex == 3) await _mainVm.Semantic.InitializePageAsync();
     }
 
     private async void PeopleFace_DoubleClick(object sender, MouseButtonEventArgs e)

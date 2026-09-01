@@ -48,19 +48,33 @@ public partial class SemanticViewModel : ObservableObject
     private readonly PicerDatabase _db;
     private readonly Action? _changed;
     private CancellationTokenSource? _selectionCancellation;
+    private int _initialized;
 
     public SemanticViewModel(PicerDatabase db, Action? changed = null)
     {
         _db = db;
         _changed = changed;
-        _ = InitializeAsync();
     }
 
-    private async Task InitializeAsync()
+    public async Task InitializePageAsync()
     {
+        if (Interlocked.Exchange(ref _initialized, 1) != 0) return;
+        IsBusy = true;
+        StatusText = "正在加载标签与相册…";
+        await Application.Current.Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.Render);
+        try
+        {
         var snapshot = await UiWork.RunDatabaseAsync(() => (Tags: SemanticEngine.GetTags(_db).ToArray(), Albums: SemanticEngine.GetAlbums(_db).ToArray()));
         Tags = new(snapshot.Tags.Select(tag => new TagItemViewModel(tag)));
         Albums = new(snapshot.Albums.Select(album => new AlbumItemViewModel(album)));
+            StatusText = $"已加载 {Tags.Count} 个标签、{Albums.Count} 个相册";
+        }
+        catch
+        {
+            Interlocked.Exchange(ref _initialized, 0);
+            throw;
+        }
+        finally { IsBusy = false; }
     }
 
     public void SetCurrentImage(long imageId)

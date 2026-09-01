@@ -287,4 +287,31 @@ public sealed class SearchTests : IDisposable
         Assert.EndsWith("xian.jpg", page.Items[0].Path);
         Assert.Equal(1, page.TotalCount);
     }
+
+    [Fact]
+    public void XianAndShangluoFallbackAreas_DoNotReturnTheSameBorderPhotos()
+    {
+        _db = new PicerDatabase(Path.Combine(_dataDir, "test.db"));
+        var source = _db.AddSource(Path.Combine(_dataDir, "photos"));
+        foreach (var (name, gps) in new[]
+                 {
+                     ("lantian.jpg", "34.0741,109.2710"),
+                     ("shangzhou.jpg", "33.8700,109.9400")
+                 })
+            _db.UpsertImage(new ImageRecord
+            {
+                SourceId = source.Id, Path = Path.Combine(source.Path, name), FileSize = 100,
+                ModifiedUtc = DateTime.UtcNow, IndexedUtc = DateTime.UtcNow,
+                Status = ImageStatus.Active, Gps = gps
+            });
+
+        var xian = IndexSearchEngine.Search(_db, new SearchFilters { GeoBounds = GeoPlaceResolver.Resolve("西安") });
+        var shangluo = IndexSearchEngine.Search(_db, new SearchFilters { GeoBounds = GeoPlaceResolver.Resolve("商洛") });
+
+        Assert.Single(xian);
+        Assert.EndsWith("lantian.jpg", xian[0].Path);
+        Assert.Single(shangluo);
+        Assert.EndsWith("shangzhou.jpg", shangluo[0].Path);
+        Assert.Empty(xian.Select(image => image.Id).Intersect(shangluo.Select(image => image.Id)));
+    }
 }

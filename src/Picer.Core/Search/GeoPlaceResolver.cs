@@ -3,15 +3,16 @@ using System.Text.RegularExpressions;
 
 namespace Picer.Core.Search;
 
-public sealed record GeoBounds(string Name, double MinLatitude, double MaxLatitude, double MinLongitude, double MaxLongitude);
+public sealed record GeoBounds(string Name, double MinLatitude, double MaxLatitude, double MinLongitude, double MaxLongitude,
+    string? AreaKey = null);
 
 public static partial class GeoPlaceResolver
 {
     private static readonly IReadOnlyDictionary<string, GeoBounds> Places =
         new Dictionary<string, GeoBounds>(StringComparer.OrdinalIgnoreCase)
         {
-            ["西安"] = new("西安", 33.70, 34.80, 107.60, 109.85),
-            ["西安市"] = new("西安", 33.70, 34.80, 107.60, 109.85),
+            ["西安"] = new("西安市", 33.70, 34.80, 107.60, 109.85, "xian"),
+            ["西安市"] = new("西安市", 33.70, 34.80, 107.60, 109.85, "xian"),
             ["北京"] = new("北京", 39.40, 41.10, 115.40, 117.60),
             ["上海"] = new("上海", 30.65, 31.90, 120.85, 122.25),
             ["广州"] = new("广州", 22.40, 23.95, 112.95, 114.10),
@@ -33,8 +34,8 @@ public static partial class GeoPlaceResolver
             , ["商州市"] = new("商洛市商州区", 33.48, 34.12, 109.45, 110.25)
             , ["商州区"] = new("商洛市商州区", 33.48, 34.12, 109.45, 110.25)
             , ["商洛市商州区"] = new("商洛市商州区", 33.48, 34.12, 109.45, 110.25)
-            , ["商洛"] = new("商洛市", 32.95, 34.42, 108.55, 111.10)
-            , ["商洛市"] = new("商洛市", 32.95, 34.42, 108.55, 111.10)
+            , ["商洛"] = new("商洛市", 32.95, 34.42, 108.55, 111.10, "shangluo")
+            , ["商洛市"] = new("商洛市", 32.95, 34.42, 108.55, 111.10, "shangluo")
         };
 
     public static GeoBounds? Resolve(string? query) =>
@@ -50,6 +51,28 @@ public static partial class GeoPlaceResolver
         if (maxLongitude < 0 && longitude > 0 && !HasExplicitDirection(gps!, 'E', 'W')) longitude = -longitude;
         return latitude >= minLatitude && latitude <= maxLatitude &&
                longitude >= minLongitude && longitude <= maxLongitude;
+    }
+
+    public static bool IsWithinArea(string? gps, string areaKey)
+    {
+        var bounds = Places.Values.FirstOrDefault(value => string.Equals(value.AreaKey, areaKey, StringComparison.Ordinal));
+        if (bounds is null || !TryParseCoordinates(gps, out var latitude, out var longitude) ||
+            !IsWithin(gps, bounds.MinLatitude, bounds.MaxLatitude, bounds.MinLongitude, bounds.MaxLongitude)) return false;
+        if (areaKey is not ("xian" or "shangluo")) return true;
+
+        // The old rectangular Xi'an and Shangluo fallbacks overlap around the Qinling boundary.
+        // Split that overlap with a shared west-to-east boundary so a coordinate can belong to only one city.
+        var inOverlap = latitude >= 32.95 && latitude <= 34.42 && longitude >= 108.55 && longitude <= 109.85;
+        if (!inOverlap) return true;
+        var boundaryLatitude = longitude switch
+        {
+            <= 108.55 => 33.72,
+            <= 108.90 => 33.72 + (longitude - 108.55) / 0.35 * 0.06,
+            <= 109.20 => 33.78 + (longitude - 108.90) / 0.30 * 0.14,
+            <= 109.50 => 33.92 + (longitude - 109.20) / 0.30 * 0.16,
+            _ => 34.08 + (longitude - 109.50) / 0.35 * 0.17
+        };
+        return areaKey == "xian" ? latitude >= boundaryLatitude : latitude < boundaryLatitude;
     }
 
     private static bool HasExplicitDirection(string gps, char positive, char negative) =>
