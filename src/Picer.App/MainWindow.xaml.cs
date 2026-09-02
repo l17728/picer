@@ -147,7 +147,10 @@ public partial class MainWindow : Window
     private void PeopleFace_PreviewMouseRightButtonDown(object sender, MouseButtonEventArgs e)
     {
         if (FindAncestor<ListBoxItem>(e.OriginalSource as DependencyObject) is { } item)
+        {
+            if (!item.IsSelected) PeopleFacesList.SelectedItems.Clear();
             item.IsSelected = true;
+        }
     }
 
     private void PeopleFace_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
@@ -214,6 +217,15 @@ public partial class MainWindow : Window
             move.Items.Add(item);
         }
         if (move.Items.Count > 0) menu.Items.Add(move);
+
+        var create = new MenuItem { Header = $"创建新人物并归入{countText}…" };
+        create.Click += async (_, _) =>
+        {
+            var dialog = new Views.CreatePersonWindow { Owner = this };
+            if (dialog.ShowDialog() == true)
+                await _mainVm.People.CreatePersonWithFacesAsync(dialog.PersonName, faces);
+        };
+        menu.Items.Add(create);
 
         if (kind != DisplayedFaceCollectionKind.Unassigned)
         {

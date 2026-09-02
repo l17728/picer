@@ -30,6 +30,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
     private CancellationTokenSource? _clusterLoadCancellation;
     private CancellationTokenSource? _collectionLoadCancellation;
     private bool _isLoaded;
+    private bool _suppressPersonSelectionLoad;
 
     public PeopleViewModel(PicerDatabase database, PeopleService peopleService,
         VisionAnalysisRepository repository, VisionAnalysisService? analysisService,
@@ -146,7 +147,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         if (restoredPerson is not null) SelectedPerson = restoredPerson;
         else if (restoredCluster is not null) SelectedCandidateCluster = restoredCluster;
         else if (restoreIgnored) await ShowIgnoredFacesAsync();
-        else if (restoreUnassigned || DisplayedFaces.Count == 0) ShowUnassignedFaces();
+        else if (restoreUnassigned || DisplayedFaces.Count == 0) await ShowUnassignedFacesAsync();
     }
 
     [RelayCommand]
@@ -231,6 +232,27 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         {
             StatusText = $"创建人物失败：{exception.Message}";
         }
+    }
+
+    public async Task CreatePersonWithFacesAsync(string name, IReadOnlyCollection<UnassignedFaceViewModel> faces)
+    {
+        if (string.IsNullOrWhiteSpace(name)) { StatusText = "请输入人物名称"; return; }
+        try
+        {
+            var faceIds = faces.Select(face => face.FaceId).Distinct().ToArray();
+            var person = await UiWork.RunDatabaseAsync(() =>
+            {
+                var created = _peopleService.Create(name);
+                foreach (var faceId in faceIds) _peopleService.MoveFace(faceId, created.Id);
+                return created;
+            });
+            RemoveFacesFromCurrentView(faceIds);
+            await RefreshPeopleDropdownAsync(person.Id);
+            StatusText = faceIds.Length == 0
+                ? $"已创建人物“{person.DisplayName}”"
+                : $"已创建人物“{person.DisplayName}”并归入 {faceIds.Length} 张人脸";
+        }
+        catch (Exception exception) { StatusText = $"创建人物失败：{exception.Message}"; }
     }
 
     [RelayCommand]
@@ -331,7 +353,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         {
             foreach (var faceId in faceIds) _peopleService.MoveFace(faceId, person.Id);
         });
-        await RefreshAsync();
+        RemoveFacesFromCurrentView(faceIds);
         StatusText = $"已将 {faceIds.Length} 张人脸移到“{person.DisplayName}”";
     }
 
@@ -346,7 +368,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         {
             foreach (var faceId in faceIds) _peopleService.MoveFaceToUnassigned(faceId);
         });
-        await RefreshAsync();
+        RemoveFacesFromCurrentView(faceIds);
         StatusText = $"已将 {faceIds.Length} 张人脸移到待分类";
     }
 
@@ -375,7 +397,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
                 throw new InvalidOperationException($"数据库复核失败，仍有 {missing.Length} 张人脸未进入不分类");
             foreach (var item in DisplayedFaces.Where(item => faceIds.Contains(item.FaceId)).ToArray())
                 DisplayedFaces.Remove(item);
-            await RefreshAsync();
+            RemoveFacesFromCurrentView(faceIds);
             StatusText = changed == 0
                 ? $"所选 {faceIds.Length} 张人脸早已是不分类；界面已重新同步"
                 : $"已将 {changed} 张人脸移到不分类；后续自动归类会跳过";
@@ -389,7 +411,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             {
                 foreach (var item in DisplayedFaces.Where(item => faceIds.Contains(item.FaceId)).ToArray())
                     DisplayedFaces.Remove(item);
-                await RefreshAsync();
+                RemoveFacesFromCurrentView(faceIds);
                 StatusText = $"所选 {faceIds.Length} 张人脸已是不分类；界面已重新同步";
             }
             else StatusText = $"移动到不分类失败：{exception.Message}";
@@ -397,14 +419,29 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
     }
 
     [RelayCommand]
-    private void ShowUnassignedFaces()
+    private async Task ShowUnassignedFacesAsync()
     {
         _collectionLoadCancellation?.Cancel();
         SelectedPerson = null;
         SelectedCandidateCluster = null;
         DisplayedCollectionKind = DisplayedFaceCollectionKind.Unassigned;
-        DisplayedFacesTitle = $"待分类人脸（{UnassignedFaces.Count}）";
-        SetDisplayedFaces(UnassignedFaces);
+        DisplayedFaces.Clear();
+        DisplayedFacesTitle = "待分类人脸 · 正在加载…";
+        var cancellation = _collectionLoadCancellation = new CancellationTokenSource();
+        try
+        {
+            var records = await UiWork.RunDatabaseAsync(() => _repository.GetUnassignedFaces(5000).ToArray(), cancellation.Token);
+            UnassignedFaces.Clear();
+            await UiWork.AddInBatchesAsync(records, record =>
+            {
+                var item = CreateFaceItem(record);
+                UnassignedFaces.Add(item); DisplayedFaces.Add(item);
+                LoadDisplayedFaceThumbnailAsync(item, cancellation.Token).Forget();
+                DisplayedFacesTitle = $"待分类人脸 · {DisplayedFaces.Count}/{records.Length}";
+            }, cancellation.Token, batchSize: 30);
+            DisplayedFacesTitle = $"待分类人脸（{records.Length}）";
+        }
+        catch (OperationCanceledException) { }
     }
 
     [RelayCommand]
@@ -447,9 +484,14 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
     [RelayCommand]
     private async Task NameCandidateClusterAsync()
     {
-        if (SelectedCandidateCluster is null || string.IsNullOrWhiteSpace(NewPersonName))
+        if (string.IsNullOrWhiteSpace(NewPersonName))
         {
-            StatusText = "请选择候选组并输入人物名称";
+            StatusText = "请输入人物名称";
+            return;
+        }
+        if (SelectedCandidateCluster is null)
+        {
+            await CreatePersonAsync();
             return;
         }
         var name = NewPersonName;
@@ -562,6 +604,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
 
     partial void OnSelectedPersonChanged(PersonSummary? value)
     {
+        if (_suppressPersonSelectionLoad) return;
         _collectionLoadCancellation?.Cancel();
         _personLoadCancellation?.Cancel();
         _personLoadCancellation?.Dispose();
@@ -613,7 +656,40 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         if (SelectedPerson is not null) OnSelectedPersonChanged(SelectedPerson);
         else if (SelectedCandidateCluster is not null) OnSelectedCandidateClusterChanged(SelectedCandidateCluster);
         else if (DisplayedFacesTitle.StartsWith("不分类", StringComparison.Ordinal)) _ = ShowIgnoredFacesAsync();
-        else ShowUnassignedFaces();
+        else ShowUnassignedFacesAsync().Forget();
+    }
+
+    private void RemoveFacesFromCurrentView(IReadOnlyCollection<long> faceIds)
+    {
+        var ids = faceIds.ToHashSet();
+        foreach (var item in DisplayedFaces.Where(item => ids.Contains(item.FaceId)).ToArray()) DisplayedFaces.Remove(item);
+        foreach (var item in AssignedFaces.Where(item => ids.Contains(item.FaceId)).ToArray()) AssignedFaces.Remove(item);
+        foreach (var item in SelectedClusterFaces.Where(item => ids.Contains(item.FaceId)).ToArray()) SelectedClusterFaces.Remove(item);
+        foreach (var item in UnassignedFaces.Where(item => ids.Contains(item.FaceId)).ToArray()) UnassignedFaces.Remove(item);
+        if (SelectedDisplayedFace is not null && ids.Contains(SelectedDisplayedFace.FaceId)) SelectedDisplayedFace = null;
+        DisplayedFacesTitle = DisplayedCollectionKind switch
+        {
+            DisplayedFaceCollectionKind.NamedPerson => $"{SelectedPerson?.DisplayName ?? "人物"} · {DisplayedFaces.Count} 张人脸",
+            DisplayedFaceCollectionKind.CandidateCluster => $"候选人物 · {DisplayedFaces.Count} 张人脸",
+            DisplayedFaceCollectionKind.Unassigned => $"待分类人脸（{DisplayedFaces.Count}）",
+            DisplayedFaceCollectionKind.Ignored => $"不分类（{DisplayedFaces.Count}）",
+            _ => DisplayedFacesTitle
+        };
+    }
+
+    private async Task RefreshPeopleDropdownAsync(long createdPersonId)
+    {
+        var selectedId = SelectedPerson?.Id;
+        var values = await UiWork.RunDatabaseAsync(() => _peopleService.GetAll().ToArray());
+        _suppressPersonSelectionLoad = true;
+        try
+        {
+            People.Clear();
+            foreach (var person in values) People.Add(person);
+            SelectedPerson = selectedId is long id ? People.FirstOrDefault(person => person.Id == id) : null;
+            CandidateTargetPerson = People.FirstOrDefault(person => person.Id == createdPersonId);
+        }
+        finally { _suppressPersonSelectionLoad = false; }
     }
 
     private void SetDisplayedFaces(IEnumerable<UnassignedFaceViewModel> faces)
