@@ -376,7 +376,6 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             foreach (var item in DisplayedFaces.Where(item => faceIds.Contains(item.FaceId)).ToArray())
                 DisplayedFaces.Remove(item);
             await RefreshAsync();
-            await ShowIgnoredFacesAsync();
             StatusText = changed == 0
                 ? $"所选 {faceIds.Length} 张人脸早已是不分类；界面已重新同步"
                 : $"已将 {changed} 张人脸移到不分类；后续自动归类会跳过";
@@ -388,7 +387,9 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
                 _repository.GetIgnoredFaces(5000).Select(face => face.FaceId).ToHashSet());
             if (faceIds.All(alreadyIgnored.Contains))
             {
-                await ShowIgnoredFacesAsync();
+                foreach (var item in DisplayedFaces.Where(item => faceIds.Contains(item.FaceId)).ToArray())
+                    DisplayedFaces.Remove(item);
+                await RefreshAsync();
                 StatusText = $"所选 {faceIds.Length} 张人脸已是不分类；界面已重新同步";
             }
             else StatusText = $"移动到不分类失败：{exception.Message}";
