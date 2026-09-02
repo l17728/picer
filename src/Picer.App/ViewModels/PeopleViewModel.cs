@@ -27,6 +27,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
     private CancellationTokenSource? _pageLoadCancellation;
     private CancellationTokenSource? _personLoadCancellation;
     private CancellationTokenSource? _clusterLoadCancellation;
+    private CancellationTokenSource? _collectionLoadCancellation;
     private bool _isLoaded;
 
     public PeopleViewModel(PicerDatabase database, PeopleService peopleService,
@@ -338,17 +339,29 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
     {
         var faceIds = faces.Select(face => face.FaceId).Distinct().ToArray();
         if (faceIds.Length == 0) return;
-        await UiWork.RunDatabaseAsync(() =>
+        StatusText = $"正在将 {faceIds.Length} 张人脸移到不分类…";
+        try
         {
-            foreach (var faceId in faceIds) _peopleService.IgnoreFace(faceId);
-        });
-        await RefreshAsync();
-        StatusText = $"已将 {faceIds.Length} 张人脸标记为不分类；后续自动归类会跳过";
+            await UiWork.RunDatabaseAsync(() =>
+            {
+                foreach (var faceId in faceIds) _peopleService.IgnoreFace(faceId);
+            });
+            foreach (var item in DisplayedFaces.Where(item => faceIds.Contains(item.FaceId)).ToArray())
+                DisplayedFaces.Remove(item);
+            await RefreshAsync();
+            await ShowIgnoredFacesAsync();
+            StatusText = $"已将 {faceIds.Length} 张人脸移到不分类；后续自动归类会跳过";
+        }
+        catch (Exception exception)
+        {
+            StatusText = $"移动到不分类失败：{exception.Message}";
+        }
     }
 
     [RelayCommand]
     private void ShowUnassignedFaces()
     {
+        _collectionLoadCancellation?.Cancel();
         SelectedPerson = null;
         SelectedCandidateCluster = null;
         DisplayedFacesTitle = $"待分类人脸（{UnassignedFaces.Count}）";
@@ -358,12 +371,28 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
     [RelayCommand]
     private async Task ShowIgnoredFacesAsync()
     {
+        _collectionLoadCancellation?.Cancel();
+        _collectionLoadCancellation?.Dispose();
         SelectedPerson = null;
         SelectedCandidateCluster = null;
-        var records = await UiWork.RunDatabaseAsync(() => _repository.GetIgnoredFaces().ToArray());
-        var faces = records.Select(CreateFaceItem).ToArray();
-        DisplayedFacesTitle = $"不分类（{faces.Length}）";
-        SetDisplayedFaces(faces);
+        DisplayedFaces.Clear();
+        DisplayedFacesTitle = "不分类 · 正在加载…";
+        StatusText = "正在加载不分类人脸…";
+        var cancellation = _collectionLoadCancellation = new CancellationTokenSource();
+        try
+        {
+            var records = await UiWork.RunDatabaseAsync(() => _repository.GetIgnoredFaces(5000).ToArray(), cancellation.Token);
+            await UiWork.AddInBatchesAsync(records, record =>
+            {
+                var item = CreateFaceItem(record);
+                DisplayedFaces.Add(item);
+                LoadDisplayedFaceThumbnailAsync(item, cancellation.Token).Forget();
+                DisplayedFacesTitle = $"不分类 · {DisplayedFaces.Count}/{records.Length} 张人脸";
+            }, cancellation.Token, batchSize: 30);
+            DisplayedFacesTitle = $"不分类（{records.Length}）";
+            StatusText = records.Length == 0 ? "当前没有标记为不分类的人脸" : $"已显示 {records.Length} 张不分类人脸";
+        }
+        catch (OperationCanceledException) { }
     }
 
     [RelayCommand]
@@ -417,6 +446,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
 
     partial void OnSelectedCandidateClusterChanged(CandidateClusterViewModel? value)
     {
+        _collectionLoadCancellation?.Cancel();
         _clusterLoadCancellation?.Cancel();
         SelectedClusterFaces.Clear();
         if (value is null) return;
@@ -464,6 +494,8 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         _personLoadCancellation?.Cancel();
         _clusterLoadCancellation?.Cancel();
         _clusterLoadCancellation?.Dispose();
+        _collectionLoadCancellation?.Cancel();
+        _collectionLoadCancellation?.Dispose();
     }
 
     private async Task LoadFaceThumbnailAsync(UnassignedFaceViewModel item)
@@ -489,6 +521,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
 
     partial void OnSelectedPersonChanged(PersonSummary? value)
     {
+        _collectionLoadCancellation?.Cancel();
         _personLoadCancellation?.Cancel();
         _personLoadCancellation?.Dispose();
         AssignedFaces.Clear();
