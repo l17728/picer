@@ -406,6 +406,8 @@
                                      SelectionMode="Extended"
                                      AutomationProperties.Name="人物人脸列表" AutomationProperties.HelpText="双击打开关联照片；右击可移动到已有分类、待分类或不分类"
                                      MouseDoubleClick="PeopleFace_DoubleClick" PreviewMouseRightButtonDown="PeopleFace_PreviewMouseRightButtonDown"
+                                     PreviewMouseLeftButtonDown="PeopleFace_PreviewMouseLeftButtonDown"
+                                     PreviewMouseMove="PeopleFace_PreviewMouseMove" PreviewMouseLeftButtonUp="PeopleFace_PreviewMouseLeftButtonUp"
                                      ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                                      ScrollViewer.CanContentScroll="True"
                                      VirtualizingPanel.IsVirtualizing="True"

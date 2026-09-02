@@ -7,6 +7,10 @@ namespace Picer.App;
 
 public partial class MainWindow : Window
 {
+    private Point _faceDragStartPoint;
+    private int _faceDragStartIndex = -1;
+    private bool _faceDragSelecting;
+    private HashSet<object> _faceSelectionBeforeDrag = [];
     private readonly MainViewModel _mainVm;
     private bool _initialized;
 
@@ -144,6 +148,45 @@ public partial class MainWindow : Window
     {
         if (FindAncestor<ListBoxItem>(e.OriginalSource as DependencyObject) is { } item)
             item.IsSelected = true;
+    }
+
+    private void PeopleFace_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is not ListBox list || FindAncestor<ListBoxItem>(e.OriginalSource as DependencyObject) is not { } item ||
+            item.DataContext is not UnassignedFaceViewModel) return;
+        _faceDragStartPoint = e.GetPosition(list);
+        _faceDragStartIndex = list.ItemContainerGenerator.IndexFromContainer(item);
+        _faceDragSelecting = false;
+        _faceSelectionBeforeDrag = list.SelectedItems.Cast<object>().ToHashSet();
+    }
+
+    private void PeopleFace_PreviewMouseMove(object sender, MouseEventArgs e)
+    {
+        if (sender is not ListBox list || e.LeftButton != MouseButtonState.Pressed || _faceDragStartIndex < 0) return;
+        var point = e.GetPosition(list);
+        if (!_faceDragSelecting && Math.Abs(point.X - _faceDragStartPoint.X) < SystemParameters.MinimumHorizontalDragDistance &&
+            Math.Abs(point.Y - _faceDragStartPoint.Y) < SystemParameters.MinimumVerticalDragDistance) return;
+        _faceDragSelecting = true;
+        if (FindAncestor<ListBoxItem>(e.OriginalSource as DependencyObject) is not { } item) return;
+        var currentIndex = list.ItemContainerGenerator.IndexFromContainer(item);
+        if (currentIndex < 0) return;
+        var additive = Keyboard.Modifiers.HasFlag(ModifierKeys.Control);
+        list.SelectedItems.Clear();
+        if (additive)
+            foreach (var selected in _faceSelectionBeforeDrag.Where(list.Items.Contains)) list.SelectedItems.Add(selected);
+        var first = Math.Min(_faceDragStartIndex, currentIndex);
+        var last = Math.Max(_faceDragStartIndex, currentIndex);
+        for (var index = first; index <= last; index++)
+            if (list.Items[index] is UnassignedFaceViewModel face && !list.SelectedItems.Contains(face))
+                list.SelectedItems.Add(face);
+        e.Handled = true;
+    }
+
+    private void PeopleFace_PreviewMouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        _faceDragStartIndex = -1;
+        _faceDragSelecting = false;
+        _faceSelectionBeforeDrag.Clear();
     }
 
     private void PeopleFaceMenu_Opened(object sender, RoutedEventArgs e)
