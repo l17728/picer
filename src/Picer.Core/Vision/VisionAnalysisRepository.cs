@@ -336,7 +336,19 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
                 new NormalizedFaceBox(reader.GetFloat(7), reader.GetFloat(8), reader.GetFloat(9), reader.GetFloat(10)),
                 reader.GetFloat(11)));
         }
-        return groups.Select(pair => new FaceCandidateClusterRecord(pair.Key, pair.Value.Version, pair.Value.Faces)).ToArray();
+        return groups.Where(pair => pair.Value.Faces.Count >= 2)
+            .Select(pair => new FaceCandidateClusterRecord(pair.Key, pair.Value.Version, pair.Value.Faces)).ToArray();
+    }
+
+    public int GetIgnoredFaceCount()
+    {
+        using var command = database.Command("""
+            SELECT COUNT(*) FROM face_review_states r
+            JOIN detected_faces f ON f.id=r.face_id
+            JOIN images i ON i.id=f.image_id AND i.status='active'
+            WHERE r.state='ignored'
+            """);
+        return Convert.ToInt32(command.ExecuteScalar());
     }
 
     public void RemoveFaceFromCandidateCluster(long clusterId, long faceId)

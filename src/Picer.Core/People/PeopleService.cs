@@ -220,10 +220,14 @@ public sealed class PeopleService(PicerDatabase database)
         transaction.Commit();
     }
 
-    public void IgnoreFace(long faceId)
+    public bool IgnoreFace(long faceId)
     {
         using var transaction = database.BeginTransaction();
         EnsureFaceExists(faceId, transaction);
+        using var currentReview = database.Command("SELECT state FROM face_review_states WHERE face_id=$face");
+        currentReview.Transaction = transaction;
+        currentReview.Parameters.AddWithValue("$face", faceId);
+        var wasIgnored = string.Equals(currentReview.ExecuteScalar() as string, "ignored", StringComparison.Ordinal);
         using var old = database.Command("SELECT person_id FROM face_person_assignments WHERE face_id=$face");
         old.Transaction = transaction;
         old.Parameters.AddWithValue("$face", faceId);
@@ -245,8 +249,10 @@ public sealed class PeopleService(PicerDatabase database)
         review.Parameters.AddWithValue("$face", faceId);
         review.Parameters.AddWithValue("$now", Format(DateTime.UtcNow));
         review.ExecuteNonQuery();
-        InsertCorrection(faceId, oldPersonId, null, "ignore", transaction);
+        if (!wasIgnored || oldPersonId is not null)
+            InsertCorrection(faceId, oldPersonId, null, "ignore", transaction);
         transaction.Commit();
+        return !wasIgnored || oldPersonId is not null;
     }
 
     public PersonRecord? FindByName(string name)

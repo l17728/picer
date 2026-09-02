@@ -160,10 +160,12 @@ public sealed class VisionAnalysisTests : IDisposable
         var faceId = Assert.Single(repository.GetFaceIds(_image.Id));
         var people = new PeopleService(_database);
 
-        people.IgnoreFace(faceId);
+        Assert.True(people.IgnoreFace(faceId));
+        Assert.False(people.IgnoreFace(faceId));
 
         Assert.Empty(repository.GetUnassignedFaces());
         Assert.Equal(faceId, Assert.Single(repository.GetIgnoredFaces()).FaceId);
+        Assert.Equal(1, repository.GetIgnoredFaceCount());
         Assert.DoesNotContain(repository.GetEmbeddingsForMatching(), face => face.FaceId == faceId);
 
         people.MoveFaceToUnassigned(faceId);
