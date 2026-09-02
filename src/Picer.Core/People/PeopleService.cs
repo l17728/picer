@@ -233,6 +233,10 @@ public sealed class PeopleService(PicerDatabase database)
         assignment.Transaction = transaction;
         assignment.Parameters.AddWithValue("$face", faceId);
         assignment.ExecuteNonQuery();
+        using var candidate = database.Command("DELETE FROM face_candidate_members WHERE face_id=$face");
+        candidate.Transaction = transaction;
+        candidate.Parameters.AddWithValue("$face", faceId);
+        candidate.ExecuteNonQuery();
         using var review = database.Command("""
             INSERT INTO face_review_states(face_id,state,updated_utc) VALUES($face,'ignored',$now)
             ON CONFLICT(face_id) DO UPDATE SET state='ignored',updated_utc=excluded.updated_utc

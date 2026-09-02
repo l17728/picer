@@ -15,6 +15,7 @@ public partial class PhotoGrid : UserControl
     public static readonly DependencyProperty ShowInExplorerCommandProperty = DependencyProperty.Register(nameof(ShowInExplorerCommand), typeof(ICommand), typeof(PhotoGrid));
     public static readonly DependencyProperty ShowDetailsCommandProperty = DependencyProperty.Register(nameof(ShowDetailsCommand), typeof(ICommand), typeof(PhotoGrid));
     public static readonly DependencyProperty EditLocationCommandProperty = DependencyProperty.Register(nameof(EditLocationCommand), typeof(ICommand), typeof(PhotoGrid));
+    public static readonly DependencyProperty EditTagsCommandProperty = DependencyProperty.Register(nameof(EditTagsCommand), typeof(ICommand), typeof(PhotoGrid));
     public static readonly DependencyProperty ThumbnailSizeProperty = DependencyProperty.Register(nameof(ThumbnailSize), typeof(double), typeof(PhotoGrid), new PropertyMetadata(150d, OnSizeChanged));
     public static readonly DependencyProperty CardWidthProperty = DependencyProperty.Register(nameof(CardWidth), typeof(double), typeof(PhotoGrid), new PropertyMetadata(170d));
     public static readonly DependencyProperty CardHeightProperty = DependencyProperty.Register(nameof(CardHeight), typeof(double), typeof(PhotoGrid), new PropertyMetadata(205d));
@@ -29,6 +30,7 @@ public partial class PhotoGrid : UserControl
     public ICommand? ShowInExplorerCommand { get => (ICommand?)GetValue(ShowInExplorerCommandProperty); set => SetValue(ShowInExplorerCommandProperty, value); }
     public ICommand? ShowDetailsCommand { get => (ICommand?)GetValue(ShowDetailsCommandProperty); set => SetValue(ShowDetailsCommandProperty, value); }
     public ICommand? EditLocationCommand { get => (ICommand?)GetValue(EditLocationCommandProperty); set => SetValue(EditLocationCommandProperty, value); }
+    public ICommand? EditTagsCommand { get => (ICommand?)GetValue(EditTagsCommandProperty); set => SetValue(EditTagsCommandProperty, value); }
     public double ThumbnailSize { get => (double)GetValue(ThumbnailSizeProperty); set => SetValue(ThumbnailSizeProperty, value); }
     public double CardWidth { get => (double)GetValue(CardWidthProperty); private set => SetValue(CardWidthProperty, value); }
     public double CardHeight { get => (double)GetValue(CardHeightProperty); private set => SetValue(CardHeightProperty, value); }
@@ -58,6 +60,7 @@ public partial class PhotoGrid : UserControl
     private void Explorer_Click(object sender, RoutedEventArgs e) => Execute(ShowInExplorerCommand);
     private void Details_Click(object sender, RoutedEventArgs e) => Execute(ShowDetailsCommand);
     private void EditLocation_Click(object sender, RoutedEventArgs e) => Execute(EditLocationCommand);
+    private void EditTags_Click(object sender, RoutedEventArgs e) => Execute(EditTagsCommand);
     private void List_PreviewMouseRightButtonDown(object sender, MouseButtonEventArgs e)
     {
         if (sender is not ListBox) return;

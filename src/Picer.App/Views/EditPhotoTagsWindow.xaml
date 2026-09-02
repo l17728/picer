@@ -1,0 +1,25 @@
+<Window x:Class="Picer.App.Views.EditPhotoTagsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="编辑照片标签" Width="520" Height="520" MinWidth="400" MinHeight="360"
+        WindowStartupLocation="CenterOwner">
+    <Grid Margin="14">
+        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+        <TextBlock x:Name="HelpText" TextWrapping="Wrap" Foreground="#555" Margin="0,0,0,10"/>
+        <DockPanel Grid.Row="1" Margin="0,0,0,10">
+            <Button DockPanel.Dock="Right" Content="新增标签" Click="Add_Click" Padding="12,5" Margin="8,0,0,0"/>
+            <TextBox x:Name="NewTagText" MaxLength="80" ToolTip="输入新的标签名称"/>
+        </DockPanel>
+        <ListBox Grid.Row="2" ItemsSource="{Binding Items}">
+            <ListBox.ItemTemplate><DataTemplate>
+                <CheckBox Content="{Binding Name}" IsChecked="{Binding IsChecked, Mode=TwoWay}" IsThreeState="True"
+                          Margin="5" ToolTip="半选表示仅部分所选照片已有此标签；保持半选则不改变"/>
+            </DataTemplate></ListBox.ItemTemplate>
+        </ListBox>
+        <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
+            <Button Content="取消" IsCancel="True" Padding="18,6" Margin="0,0,8,0"/>
+            <Button Content="应用" IsDefault="True" Click="Apply_Click" Padding="18,6"/>
+        </StackPanel>
+    </Grid>
+</Window>

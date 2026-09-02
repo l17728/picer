@@ -200,6 +200,8 @@
                             <Separator Tag="directory"/><MenuItem Tag="directory" Header="描述未分类场景…" Click="DescribeUnclassifiedScene_Click"
                                                                  ToolTip="批量描述所选目录中尚未描述的未分类场景；在场景节点上使用时只描述当前场景"/>
                             <MenuItem Tag="directory" Header="重新生成分类锚点" Click="RegenerateDirectoryClassification_Click"/>
+                            <MenuItem Tag="scene" Header="编辑场景标题和摘要…" Click="EditSceneDescription_Click"/>
+                            <MenuItem Tag="scene" Header="描述此未分类场景…" Click="DescribeUnclassifiedScene_Click"/>
                             <MenuItem Tag="album" Header="删除相册…" Click="DeleteAlbum_Click" Foreground="#A00000"/>
                             <MenuItem Tag="pending-location" Header="解析位置" Click="ParsePendingLocations_Click"/>
                         </ContextMenu></TreeView.ContextMenu>
@@ -283,6 +285,7 @@
                                         OpenCommand="{Binding OpenSelectedCommand}"
                                         ShowDetailsCommand="{Binding ShowImageInfoCommand}"
                                         EditLocationCommand="{Binding EditSelectedLocationCommand}"
+                                        EditTagsCommand="{Binding EditSelectedTagsCommand}"
                                         ShowInExplorerCommand="{Binding ShowInExplorerCommand}"/>
                     </DockPanel>
                 </Grid>
@@ -331,6 +334,7 @@
                                     OpenCommand="{Binding OpenSelectedCommand}"
                                     ShowDetailsCommand="{Binding ShowImageInfoCommand}"
                                     EditLocationCommand="{Binding EditSelectedLocationCommand}"
+                                    EditTagsCommand="{Binding EditSelectedTagsCommand}"
                                     ShowInExplorerCommand="{Binding ShowInExplorerCommand}"/>
                 </DockPanel>
             </TabItem>
@@ -347,7 +351,8 @@
                                         ToolTip="使用最新已应用阈值匹配已命名人物，并重建待命名候选组；保留人工确认与排除结果"/>
                                 <Button Content="人脸精度验证" Click="FaceValidation_Click" Padding="12,5" Margin="4,0"/>
                                 <Button Content="取消" Command="{Binding CancelAnalysisCommand}" Padding="12,5" Margin="4,0"/>
-                                <Button Content="刷新" Command="{Binding RefreshCommand}" Padding="12,5" Margin="4,0"/>
+                                <Button Content="刷新" Command="{Binding RefreshPageCommand}" Padding="12,5" Margin="4,0"
+                                        ToolTip="仅从数据库同步最新人物、候选组和人脸状态，不重新扫描或归类"/>
                             </StackPanel>
                             <TextBlock Text="{Binding StatusText}" TextWrapping="Wrap" VerticalAlignment="Center"/>
                         </DockPanel>

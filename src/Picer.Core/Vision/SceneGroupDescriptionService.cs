@@ -111,6 +111,22 @@ public sealed class SceneGroupDescriptionService(PicerDatabase database, CloudVi
         return new(fingerprint, reader.GetString(0), reader.GetString(1), terms, reader.GetString(3), reader.GetString(4), reader.GetString(5), reader.GetString(6));
     }
 
+    public void UpdateAcceptedText(string fingerprint, string sceneName, string summary)
+    {
+        if (string.IsNullOrWhiteSpace(sceneName)) throw new ArgumentException("场景标题不能为空。", nameof(sceneName));
+        using var command = database.Command("""
+            UPDATE scene_group_descriptions
+            SET scene_name=$scene, summary=$summary, provider='user', model_version='manual-edit',
+                prompt_version='manual-edit-v1', reviewed_utc=$now
+            WHERE fingerprint=$fingerprint AND state='accepted'
+            """);
+        command.Parameters.AddWithValue("$scene", sceneName.Trim());
+        command.Parameters.AddWithValue("$summary", summary.Trim());
+        command.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("O"));
+        command.Parameters.AddWithValue("$fingerprint", fingerprint);
+        if (command.ExecuteNonQuery() == 0) throw new InvalidOperationException("场景描述不存在或已经失效。");
+    }
+
     public static string CreateFingerprint(IEnumerable<ImageRecord> images)
     {
         var text = string.Join('|', images.OrderBy(x => x.Id).Select(x => $"{x.Id}:{x.FileSize}:{x.ModifiedUtc.ToUniversalTime():O}"));

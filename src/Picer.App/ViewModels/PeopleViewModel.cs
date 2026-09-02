@@ -86,12 +86,12 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         await OrganizeFacesAsync();
     }
 
-    [RelayCommand]
     private async Task RefreshAsync()
     {
         _pageLoadCancellation?.Cancel();
         var cancellation = _pageLoadCancellation = new CancellationTokenSource();
         var selectedPersonId = SelectedPerson?.Id;
+        var selectedClusterId = SelectedCandidateCluster?.Record.Id;
         var snapshot = await UiWork.RunDatabaseAsync(() => (
             People: _peopleService.GetAll().ToArray(),
             Faces: _repository.GetUnassignedFaces().ToArray(),
@@ -99,6 +99,8 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             Summary: _repository.GetSummary()), cancellation.Token);
         cancellation.Token.ThrowIfCancellationRequested();
 
+        SelectedPerson = null;
+        SelectedCandidateCluster = null;
         People.Clear();
         foreach (var person in snapshot.People) People.Add(person);
         SelectedPerson = selectedPersonId is long id ? People.FirstOrDefault(value => value.Id == id) : SelectedPerson;
@@ -121,11 +123,21 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             CandidateClusters.Add(item);
             _ = LoadClusterThumbnailAsync(item);
         }
+        if (selectedClusterId is long clusterId)
+            SelectedCandidateCluster = CandidateClusters.FirstOrDefault(value => value.Record.Id == clusterId);
         var summary = snapshot.Summary;
         StatusText = _unavailableReason ??
             $"已分析 {summary.CompletedImages}/{summary.TotalImages} 张照片，发现 {summary.FaceCount} 张人脸，失败 {summary.FailedImages} 张";
         ProgressValue = summary.TotalImages == 0 ? 0 : summary.CompletedImages * 100d / summary.TotalImages;
         RefreshDisplayedFaces();
+    }
+
+    [RelayCommand]
+    private async Task RefreshPageAsync()
+    {
+        StatusText = "正在同步人物界面…";
+        await RefreshAsync();
+        StatusText = "已刷新人物、候选组、待分类和不分类状态";
     }
 
     [RelayCommand(CanExecute = nameof(CanAnalyzeAll))]
@@ -300,8 +312,8 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         {
             foreach (var faceId in faceIds) _peopleService.MoveFace(faceId, person.Id);
         });
-        StatusText = $"已将 {faceIds.Length} 张人脸移到“{person.DisplayName}”";
         await RefreshAsync();
+        StatusText = $"已将 {faceIds.Length} 张人脸移到“{person.DisplayName}”";
     }
 
     public async Task MoveFaceToUnassignedAsync(UnassignedFaceViewModel face)
@@ -315,8 +327,8 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         {
             foreach (var faceId in faceIds) _peopleService.MoveFaceToUnassigned(faceId);
         });
-        StatusText = $"已将 {faceIds.Length} 张人脸移到待分类";
         await RefreshAsync();
+        StatusText = $"已将 {faceIds.Length} 张人脸移到待分类";
     }
 
     public async Task IgnoreFaceAsync(UnassignedFaceViewModel face)
@@ -330,8 +342,8 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         {
             foreach (var faceId in faceIds) _peopleService.IgnoreFace(faceId);
         });
-        StatusText = $"已将 {faceIds.Length} 张人脸标记为不分类；后续自动归类会跳过";
         await RefreshAsync();
+        StatusText = $"已将 {faceIds.Length} 张人脸标记为不分类；后续自动归类会跳过";
     }
 
     [RelayCommand]

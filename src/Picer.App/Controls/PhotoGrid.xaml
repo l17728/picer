@@ -95,6 +95,7 @@
                 <ContextMenu>
                     <MenuItem Header="查看图片信息" Click="Details_Click"/>
                     <MenuItem Header="编辑地点…" Click="EditLocation_Click"/>
+                    <MenuItem Header="编辑标签…" Click="EditTags_Click"/>
                     <Separator/>
                     <MenuItem Header="打开" Click="Open_Click"/>
                     <MenuItem Header="在资源管理器中显示" Click="Explorer_Click"/>

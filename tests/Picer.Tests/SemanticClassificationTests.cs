@@ -93,6 +93,8 @@ public sealed class SemanticClassificationTests : IDisposable
         var imageTags = SemanticEngine.GetImageTags(_db, image.Id);
         Assert.Single(imageTags);
         Assert.Equal("test_tag", imageTags[0].Name);
+        Assert.Equal(image.Id, Assert.Single(IndexSearchEngine.Search(_db,
+            new SearchFilters { Query = "test_tag", IncludeMissing = false })).Id);
 
         // Remove tag
         SemanticEngine.RemoveTag(_db, image.Id, tag.Id);

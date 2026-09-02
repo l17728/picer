@@ -805,6 +805,51 @@ public partial class MainViewModel : ObservableObject, IDisposable
             : $"已批量更新 {images.Length} 张照片的地点：{dialog.Result.DisplayName}";
     }
 
+    [RelayCommand]
+    private async Task EditSelectedTagsAsync()
+    {
+        var images = (SelectedImages.Count > 0
+                ? SelectedImages.ToArray()
+                : SelectedImage is null ? [] : [SelectedImage])
+            .DistinctBy(image => image.Record.Id).ToArray();
+        if (images.Length == 0) return;
+        var imageIds = images.Select(image => image.Record.Id).ToArray();
+        var snapshot = await UiWork.RunDatabaseAsync(() =>
+        {
+            var all = SemanticEngine.GetTags(_db).ToArray();
+            var counts = all.ToDictionary(tag => tag.Id, _ => 0);
+            foreach (var imageId in imageIds)
+                foreach (var tag in SemanticEngine.GetImageTags(_db, imageId)) counts[tag.Id]++;
+            return all.Select(tag => (Tag: tag, AssignedCount: counts[tag.Id])).ToArray();
+        });
+        var dialog = new EditPhotoTagsWindow(images.Length, snapshot) { Owner = Application.Current.MainWindow };
+        if (dialog.ShowDialog() != true) return;
+        await UiWork.RunDatabaseAsync(() =>
+        {
+            var known = SemanticEngine.GetTags(_db);
+            foreach (var item in dialog.Items.Where(item => item.IsChecked is not null))
+            {
+                var tag = known.FirstOrDefault(existing => string.Equals(existing.Name, item.Name,
+                    StringComparison.CurrentCultureIgnoreCase));
+                if (tag is null && item.IsChecked == true)
+                {
+                    tag = SemanticEngine.AddTag(_db, item.Name);
+                    known.Add(tag);
+                }
+                if (tag is null) continue;
+                foreach (var imageId in imageIds)
+                {
+                    if (item.IsChecked == true) SemanticEngine.AssignTag(_db, imageId, tag.Id);
+                    else SemanticEngine.RemoveTag(_db, imageId, tag.Id);
+                }
+            }
+        });
+        LoadTags();
+        Semantic.LoadTags();
+        await ApplySearchAndFilterAsync();
+        StatusText = $"已更新 {images.Length} 张照片的标签；标签可直接作为搜索关键字";
+    }
+
     partial void OnIsIndexingChanged(bool value) => CancelIndexCommand.NotifyCanExecuteChanged();
 
     [RelayCommand]
@@ -1307,6 +1352,42 @@ public partial class MainViewModel : ObservableObject, IDisposable
         parent.IsExpanded = true;
         SelectedDirectory = refreshed ?? parent;
         if (refreshed is not null) refreshed.IsSelected = true;
+    }
+
+    public async Task EditSceneDescriptionAsync(DirectoryNodeViewModel node)
+    {
+        if (!node.IsSceneAnchor) return;
+        var service = new SceneGroupDescriptionService(_db, AppServices.CloudVisionRepository);
+        var images = await UiWork.RunDatabaseAsync(() => node.AnchorImageIds.Select(id => _db.GetImage(id))
+            .Where(image => image is { Status: ImageStatus.Active }).Cast<ImageRecord>().ToArray());
+        if (images.Length == 0) { StatusText = "该场景没有可编辑的照片记录"; return; }
+        var plan = await UiWork.RunDatabaseAsync(() => service.BuildPlan(node.FullPath, images));
+        var accepted = await UiWork.RunDatabaseAsync(() => service.GetAccepted(plan.Fingerprint));
+        var window = new EditSceneDescriptionWindow(accepted?.SceneName ?? node.SceneName, accepted?.Summary ?? "")
+        {
+            Owner = Application.Current.MainWindow
+        };
+        if (window.ShowDialog() != true) return;
+        await UiWork.RunDatabaseAsync(() =>
+        {
+            if (accepted is null)
+            {
+                service.SaveAccepted(plan, new SceneGroupDescription(plan.Fingerprint, window.SceneTitle,
+                    window.SceneSummary, [window.SceneTitle], "user", "manual-edit", "manual-edit-v1", "accepted"));
+            }
+            else service.UpdateAcceptedText(plan.Fingerprint, window.SceneTitle, window.SceneSummary);
+        });
+        var parent = EnumerateDirectoryNodes(DirectoryTree).FirstOrDefault(candidate => candidate.Children.Contains(node));
+        if (parent is not null)
+        {
+            await LoadSceneAnchorsAsync(parent, true);
+            var refreshed = parent.Children.FirstOrDefault(candidate => candidate.IsSceneAnchor &&
+                candidate.AnchorImageIds.Order().SequenceEqual(node.AnchorImageIds.Order()));
+            parent.IsExpanded = true;
+            SelectedDirectory = refreshed ?? parent;
+            if (refreshed is not null) refreshed.IsSelected = true;
+        }
+        StatusText = $"已更新场景“{window.SceneTitle}”的标题和摘要";
     }
 
     private async Task DescribeUnclassifiedScenesInDirectoryAsync(DirectoryNodeViewModel directory)

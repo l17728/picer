@@ -215,6 +215,7 @@ public partial class MainWindow : Window
         {
             { IsPendingLocation: true } => "pending-location",
             { AlbumId: not null } => "album",
+            { IsSceneAnchor: true } => "scene",
             { IsAlbumRoot: false, IsGeoNode: false } => "directory",
             _ => null
         };
@@ -233,6 +234,7 @@ public partial class MainWindow : Window
     private async void DirectoryRecursiveClassification_Click(object sender,RoutedEventArgs e){if(DirectoryTreeView.SelectedItem is DirectoryNodeViewModel node)await _mainVm.SetDirectoryClassificationModeAsync(node,true);}
     private async void RegenerateDirectoryClassification_Click(object sender,RoutedEventArgs e){if(DirectoryTreeView.SelectedItem is DirectoryNodeViewModel node)await _mainVm.LoadSceneAnchorsAsync(node,true);}
     private async void DescribeUnclassifiedScene_Click(object sender,RoutedEventArgs e){if(DirectoryTreeView.SelectedItem is DirectoryNodeViewModel node)await _mainVm.DescribeUnclassifiedSceneAsync(node);}
+    private async void EditSceneDescription_Click(object sender,RoutedEventArgs e){if(DirectoryTreeView.SelectedItem is DirectoryNodeViewModel node)await _mainVm.EditSceneDescriptionAsync(node);}
 
     private void ImagesList_MouseDoubleClick(object sender, MouseButtonEventArgs e)
     {

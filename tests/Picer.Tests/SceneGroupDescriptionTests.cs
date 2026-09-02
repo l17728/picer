@@ -53,6 +53,13 @@ public sealed class SceneGroupDescriptionTests : IDisposable
         Assert.Equal(summary.SceneName, cluster.SceneName);
         Assert.Equal(images.Length, IndexSearchEngine.Search(_db,
             new SearchFilters { Query = "日落", IncludeMissing = false }).Count);
+
+        service.UpdateAcceptedText(plan.Fingerprint, "海滨毕业旅行", "同学们在海边庆祝毕业");
+        var edited = service.GetAccepted(plan.Fingerprint)!;
+        Assert.Equal("海滨毕业旅行", edited.SceneName);
+        Assert.Equal("同学们在海边庆祝毕业", edited.Summary);
+        Assert.Equal(images.Length, IndexSearchEngine.Search(_db,
+            new SearchFilters { Query = "毕业", IncludeMissing = false }).Count);
     }
 
     public void Dispose() { _db.Dispose(); try { Directory.Delete(_root, true); } catch { } }
