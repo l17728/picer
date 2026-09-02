@@ -71,6 +71,12 @@ public sealed class DesktopSmokeTests
                     window.UpdateLayout();
                 }
                 Assert.Equal(282, items.Count);
+                items.Clear();
+                foreach (var value in Enumerable.Range(1000, 22)) items.Add(value);
+                window.UpdateLayout();
+                Assert.NotNull(list.ItemContainerGenerator.ContainerFromIndex(0));
+                Assert.True(list.Items.Count > 0 && list.ItemContainerGenerator.ContainerFromIndex(0) is not null,
+                    "切换到小候选组后首张人脸没有重新生成容器");
                 window.Close();
             }
             catch (Exception exception) { failure = exception; }

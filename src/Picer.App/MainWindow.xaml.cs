@@ -190,6 +190,22 @@ public partial class MainWindow : Window
         }
     }
 
+    private void CandidateCluster_PreviewMouseRightButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (FindAncestor<ListBoxItem>(e.OriginalSource as DependencyObject) is { } item)
+            item.IsSelected = true;
+    }
+
+    private void CandidateClusterMenu_Opened(object sender, RoutedEventArgs e)
+    {
+        if (sender is not ContextMenu menu) return;
+        menu.Items.Clear();
+        if (CandidateClustersList.SelectedItem is not CandidateClusterViewModel cluster) return;
+        var ignore = new MenuItem { Header = $"整组标记为不分类（{cluster.FaceCount} 张）" };
+        ignore.Click += async (_, _) => await _mainVm.People.IgnoreCandidateClusterAsync(cluster);
+        menu.Items.Add(ignore);
+    }
+
     private void PeopleFace_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
         if (sender is not ListBox list || FindAncestor<ListBoxItem>(e.OriginalSource as DependencyObject) is not { } item ||

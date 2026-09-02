@@ -211,6 +211,29 @@ public sealed class VisionAnalysisTests : IDisposable
     }
 
     [Fact]
+    public async Task PeopleViews_ShowOnlyOneRepresentativeForIdenticalPhotoCopies()
+    {
+        using (var hash = _database.Command("UPDATE images SET sha256='identical-content' WHERE id=$id"))
+        {
+            hash.Parameters.AddWithValue("$id", _image.Id);
+            hash.ExecuteNonQuery();
+        }
+        var copyPath = Path.Combine(_root, "copy.jpg");
+        File.WriteAllBytes(copyPath, [1, 2, 3, 4, 5]);
+        var copy = _database.UpsertImage(new ImageRecord
+        {
+            SourceId = _image.SourceId, Path = copyPath, FileSize = 5, ModifiedUtc = File.GetLastWriteTimeUtc(copyPath),
+            Sha256 = "identical-content", Status = ImageStatus.Active, IndexedUtc = DateTime.UtcNow
+        });
+        var repository = new VisionAnalysisRepository(_database);
+        using var analysis = new VisionAnalysisService(repository, new FakeFaceAnalyzer("model-1"));
+        await analysis.AnalyzeAsync([_image, copy]);
+
+        Assert.Equal(2, repository.GetFaceIds(_image.Id).Count + repository.GetFaceIds(copy.Id).Count);
+        Assert.Single(repository.GetUnassignedFaces());
+    }
+
+    [Fact]
     public async Task People_MergeMovesConfirmedFacesAndPreservesAliases()
     {
         var repository = new VisionAnalysisRepository(_database);

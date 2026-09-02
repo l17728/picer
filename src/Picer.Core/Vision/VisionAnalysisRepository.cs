@@ -123,16 +123,22 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
     public IReadOnlyList<UnassignedFaceRecord> GetUnassignedFaces(int limit = 500)
     {
         using var command = database.Command("""
+            WITH ranked_faces AS (
+                SELECT f.*, ROW_NUMBER() OVER (
+                    PARTITION BY COALESCE(i.sha256, printf('image:%d', i.id)), f.ordinal
+                    ORDER BY f.id) AS duplicate_rank
+                FROM detected_faces f JOIN images i ON i.id=f.image_id AND i.status='active'
+            )
             SELECT f.id, f.image_id, i.path, i.thumb_path, f.ordinal,
                    f.box_x, f.box_y, f.box_width, f.box_height, f.confidence,
                    CASE WHEN a.state='suggested' THEN a.person_id END,
                    CASE WHEN a.state='suggested' THEN p.display_name END
-            FROM detected_faces f
+            FROM ranked_faces f
             JOIN images i ON i.id=f.image_id AND i.status='active'
             LEFT JOIN face_person_assignments a ON a.face_id=f.id
             LEFT JOIN people p ON p.id=a.person_id
             LEFT JOIN face_review_states r ON r.face_id=f.id
-            WHERE (a.face_id IS NULL OR a.state='suggested') AND r.face_id IS NULL
+            WHERE f.duplicate_rank=1 AND (a.face_id IS NULL OR a.state='suggested') AND r.face_id IS NULL
             ORDER BY f.created_utc DESC, f.id DESC
             LIMIT $limit
             """);
@@ -154,10 +160,16 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
     public IReadOnlyList<UnassignedFaceRecord> GetConfirmedFaces(long personId, int limit = 500)
     {
         using var command = database.Command("""
+            WITH ranked_faces AS (
+                SELECT f.*, ROW_NUMBER() OVER (
+                    PARTITION BY COALESCE(i.sha256, printf('image:%d', i.id)), f.ordinal
+                    ORDER BY f.id) AS duplicate_rank
+                FROM detected_faces f JOIN images i ON i.id=f.image_id AND i.status='active'
+            )
             SELECT f.id, f.image_id, i.path, i.thumb_path, f.ordinal,
                    f.box_x, f.box_y, f.box_width, f.box_height, f.confidence
             FROM face_person_assignments a
-            JOIN detected_faces f ON f.id=a.face_id
+            JOIN ranked_faces f ON f.id=a.face_id AND f.duplicate_rank=1
             JOIN images i ON i.id=f.image_id AND i.status='active'
             WHERE a.person_id=$person AND a.state='confirmed'
             ORDER BY f.created_utc DESC, f.id DESC
@@ -178,12 +190,18 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
     public IReadOnlyList<UnassignedFaceRecord> GetPersonFaces(long personId, int limit = 500)
     {
         using var command = database.Command("""
+            WITH ranked_faces AS (
+                SELECT f.*, ROW_NUMBER() OVER (
+                    PARTITION BY COALESCE(i.sha256, printf('image:%d', i.id)), f.ordinal
+                    ORDER BY f.id) AS duplicate_rank
+                FROM detected_faces f JOIN images i ON i.id=f.image_id AND i.status='active'
+            )
             SELECT f.id, f.image_id, i.path, i.thumb_path, f.ordinal,
                    f.box_x, f.box_y, f.box_width, f.box_height, f.confidence,
                    CASE WHEN a.state='suggested' THEN a.person_id END,
                    CASE WHEN a.state='suggested' THEN p.display_name END
             FROM face_person_assignments a
-            JOIN detected_faces f ON f.id=a.face_id
+            JOIN ranked_faces f ON f.id=a.face_id AND f.duplicate_rank=1
             JOIN images i ON i.id=f.image_id AND i.status='active'
             JOIN people p ON p.id=a.person_id
             WHERE a.person_id=$person AND a.state IN ('confirmed','suggested')
@@ -206,10 +224,16 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
     public IReadOnlyList<UnassignedFaceRecord> GetIgnoredFaces(int limit = 500)
     {
         using var command = database.Command("""
+            WITH ranked_faces AS (
+                SELECT f.*, ROW_NUMBER() OVER (
+                    PARTITION BY COALESCE(i.sha256, printf('image:%d', i.id)), f.ordinal
+                    ORDER BY f.id) AS duplicate_rank
+                FROM detected_faces f JOIN images i ON i.id=f.image_id AND i.status='active'
+            )
             SELECT f.id, f.image_id, i.path, i.thumb_path, f.ordinal,
                    f.box_x, f.box_y, f.box_width, f.box_height, f.confidence
             FROM face_review_states r
-            JOIN detected_faces f ON f.id=r.face_id
+            JOIN ranked_faces f ON f.id=r.face_id AND f.duplicate_rank=1
             JOIN images i ON i.id=f.image_id AND i.status='active'
             WHERE r.state='ignored'
             ORDER BY r.updated_utc DESC, f.id DESC

@@ -3,6 +3,90 @@ using System.Text.Json;
 using Picer.Core.Data;
 using Picer.Core.Search;
 
+if (args.Length >= 2 && args[0] == "--face-diagnostics")
+{
+    using var diagnosticDb = new PicerDatabase(Path.GetFullPath(args[1]));
+    long Scalar(string sql)
+    {
+        using var command = diagnosticDb.Command(sql);
+        return Convert.ToInt64(command.ExecuteScalar());
+    }
+    var boxesByImage = new Dictionary<long, List<(long FaceId, double X, double Y, double W, double H, double Confidence)>>();
+    using (var boxes = diagnosticDb.Command("SELECT image_id,id,box_x,box_y,box_width,box_height,confidence FROM detected_faces ORDER BY image_id,id"))
+    using (var reader = boxes.ExecuteReader())
+        while (reader.Read())
+        {
+            var imageId = reader.GetInt64(0);
+            if (!boxesByImage.TryGetValue(imageId, out var values)) boxesByImage[imageId] = values = [];
+            values.Add((reader.GetInt64(1), reader.GetDouble(2), reader.GetDouble(3), reader.GetDouble(4), reader.GetDouble(5), reader.GetDouble(6)));
+        }
+    static double IntersectionOverUnion((long FaceId, double X, double Y, double W, double H, double Confidence) a,
+        (long FaceId, double X, double Y, double W, double H, double Confidence) b)
+    {
+        var intersection = Math.Max(0, Math.Min(a.X + a.W, b.X + b.W) - Math.Max(a.X, b.X)) *
+                           Math.Max(0, Math.Min(a.Y + a.H, b.Y + b.H) - Math.Max(a.Y, b.Y));
+        return intersection / Math.Max(double.Epsilon, a.W * a.H + b.W * b.H - intersection);
+    }
+    var overlappingPairs = boxesByImage.SelectMany(group => group.Value.SelectMany((face, index) =>
+            group.Value.Skip(index + 1).Select(other => (ImageId: group.Key, First: face.FaceId, Second: other.FaceId,
+                IoU: IntersectionOverUnion(face, other)))))
+        .Where(pair => pair.IoU >= 0.45).OrderByDescending(pair => pair.IoU).ToArray();
+    var report = new
+    {
+        detectedFaces = Scalar("SELECT COUNT(*) FROM detected_faces"),
+        unassignedRows = Scalar("""
+            SELECT COUNT(*) FROM detected_faces f
+            JOIN images i ON i.id=f.image_id AND i.status='active'
+            LEFT JOIN face_person_assignments a ON a.face_id=f.id
+            LEFT JOIN face_review_states r ON r.face_id=f.id
+            WHERE (a.face_id IS NULL OR a.state='suggested') AND r.face_id IS NULL
+            """),
+        duplicateUnassignedFaceIds = Scalar("""
+            SELECT COUNT(*) FROM (
+                SELECT f.id FROM detected_faces f
+                JOIN images i ON i.id=f.image_id AND i.status='active'
+                LEFT JOIN face_person_assignments a ON a.face_id=f.id
+                LEFT JOIN face_review_states r ON r.face_id=f.id
+                WHERE (a.face_id IS NULL OR a.state='suggested') AND r.face_id IS NULL
+                GROUP BY f.id HAVING COUNT(*) > 1)
+            """),
+        exactDuplicateBoxes = Scalar("""
+            SELECT COUNT(*) FROM detected_faces a JOIN detected_faces b
+              ON a.image_id=b.image_id AND a.id<b.id
+             AND a.box_x=b.box_x AND a.box_y=b.box_y AND a.box_width=b.box_width AND a.box_height=b.box_height
+            """),
+        nearDuplicateBoxes = Scalar("""
+            SELECT COUNT(*) FROM detected_faces a JOIN detected_faces b
+              ON a.image_id=b.image_id AND a.id<b.id
+             AND abs(a.box_x-b.box_x)<0.01 AND abs(a.box_y-b.box_y)<0.01
+             AND abs(a.box_width-b.box_width)<0.01 AND abs(a.box_height-b.box_height)<0.01
+            """),
+        duplicateActivePaths = Scalar("""
+            SELECT COUNT(*) FROM (SELECT path FROM images WHERE status='active' GROUP BY lower(path) HAVING COUNT(*)>1)
+            """),
+        duplicateContentGroups = Scalar("""
+            SELECT COUNT(*) FROM (SELECT sha256 FROM images WHERE status='active' AND sha256 IS NOT NULL GROUP BY sha256 HAVING COUNT(*)>1)
+            """),
+        facesFromDuplicateContent = Scalar("""
+            SELECT COUNT(*) FROM detected_faces f JOIN images i ON i.id=f.image_id
+            WHERE i.status='active' AND i.sha256 IN (
+                SELECT sha256 FROM images WHERE status='active' AND sha256 IS NOT NULL GROUP BY sha256 HAVING COUNT(*)>1)
+            """),
+        imagesWithMultipleUnassignedFaces = Scalar("""
+            SELECT COUNT(*) FROM (
+                SELECT f.image_id FROM detected_faces f
+                LEFT JOIN face_person_assignments a ON a.face_id=f.id
+                LEFT JOIN face_review_states r ON r.face_id=f.id
+                WHERE (a.face_id IS NULL OR a.state='suggested') AND r.face_id IS NULL
+                GROUP BY f.image_id HAVING COUNT(*)>1)
+            """),
+        overlappingFacePairs = overlappingPairs.Length,
+        overlapSamples = overlappingPairs.Take(20)
+    };
+    Console.WriteLine(JsonSerializer.Serialize(report, new JsonSerializerOptions { WriteIndented = true }));
+    return;
+}
+
 var count = args.Length > 0 && int.TryParse(args[0], out var parsed) ? parsed : 1_000;
 if (count is < 1 or > 1_000_000) throw new ArgumentOutOfRangeException(nameof(count));
 var iterations = args.Length > 1 && int.TryParse(args[1], out var parsedIterations) ? parsedIterations : 30;

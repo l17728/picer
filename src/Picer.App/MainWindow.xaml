@@ -375,7 +375,9 @@
                             </StackPanel>
                             <StackPanel DockPanel.Dock="Bottom" Margin="0,8,0,0">
                                 <TextBlock Text="待命名人物组" FontWeight="SemiBold" Margin="2,3"/>
-                                <ListBox Height="190" ItemsSource="{Binding CandidateClusters}" SelectedItem="{Binding SelectedCandidateCluster}">
+                                <ListBox x:Name="CandidateClustersList" Height="190" ItemsSource="{Binding CandidateClusters}"
+                                         SelectedItem="{Binding SelectedCandidateCluster}" PreviewMouseRightButtonDown="CandidateCluster_PreviewMouseRightButtonDown">
+                                    <ListBox.ContextMenu><ContextMenu Opened="CandidateClusterMenu_Opened"/></ListBox.ContextMenu>
                                     <ListBox.ItemTemplate><DataTemplate><DockPanel Margin="3">
                                         <Image Width="48" Height="48" Source="{Binding RepresentativeThumbnailPath}" Stretch="UniformToFill" Margin="0,0,8,0"/>
                                         <TextBlock Text="{Binding Summary}" VerticalAlignment="Center"/>

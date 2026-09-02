@@ -451,13 +451,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         var changed = 0;
         try
         {
-            changed = await UiWork.RunDatabaseAsync(() =>
-            {
-                var count = 0;
-                foreach (var faceId in faceIds)
-                    if (_peopleService.IgnoreFace(faceId)) count++;
-                return count;
-            });
+            changed = (await UiWork.RunDatabaseAsync("IgnoreFaces", () => _peopleService.IgnoreFaces(faceIds))).Changed;
             var verified = await UiWork.RunDatabaseAsync(() =>
                 _repository.GetIgnoredFaces(5000).Select(face => face.FaceId).ToHashSet());
             var missing = faceIds.Where(faceId => !verified.Contains(faceId)).ToArray();
@@ -480,6 +474,30 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
                 StatusText = $"所选 {faceIds.Length} 张人脸已是不分类；界面已重新同步";
             }
             else StatusText = $"移动到不分类失败：{exception.Message}";
+        }
+    }
+
+    public async Task IgnoreCandidateClusterAsync(CandidateClusterViewModel cluster)
+    {
+        var faceIds = cluster.Record.Faces.Select(face => face.FaceId).Distinct().ToArray();
+        if (faceIds.Length == 0) return;
+        if (SelectedCandidateCluster?.Record.Id == cluster.Record.Id)
+        {
+            RemoveFacesFromCurrentView(faceIds);
+            SelectedCandidateCluster = null;
+        }
+        CandidateClusters.Remove(cluster);
+        StatusText = $"候选人物已从界面移除，正在后台标记 {faceIds.Length} 张人脸为不分类…";
+        try
+        {
+            var result = await UiWork.RunDatabaseAsync("IgnoreCandidateCluster", () => _peopleService.IgnoreFaces(faceIds));
+            StatusText = $"已将整组 {result.Requested} 张人脸标记为不分类";
+        }
+        catch (Exception exception)
+        {
+            AppLogger.Error($"整组标记候选人物为不分类失败：{cluster.Record.Id}", exception);
+            StatusText = $"整组标记失败，正在恢复界面：{exception.Message}";
+            await RefreshAsync();
         }
     }
 

@@ -5,6 +5,7 @@ namespace Picer.Core.People;
 public sealed record PersonRecord(long Id, string DisplayName, string Description, IReadOnlyList<string> Aliases);
 public sealed record PersonSummary(long Id, string DisplayName, int ConfirmedFaceCount, int PhotoCount);
 public sealed record FaceMoveResult(int Requested, int Changed, int AlreadyAssigned);
+public sealed record FaceIgnoreResult(int Requested, int Changed, int AlreadyIgnored);
 public sealed record PersonQueryMention(PersonRecord Person, string MatchedName, string RemainingQuery);
 
 /// <summary>
@@ -235,39 +236,50 @@ public sealed class PeopleService(PicerDatabase database)
         transaction.Commit();
     }
 
-    public bool IgnoreFace(long faceId)
+    public bool IgnoreFace(long faceId) => IgnoreFaces([faceId]).Changed > 0;
+
+    public FaceIgnoreResult IgnoreFaces(IEnumerable<long> faceIds)
     {
+        var ids = faceIds.Distinct().ToArray();
+        if (ids.Length == 0) return new FaceIgnoreResult(0, 0, 0);
+        var changed = 0;
         using var transaction = database.BeginTransaction();
-        EnsureFaceExists(faceId, transaction);
-        using var currentReview = database.Command("SELECT state FROM face_review_states WHERE face_id=$face");
-        currentReview.Transaction = transaction;
-        currentReview.Parameters.AddWithValue("$face", faceId);
-        var wasIgnored = string.Equals(currentReview.ExecuteScalar() as string, "ignored", StringComparison.Ordinal);
-        using var old = database.Command("SELECT person_id FROM face_person_assignments WHERE face_id=$face");
-        old.Transaction = transaction;
-        old.Parameters.AddWithValue("$face", faceId);
-        var value = old.ExecuteScalar();
-        var oldPersonId = value is null ? (long?)null : Convert.ToInt64(value);
-        using var assignment = database.Command("DELETE FROM face_person_assignments WHERE face_id=$face");
-        assignment.Transaction = transaction;
-        assignment.Parameters.AddWithValue("$face", faceId);
-        assignment.ExecuteNonQuery();
-        using var candidate = database.Command("DELETE FROM face_candidate_members WHERE face_id=$face");
-        candidate.Transaction = transaction;
-        candidate.Parameters.AddWithValue("$face", faceId);
-        candidate.ExecuteNonQuery();
-        using var review = database.Command("""
-            INSERT INTO face_review_states(face_id,state,updated_utc) VALUES($face,'ignored',$now)
-            ON CONFLICT(face_id) DO UPDATE SET state='ignored',updated_utc=excluded.updated_utc
-            """);
-        review.Transaction = transaction;
-        review.Parameters.AddWithValue("$face", faceId);
-        review.Parameters.AddWithValue("$now", Format(DateTime.UtcNow));
-        review.ExecuteNonQuery();
-        if (!wasIgnored || oldPersonId is not null)
-            InsertCorrection(faceId, oldPersonId, null, "ignore", transaction);
+        foreach (var faceId in ids)
+        {
+            EnsureFaceExists(faceId, transaction);
+            using var currentReview = database.Command("SELECT state FROM face_review_states WHERE face_id=$face");
+            currentReview.Transaction = transaction;
+            currentReview.Parameters.AddWithValue("$face", faceId);
+            var wasIgnored = string.Equals(currentReview.ExecuteScalar() as string, "ignored", StringComparison.Ordinal);
+            using var old = database.Command("SELECT person_id FROM face_person_assignments WHERE face_id=$face");
+            old.Transaction = transaction;
+            old.Parameters.AddWithValue("$face", faceId);
+            var value = old.ExecuteScalar();
+            var oldPersonId = value is null ? (long?)null : Convert.ToInt64(value);
+            using var assignment = database.Command("DELETE FROM face_person_assignments WHERE face_id=$face");
+            assignment.Transaction = transaction;
+            assignment.Parameters.AddWithValue("$face", faceId);
+            assignment.ExecuteNonQuery();
+            using var candidate = database.Command("DELETE FROM face_candidate_members WHERE face_id=$face");
+            candidate.Transaction = transaction;
+            candidate.Parameters.AddWithValue("$face", faceId);
+            candidate.ExecuteNonQuery();
+            using var review = database.Command("""
+                INSERT INTO face_review_states(face_id,state,updated_utc) VALUES($face,'ignored',$now)
+                ON CONFLICT(face_id) DO UPDATE SET state='ignored',updated_utc=excluded.updated_utc
+                """);
+            review.Transaction = transaction;
+            review.Parameters.AddWithValue("$face", faceId);
+            review.Parameters.AddWithValue("$now", Format(DateTime.UtcNow));
+            review.ExecuteNonQuery();
+            if (!wasIgnored || oldPersonId is not null)
+            {
+                InsertCorrection(faceId, oldPersonId, null, "ignore", transaction);
+                changed++;
+            }
+        }
         transaction.Commit();
-        return !wasIgnored || oldPersonId is not null;
+        return new FaceIgnoreResult(ids.Length, changed, ids.Length - changed);
     }
 
     public PersonRecord? FindByName(string name)

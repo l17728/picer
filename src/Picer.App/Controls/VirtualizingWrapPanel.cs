@@ -41,6 +41,8 @@ public sealed class VirtualizingWrapPanel : VirtualizingPanel, IScrollInfo
         _extent = new Size(width, extentHeight);
         var height = double.IsFinite(availableSize.Height) ? availableSize.Height : _extent.Height;
         _viewport = new Size(width, height);
+        var maximumVerticalOffset = Math.Max(0, _extent.Height - _viewport.Height);
+        if (_offset.Y > maximumVerticalOffset) _offset.Y = maximumVerticalOffset;
         ScrollOwner?.InvalidateScrollInfo();
 
         var first = Array.FindIndex(_layouts, rect => rect.Bottom >= _offset.Y - ItemHeight);
