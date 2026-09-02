@@ -13,6 +13,37 @@ namespace Picer.E2E;
 public sealed class DesktopSmokeTests
 {
     [Fact]
+    public void FaceDetailWindow_ReadOnlyBindingsRenderWithoutDispatcherFailures()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "picer-face-detail-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var databasePath = Path.Combine(root, "picer.db");
+        SeedLibrary(databasePath, 1);
+        SeedPerson(databasePath);
+        Exception? failure = null;
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                using var db = new PicerDatabase(databasePath);
+                var repository = new Picer.Core.Vision.VisionAnalysisRepository(db);
+                var faceId = repository.GetFaceIds(db.GetImages(includeMissing: false).Single().Id).Single();
+                var window = new Picer.App.Views.FaceDetailWindow(db.GetImages(includeMissing: false).Single(), repository,
+                    new Picer.Core.People.PeopleService(db), faceId) { ShowInTaskbar = false };
+                window.Show();
+                window.UpdateLayout();
+                window.Close();
+            }
+            catch (Exception exception) { failure = exception; }
+        });
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        Assert.True(thread.Join(TimeSpan.FromSeconds(10)), "人脸详情窗口布局测试超时");
+        try { Assert.Null(failure); }
+        finally { try { Directory.Delete(root, true); } catch { } }
+    }
+
+    [Fact]
     public void VirtualizingFaceGrid_RapidRemovalsDoNotCorruptGenerator()
     {
         Exception? failure = null;

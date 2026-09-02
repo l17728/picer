@@ -1,4 +1,6 @@
+using System.Diagnostics;
 using System.Windows.Threading;
+using Picer.Core.Logging;
 
 namespace Picer.App.Infrastructure;
 
@@ -18,6 +20,39 @@ internal static class UiWork
         await DatabaseGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try { return await Task.Run(work, cancellationToken).ConfigureAwait(false); }
         finally { DatabaseGate.Release(); }
+    }
+
+    public static async Task<T> RunDatabaseAsync<T>(string operation, Func<T> work, CancellationToken cancellationToken = default)
+    {
+        var stopwatch = Stopwatch.StartNew();
+        await DatabaseGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        var queueMilliseconds = stopwatch.ElapsedMilliseconds;
+        try
+        {
+            var result = await Task.Run(work, cancellationToken).ConfigureAwait(false);
+            LogDatabaseTiming(operation, queueMilliseconds, stopwatch.ElapsedMilliseconds - queueMilliseconds);
+            return result;
+        }
+        finally { DatabaseGate.Release(); }
+    }
+
+    public static async Task RunDatabaseAsync(string operation, Action work, CancellationToken cancellationToken = default)
+    {
+        var stopwatch = Stopwatch.StartNew();
+        await DatabaseGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        var queueMilliseconds = stopwatch.ElapsedMilliseconds;
+        try
+        {
+            await Task.Run(work, cancellationToken).ConfigureAwait(false);
+            LogDatabaseTiming(operation, queueMilliseconds, stopwatch.ElapsedMilliseconds - queueMilliseconds);
+        }
+        finally { DatabaseGate.Release(); }
+    }
+
+    private static void LogDatabaseTiming(string operation, long queueMilliseconds, long executionMilliseconds)
+    {
+        if (queueMilliseconds >= 100 || executionMilliseconds >= 100)
+            AppLogger.Info($"DatabaseWork {operation}: queue={queueMilliseconds} ms; execute={executionMilliseconds} ms");
     }
 
     public static async Task RunDatabaseAsync(Action work, CancellationToken cancellationToken = default)

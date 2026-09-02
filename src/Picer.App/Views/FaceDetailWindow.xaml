@@ -28,9 +28,9 @@
                 <ListBox.ItemTemplate>
                     <DataTemplate>
                         <StackPanel Margin="4">
-                            <TextBlock FontWeight="SemiBold"><Run Text="人脸 #"/><Run Text="{Binding DisplayOrdinal}"/></TextBlock>
-                            <TextBlock Text="{Binding IdentityText}" Foreground="#555"/>
-                            <TextBlock Text="{Binding ConfidenceText}" Foreground="#777" FontSize="11"/>
+                            <TextBlock FontWeight="SemiBold"><Run Text="人脸 #"/><Run Text="{Binding DisplayOrdinal, Mode=OneWay}"/></TextBlock>
+                            <TextBlock Text="{Binding IdentityText, Mode=OneWay}" Foreground="#555"/>
+                            <TextBlock Text="{Binding ConfidenceText, Mode=OneWay}" Foreground="#777" FontSize="11"/>
                         </StackPanel>
                     </DataTemplate>
                 </ListBox.ItemTemplate>

@@ -351,15 +351,18 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
     {
         if (face.Record.SuggestedPersonId is not long personId) return;
         face.IsAutomaticSuggestion = false;
+        if (DisplayedCollectionKind is DisplayedFaceCollectionKind.Unassigned or DisplayedFaceCollectionKind.CandidateCluster)
+            RemoveFacesFromCurrentView([face.FaceId]);
         StatusText = "正在后台保存人工确认…";
         try
         {
-            await UiWork.RunDatabaseAsync(() => _peopleService.ConfirmFace(face.FaceId, personId));
+            await UiWork.RunDatabaseAsync("ConfirmAutomaticSuggestion", () => _peopleService.ConfirmFace(face.FaceId, personId));
             StatusText = "已确认该人脸，后续自动归类会将其作为人物参照";
         }
         catch (Exception exception)
         {
             face.IsAutomaticSuggestion = true;
+            RefreshDisplayedFaces();
             StatusText = $"确认人脸失败：{exception.Message}";
             AppLogger.Error($"确认自动人脸建议失败：{face.FaceId}", exception);
         }
@@ -372,7 +375,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         StatusText = "已从当前人物移除，正在后台保存拒绝标记…";
         try
         {
-            await UiWork.RunDatabaseAsync(() => _peopleService.MarkNotThisPerson(face.FaceId, personId));
+            await UiWork.RunDatabaseAsync("RejectAutomaticSuggestion", () => _peopleService.MarkNotThisPerson(face.FaceId, personId));
             StatusText = "已标记不是此人；请选择正确人物，或保留在待分类";
         }
         catch (Exception exception)
@@ -395,8 +398,16 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         try
         {
             var databaseStart = stopwatch.ElapsedMilliseconds;
-            var result = await UiWork.RunDatabaseAsync(() => _peopleService.MoveFaces(faceIds, person.Id));
+            var backgroundCompleted = Stopwatch.GetTimestamp();
+            var result = await UiWork.RunDatabaseAsync($"FaceMove#{operationId}", () =>
+            {
+                var value = _peopleService.MoveFaces(faceIds, person.Id);
+                backgroundCompleted = Stopwatch.GetTimestamp();
+                return value;
+            });
+            var uiResumeMilliseconds = Stopwatch.GetElapsedTime(backgroundCompleted).TotalMilliseconds;
             AppLogger.Info($"FaceMove #{operationId}: database batch completed in {stopwatch.ElapsedMilliseconds - databaseStart} ms; changed={result.Changed}; already-assigned={result.AlreadyAssigned}");
+            if (uiResumeMilliseconds >= 50) AppLogger.Info($"FaceMove #{operationId}: UI resume delay={uiResumeMilliseconds:F0} ms");
             var dropdownStart = stopwatch.ElapsedMilliseconds;
             await RefreshPeopleDropdownAsync(person.Id);
             AppLogger.Info($"FaceMove #{operationId}: dropdown refreshed in {stopwatch.ElapsedMilliseconds - dropdownStart} ms; total={stopwatch.ElapsedMilliseconds} ms");
@@ -419,11 +430,12 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
     {
         var faceIds = faces.Select(face => face.FaceId).Distinct().ToArray();
         if (faceIds.Length == 0) return;
-        await UiWork.RunDatabaseAsync(() =>
+        RemoveFacesFromCurrentView(faceIds);
+        StatusText = $"正在后台将 {faceIds.Length} 张人脸移到待分类…";
+        await UiWork.RunDatabaseAsync("MoveFacesToUnassigned", () =>
         {
             foreach (var faceId in faceIds) _peopleService.MoveFaceToUnassigned(faceId);
         });
-        RemoveFacesFromCurrentView(faceIds);
         StatusText = $"已将 {faceIds.Length} 张人脸移到待分类";
     }
 
@@ -434,6 +446,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
     {
         var faceIds = faces.Select(face => face.FaceId).Distinct().ToArray();
         if (faceIds.Length == 0) return;
+        RemoveFacesFromCurrentView(faceIds);
         StatusText = $"正在将 {faceIds.Length} 张人脸移到不分类…";
         var changed = 0;
         try
@@ -450,9 +463,6 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             var missing = faceIds.Where(faceId => !verified.Contains(faceId)).ToArray();
             if (missing.Length > 0)
                 throw new InvalidOperationException($"数据库复核失败，仍有 {missing.Length} 张人脸未进入不分类");
-            foreach (var item in DisplayedFaces.Where(item => faceIds.Contains(item.FaceId)).ToArray())
-                DisplayedFaces.Remove(item);
-            RemoveFacesFromCurrentView(faceIds);
             StatusText = changed == 0
                 ? $"所选 {faceIds.Length} 张人脸早已是不分类；界面已重新同步"
                 : $"已将 {changed} 张人脸移到不分类；后续自动归类会跳过";
