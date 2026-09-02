@@ -38,6 +38,8 @@
                  VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling"
                  VirtualizingPanel.IsVirtualizingWhenGrouping="True" ScrollViewer.IsDeferredScrollingEnabled="True"
                  MouseDoubleClick="List_MouseDoubleClick" KeyDown="List_KeyDown"
+                 PreviewMouseLeftButtonDown="List_PreviewMouseLeftButtonDown"
+                 PreviewMouseMove="List_PreviewMouseMove" PreviewMouseLeftButtonUp="List_PreviewMouseLeftButtonUp"
                  PreviewMouseRightButtonDown="List_PreviewMouseRightButtonDown">
             <ListBox.Style>
                 <Style TargetType="ListBox">

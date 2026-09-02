@@ -8,6 +8,10 @@ namespace Picer.App.Controls;
 
 public partial class PhotoGrid : UserControl
 {
+    private Point _dragStartPoint;
+    private int _dragStartIndex = -1;
+    private bool _dragSelecting;
+    private HashSet<object> _selectionBeforeDrag = [];
     public static readonly DependencyProperty ItemsSourceProperty = DependencyProperty.Register(nameof(ItemsSource), typeof(IEnumerable), typeof(PhotoGrid));
     public static readonly DependencyProperty SelectedItemProperty = DependencyProperty.Register(nameof(SelectedItem), typeof(object), typeof(PhotoGrid), new FrameworkPropertyMetadata(null, FrameworkPropertyMetadataOptions.BindsTwoWayByDefault));
     public static readonly DependencyProperty SelectedItemsTargetProperty = DependencyProperty.Register(nameof(SelectedItemsTarget), typeof(IList), typeof(PhotoGrid));
@@ -73,11 +77,57 @@ public partial class PhotoGrid : UserControl
             item.IsSelected = true;
         }
     }
+    private void List_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is not ListBox list || FindContainer(e.OriginalSource as DependencyObject) is not { } item ||
+            item.DataContext is not ImageItemViewModel) return;
+        _dragStartPoint = e.GetPosition(list);
+        _dragStartIndex = list.ItemContainerGenerator.IndexFromContainer(item);
+        _dragSelecting = false;
+        _selectionBeforeDrag = list.SelectedItems.Cast<object>().ToHashSet();
+    }
+
+    private void List_PreviewMouseMove(object sender, MouseEventArgs e)
+    {
+        if (sender is not ListBox list || e.LeftButton != MouseButtonState.Pressed || _dragStartIndex < 0) return;
+        var point = e.GetPosition(list);
+        if (!_dragSelecting && Math.Abs(point.X - _dragStartPoint.X) < SystemParameters.MinimumHorizontalDragDistance &&
+            Math.Abs(point.Y - _dragStartPoint.Y) < SystemParameters.MinimumVerticalDragDistance) return;
+        _dragSelecting = true;
+        if (FindContainer(e.OriginalSource as DependencyObject) is not { } item || item.DataContext is not ImageItemViewModel) return;
+        var currentIndex = list.ItemContainerGenerator.IndexFromContainer(item);
+        if (currentIndex < 0) return;
+        var additive = Keyboard.Modifiers.HasFlag(ModifierKeys.Control);
+        list.SelectedItems.Clear();
+        if (additive)
+            foreach (var selected in _selectionBeforeDrag.Where(list.Items.Contains)) list.SelectedItems.Add(selected);
+        var first = Math.Min(_dragStartIndex, currentIndex);
+        var last = Math.Max(_dragStartIndex, currentIndex);
+        for (var index = first; index <= last; index++)
+            if (list.Items[index] is ImageItemViewModel image && !list.SelectedItems.Contains(image))
+                list.SelectedItems.Add(image);
+        e.Handled = true;
+    }
+
+    private void List_PreviewMouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        _dragStartIndex = -1;
+        _dragSelecting = false;
+        _selectionBeforeDrag.Clear();
+    }
+
+    private static ListBoxItem? FindContainer(DependencyObject? element)
+    {
+        while (element is not null && element is not ListBoxItem)
+            element = System.Windows.Media.VisualTreeHelper.GetParent(element);
+        return element as ListBoxItem;
+    }
+
     private void List_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (SelectedItemsTarget is null || sender is not ListBox list) return;
         SelectedItemsTarget.Clear();
-        foreach (var item in list.SelectedItems) SelectedItemsTarget.Add(item);
+        foreach (var item in list.SelectedItems.OfType<ImageItemViewModel>()) SelectedItemsTarget.Add(item);
     }
     private void Thumbnail_Unloaded(object sender, RoutedEventArgs e)
     {
