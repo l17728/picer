@@ -5,11 +5,57 @@ using Picer.App.FileOperations;
 using Picer.Core.FileOperations;
 using Picer.Core.Hashing;
 using Picer.Core.Data;
+using Picer.Core.Models;
+using Picer.Core.Search;
 
 namespace Picer.E2E;
 
 public sealed class DesktopSmokeTests
 {
+    [Fact]
+    public void DirectoryBrowser_SourceAlbumsAndTimelineRootsAlwaysResolvePhotos()
+    {
+        var isolatedData = Path.Combine(Path.GetTempPath(), "picer-directory-ui-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(isolatedData);
+        SeedDirectoryBrowser(Path.Combine(isolatedData, "picer.db"), isolatedData);
+        var executable = Path.Combine(Path.GetDirectoryName(typeof(Picer.App.App).Assembly.Location)!, "Picer.App.exe");
+        using var process = Process.Start(new ProcessStartInfo(executable)
+        {
+            UseShellExecute = false,
+            Environment = { ["PICER_DATA_ROOT"] = isolatedData }
+        })!;
+        try
+        {
+            var window = WaitForWindow(process.Id, TimeSpan.FromSeconds(15));
+            Assert.NotNull(window);
+            var directoryTab = window!.FindAll(TreeScope.Descendants,
+                    new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.TabItem))
+                .Cast<AutomationElement>().First(item => item.Current.Name.Contains("目录浏览"));
+            ((SelectionItemPattern)directoryTab.GetCurrentPattern(SelectionItemPattern.Pattern)).Select();
+            var tree = WaitForElement(window, "目录树", TimeSpan.FromSeconds(5));
+            Assert.NotNull(tree);
+            foreach (var nodeName in new[] { "photos", "我的相册", "光锥之内", "2024年01月" })
+            {
+                var node = WaitForTreeItem(tree!, nodeName, TimeSpan.FromSeconds(8));
+                Assert.True(node is not null, $"目录树中未出现节点：{nodeName}");
+                if (node!.TryGetCurrentPattern(ExpandCollapsePattern.Pattern, out var expandPattern) &&
+                    ((ExpandCollapsePattern)expandPattern).Current.ExpandCollapseState == ExpandCollapseState.Collapsed)
+                {
+                    ((ExpandCollapsePattern)expandPattern).Expand();
+                }
+                ((SelectionItemPattern)node!.GetCurrentPattern(SelectionItemPattern.Pattern)).Select();
+                var grid = window.FindAll(TreeScope.Descendants,
+                        new PropertyCondition(AutomationElement.NameProperty, "图片网格"))
+                    .Cast<AutomationElement>().First(item => !item.Current.BoundingRectangle.IsEmpty);
+                Assert.NotEmpty(WaitForItems(grid, TimeSpan.FromSeconds(8)).Cast<AutomationElement>());
+            }
+        }
+        finally
+        {
+            if (!process.HasExited) { process.CloseMainWindow(); if (!process.WaitForExit(3000)) process.Kill(true); }
+            try { Directory.Delete(isolatedData, true); } catch { }
+        }
+    }
     [Fact]
     public void AllSafeFeatureWindows_InitializeWithRealApplicationServices()
     {
@@ -109,13 +155,13 @@ public sealed class DesktopSmokeTests
                 new PropertyCondition(AutomationElement.NameProperty, "图片网格")));
             Assert.NotNull(window.FindFirst(TreeScope.Descendants,
                 new PropertyCondition(AutomationElement.NameProperty, "添加文件夹")));
-            foreach (var entry in new[] { "重建索引", "检查缺失", "查找重复" })
+            foreach (var entry in new[] { "增量更新索引", "检查缺失" })
             {
                 Assert.True(WaitForElement(window, entry, TimeSpan.FromSeconds(5)) is not null,
                     $"主窗口缺少可访问功能入口：{entry}");
             }
             AssertMenuEntries(window, "文件菜单", "添加文件夹", "存储设置", "删除所选", "备份与恢复");
-            AssertMenuEntries(window, "AI 功能菜单", "云端分析设置", "描述选中照片", "任务中心",
+            AssertMenuEntries(window, "AI 功能菜单", "AI 模型设置", "描述选中照片", "任务中心",
                 "中文语义检索", "Florence 运行验证", "本地描述任务");
             AssertMenuEntries(window, "工具菜单", "查找重复", "运行组件", "诊断中心", "扫描视频");
             Assert.Contains("Picer", window.Current.Name);
@@ -191,14 +237,14 @@ public sealed class DesktopSmokeTests
             Assert.NotNull(pending);
             Assert.True(visible.Elapsed < TimeSpan.FromSeconds(2), $"人物页骨架显示耗时 {visible.Elapsed}");
 
-            var peopleList = WaitForElement(window, "已命名人物列表", TimeSpan.FromSeconds(5));
+            var peopleList = WaitForElement(window, "已命名人物下拉列表", TimeSpan.FromSeconds(5));
             Assert.NotNull(peopleList);
-            var personItem = peopleList!.FindAll(TreeScope.Descendants,
-                    new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.ListItem))
-                .Cast<AutomationElement>().FirstOrDefault(item => item.Current.Name.Contains("测试人物"));
+            Assert.True(peopleList!.TryGetCurrentPattern(ExpandCollapsePattern.Pattern, out var peopleExpand));
+            ((ExpandCollapsePattern)peopleExpand).Expand();
+            var personItem = WaitForSelectableItem("测试人物", TimeSpan.FromSeconds(5));
             Assert.NotNull(personItem);
-            Assert.True(personItem!.TryGetCurrentPattern(SelectionItemPattern.Pattern, out var personSelection));
-            ((SelectionItemPattern)personSelection).Select();
+            Assert.True(ActivateAutomationItem(personItem!), "已命名人物下拉项无法通过 UI 自动化选择");
+            ((ExpandCollapsePattern)peopleExpand).Collapse();
 
             var faces = WaitForElement(window, "人物人脸列表", TimeSpan.FromSeconds(5));
             Assert.NotNull(faces);
@@ -243,6 +289,66 @@ public sealed class DesktopSmokeTests
         return null;
     }
 
+    private static AutomationElement? WaitForTreeItem(AutomationElement tree, string text, TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        do
+        {
+            var item = tree.FindAll(TreeScope.Descendants,
+                    new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.TreeItem))
+                .Cast<AutomationElement>().FirstOrDefault(value => value.Current.Name.Contains(text, StringComparison.Ordinal));
+            if (item is not null) return item;
+            Thread.Sleep(100);
+        } while (DateTime.UtcNow < deadline);
+        return null;
+    }
+
+    private static AutomationElement? WaitForControlContainingName(
+        AutomationElement root, ControlType controlType, string text, TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        do
+        {
+            var item = root.FindAll(TreeScope.Descendants,
+                    new PropertyCondition(AutomationElement.ControlTypeProperty, controlType))
+                .Cast<AutomationElement>().FirstOrDefault(value => value.Current.Name.Contains(text, StringComparison.Ordinal));
+            if (item is not null) return item;
+            Thread.Sleep(100);
+        } while (DateTime.UtcNow < deadline);
+        return null;
+    }
+
+    private static bool ActivateAutomationItem(AutomationElement item)
+    {
+        if (item.TryGetCurrentPattern(SelectionItemPattern.Pattern, out var selection))
+        {
+            ((SelectionItemPattern)selection).Select();
+            return true;
+        }
+        if (item.TryGetCurrentPattern(InvokePattern.Pattern, out var invoke))
+        {
+            ((InvokePattern)invoke).Invoke();
+            return true;
+        }
+        return false;
+    }
+
+    private static AutomationElement? WaitForSelectableItem(string text, TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        do
+        {
+            var item = AutomationElement.RootElement.FindAll(TreeScope.Descendants,
+                    new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.ListItem))
+                .Cast<AutomationElement>().FirstOrDefault(value =>
+                    value.Current.Name.Contains(text, StringComparison.Ordinal) &&
+                    value.TryGetCurrentPattern(SelectionItemPattern.Pattern, out _));
+            if (item is not null) return item;
+            Thread.Sleep(100);
+        } while (DateTime.UtcNow < deadline);
+        return null;
+    }
+
     private static AutomationElementCollection WaitForItems(AutomationElement grid, TimeSpan timeout)
     {
         var condition = new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.ListItem);
@@ -264,10 +370,9 @@ public sealed class DesktopSmokeTests
         Assert.NotNull(menu);
         Assert.True(menu!.TryGetCurrentPattern(ExpandCollapsePattern.Pattern, out var pattern));
         ((ExpandCollapsePattern)pattern).Expand();
-        Thread.Sleep(100);
         foreach (var entry in entries)
-            Assert.NotNull(AutomationElement.RootElement.FindFirst(TreeScope.Descendants,
-                new PropertyCondition(AutomationElement.NameProperty, entry)));
+            Assert.True(WaitForElement(AutomationElement.RootElement, entry, TimeSpan.FromSeconds(2)) is not null,
+                $"{menuName} 缺少菜单项：{entry}");
         ((ExpandCollapsePattern)pattern).Collapse();
     }
 
@@ -308,5 +413,26 @@ public sealed class DesktopSmokeTests
         var faceId = (long)insert.ExecuteScalar()!;
         var people = new Picer.Core.People.PeopleService(db);
         people.ConfirmFace(faceId, people.Create("测试人物").Id);
+    }
+
+    private static void SeedDirectoryBrowser(string path, string root)
+    {
+        var photos = Path.Combine(root, "photos"); Directory.CreateDirectory(photos);
+        using var db = new PicerDatabase(path);
+        var source = db.AddSource(photos);
+        var records = Enumerable.Range(1, 3).Select(index => db.UpsertImage(new ImageRecord
+        {
+            SourceId = source.Id, Path = Path.Combine(photos, $"timeline-{index}.jpg"), FileSize = 100,
+            ModifiedUtc = new DateTime(2024, 1, index, 12, 0, 0, DateTimeKind.Utc),
+            TakenUtc = new DateTime(2024, 1, index, 12, 0, 0, DateTimeKind.Utc),
+            IndexedUtc = DateTime.UtcNow, Status = ImageStatus.Active
+        })).ToArray();
+        var regular = SemanticEngine.AddAlbum(db, "回归相册");
+        var timeline = SemanticEngine.AddAlbum(db, "2024年01月", "时间线相册（自动生成）");
+        foreach (var image in records)
+        {
+            SemanticEngine.AddToAlbum(db, regular.Id, image.Id);
+            SemanticEngine.AddToAlbum(db, timeline.Id, image.Id);
+        }
     }
 }

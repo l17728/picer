@@ -1099,7 +1099,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         var snapshot = await UiWork.RunDatabaseAsync(() => (
             Sources: _db.GetSources().ToArray(),
             Albums: SemanticEngine.GetAlbums(_db)
-                .Select(album => (Album: album, Count: SemanticEngine.GetAlbumImageCount(_db, album.Id))).ToArray(),
+                .Select(album => (Album: album, Images: SemanticEngine.GetAlbumImages(_db, album.Id).ToArray())).ToArray(),
             Locations: _db.GetImageLocationHierarchyRows().ToArray()));
         DirectoryTree.Clear();
         foreach (var source in snapshot.Sources)
@@ -1120,24 +1120,26 @@ public partial class MainViewModel : ObservableObject, IDisposable
         var albumsRoot = new DirectoryNodeViewModel
         {
             Name = "我的相册", Icon = "📚", IsAlbumRoot = true, IsExpanded = true,
-            ImageCount = regularAlbums.Sum(item => item.Count)
+            ImageCount = regularAlbums.Sum(item => item.Images.Length),
+            AnchorImageIds = regularAlbums.SelectMany(item => item.Images).Select(image => image.Id).Distinct().ToArray()
         };
         foreach (var item in regularAlbums)
             albumsRoot.Children.Add(new DirectoryNodeViewModel
             {
-                Name = item.Album.Name, Icon = "🖼", AlbumId = item.Album.Id, ImageCount = item.Count
+                Name = item.Album.Name, Icon = "🖼", AlbumId = item.Album.Id, ImageCount = item.Images.Length
             });
         DirectoryTree.Add(albumsRoot);
 
         var lightConeRoot = new DirectoryNodeViewModel
         {
-            Name = "光锥之内", Icon = "⌛", IsAlbumRoot = true, IsExpanded = true,
-            ImageCount = timelineAlbums.Sum(item => item.Count)
+            Name = "光锥之内", Icon = "⌛", IsAlbumRoot = true, IsExpanded = true, IsTimelineAlbum = true,
+            ImageCount = timelineAlbums.Sum(item => item.Images.Length),
+            AnchorImageIds = timelineAlbums.SelectMany(item => item.Images).Select(image => image.Id).Distinct().ToArray()
         };
         foreach (var item in timelineAlbums)
             lightConeRoot.Children.Add(new DirectoryNodeViewModel
             {
-                Name = item.Album.Name, Icon = "🕰", AlbumId = item.Album.Id, ImageCount = item.Count,
+                Name = item.Album.Name, Icon = "🕰", AlbumId = item.Album.Id, ImageCount = item.Images.Length,
                 IsTimelineAlbum = true
             });
         DirectoryTree.Add(lightConeRoot);
@@ -1493,13 +1495,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
         PrepareDirectoryTimelineForLoading();
         try
         {
-            if (selectedDirectory.IsAlbumRoot)
+            if (selectedDirectory.IsAlbumRoot && selectedDirectory.AnchorImageIds.Count == 0)
             {
                 OnPropertyChanged(nameof(DirectoryImageCount));
                 StatusText = $"请选择“{selectedDirectory.Name}”下的一个相册";
                 return;
             }
-            var records = await UiWork.RunDatabaseAsync(() => selectedDirectory.IsSceneAnchor || selectedDirectory.IsGeoNode
+            var records = await UiWork.RunDatabaseAsync(() => selectedDirectory.IsSceneAnchor || selectedDirectory.IsGeoNode || selectedDirectory.IsAlbumRoot
                 ? selectedDirectory.AnchorImageIds.Select(id => _db.GetImage(id)).Where(image => image is not null).Cast<ImageRecord>()
                     .OrderBy(SceneTimeClusterService.EffectiveTime).ThenBy(image => image.Id).ToList()
                 : selectedDirectory.AlbumId is { } albumId
@@ -1525,7 +1527,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             OnPropertyChanged(nameof(DirectoryImageCount));
             StatusText = $"[{selectedDirectory.Name}] 已显示 {DirectoryImages.Count} 张索引照片";
 
-            var unindexedFiles = selectedDirectory.IsSceneAnchor || selectedDirectory.IsGeoNode || selectedDirectory.AlbumId is not null ? [] : await Task.Run(() =>
+            var unindexedFiles = selectedDirectory.IsSceneAnchor || selectedDirectory.IsGeoNode || selectedDirectory.IsAlbumRoot || selectedDirectory.AlbumId is not null ? [] : await Task.Run(() =>
             {
                 var options = new EnumerationOptions
                 {

@@ -71,7 +71,7 @@ public sealed class LifecycleScenarioTests : IDisposable
             var archive = Path.Combine(_root, "library.picer-backup");
             await new DataProtectionService(database, data).CreateBackupAsync(archive);
             var manifest = DataProtectionService.ValidateBackup(archive);
-            Assert.Equal(19, manifest.DatabaseVersion);
+            Assert.Equal(PicerDatabase.CurrentSchemaVersion, manifest.DatabaseVersion);
             Assert.Contains("picer.db", manifest.Entries);
 
             using var zip = ZipFile.OpenRead(archive);

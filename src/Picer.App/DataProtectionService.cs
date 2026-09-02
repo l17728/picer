@@ -56,7 +56,8 @@ public sealed class DataProtectionService(PicerDatabase database, string dataRoo
         PicerBackupManifest manifest;
         using (var stream = manifestEntry.Open()) manifest = JsonSerializer.Deserialize<PicerBackupManifest>(stream) ?? throw new InvalidDataException("备份清单无法读取。");
         if (manifest.FormatVersion != 1) throw new InvalidDataException($"不支持的备份格式：{manifest.FormatVersion}。");
-        if (manifest.DatabaseVersion > 19) throw new InvalidDataException($"备份数据库版本 {manifest.DatabaseVersion} 高于当前程序支持的 v19。");
+        if (manifest.DatabaseVersion > PicerDatabase.CurrentSchemaVersion)
+            throw new InvalidDataException($"备份数据库版本 {manifest.DatabaseVersion} 高于当前程序支持的 v{PicerDatabase.CurrentSchemaVersion}。");
         foreach (var name in manifest.Entries)
         {
             if (name.Contains("..", StringComparison.Ordinal) || Path.IsPathRooted(name) || archive.GetEntry(name) is null) throw new InvalidDataException("备份包含无效路径或缺失文件。");

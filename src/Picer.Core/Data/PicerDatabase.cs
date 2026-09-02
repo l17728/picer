@@ -6,6 +6,7 @@ namespace Picer.Core.Data;
 
 public sealed class PicerDatabase : IDisposable
 {
+    public const int CurrentSchemaVersion = 20;
     private readonly SqliteConnection _conn;
     private readonly string _connectionString;
 

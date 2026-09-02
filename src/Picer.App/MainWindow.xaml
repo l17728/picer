@@ -191,7 +191,7 @@
 
                     <Grid Grid.Column="0">
                         <Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-                    <TreeView x:Name="DirectoryTreeView" Grid.Row="0" Margin="4"
+                    <TreeView x:Name="DirectoryTreeView" Grid.Row="0" Margin="4" AutomationProperties.Name="目录树"
                               ItemsSource="{Binding DirectoryTree}"
                               SelectedItemChanged="DirectoryTree_SelectedItemChanged" PreviewMouseRightButtonDown="DirectoryTree_PreviewMouseRightButtonDown">
                         <TreeView.ContextMenu><ContextMenu Opened="DirectoryContextMenu_Opened">
@@ -209,6 +209,7 @@
                             <Style TargetType="TreeViewItem">
                                 <Setter Property="IsExpanded" Value="{Binding IsExpanded}"/>
                                 <Setter Property="IsSelected" Value="{Binding IsSelected, Mode=TwoWay}"/>
+                                <Setter Property="AutomationProperties.Name" Value="{Binding Name}"/>
                             </Style>
                         </TreeView.ItemContainerStyle>
                         <TreeView.Resources>

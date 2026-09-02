@@ -21,7 +21,7 @@ public sealed class DataProtectionTests : IDisposable
         await service.CreateBackupAsync(archive);
         var manifest = DataProtectionService.ValidateBackup(archive);
         Assert.Equal(1, manifest.FormatVersion);
-        Assert.Equal(19, manifest.DatabaseVersion);
+        Assert.Equal(PicerDatabase.CurrentSchemaVersion, manifest.DatabaseVersion);
         Assert.Contains("picer.db", manifest.Entries);
         Assert.Contains("directory-classification.json", manifest.Entries);
     }
