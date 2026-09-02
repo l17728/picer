@@ -24,6 +24,7 @@ public sealed class VirtualizingWrapPanel : VirtualizingPanel, IScrollInfo
     private Point _offset;
     private int _itemsPerRow = 1;
     private bool _generatorRetryScheduled;
+    private bool _cleanupInProgress;
     private Rect[] _layouts = [];
 
     protected override Size MeasureOverride(Size availableSize)
@@ -117,15 +118,28 @@ public sealed class VirtualizingWrapPanel : VirtualizingPanel, IScrollInfo
 
     private void CleanupOutsideRange(IItemContainerGenerator generator, int firstIndex, int lastIndex)
     {
-        for (var childIndex = InternalChildren.Count - 1; childIndex >= 0; childIndex--)
+        if (_cleanupInProgress) return;
+        _cleanupInProgress = true;
+        try
         {
-            var itemIndex = IndexFromContainer(InternalChildren[childIndex]);
-            if (itemIndex < firstIndex || itemIndex > lastIndex)
+            for (var childIndex = InternalChildren.Count - 1; childIndex >= 0; childIndex--)
             {
-                generator.Remove(new GeneratorPosition(childIndex, 0), 1);
+                var itemIndex = IndexFromContainer(InternalChildren[childIndex]);
+                if (itemIndex >= firstIndex && itemIndex <= lastIndex) continue;
+
+                // A collection change can detach a visual before the next measure.
+                // In that case it no longer has a generator position and only the
+                // stale visual must be removed.  childIndex is not a generator
+                // position when the realized range starts after item zero.
+                var position = itemIndex >= 0
+                    ? generator.GeneratorPositionFromIndex(itemIndex)
+                    : new GeneratorPosition(-1, 0);
+                if (position.Index >= 0 && position.Offset == 0)
+                    generator.Remove(position, 1);
                 RemoveInternalChildRange(childIndex, 1);
             }
         }
+        finally { _cleanupInProgress = false; }
     }
 
     protected override Size ArrangeOverride(Size finalSize)

@@ -13,6 +13,44 @@ namespace Picer.E2E;
 public sealed class DesktopSmokeTests
 {
     [Fact]
+    public void VirtualizingFaceGrid_RapidRemovalsDoNotCorruptGenerator()
+    {
+        Exception? failure = null;
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                var items = new System.Collections.ObjectModel.ObservableCollection<int>(Enumerable.Range(0, 300));
+                var list = new System.Windows.Controls.ListBox
+                {
+                    Width = 700, Height = 420, ItemsSource = items,
+                    ItemsPanel = new System.Windows.Controls.ItemsPanelTemplate(
+                        new System.Windows.FrameworkElementFactory(typeof(Picer.App.Controls.VirtualizingWrapPanel)))
+                };
+                System.Windows.Controls.ScrollViewer.SetCanContentScroll(list, true);
+                System.Windows.Controls.VirtualizingPanel.SetIsVirtualizing(list, true);
+                var window = new System.Windows.Window { Width = 720, Height = 460, Content = list, ShowInTaskbar = false };
+                window.Show();
+                window.UpdateLayout();
+                list.ScrollIntoView(items[220]);
+                window.UpdateLayout();
+                for (var round = 0; round < 6; round++)
+                {
+                    foreach (var value in items.Skip(30).Take(3).ToArray()) items.Remove(value);
+                    window.UpdateLayout();
+                }
+                Assert.Equal(282, items.Count);
+                window.Close();
+            }
+            catch (Exception exception) { failure = exception; }
+        });
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        Assert.True(thread.Join(TimeSpan.FromSeconds(15)), "连续移除人脸后的虚拟布局测试超时");
+        Assert.Null(failure);
+    }
+
+    [Fact]
     public void DirectoryBrowser_SourceAlbumsAndTimelineRootsAlwaysResolvePhotos()
     {
         var isolatedData = Path.Combine(Path.GetTempPath(), "picer-directory-ui-" + Guid.NewGuid().ToString("N"));
@@ -34,6 +72,16 @@ public sealed class DesktopSmokeTests
             ((SelectionItemPattern)directoryTab.GetCurrentPattern(SelectionItemPattern.Pattern)).Select();
             var tree = WaitForElement(window, "目录树", TimeSpan.FromSeconds(5));
             Assert.NotNull(tree);
+            Assert.Equal(new[] { "photos", "我的相册", "光锥之内", "太阳系第三行星（地球）" },
+                WaitForDirectTreeItemNames(tree!, 4, TimeSpan.FromSeconds(8)));
+
+            AssertDirectChildren(tree, "photos", new[] { "archive" });
+            AssertDirectChildren(tree, "我的相册", new[] { "回归相册" });
+            AssertDirectChildren(tree, "光锥之内", new[] { "2024年01月" });
+            AssertDirectChildren(tree, "太阳系第三行星（地球）", new[] { "未知位置", "中国" });
+            AssertDirectChildren(tree, "中国", new[] { "陕西省" });
+            AssertDirectChildren(tree, "陕西省", new[] { "西安市" });
+
             foreach (var nodeName in new[] { "photos", "我的相册", "光锥之内", "2024年01月" })
             {
                 var node = WaitForTreeItem(tree!, nodeName, TimeSpan.FromSeconds(8));
@@ -49,6 +97,8 @@ public sealed class DesktopSmokeTests
                     .Cast<AutomationElement>().First(item => !item.Current.BoundingRectangle.IsEmpty);
                 Assert.NotEmpty(WaitForItems(grid, TimeSpan.FromSeconds(8)).Cast<AutomationElement>());
             }
+            Assert.Equal(new[] { "photos", "我的相册", "光锥之内", "太阳系第三行星（地球）" },
+                WaitForDirectTreeItemNames(tree, 4, TimeSpan.FromSeconds(2)));
         }
         finally
         {
@@ -251,6 +301,16 @@ public sealed class DesktopSmokeTests
             Assert.Contains("双击打开关联照片", faces!.Current.HelpText);
             Assert.Contains("右击", faces.Current.HelpText);
             Assert.NotEmpty(WaitForItems(faces, TimeSpan.FromSeconds(5)).Cast<AutomationElement>());
+
+            var newPersonName = WaitForElement(window, "新人物名称", TimeSpan.FromSeconds(3));
+            var createPerson = WaitForElement(window, "只新建人物", TimeSpan.FromSeconds(3));
+            Assert.NotNull(newPersonName);
+            Assert.NotNull(createPerson);
+            ((ValuePattern)newPersonName!.GetCurrentPattern(ValuePattern.Pattern)).SetValue("空人物回归");
+            ((InvokePattern)createPerson!.GetCurrentPattern(InvokePattern.Pattern)).Invoke();
+            ((ExpandCollapsePattern)peopleExpand).Expand();
+            Assert.True(WaitForSelectableItem("空人物回归", TimeSpan.FromSeconds(5)) is not null,
+                "新建空人物后没有立即出现在已命名人物下拉列表");
         }
         finally
         {
@@ -301,6 +361,31 @@ public sealed class DesktopSmokeTests
             Thread.Sleep(100);
         } while (DateTime.UtcNow < deadline);
         return null;
+    }
+
+    private static string[] WaitForDirectTreeItemNames(AutomationElement parent, int count, TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        string[] names;
+        do
+        {
+            names = parent.FindAll(TreeScope.Children,
+                    new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.TreeItem))
+                .Cast<AutomationElement>().Select(item => item.Current.Name).ToArray();
+            if (names.Length == count) return names;
+            Thread.Sleep(100);
+        } while (DateTime.UtcNow < deadline);
+        return names;
+    }
+
+    private static void AssertDirectChildren(AutomationElement tree, string parentName, string[] expectedNames)
+    {
+        var parent = WaitForTreeItem(tree, parentName, TimeSpan.FromSeconds(5));
+        Assert.True(parent is not null, $"目录树中未出现父节点：{parentName}");
+        if (parent!.TryGetCurrentPattern(ExpandCollapsePattern.Pattern, out var pattern) &&
+            ((ExpandCollapsePattern)pattern).Current.ExpandCollapseState == ExpandCollapseState.Collapsed)
+            ((ExpandCollapsePattern)pattern).Expand();
+        Assert.Equal(expectedNames, WaitForDirectTreeItemNames(parent, expectedNames.Length, TimeSpan.FromSeconds(5)));
     }
 
     private static AutomationElement? WaitForControlContainingName(
@@ -418,6 +503,8 @@ public sealed class DesktopSmokeTests
     private static void SeedDirectoryBrowser(string path, string root)
     {
         var photos = Path.Combine(root, "photos"); Directory.CreateDirectory(photos);
+        var archive = Path.Combine(photos, "archive"); Directory.CreateDirectory(archive);
+        File.WriteAllBytes(Path.Combine(archive, "nested.jpg"), [0x01, 0x02, 0x03]);
         using var db = new PicerDatabase(path);
         var source = db.AddSource(photos);
         var records = Enumerable.Range(1, 3).Select(index => db.UpsertImage(new ImageRecord
@@ -434,5 +521,7 @@ public sealed class DesktopSmokeTests
             SemanticEngine.AddToAlbum(db, regular.Id, image.Id);
             SemanticEngine.AddToAlbum(db, timeline.Id, image.Id);
         }
+        db.SetImageLocation(records[0].Id,
+            new LocationHierarchyChoice("中国 / 陕西省 / 西安市", "中国", "陕西省", "西安市"));
     }
 }

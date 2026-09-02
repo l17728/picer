@@ -192,6 +192,25 @@ public sealed class VisionAnalysisTests : IDisposable
     }
 
     [Fact]
+    public async Task People_BatchMoveIsIdempotentAndReportsStaleUiAssignments()
+    {
+        var repository = new VisionAnalysisRepository(_database);
+        using var analysis = new VisionAnalysisService(repository, new FakeFaceAnalyzer("model-1"));
+        await analysis.AnalyzeAsync([_image]);
+        var faceId = Assert.Single(repository.GetFaceIds(_image.Id));
+        var people = new PeopleService(_database);
+        var person = people.Create("目标人物");
+
+        var first = people.MoveFaces([faceId], person.Id);
+        var repeated = people.MoveFaces([faceId], person.Id);
+
+        Assert.Equal(new FaceMoveResult(1, 1, 0), first);
+        Assert.Equal(new FaceMoveResult(1, 0, 1), repeated);
+        Assert.Empty(repository.GetUnassignedFaces());
+        Assert.Equal(faceId, Assert.Single(repository.GetConfirmedFaces(person.Id)).FaceId);
+    }
+
+    [Fact]
     public async Task People_MergeMovesConfirmedFacesAndPreservesAliases()
     {
         var repository = new VisionAnalysisRepository(_database);

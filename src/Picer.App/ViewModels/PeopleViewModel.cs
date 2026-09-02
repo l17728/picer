@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using System.IO;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -14,6 +15,7 @@ namespace Picer.App.ViewModels;
 
 public partial class PeopleViewModel : ObservableObject, IDisposable
 {
+    private static long _faceMoveOperationId;
     private readonly PicerDatabase _database;
     private readonly PeopleService _peopleService;
     private readonly VisionAnalysisRepository _repository;
@@ -224,7 +226,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             var name = NewPersonName;
             var person = await UiWork.RunDatabaseAsync(() => _peopleService.Create(name));
             NewPersonName = "";
-            await RefreshAsync();
+            await RefreshPeopleDropdownAsync(person.Id);
             SelectedPerson = People.FirstOrDefault(value => value.Id == person.Id);
             StatusText = $"已创建人物“{person.DisplayName}”";
         }
@@ -345,16 +347,69 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
     public async Task MoveFaceToPersonAsync(UnassignedFaceViewModel face, PersonSummary person)
         => await MoveFacesToPersonAsync([face], person);
 
+    public async Task ConfirmAutomaticSuggestionAsync(UnassignedFaceViewModel face)
+    {
+        if (face.Record.SuggestedPersonId is not long personId) return;
+        face.IsAutomaticSuggestion = false;
+        StatusText = "正在后台保存人工确认…";
+        try
+        {
+            await UiWork.RunDatabaseAsync(() => _peopleService.ConfirmFace(face.FaceId, personId));
+            StatusText = "已确认该人脸，后续自动归类会将其作为人物参照";
+        }
+        catch (Exception exception)
+        {
+            face.IsAutomaticSuggestion = true;
+            StatusText = $"确认人脸失败：{exception.Message}";
+            AppLogger.Error($"确认自动人脸建议失败：{face.FaceId}", exception);
+        }
+    }
+
+    public async Task RejectAutomaticSuggestionAsync(UnassignedFaceViewModel face)
+    {
+        if (face.Record.SuggestedPersonId is not long personId) return;
+        RemoveFacesFromCurrentView([face.FaceId]);
+        StatusText = "已从当前人物移除，正在后台保存拒绝标记…";
+        try
+        {
+            await UiWork.RunDatabaseAsync(() => _peopleService.MarkNotThisPerson(face.FaceId, personId));
+            StatusText = "已标记不是此人；请选择正确人物，或保留在待分类";
+        }
+        catch (Exception exception)
+        {
+            RefreshDisplayedFaces();
+            StatusText = $"拒绝自动建议失败，界面正在恢复：{exception.Message}";
+            AppLogger.Error($"拒绝自动人脸建议失败：{face.FaceId}", exception);
+        }
+    }
+
     public async Task MoveFacesToPersonAsync(IReadOnlyCollection<UnassignedFaceViewModel> faces, PersonSummary person)
     {
+        var operationId = Interlocked.Increment(ref _faceMoveOperationId);
+        var stopwatch = Stopwatch.StartNew();
         var faceIds = faces.Select(face => face.FaceId).Distinct().ToArray();
         if (faceIds.Length == 0) return;
-        await UiWork.RunDatabaseAsync(() =>
-        {
-            foreach (var faceId in faceIds) _peopleService.MoveFace(faceId, person.Id);
-        });
         RemoveFacesFromCurrentView(faceIds);
-        StatusText = $"已将 {faceIds.Length} 张人脸移到“{person.DisplayName}”";
+        AppLogger.Info($"FaceMove #{operationId}: UI removed {faceIds.Length} faces in {stopwatch.ElapsedMilliseconds} ms; target={person.Id}");
+        StatusText = $"正在后台将 {faceIds.Length} 张人脸移到“{person.DisplayName}”…";
+        try
+        {
+            var databaseStart = stopwatch.ElapsedMilliseconds;
+            var result = await UiWork.RunDatabaseAsync(() => _peopleService.MoveFaces(faceIds, person.Id));
+            AppLogger.Info($"FaceMove #{operationId}: database batch completed in {stopwatch.ElapsedMilliseconds - databaseStart} ms; changed={result.Changed}; already-assigned={result.AlreadyAssigned}");
+            var dropdownStart = stopwatch.ElapsedMilliseconds;
+            await RefreshPeopleDropdownAsync(person.Id);
+            AppLogger.Info($"FaceMove #{operationId}: dropdown refreshed in {stopwatch.ElapsedMilliseconds - dropdownStart} ms; total={stopwatch.ElapsedMilliseconds} ms");
+            StatusText = result.AlreadyAssigned == 0
+                ? $"已将 {result.Changed} 张人脸移到“{person.DisplayName}”"
+                : $"已同步到“{person.DisplayName}”：新移动 {result.Changed} 张，原本已归类 {result.AlreadyAssigned} 张";
+        }
+        catch (Exception exception)
+        {
+            AppLogger.Error($"批量移动人脸到人物失败：{string.Join(',', faceIds)}", exception);
+            RefreshDisplayedFaces();
+            StatusText = $"移动到“{person.DisplayName}”失败，界面正在恢复：{exception.Message}";
+        }
     }
 
     public async Task MoveFaceToUnassignedAsync(UnassignedFaceViewModel face)
@@ -736,6 +791,9 @@ public partial class UnassignedFaceViewModel(UnassignedFaceRecord record, string
 
     [ObservableProperty]
     private string? _faceThumbnailPath = initialThumbnailPath;
+
+    [ObservableProperty]
+    private bool _isAutomaticSuggestion = record.SuggestedPersonId is not null;
 }
 
 public partial class CandidateClusterViewModel(FaceCandidateClusterRecord record) : ObservableObject

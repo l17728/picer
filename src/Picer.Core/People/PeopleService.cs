@@ -4,6 +4,7 @@ namespace Picer.Core.People;
 
 public sealed record PersonRecord(long Id, string DisplayName, string Description, IReadOnlyList<string> Aliases);
 public sealed record PersonSummary(long Id, string DisplayName, int ConfirmedFaceCount, int PhotoCount);
+public sealed record FaceMoveResult(int Requested, int Changed, int AlreadyAssigned);
 public sealed record PersonQueryMention(PersonRecord Person, string MatchedName, string RemainingQuery);
 
 /// <summary>
@@ -173,30 +174,44 @@ public sealed class PeopleService(PicerDatabase database)
     }
 
     public void MoveFace(long faceId, long newPersonId)
-    {
-        using var old = database.Command("SELECT person_id FROM face_person_assignments WHERE face_id=$face");
-        old.Parameters.AddWithValue("$face", faceId);
-        var oldValue = old.ExecuteScalar();
-        var oldPersonId = oldValue is null ? (long?)null : Convert.ToInt64(oldValue);
+        => MoveFaces([faceId], newPersonId);
 
+    public FaceMoveResult MoveFaces(IEnumerable<long> faceIds, long newPersonId)
+    {
+        var ids = faceIds.Distinct().ToArray();
+        if (ids.Length == 0) return new FaceMoveResult(0, 0, 0);
+        var alreadyAssigned = 0;
         using var transaction = database.BeginTransaction();
-        EnsureFaceExists(faceId, transaction);
         EnsurePersonExists(newPersonId, transaction);
-        AssignCore(faceId, newPersonId, "confirmed", "user", null, transaction);
-        if (oldPersonId is not null && oldPersonId != newPersonId)
+        foreach (var faceId in ids)
         {
-            using var reject = database.Command("""
-                INSERT OR IGNORE INTO face_person_rejections(face_id, person_id, created_utc)
-                VALUES($face, $person, $now)
-                """);
-            reject.Transaction = transaction;
-            reject.Parameters.AddWithValue("$face", faceId);
-            reject.Parameters.AddWithValue("$person", oldPersonId.Value);
-            reject.Parameters.AddWithValue("$now", Format(DateTime.UtcNow));
-            reject.ExecuteNonQuery();
+            EnsureFaceExists(faceId, transaction);
+            using var old = database.Command("SELECT person_id,state FROM face_person_assignments WHERE face_id=$face");
+            old.Transaction = transaction;
+            old.Parameters.AddWithValue("$face", faceId);
+            using var oldReader = old.ExecuteReader();
+            var hasOld = oldReader.Read();
+            var oldPersonId = hasOld ? oldReader.GetInt64(0) : (long?)null;
+            var wasAlreadyAssigned = hasOld && oldPersonId == newPersonId && oldReader.GetString(1) == "confirmed";
+            oldReader.Close();
+            if (wasAlreadyAssigned) alreadyAssigned++;
+            AssignCore(faceId, newPersonId, "confirmed", "user", null, transaction);
+            if (oldPersonId is not null && oldPersonId != newPersonId)
+            {
+                using var reject = database.Command("""
+                    INSERT OR IGNORE INTO face_person_rejections(face_id, person_id, created_utc)
+                    VALUES($face, $person, $now)
+                    """);
+                reject.Transaction = transaction;
+                reject.Parameters.AddWithValue("$face", faceId);
+                reject.Parameters.AddWithValue("$person", oldPersonId.Value);
+                reject.Parameters.AddWithValue("$now", Format(DateTime.UtcNow));
+                reject.ExecuteNonQuery();
+            }
+            InsertCorrection(faceId, oldPersonId, newPersonId, "move", transaction);
         }
-        InsertCorrection(faceId, oldPersonId, newPersonId, "move", transaction);
         transaction.Commit();
+        return new FaceMoveResult(ids.Length, ids.Length - alreadyAssigned, alreadyAssigned);
     }
 
     public void MoveFaceToUnassigned(long faceId)

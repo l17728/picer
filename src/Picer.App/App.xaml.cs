@@ -10,6 +10,9 @@ public partial class App : Application
 {
     private MainViewModel? _mainViewModel;
     private static readonly string LogPath = Path.Combine(AppPaths.DataRoot, "logs", "crash.log");
+    private static readonly object CrashLogLock = new();
+    private static string? _lastCrashFingerprint;
+    private static DateTime _lastCrashUtc;
 
     protected override void OnStartup(StartupEventArgs e)
     {
@@ -101,13 +104,24 @@ public partial class App : Application
 
     private static void LogCrash(string source, Exception? ex)
     {
-        var dir = Path.GetDirectoryName(LogPath);
-        if (!string.IsNullOrEmpty(dir))
-            Directory.CreateDirectory(dir);
-
-        var msg = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] CRASH: {source}\n{ex}\n\n";
-        File.AppendAllText(LogPath, msg);
-        Debug.Write(msg);
+        try
+        {
+            var fingerprint = $"{source}|{ex?.GetType().FullName}|{ex?.StackTrace?.Split('\n').FirstOrDefault()}";
+            lock (CrashLogLock)
+            {
+                var now = DateTime.UtcNow;
+                if (fingerprint == _lastCrashFingerprint && now - _lastCrashUtc < TimeSpan.FromSeconds(10)) return;
+                _lastCrashFingerprint = fingerprint;
+                _lastCrashUtc = now;
+                var dir = Path.GetDirectoryName(LogPath);
+                if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+                TrimOversizedCrashLog();
+                var msg = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] CRASH: {source}\n{ex}\n\n";
+                File.AppendAllText(LogPath, msg);
+                Debug.Write(msg);
+            }
+        }
+        catch { }
     }
 
     private static void LogInfo(string message)
@@ -116,8 +130,18 @@ public partial class App : Application
         if (!string.IsNullOrEmpty(dir))
             Directory.CreateDirectory(dir);
 
-        var msg = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] INFO: {message}\n";
-        File.AppendAllText(LogPath, msg);
-        Debug.Write(msg);
+        lock (CrashLogLock)
+        {
+            TrimOversizedCrashLog();
+            var msg = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] INFO: {message}\n";
+            File.AppendAllText(LogPath, msg);
+            Debug.Write(msg);
+        }
+    }
+
+    private static void TrimOversizedCrashLog()
+    {
+        if (File.Exists(LogPath) && new FileInfo(LogPath).Length > 20 * 1024 * 1024)
+            File.Delete(LogPath);
     }
 }

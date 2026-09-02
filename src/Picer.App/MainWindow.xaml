@@ -383,7 +383,9 @@
                                 </ListBox>
                                 <DockPanel Margin="0,6,0,0">
                                     <Button DockPanel.Dock="Right" Content="创建为新人物" Command="{Binding NameCandidateClusterCommand}" Padding="8,4" Margin="5,0,0,0"/>
-                                    <TextBox Text="{Binding NewPersonName, UpdateSourceTrigger=PropertyChanged}" ToolTip="输入姓名后，将所选待命名组确认为新人物"/>
+                                    <TextBox Text="{Binding NewPersonName, UpdateSourceTrigger=PropertyChanged}"
+                                             AutomationProperties.Name="新人物名称"
+                                             ToolTip="输入姓名后，将所选待命名组确认为新人物"/>
                                 </DockPanel>
                                 <DockPanel Margin="0,6,0,0">
                                     <Button DockPanel.Dock="Right" Content="归入已有人物" Command="{Binding AssignCandidateClusterToSelectedPersonCommand}"
@@ -392,7 +394,8 @@
                                               DisplayMemberPath="DisplayName" ToolTip="选择该候选组应归入的已命名人物"/>
                                 </DockPanel>
                                 <DockPanel Margin="0,6,0,0">
-                                    <Button DockPanel.Dock="Right" Content="只新建人物" Command="{Binding CreatePersonCommand}" Padding="8,4" Margin="5,0,0,0"
+                                    <Button DockPanel.Dock="Right" Content="只新建人物" AutomationProperties.Name="只新建人物"
+                                            Command="{Binding CreatePersonCommand}" Padding="8,4" Margin="5,0,0,0"
                                             ToolTip="建立一个空人物分类，之后可在右侧多选人脸并移动过去"/>
                                     <TextBlock Text="单张或跨组整理" VerticalAlignment="Center" Foreground="#666"/>
                                 </DockPanel>
@@ -417,9 +420,16 @@
                                 <ListBox.ItemsPanel><ItemsPanelTemplate><controls:VirtualizingWrapPanel ItemWidth="155" ItemHeight="184"/></ItemsPanelTemplate></ListBox.ItemsPanel>
                                 <ListBox.ItemTemplate><DataTemplate><Border Width="145" Margin="5" Padding="5" BorderBrush="#CCC" BorderThickness="1">
                                     <StackPanel>
-                                        <Border Height="112" Background="#EEF2F6">
+                                        <Grid Height="112" Background="#EEF2F6">
                                             <Image Source="{Binding FaceThumbnailPath}" Stretch="UniformToFill"/>
-                                        </Border>
+                                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                                                        Margin="3" Visibility="{Binding IsAutomaticSuggestion, Converter={StaticResource BoolToVis}}">
+                                                <Button Content="是" Padding="7,2" Margin="0,0,3,0" Click="ConfirmSuggestedFace_Click"
+                                                        ToolTip="确认自动归类正确"/>
+                                                <Button Content="不是" Padding="7,2" Click="RejectSuggestedFace_Click"
+                                                        ToolTip="否定当前人物并重新分类"/>
+                                            </StackPanel>
+                                        </Grid>
                                         <TextBlock Text="{Binding SuggestedText}" Foreground="#8A4B08" FontWeight="SemiBold" Margin="0,4,0,0"/>
                                         <TextBlock Text="{Binding ImagePath}" TextTrimming="CharacterEllipsis" ToolTip="{Binding ImagePath}" Foreground="#666" FontSize="11"/>
                                     </StackPanel>

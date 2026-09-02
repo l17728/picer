@@ -144,6 +144,43 @@ public partial class MainWindow : Window
             await _mainVm.People.OpenFacePhotoAsync(face);
     }
 
+    private async void ConfirmSuggestedFace_Click(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is UnassignedFaceViewModel face)
+            await _mainVm.People.ConfirmAutomaticSuggestionAsync(face);
+        e.Handled = true;
+    }
+
+    private async void RejectSuggestedFace_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement anchor || anchor.DataContext is not UnassignedFaceViewModel face) return;
+        var menu = new ContextMenu();
+        foreach (var person in _mainVm.People.People.Where(person => person.Id != face.Record.SuggestedPersonId))
+        {
+            var target = person;
+            var item = new MenuItem { Header = target.DisplayName };
+            item.Click += async (_, _) => await _mainVm.People.MoveFaceToPersonAsync(face, target);
+            menu.Items.Add(item);
+        }
+        if (menu.Items.Count > 0) menu.Items.Add(new Separator());
+        var create = new MenuItem { Header = "创建新人物并归入…" };
+        create.Click += async (_, _) =>
+        {
+            var dialog = new Views.CreatePersonWindow { Owner = this };
+            if (dialog.ShowDialog() == true) await _mainVm.People.CreatePersonWithFacesAsync(dialog.PersonName, [face]);
+        };
+        menu.Items.Add(create);
+        var pending = new MenuItem { Header = "保留在待分类" };
+        menu.Items.Add(pending);
+        var ignored = new MenuItem { Header = "标记为不分类" };
+        ignored.Click += async (_, _) => await _mainVm.People.IgnoreFaceAsync(face);
+        menu.Items.Add(ignored);
+        menu.PlacementTarget = anchor;
+        menu.IsOpen = true;
+        await _mainVm.People.RejectAutomaticSuggestionAsync(face);
+        e.Handled = true;
+    }
+
     private void PeopleFace_PreviewMouseRightButtonDown(object sender, MouseButtonEventArgs e)
     {
         if (FindAncestor<ListBoxItem>(e.OriginalSource as DependencyObject) is { } item)
