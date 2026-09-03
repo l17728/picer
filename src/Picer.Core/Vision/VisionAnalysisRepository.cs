@@ -256,6 +256,44 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
         return values;
     }
 
+    public IReadOnlyList<SuggestedPersonGroupRecord> GetSuggestedPersonGroups()
+    {
+        using var command = database.Command("""
+            SELECT p.id, p.display_name, f.id, f.image_id, i.path, i.thumb_path, f.ordinal,
+                   f.box_x, f.box_y, f.box_width, f.box_height, f.confidence,
+                   i.sha256, i.ahash, i.width, i.height
+            FROM face_person_assignments a
+            JOIN people p ON p.id=a.person_id
+            JOIN detected_faces f ON f.id=a.face_id
+            JOIN images i ON i.id=f.image_id AND i.status='active'
+            LEFT JOIN face_review_states r ON r.face_id=f.id
+            WHERE a.state='suggested' AND r.face_id IS NULL
+            ORDER BY p.display_name, f.created_utc DESC, f.id DESC
+            """);
+        var groups = new Dictionary<long, (string Name, List<UnassignedFaceRecord> Faces, FaceSourceDeduplicator Deduplicator)>();
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            var personId = reader.GetInt64(0);
+            if (!groups.TryGetValue(personId, out var group))
+            {
+                group = (reader.GetString(1), [], new FaceSourceDeduplicator());
+                groups.Add(personId, group);
+            }
+            var signature = new FaceSourceSignature(
+                reader.IsDBNull(12) ? null : reader.GetString(12), reader.GetInt64(13),
+                reader.GetInt32(14), reader.GetInt32(15),
+                new NormalizedFaceBox(reader.GetFloat(7), reader.GetFloat(8), reader.GetFloat(9), reader.GetFloat(10)));
+            if (group.Deduplicator.IsDuplicateAndAdd(signature)) continue;
+            group.Faces.Add(new UnassignedFaceRecord(
+                reader.GetInt64(2), reader.GetInt64(3), reader.GetString(4),
+                reader.IsDBNull(5) ? null : reader.GetString(5), reader.GetInt32(6),
+                signature.Box, reader.GetFloat(11), personId, group.Name));
+        }
+        return groups.Select(pair => new SuggestedPersonGroupRecord(pair.Key, pair.Value.Name, pair.Value.Faces))
+            .Where(group => group.Faces.Count > 0).OrderByDescending(group => group.Faces.Count).ToArray();
+    }
+
     public IReadOnlyList<UnassignedFaceRecord> GetPersonFaces(long personId, int limit = 500)
     {
         using var command = database.Command("""

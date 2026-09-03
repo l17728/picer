@@ -395,6 +395,9 @@ public sealed class VisionAnalysisTests : IDisposable
 
         Assert.Equal(1, suggestions.Suggested);
         Assert.Equal(0, unchangedSuggestions.Suggested);
+        var suggestedGroup = Assert.Single(repository.GetSuggestedPersonGroups());
+        Assert.Equal(person.Id, suggestedGroup.PersonId);
+        Assert.Equal(secondFace, Assert.Single(suggestedGroup.Faces).FaceId);
         Assert.Empty(IndexSearchEngine.Search(_database, new SearchFilters { PersonId = person.Id })
             .Where(image => image.Id == secondImage.Id));
 

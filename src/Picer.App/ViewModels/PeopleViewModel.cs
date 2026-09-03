@@ -54,6 +54,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
     public ObservableCollection<UnassignedFaceViewModel> UnassignedFaces { get; } = [];
     public ObservableCollection<UnassignedFaceViewModel> AssignedFaces { get; } = [];
     public ObservableCollection<CandidateClusterViewModel> CandidateClusters { get; } = [];
+    public ObservableCollection<SuggestedPersonGroupViewModel> SuggestedPersonGroups { get; } = [];
     public ObservableCollection<UnassignedFaceViewModel> SelectedClusterFaces { get; } = [];
     public ObservableCollection<UnassignedFaceViewModel> DisplayedFaces { get; } = [];
     public ObservableCollection<VideoFaceItemViewModel> PersonVideoFaces { get; } = [];
@@ -62,6 +63,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
     [ObservableProperty] private PersonSummary? _candidateTargetPerson;
     [ObservableProperty] private UnassignedFaceViewModel? _selectedFace;
     [ObservableProperty] private CandidateClusterViewModel? _selectedCandidateCluster;
+    [ObservableProperty] private SuggestedPersonGroupViewModel? _selectedSuggestedPersonGroup;
     [ObservableProperty] private UnassignedFaceViewModel? _selectedClusterFace;
     [ObservableProperty] private UnassignedFaceViewModel? _selectedDisplayedFace;
     [ObservableProperty] private string _displayedFacesTitle = "选择左侧分类查看人脸";
@@ -106,12 +108,14 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         var cancellation = _pageLoadCancellation = new CancellationTokenSource();
         var selectedPersonId = SelectedPerson?.Id;
         var selectedClusterId = SelectedCandidateCluster?.Record.Id;
+        var selectedSuggestedPersonId = SelectedSuggestedPersonGroup?.Record.PersonId;
         var restoreIgnored = DisplayedFacesTitle.StartsWith("不分类", StringComparison.Ordinal);
         var restoreUnassigned = DisplayedFacesTitle.StartsWith("待分类", StringComparison.Ordinal);
         var snapshot = await UiWork.RunDatabaseAsync(() => (
             People: _peopleService.GetAll().ToArray(),
             Faces: _repository.GetUnassignedFaces().ToArray(),
             Clusters: _repository.GetCandidateClusters().ToArray(),
+            SuggestedGroups: _repository.GetSuggestedPersonGroups().ToArray(),
             WorkQueue: _repository.GetFaceWorkQueueCounts(),
             IgnoredCount: _repository.GetIgnoredFaceCount(),
             Summary: _repository.GetSummary()), cancellation.Token);
@@ -147,6 +151,8 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             CandidateClusters.Add(item);
             _ = LoadClusterThumbnailAsync(item);
         }
+        SuggestedPersonGroups.Clear();
+        foreach (var group in snapshot.SuggestedGroups) SuggestedPersonGroups.Add(new SuggestedPersonGroupViewModel(group));
         UnassignedSummary = $"待处理人脸 · {snapshot.WorkQueue.Total}（待确认 {snapshot.WorkQueue.Suggested} / 未匹配 {snapshot.WorkQueue.Unassigned}）";
         var summary = snapshot.Summary;
         StatusText = _unavailableReason ??
@@ -154,7 +160,10 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         ProgressValue = summary.TotalImages == 0 ? 0 : summary.CompletedImages * 100d / summary.TotalImages;
         var restoredPerson = selectedPersonId is long personId ? People.FirstOrDefault(value => value.Id == personId) : null;
         var restoredCluster = selectedClusterId is long clusterId ? CandidateClusters.FirstOrDefault(value => value.Record.Id == clusterId) : null;
+        var restoredSuggestedGroup = selectedSuggestedPersonId is long suggestedPersonId
+            ? SuggestedPersonGroups.FirstOrDefault(value => value.Record.PersonId == suggestedPersonId) : null;
         if (restoredPerson is not null) SelectedPerson = restoredPerson;
+        else if (restoredSuggestedGroup is not null) SelectedSuggestedPersonGroup = restoredSuggestedGroup;
         else if (restoredCluster is not null) SelectedCandidateCluster = restoredCluster;
         else if (restoreIgnored) await ShowIgnoredFacesAsync();
         else if (restoreUnassigned || DisplayedFaces.Count == 0) await ShowUnassignedFacesAsync();
@@ -677,6 +686,50 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         _ = LoadCandidateClusterAsync(value, cancellation.Token);
     }
 
+    partial void OnSelectedSuggestedPersonGroupChanged(SuggestedPersonGroupViewModel? value)
+    {
+        _collectionLoadCancellation?.Cancel();
+        _personLoadCancellation?.Cancel();
+        DisplayedFaces.Clear();
+        if (value is null) return;
+        SelectedPerson = null;
+        SelectedCandidateCluster = null;
+        DisplayedCollectionKind = DisplayedFaceCollectionKind.SuggestedGroup;
+        DisplayedFacesTitle = $"推荐为 {value.Record.PersonName} · 正在加载…";
+        var cancellation = _collectionLoadCancellation = new CancellationTokenSource();
+        LoadSuggestedPersonGroupAsync(value, cancellation.Token).Forget();
+    }
+
+    private async Task LoadSuggestedPersonGroupAsync(SuggestedPersonGroupViewModel group, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await UiWork.AddInBatchesAsync(group.Record.Faces, record =>
+            {
+                var item = CreateFaceItem(record);
+                DisplayedFaces.Add(item);
+                LoadDisplayedFaceThumbnailAsync(item, cancellationToken).Forget();
+                DisplayedFacesTitle = $"推荐为 {group.Record.PersonName} · {DisplayedFaces.Count}/{group.Record.Faces.Count}";
+            }, cancellationToken, batchSize: 30);
+            DisplayedFacesTitle = $"推荐为 {group.Record.PersonName}（{DisplayedFaces.Count}）";
+        }
+        catch (OperationCanceledException) { }
+    }
+
+    [RelayCommand]
+    private async Task ConfirmSuggestedPersonGroupAsync()
+    {
+        if (SelectedSuggestedPersonGroup is not { } group) { StatusText = "请先选择一个待确认推荐组"; return; }
+        var faceIds = group.Record.Faces.Select(face => face.FaceId).Distinct().ToArray();
+        StatusText = $"正在确认推荐组“{group.Record.PersonName}”的 {faceIds.Length} 张人脸…";
+        await UiWork.RunDatabaseAsync("People.ConfirmSuggestedGroup",
+            () => _peopleService.MoveFaces(faceIds, group.Record.PersonId));
+        RemoveFacesFromCurrentView(faceIds);
+        SuggestedPersonGroups.Remove(group);
+        SelectedSuggestedPersonGroup = null;
+        StatusText = $"已整组确认为“{group.Record.PersonName}”：{faceIds.Length} 张人脸";
+    }
+
     private async Task LoadCandidateClusterAsync(CandidateClusterViewModel cluster, CancellationToken cancellationToken)
     {
         try
@@ -877,8 +930,15 @@ public enum DisplayedFaceCollectionKind
     None,
     NamedPerson,
     CandidateCluster,
+    SuggestedGroup,
     Unassigned,
     Ignored
+}
+
+public sealed class SuggestedPersonGroupViewModel(SuggestedPersonGroupRecord record)
+{
+    public SuggestedPersonGroupRecord Record { get; } = record;
+    public string Summary => $"{Record.PersonName} · {Record.Faces.Count} 张待确认";
 }
 
 public partial class UnassignedFaceViewModel(UnassignedFaceRecord record, string? initialThumbnailPath = null) : ObservableObject

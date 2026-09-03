@@ -375,9 +375,17 @@
                                         Padding="10,5" Margin="0,6,0,0"/>
                             </StackPanel>
                             <StackPanel DockPanel.Dock="Bottom" Margin="0,8,0,0">
+                                <TextBlock Text="待确认推荐组" FontWeight="SemiBold" Margin="2,3"
+                                           ToolTip="按系统推荐的已命名人物分组，可整组确认；少量错误脸可在右侧多选后重新分类"/>
+                                <ListBox Height="125" ItemsSource="{Binding SuggestedPersonGroups}"
+                                         SelectedItem="{Binding SelectedSuggestedPersonGroup}" DisplayMemberPath="Summary"
+                                         AutomationProperties.Name="待确认推荐组"/>
+                                <Button Content="整组确认推荐人物" Command="{Binding ConfirmSuggestedPersonGroupCommand}"
+                                        Padding="8,4" Margin="0,5,0,8"
+                                        ToolTip="把当前推荐组全部确认为该人物；如有错误脸，请先在右侧多选并移动到正确分类"/>
                                 <TextBlock Text="待命名人物组" FontWeight="SemiBold" Margin="2,3"
                                            ToolTip="系统把多张相似且尚无姓名的人脸聚成候选人物组；可整组命名或归入已有人物"/>
-                                <ListBox x:Name="CandidateClustersList" Height="190" ItemsSource="{Binding CandidateClusters}"
+                                <ListBox x:Name="CandidateClustersList" Height="125" ItemsSource="{Binding CandidateClusters}"
                                          SelectedItem="{Binding SelectedCandidateCluster}" PreviewMouseRightButtonDown="CandidateCluster_PreviewMouseRightButtonDown">
                                     <ListBox.ContextMenu><ContextMenu Opened="CandidateClusterMenu_Opened"/></ListBox.ContextMenu>
                                     <ListBox.ItemTemplate><DataTemplate><DockPanel Margin="3">

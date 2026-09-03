@@ -47,6 +47,7 @@ public sealed record FaceEmbeddingRecord(long FaceId, long ImageId, string Model
 public sealed record FaceWorkQueueCounts(int Total, int Suggested, int Unassigned);
 public sealed record CandidateClusterDraft(IReadOnlyList<(long FaceId, double Similarity)> Members);
 public sealed record FaceCandidateClusterRecord(long Id, string ModelVersion, IReadOnlyList<UnassignedFaceRecord> Faces);
+public sealed record SuggestedPersonGroupRecord(long PersonId, string PersonName, IReadOnlyList<UnassignedFaceRecord> Faces);
 public sealed record ImageFaceRecord(long FaceId, int Ordinal, NormalizedFaceBox Box, float Confidence,
     long? PersonId, string? PersonName, string? AssignmentState);
 
