@@ -1054,7 +1054,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         var configured = AppServices.CreateCloudVisionService(featureId);
         if (configured is null)
         {
-            MessageBox.Show("云端分析尚未启用，或尚未保存API Key。请先打开“云端分析设置”。", "云端照片分析",
+            MessageBox.Show("AI 分析尚未启用、模型未配置，或云端模型尚未保存 API Key。请先打开“AI 模型设置”。", "照片内容分析",
                 MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
@@ -1062,9 +1062,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
         var preciseText = configured.Value.Policy.IncludePreciseGps ? "会提供精确坐标" : "不会提供精确坐标，只提供本地解析后的地点文字";
         var estimated = DomesticCloudVisionPricing.Calculate(configured.Value.Analyzer.Provider,
             configured.Value.Analyzer.ModelVersion, count * 1200L, count * 200L).EstimatedCostYuan;
-        var confirmation = MessageBox.Show(
-            $"即将通过{configured.Value.ProviderLabel}分析 {count} 张照片，粗略估算费用 ¥{estimated:0.0000}。\n每日/每月预算：¥{configured.Value.Policy.DailyBudgetYuan:0.##} / ¥{configured.Value.Policy.MonthlyBudgetYuan:0.##}。\n\n上传的是最长边1280像素、已清除EXIF的副本；{preciseText}。原始照片不会被修改。\n\n是否继续？",
-            "确认云端照片分析", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+        var confirmationText = configured.Value.IsLocal
+            ? $"即将通过 {configured.Value.ProviderLabel} 在本机分析 {count} 张照片。\n\n照片只发送到 127.0.0.1 的本地模型服务，不上传云端、不产生 API 费用；原始照片不会被修改。\n\n是否继续？"
+            : $"即将通过{configured.Value.ProviderLabel}分析 {count} 张照片，粗略估算费用 ¥{estimated:0.0000}。\n每日/每月预算：¥{configured.Value.Policy.DailyBudgetYuan:0.##} / ¥{configured.Value.Policy.MonthlyBudgetYuan:0.##}。\n\n上传的是最长边1280像素、已清除EXIF的副本；{preciseText}。原始照片不会被修改。\n\n是否继续？";
+        var confirmation = MessageBox.Show(confirmationText,
+            configured.Value.IsLocal ? "确认本地照片分析" : "确认云端照片分析",
+            MessageBoxButton.YesNo, configured.Value.IsLocal ? MessageBoxImage.Question : MessageBoxImage.Warning);
         if (confirmation != MessageBoxResult.Yes)
         {
             configured.Value.Analyzer.Dispose();

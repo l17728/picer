@@ -3,18 +3,18 @@
     <Grid Margin="20">
         <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
         <Border Background="#EEF6FF" BorderBrush="#8CB9E8" BorderThickness="1" Padding="12" Margin="0,0,0,14">
-            <StackPanel><TextBlock Text="统一 AI 模型设置" FontSize="17" FontWeight="SemiBold"/><TextBlock Margin="0,5,0,0" TextWrapping="Wrap" Text="云端功能按用途独立选择服务商和模型。API Key 安全保存到 Windows 凭据管理器，不写入设置文件。可从 OpenCode 同步服务商、接口、模型和密钥。"/></StackPanel>
+            <StackPanel><TextBlock Text="统一 AI 模型设置" FontSize="17" FontWeight="SemiBold"/><TextBlock Margin="0,5,0,0" TextWrapping="Wrap" Text="每项功能可独立选择本地或云端模型。本地模型通过 127.0.0.1 调用且无需密钥；云端 API Key 安全保存到 Windows 凭据管理器。"/></StackPanel>
         </Border>
         <Grid Grid.Row="1"><Grid.ColumnDefinitions><ColumnDefinition Width="270"/><ColumnDefinition Width="16"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
             <StackPanel>
-                <TextBlock Text="云端 AI 功能" FontWeight="SemiBold" Margin="0,0,0,7"/>
+                <TextBlock Text="AI 功能与模型" FontWeight="SemiBold" Margin="0,0,0,7"/>
                 <ListBox x:Name="FeatureBox" SelectionChanged="FeatureBox_SelectionChanged" BorderBrush="#CCC">
                     <ListBox.ItemTemplate><DataTemplate><StackPanel Margin="6"><TextBlock Text="{Binding Name}" FontWeight="SemiBold"/><TextBlock Text="{Binding TypeLabel}" Foreground="#3573A8" FontSize="11"/><TextBlock Text="{Binding Description}" Foreground="#666" FontSize="11" TextWrapping="Wrap"/></StackPanel></DataTemplate></ListBox.ItemTemplate>
                 </ListBox>
                 <TextBlock Text="本地 AI 能力" FontWeight="SemiBold" Margin="0,16,0,7"/>
                 <Border BorderBrush="#DDD" BorderThickness="1" Padding="10"><StackPanel>
-                    <TextBlock Text="AI 问答 · 语言模型（后续接入）"/><TextBlock Text="人脸识别 · YuNet / SFace" Margin="0,6,0,0"/><TextBlock Text="语义搜索 · Chinese-CLIP" Margin="0,6,0,0"/><TextBlock Text="OCR / 图片描述 · Florence" Margin="0,6,0,0"/><TextBlock Text="语音转写 · Whisper" Margin="0,6,0,0"/>
-                    <TextBlock Text="这些能力仅在本机运行，不使用云端 API。" Foreground="#666" FontSize="11" TextWrapping="Wrap" Margin="0,9,0,0"/>
+                    <TextBlock Text="AI 问答 · 语言模型（后续接入）"/><TextBlock Text="人脸识别 · YuNet / SFace" Margin="0,6,0,0"/><TextBlock Text="语义搜索 · Chinese-CLIP" Margin="0,6,0,0"/><TextBlock Text="OCR / 图片描述 · Florence" Margin="0,6,0,0"/><TextBlock Text="语音转写 · 可选 Qwen3-ASR / Whisper" Margin="0,6,0,0"/>
+                    <TextBlock Text="Qwen3-VL 和 Qwen3-ASR 可通过本机统一模型平台运行。" Foreground="#666" FontSize="11" TextWrapping="Wrap" Margin="0,9,0,0"/>
                 </StackPanel></Border>
             </StackPanel>
             <Border Grid.Column="2" BorderBrush="#CCC" BorderThickness="1" Padding="16">
@@ -30,7 +30,7 @@
             </Border>
         </Grid>
         <Grid Grid.Row="2" Margin="0,16,0,0"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-            <WrapPanel><CheckBox x:Name="EnabledBox" Content="启用云端 AI" FontWeight="SemiBold" VerticalAlignment="Center"/><Button Content="从 OpenCode 同步" Click="ImportOpenCode_Click" Padding="12,5" Margin="18,0,0,0"/><TextBlock x:Name="ImportStatusText" VerticalAlignment="Center" Foreground="#555" Margin="10,0,0,0"/></WrapPanel>
+            <WrapPanel><CheckBox x:Name="EnabledBox" Content="启用照片/视频 AI 分析" FontWeight="SemiBold" VerticalAlignment="Center"/><Button Content="从 OpenCode 同步" Click="ImportOpenCode_Click" Padding="12,5" Margin="18,0,0,0"/><TextBlock x:Name="ImportStatusText" VerticalAlignment="Center" Foreground="#555" Margin="10,0,0,0"/></WrapPanel>
             <WrapPanel Grid.Column="1"><TextBlock Text="单批上限" VerticalAlignment="Center"/><TextBox x:Name="MaximumBox" Width="60" Margin="7,0,16,0"/><TextBlock Text="日预算 ¥" VerticalAlignment="Center"/><TextBox x:Name="DailyBudgetBox" Width="60" Margin="5,0,12,0"/><TextBlock Text="月预算 ¥" VerticalAlignment="Center"/><TextBox x:Name="MonthlyBudgetBox" Width="70" Margin="5,0,0,0"/></WrapPanel>
         </Grid>
         <Grid Grid.Row="3" Margin="0,14,0,0"><CheckBox x:Name="PreciseGpsBox" Content="允许向云端提供精确 GPS（默认只提供本地解析后的地点文字）" VerticalAlignment="Center"/><StackPanel Orientation="Horizontal" HorizontalAlignment="Right"><Button Content="取消" IsCancel="True" Padding="16,6" Margin="0,0,8,0"/><Button Content="保存" Click="Save_Click" Padding="16,6" IsDefault="True"/></StackPanel></Grid>

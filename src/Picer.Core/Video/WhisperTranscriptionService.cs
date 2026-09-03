@@ -2,7 +2,14 @@ using System.Diagnostics;
 
 namespace Picer.Core.Video;
 
+public interface IVideoTranscriptionService
+{
+    string ModelVersion { get; }
+    Task<string> TranscribeAsync(VideoRecord video, CancellationToken cancellationToken = default);
+}
+
 public sealed class WhisperTranscriptionService(string ffmpegPath, string whisperPath, string modelPath, string workRoot)
+    : IVideoTranscriptionService
 {
     public string ModelVersion => Path.GetFileNameWithoutExtension(modelPath);
 

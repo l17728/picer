@@ -14,6 +14,7 @@ public partial class CloudVisionSettingsWindow : Window
         new(AiFeatureIds.PhotoAnalysis,"照片内容分析","多模态模型","识别场景、活动、物体并生成可搜索标签。",AiModelCapability.Multimodal),
         new(AiFeatureIds.VideoSummary,"视频内容总结","多模态模型","分析视频关键帧拼图并结合本地转写生成摘要。",AiModelCapability.Multimodal),
         new(AiFeatureIds.SceneDescription,"未分类场景描述","多模态模型","分析代表照片，为时间场景生成名称和检索词。",AiModelCapability.Multimodal)
+        ,new(AiFeatureIds.VideoTranscription,"视频语音转文字","语音模型","从视频提取完整音频，使用所选本地语音模型转写。",AiModelCapability.Language)
     ];
 
     public CloudVisionSettingsWindow(string settingsPath,ICredentialStore? credentials=null)
@@ -46,6 +47,14 @@ public partial class CloudVisionSettingsWindow : Window
     private void PersistPendingKey(){if(!string.IsNullOrWhiteSpace(_currentProviderId)&&!string.IsNullOrWhiteSpace(ApiKeyBox.Password))_credentials.Write(PicerCredentialTargets.AiProvider(_currentProviderId),ApiKeyBox.Password.Trim());}
     private void RefreshKeyStatus()
     {
+        if (ProviderBox.SelectedItem is AiProviderDefinition local && AiProviderIds.IsLocal(local.Id))
+        {
+            ApiKeyBox.IsEnabled = false;
+            KeyStatusText.Text = "✓ 本地代理无需 API Key";
+            KeyStatusText.Foreground = new SolidColorBrush(Color.FromRgb(33,115,70));
+            return;
+        }
+        ApiKeyBox.IsEnabled = true;
         var provider=ProviderBox.SelectedItem as AiProviderDefinition;var saved=provider is not null&&ReadProviderKey(provider.Id) is {Length:>0};KeyStatusText.Text=saved?"✓ 密钥已安全保存":"尚未保存密钥";KeyStatusText.Foreground=new SolidColorBrush(saved?Color.FromRgb(33,115,70):Color.FromRgb(160,70,45));
     }
     private string? ReadProviderKey(string id)
@@ -64,7 +73,7 @@ public partial class CloudVisionSettingsWindow : Window
         SaveCurrentSelection();if(!int.TryParse(MaximumBox.Text,out var maximum)||maximum is<1 or>1000){Warn("单批上限必须是 1 到 1000 之间的整数。");return;}
         if(!decimal.TryParse(DailyBudgetBox.Text,out var daily)||daily<.1m||!decimal.TryParse(MonthlyBudgetBox.Text,out var monthly)||monthly<daily){Warn("每日预算至少 0.1 元；每月预算不得低于每日预算。");return;}
         if(EnabledBox.IsChecked==true)
-            foreach(var feature in _features){var resolved=_settings.Resolve(feature.Id);if(resolved is null){Warn($"请为“{feature.Name}”选择模型。");return;}if(ReadProviderKey(resolved.Value.Provider.Id) is not{Length:>0}){Warn($"“{feature.Name}”使用的服务商尚未保存 API Key。");return;}}
+            foreach(var feature in _features){var resolved=_settings.Resolve(feature.Id);if(resolved is null){Warn($"请为“{feature.Name}”选择模型。");return;}if(!AiProviderIds.IsLocal(resolved.Value.Provider.Id)&&ReadProviderKey(resolved.Value.Provider.Id) is not{Length:>0}){Warn($"“{feature.Name}”使用的服务商尚未保存 API Key。");return;}}
         _settings.Enabled=EnabledBox.IsChecked==true;_settings.MaximumImagesPerRun=maximum;_settings.IncludePreciseGps=PreciseGpsBox.IsChecked==true;_settings.DailyBudgetYuan=daily;_settings.MonthlyBudgetYuan=monthly;_settings.Save(_settingsPath);DialogResult=true;
     }
     private void Warn(string message)=>MessageBox.Show(this,message,"AI 模型设置",MessageBoxButton.OK,MessageBoxImage.Warning);

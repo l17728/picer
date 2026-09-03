@@ -4,6 +4,7 @@ using Picer.Core.Models;
 using Picer.Core.People;
 using Picer.Core.Video;
 using Picer.Core.Vision;
+using System.Net;
 
 namespace Picer.Tests;
 
@@ -118,6 +119,41 @@ public sealed class VideoIndexTests : IDisposable
         public Task<FaceAnalysisResult> AnalyzeAsync(ImageRecord image, CancellationToken cancellationToken) =>
             Task.FromResult(new FaceAnalysisResult([new FaceDetection(new NormalizedFaceBox(.1f, .1f, .3f, .3f), .9f,
                 Embedding: [1f, 0f, 0f])]));
+    }
+
+    [Fact]
+    public async Task QwenAsr_UsesConfiguredMultipartEndpointAndReturnsJson()
+    {
+        var audioDirectory = Path.Combine(_root, "audio", "42");
+        Directory.CreateDirectory(audioDirectory);
+        await File.WriteAllBytesAsync(Path.Combine(audioDirectory, "audio-16k.wav"), [1, 2, 3, 4]);
+        var handler = new RecordingHandler();
+        using var client = new HttpClient(handler);
+        using var service = new QwenAsrTranscriptionService("unused-ffmpeg",
+            new Uri("http://127.0.0.1:8090/api/asr/transcriptions"), "qwen3-asr-1.7b",
+            Path.Combine(_root, "audio"), client);
+        var video = new VideoRecord(42, 1, Path.Combine(_root, "video.mp4"), 1, DateTime.UtcNow,
+            null, 0, 0, null, null, "active");
+
+        var result = await service.TranscribeAsync(video);
+
+        Assert.Equal("{\"text\":\"你好\"}", result);
+        Assert.Contains("qwen3-asr-1.7b", handler.Body);
+        Assert.Contains("audio-16k.wav", handler.Body);
+    }
+
+    private sealed class RecordingHandler : HttpMessageHandler
+    {
+        public string Body { get; private set; } = "";
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            Body = await request.Content!.ReadAsStringAsync(cancellationToken);
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("{\"text\":\"你好\"}")
+            };
+        }
     }
 
     public void Dispose() { _database.Dispose(); try { Directory.Delete(_root, true); } catch { } }

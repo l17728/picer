@@ -15,7 +15,7 @@ using Picer.App.Infrastructure;
 namespace Picer.App.ViewModels;
 
 public partial class VideoViewModel(VideoRepository repository, VideoIndexService index, FfmpegKeyframeService? keyframes,
-    WhisperTranscriptionService? transcription = null, VideoFaceTimelineService? faceTimeline = null,
+    IVideoTranscriptionService? transcription = null, VideoFaceTimelineService? faceTimeline = null,
     VideoSummaryService? summaryService = null, PeopleService? peopleService = null) : ObservableObject
 {
     private CancellationTokenSource? _loadCancellation;
@@ -367,19 +367,21 @@ public partial class VideoViewModel(VideoRepository repository, VideoIndexServic
     private async Task TranscribeAsync()
     {
         if (SelectedVideo is null) { StatusText="请先选择视频"; return; }
-        if (transcription is null) { StatusText="本地转写组件尚未就绪"; return; }
-        var cached=await UiWork.RunDatabaseAsync(()=>repository.GetTranscript(SelectedVideo.Record.Id));
-        if(cached is not null && IsUsableTranscript(cached)){ TranscriptText=ExtractTranscriptText(cached); StatusText="已复用本地转写缓存"; return; }
+        var activeTranscription = AppServices.CreateVideoTranscriptionService() ?? transcription;
+        if (activeTranscription is null) { StatusText="请先在 AI 模型设置中为视频语音转文字选择可用的本地语音模型"; return; }
+        var cachedRecord=await UiWork.RunDatabaseAsync(()=>repository.GetTranscriptWithModel(SelectedVideo.Record.Id));
+        var cached=cachedRecord?.Json;
+        if(cachedRecord is not null && string.Equals(cachedRecord.Value.ModelVersion, activeTranscription.ModelVersion, StringComparison.OrdinalIgnoreCase) && IsUsableTranscript(cached)){ TranscriptText=ExtractTranscriptText(cached); StatusText=$"已复用 {activeTranscription.ModelVersion} 转写缓存"; if (!ReferenceEquals(activeTranscription, transcription) && activeTranscription is IDisposable cachedDisposable) cachedDisposable.Dispose(); return; }
         IsBusy=true;
-        try { StatusText=cached is null?"正在本地提取音频并转写…":"旧转写质量异常，正在重新识别…"; var json=await transcription.TranscribeAsync(SelectedVideo.Record);
+        try { StatusText=cached is null?$"正在使用 {activeTranscription.ModelVersion} 提取音频并转写…":"旧转写质量异常，正在重新识别…"; var json=await activeTranscription.TranscribeAsync(SelectedVideo.Record);
             if (!IsUsableTranscript(json))
             {
                 TranscriptText = "模型未能可靠识别出语音；未保存本次结果。音频可能以音乐、噪声或过短语音为主。";
                 StatusText = "本地转写完成，但结果为空或存在明显重复幻觉，已拒绝缓存";
                 return;
             }
-            await UiWork.RunDatabaseAsync(()=>repository.SaveTranscript(SelectedVideo.Record.Id,transcription.ModelVersion,json)); TranscriptText=ExtractTranscriptText(json); StatusText="本地转写完成"; }
-        catch(Exception ex){AppLogger.Error($"本地音频转写失败：{SelectedVideo?.Record.Path}",ex);StatusText=$"转写失败：{CompactError(ex.Message)}";} finally{IsBusy=false;}
+            await UiWork.RunDatabaseAsync(()=>repository.SaveTranscript(SelectedVideo.Record.Id,activeTranscription.ModelVersion,json)); TranscriptText=ExtractTranscriptText(json); StatusText=$"本地转写完成（{activeTranscription.ModelVersion}）"; }
+        catch(Exception ex){AppLogger.Error($"本地音频转写失败：{SelectedVideo?.Record.Path}",ex);StatusText=$"转写失败：{CompactError(ex.Message)}";} finally{if (!ReferenceEquals(activeTranscription, transcription) && activeTranscription is IDisposable disposable) disposable.Dispose();IsBusy=false;}
     }
 
     [RelayCommand]
@@ -421,11 +423,14 @@ public partial class VideoViewModel(VideoRepository repository, VideoIndexServic
         if (SelectedVideo is null) { StatusText = "请先选择视频"; return; }
         if (summaryService is null) { StatusText = "视频摘要组件尚未就绪"; return; }
         var configured = AppServices.CreateCloudVisionService(AiFeatureIds.VideoSummary);
-        if (configured is null) { StatusText = "请先在云端分析设置中启用并配置国内视觉 API"; return; }
+        if (configured is null) { StatusText = "请先在 AI 模型设置中为视频内容总结选择本地 VL 或云端多模态模型"; return; }
         if (await UiWork.RunDatabaseAsync(() => repository.GetKeyframes(SelectedVideo.Record.Id).Count) == 0) { StatusText = "请先生成关键帧"; return; }
         var transcriptNotice = await UiWork.RunDatabaseAsync(() => repository.GetTranscript(SelectedVideo.Record.Id)) is null ? "不含语音转写" : "包含本地语音转写文本";
-        if (MessageBox.Show($"将上传去除元数据的关键帧拼图（最多12帧），{transcriptNotice}，用于生成视频融合摘要。原视频不会上传。是否继续？",
-                "确认云端视频分析", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
+        var confirmation = configured.Value.IsLocal
+            ? $"将把关键帧拼图（最多12帧）发送到本机 Qwen3-VL，{transcriptNotice}。数据不会上传云端，是否继续？"
+            : $"将上传去除元数据的关键帧拼图（最多12帧），{transcriptNotice}，用于生成视频融合摘要。原视频不会上传。是否继续？";
+        if (MessageBox.Show(confirmation, configured.Value.IsLocal ? "确认本地视频分析" : "确认云端视频分析",
+                MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
         IsBusy = true;
         try
         {

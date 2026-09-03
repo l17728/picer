@@ -10,7 +10,18 @@ public static class AiFeatureIds
     public const string PhotoAnalysis = "photo-analysis";
     public const string VideoSummary = "video-summary";
     public const string SceneDescription = "scene-description";
+    public const string VideoTranscription = "video-transcription";
     public const string AiQuestion = "ai-question";
+}
+public static class AiProviderIds
+{
+    public const string LocalQwenVl = "local-qwen-vl";
+    public const string LocalQwenAsr = "local-qwen-asr";
+    public const string BundledWhisper = "bundled-whisper";
+    public static bool IsLocal(string? providerId) =>
+        string.Equals(providerId, LocalQwenVl, StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(providerId, LocalQwenAsr, StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(providerId, BundledWhisper, StringComparison.OrdinalIgnoreCase);
 }
 public sealed class AiModelDefinition { public string Id { get; set; } = ""; public string Name { get; set; } = ""; public AiModelCapability Capability { get; set; } }
 public sealed class AiProviderDefinition { public string Id { get; set; } = ""; public string Name { get; set; } = ""; public string BaseUrl { get; set; } = ""; public List<AiModelDefinition> Models { get; set; } = []; }
@@ -42,10 +53,39 @@ public sealed class CloudVisionSettings
         AddProviderIfMissing(new() { Id="bailian", Name="阿里云百炼", BaseUrl="https://dashscope.aliyuncs.com/compatible-mode/v1", Models=[new(){Id="qwen3-vl-8b-instruct",Name="Qwen3 VL 8B",Capability=AiModelCapability.Multimodal},new(){Id="qwen3-vl-plus",Name="Qwen3 VL Plus",Capability=AiModelCapability.Multimodal}] });
         AddProviderIfMissing(new() { Id="zhipu", Name="智谱", BaseUrl="https://open.bigmodel.cn/api/paas/v4", Models=[new(){Id="glm-4.6v-flash",Name="GLM-4.6V-Flash",Capability=AiModelCapability.Multimodal}] });
         AddProviderIfMissing(new() { Id="huawei", Name="华为", Models=[] });
+        AddProviderIfMissing(new()
+        {
+            Id = AiProviderIds.LocalQwenVl,
+            Name = "本地模型服务",
+            BaseUrl = "http://127.0.0.1:8090/api/vl/chat",
+            Models =
+            [
+                new()
+                {
+                    Id = "Qwen/Qwen3-VL-8B-Instruct-GGUF:Q4_K_M",
+                    Name = "Qwen3-VL 8B（本地）",
+                    Capability = AiModelCapability.Multimodal
+                }
+            ]
+        });
+        AddProviderIfMissing(new()
+        {
+            Id = AiProviderIds.LocalQwenAsr,
+            Name = "本地语音模型服务",
+            BaseUrl = "http://127.0.0.1:8090/api/asr/transcriptions",
+            Models = [new() { Id = "qwen3-asr-1.7b", Name = "Qwen3-ASR 1.7B（本地）", Capability = AiModelCapability.Language }]
+        });
+        AddProviderIfMissing(new()
+        {
+            Id = AiProviderIds.BundledWhisper,
+            Name = "内置离线模型",
+            Models = [new() { Id = "whisper-base-q5_1", Name = "Whisper Base Q5_1", Capability = AiModelCapability.Language }]
+        });
         var provider = Provider == DomesticVisionProvider.ZhipuGlm ? "zhipu" : "bailian";
         var model = provider == "zhipu" ? "glm-4.6v-flash" : UseComplexModel ? "qwen3-vl-plus" : "qwen3-vl-8b-instruct";
         AddFeatureIfMissing(AiFeatureIds.PhotoAnalysis, provider, model); AddFeatureIfMissing(AiFeatureIds.VideoSummary, provider, model);
         AddFeatureIfMissing(AiFeatureIds.SceneDescription, provider, model);
+        AddFeatureIfMissing(AiFeatureIds.VideoTranscription, AiProviderIds.LocalQwenAsr, "qwen3-asr-1.7b");
     }
 
     public void MergeProviders(IEnumerable<AiProviderDefinition> providers)

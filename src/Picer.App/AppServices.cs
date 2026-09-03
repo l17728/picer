@@ -39,7 +39,7 @@ public static class AppServices
     public static VideoRepository Videos { get; private set; } = null!;
     public static VideoIndexService VideoIndex { get; private set; } = null!;
     public static FfmpegKeyframeService? VideoKeyframes { get; private set; }
-    public static WhisperTranscriptionService? VideoTranscription { get; private set; }
+    public static IVideoTranscriptionService? VideoTranscription { get; private set; }
     public static VideoFaceTimelineService? VideoFaceTimeline { get; private set; }
     public static VideoSummaryService VideoSummaries { get; private set; } = null!;
     public static ClipSemanticRepository ClipRepository { get; private set; } = null!;
@@ -147,7 +147,7 @@ public static class AppServices
             ? Path.GetFullPath(configured)
             : Path.Combine(AppPaths.DataRoot, "cache");
 
-    public static (CloudVisionAnalysisService Service, OpenAiCompatibleCloudVisionAnalyzer Analyzer, CloudVisionRunPolicy Policy, string ProviderLabel)? CreateCloudVisionService(string featureId = AiFeatureIds.PhotoAnalysis)
+    public static (CloudVisionAnalysisService Service, OpenAiCompatibleCloudVisionAnalyzer Analyzer, CloudVisionRunPolicy Policy, string ProviderLabel, bool IsLocal)? CreateCloudVisionService(string featureId = AiFeatureIds.PhotoAnalysis)
     {
         var settings = CloudVisionSettings.Load(AppPaths.CloudVisionSettingsPath);
         if (!settings.Enabled) return null;
@@ -156,19 +156,22 @@ public static class AppServices
         var provider = resolved.Value.Provider;
         var model = resolved.Value.Model;
         var credentials = new WindowsCredentialStore();
-        var key = credentials.Read(PicerCredentialTargets.AiProvider(provider.Id));
+        var isLocal = AiProviderIds.IsLocal(provider.Id);
+        var key = isLocal ? "local-proxy" : credentials.Read(PicerCredentialTargets.AiProvider(provider.Id));
         if (string.IsNullOrWhiteSpace(key) && provider.Id.Equals("bailian", StringComparison.OrdinalIgnoreCase)) key = credentials.Read(PicerCredentialTargets.Bailian);
         if (string.IsNullOrWhiteSpace(key) && provider.Id.Equals("zhipu", StringComparison.OrdinalIgnoreCase)) key = credentials.Read(PicerCredentialTargets.Zhipu);
         if (string.IsNullOrWhiteSpace(key)) return null;
         var baseUrl = provider.BaseUrl.TrimEnd('/');
-        var endpointText = baseUrl.EndsWith("/chat/completions", StringComparison.OrdinalIgnoreCase) ? baseUrl : baseUrl + "/chat/completions";
+        var endpointText = isLocal || baseUrl.EndsWith("/chat/completions", StringComparison.OrdinalIgnoreCase)
+            ? baseUrl : baseUrl + "/chat/completions";
         if (!Uri.TryCreate(endpointText, UriKind.Absolute, out var endpoint)) return null;
         var options = new CloudVisionApiOptions(endpoint, key, model.Id, provider.Id, PromptVersion: "picer-photo-v1");
         var analyzer = new OpenAiCompatibleCloudVisionAnalyzer(options);
         return (new CloudVisionAnalysisService(CloudVisionRepository, analyzer, Geocoder), analyzer,
             new CloudVisionRunPolicy(true, settings.MaximumImagesPerRun, settings.IncludePreciseGps,
-                settings.DailyBudgetYuan, settings.MonthlyBudgetYuan),
-            $"{provider.Name} / {model.Name}");
+                isLocal ? decimal.MaxValue : settings.DailyBudgetYuan,
+                isLocal ? decimal.MaxValue : settings.MonthlyBudgetYuan),
+            $"{provider.Name} / {model.Name}", isLocal);
     }
 
     public static OpenAiCompatibleSceneSummarizer? CreateSceneGroupSummarizer()
@@ -180,14 +183,36 @@ public static class AppServices
         var provider = resolved.Value.Provider;
         var model = resolved.Value.Model;
         var credentials = new WindowsCredentialStore();
-        var key = credentials.Read(PicerCredentialTargets.AiProvider(provider.Id));
+        var isLocal = AiProviderIds.IsLocal(provider.Id);
+        var key = isLocal ? "local-proxy" : credentials.Read(PicerCredentialTargets.AiProvider(provider.Id));
         if (string.IsNullOrWhiteSpace(key) && provider.Id.Equals("bailian", StringComparison.OrdinalIgnoreCase)) key = credentials.Read(PicerCredentialTargets.Bailian);
         if (string.IsNullOrWhiteSpace(key) && provider.Id.Equals("zhipu", StringComparison.OrdinalIgnoreCase)) key = credentials.Read(PicerCredentialTargets.Zhipu);
         if (string.IsNullOrWhiteSpace(key)) return null;
         var baseUrl = provider.BaseUrl.TrimEnd('/');
-        var endpointText = baseUrl.EndsWith("/chat/completions", StringComparison.OrdinalIgnoreCase) ? baseUrl : baseUrl + "/chat/completions";
+        var endpointText = isLocal || baseUrl.EndsWith("/chat/completions", StringComparison.OrdinalIgnoreCase)
+            ? baseUrl : baseUrl + "/chat/completions";
         if (!Uri.TryCreate(endpointText, UriKind.Absolute, out var endpoint)) return null;
         return new OpenAiCompatibleSceneSummarizer(new CloudVisionApiOptions(endpoint, key, model.Id, provider.Id));
+    }
+
+    public static IVideoTranscriptionService? CreateVideoTranscriptionService()
+    {
+        var ffmpeg = new FfmpegLocator().Find();
+        if (ffmpeg is null) return null;
+        var settings = CloudVisionSettings.Load(AppPaths.CloudVisionSettingsPath);
+        var resolved = settings.Resolve(AiFeatureIds.VideoTranscription);
+        if (resolved is not null && AiProviderIds.IsLocal(resolved.Value.Provider.Id))
+        {
+            if (resolved.Value.Provider.Id.Equals(AiProviderIds.LocalQwenAsr, StringComparison.OrdinalIgnoreCase) &&
+                Uri.TryCreate(resolved.Value.Provider.BaseUrl, UriKind.Absolute, out var endpoint))
+                return new QwenAsrTranscriptionService(ffmpeg, endpoint, resolved.Value.Model.Id,
+                    Path.Combine(AppPaths.DataRoot, "video-audio"));
+            if (resolved.Value.Provider.Id.Equals(AiProviderIds.BundledWhisper, StringComparison.OrdinalIgnoreCase) &&
+                File.Exists(AppPaths.BundledWhisperPath) && File.Exists(AppPaths.BundledWhisperModelPath))
+                return new WhisperTranscriptionService(ffmpeg, AppPaths.BundledWhisperPath,
+                    AppPaths.BundledWhisperModelPath, Path.Combine(AppPaths.DataRoot, "video-audio"));
+        }
+        return null;
     }
 
     public static void Shutdown()

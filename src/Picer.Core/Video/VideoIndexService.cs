@@ -144,6 +144,14 @@ public sealed class VideoRepository(PicerDatabase database)
         command.Parameters.AddWithValue("$video",videoId); return command.ExecuteScalar() as string;
     }
 
+    public (string ModelVersion, string Json)? GetTranscriptWithModel(long videoId)
+    {
+        using var command=database.Command("SELECT model_version,transcript_json FROM video_transcripts WHERE video_id=$video");
+        command.Parameters.AddWithValue("$video",videoId);
+        using var reader=command.ExecuteReader();
+        return reader.Read() ? (reader.GetString(0), reader.GetString(1)) : null;
+    }
+
     public void SaveSummary(long videoId,ICloudVisionAnalyzer analyzer,VideoRecord video,CloudVisionResult result)
     {
         using var command=database.Command("""
