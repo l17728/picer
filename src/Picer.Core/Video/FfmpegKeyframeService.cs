@@ -30,15 +30,19 @@ public sealed class FfmpegKeyframeService(string ffmpegPath, string cacheRoot)
     {
         var directory = Path.Combine(cacheRoot, video.Id.ToString(CultureInfo.InvariantCulture));
         Directory.CreateDirectory(directory);
+        foreach (var stale in Directory.EnumerateFiles(directory, "scene-*.jpg").Concat(Directory.EnumerateFiles(directory, "interval-*.jpg")))
+            File.Delete(stale);
         var pattern = Path.Combine(directory, "scene-%05d.jpg");
         var run = await RunAsync(ffmpegPath, ["-hide_banner", "-loglevel", "info", "-i", video.Path,
-            "-vf", "select=gt(scene\\,0.35),showinfo,scale=1280:-2", "-vsync", "vfr", "-q:v", "3", pattern], cancellationToken, throwOnError: false);
+            "-vf", "select=gt(scene\\,0.35),showinfo,scale=1280:-2,format=yuvj420p", "-vsync", "vfr",
+            "-c:v", "mjpeg", "-strict", "unofficial", "-q:v", "3", pattern], cancellationToken, throwOnError: false);
         var files = Directory.EnumerateFiles(directory, "scene-*.jpg").Order().Take(200).ToArray();
         if (files.Length == 0)
         {
             pattern = Path.Combine(directory, "interval-%05d.jpg");
             await RunAsync(ffmpegPath, ["-hide_banner", "-loglevel", "error", "-i", video.Path,
-                "-vf", "fps=1/10,scale=1280:-2", "-frames:v", "200", "-q:v", "3", pattern], cancellationToken);
+                "-vf", "fps=1/10,scale=1280:-2,format=yuvj420p", "-frames:v", "200",
+                "-c:v", "mjpeg", "-strict", "unofficial", "-q:v", "3", pattern], cancellationToken);
             files = Directory.EnumerateFiles(directory, "interval-*.jpg").Order().ToArray();
             return Deduplicate(files.Select((path, index) => new VideoKeyframe(index * 10d, path)));
         }
