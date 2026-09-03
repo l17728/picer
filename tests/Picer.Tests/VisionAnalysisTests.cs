@@ -468,6 +468,43 @@ public sealed class VisionAnalysisTests : IDisposable
     }
 
     [Fact]
+    public async Task SuggestedGroups_HideNearDuplicatePhotosUsingImageAndFaceSignals()
+    {
+        var repository = new VisionAnalysisRepository(_database);
+        using var analysis = new VisionAnalysisService(repository, new SameIdentityAnalyzer());
+        var sourceId = _database.GetSources().Single().Id;
+
+        async Task<long> Add(string name, long averageHash)
+        {
+            var path = Path.Combine(_root, name);
+            File.WriteAllBytes(path, [9, 8, 7]);
+            var image = _database.UpsertImage(new ImageRecord
+            {
+                SourceId = sourceId, Path = path, FileSize = 3, Sha256 = name,
+                Width = 640, Height = 480, AverageHash = averageHash,
+                ModifiedUtc = File.GetLastWriteTimeUtc(path), Status = ImageStatus.Active,
+                IndexedUtc = DateTime.UtcNow
+            });
+            await analysis.AnalyzeAsync([image]);
+            return Assert.Single(repository.GetFaceIds(image.Id));
+        }
+
+        var people = new PeopleService(_database);
+        var person = people.Create("近重复人物");
+        people.ConfirmFace(await Add("prototype.jpg", 0x5555), person.Id);
+        await Add("near-a.jpg", 0x1110);
+        await Add("near-b.jpg", 0x1111); // 一位感知哈希差异，且人脸向量与位置一致。
+        await Add("distinct.jpg", 0x7777);
+
+        new FaceSuggestionEngine(repository, people).Suggest(0.9);
+        var group = Assert.Single(repository.GetSuggestedPersonGroups());
+
+        Assert.Equal(2, group.Faces.Count);
+        Assert.Single(group.Faces.Where(face => Path.GetFileName(face.ImagePath).StartsWith("near-", StringComparison.Ordinal)));
+        Assert.Contains(group.Faces, face => Path.GetFileName(face.ImagePath) == "distinct.jpg");
+    }
+
+    [Fact]
     public async Task Suggestions_UseMultiplePersonPrototypesAndGeneralizedNegativeSamples()
     {
         var repository = new VisionAnalysisRepository(_database);

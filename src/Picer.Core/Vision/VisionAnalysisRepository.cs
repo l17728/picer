@@ -261,7 +261,7 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
         using var command = database.Command("""
             SELECT p.id, p.display_name, f.id, f.image_id, i.path, i.thumb_path, f.ordinal,
                    f.box_x, f.box_y, f.box_width, f.box_height, f.confidence,
-                   i.sha256, i.ahash, i.width, i.height
+                   i.sha256, i.ahash, i.width, i.height, f.embedding
             FROM face_person_assignments a
             JOIN people p ON p.id=a.person_id
             JOIN detected_faces f ON f.id=a.face_id
@@ -283,7 +283,8 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
             var signature = new FaceSourceSignature(
                 reader.IsDBNull(12) ? null : reader.GetString(12), reader.GetInt64(13),
                 reader.GetInt32(14), reader.GetInt32(15),
-                new NormalizedFaceBox(reader.GetFloat(7), reader.GetFloat(8), reader.GetFloat(9), reader.GetFloat(10)));
+                new NormalizedFaceBox(reader.GetFloat(7), reader.GetFloat(8), reader.GetFloat(9), reader.GetFloat(10)),
+                reader.IsDBNull(16) ? null : FromBytes((byte[])reader[16]));
             if (group.Deduplicator.IsDuplicateAndAdd(signature)) continue;
             group.Faces.Add(new UnassignedFaceRecord(
                 reader.GetInt64(2), reader.GetInt64(3), reader.GetString(4),
@@ -549,12 +550,14 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
         return union <= 0 ? 0 : intersection / union;
     }
 
-    private sealed record FaceSourceSignature(string? Sha256, long AverageHash, int Width, int Height, NormalizedFaceBox Box);
+    private sealed record FaceSourceSignature(string? Sha256, long AverageHash, int Width, int Height,
+        NormalizedFaceBox Box, float[]? Embedding = null);
 
     private sealed class FaceSourceDeduplicator
     {
         private readonly Dictionary<string, List<FaceSourceSignature>> _bySha256 = new(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<(long Hash, int Width, int Height), List<FaceSourceSignature>> _byVisual = [];
+        private readonly List<FaceSourceSignature> _withEmbedding = [];
 
         public bool IsDuplicateAndAdd(FaceSourceSignature signature)
         {
@@ -563,11 +566,14 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
             var visualKey = (signature.AverageHash, signature.Width, signature.Height);
             if (signature.AverageHash != 0 &&
                 ContainsDuplicate(_byVisual.GetValueOrDefault(visualKey), signature)) return true;
+            if (signature.AverageHash != 0 && signature.Embedding is { Length: > 0 } &&
+                _withEmbedding.Any(existing => IsNearDuplicateFaceSource(existing, signature))) return true;
 
             if (!string.IsNullOrWhiteSpace(signature.Sha256))
                 Add(_bySha256, signature.Sha256, signature);
             if (signature.AverageHash != 0)
                 Add(_byVisual, visualKey, signature);
+            if (signature.Embedding is { Length: > 0 }) _withEmbedding.Add(signature);
             return false;
         }
 
@@ -580,6 +586,35 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
             if (!index.TryGetValue(key, out var values)) index.Add(key, values = []);
             values.Add(value);
         }
+    }
+
+    private static bool IsNearDuplicateFaceSource(FaceSourceSignature left, FaceSourceSignature right)
+    {
+        if (left.AverageHash == 0 || right.AverageHash == 0 ||
+            left.Embedding is not { Length: > 0 } leftEmbedding ||
+            right.Embedding is not { Length: > 0 } rightEmbedding) return false;
+        if (HammingDistance(left.AverageHash, right.AverageHash) > 1) return false;
+        var leftAspect = left.Height == 0 ? 0 : (double)left.Width / left.Height;
+        var rightAspect = right.Height == 0 ? 0 : (double)right.Width / right.Height;
+        if (leftAspect <= 0 || rightAspect <= 0 || Math.Abs(leftAspect - rightAspect) / leftAspect > 0.01) return false;
+        return IntersectionOverUnion(left.Box, right.Box) >= 0.75 &&
+               CosineSimilarity(leftEmbedding, rightEmbedding) >= 0.99;
+    }
+
+    private static int HammingDistance(long left, long right) =>
+        System.Numerics.BitOperations.PopCount(unchecked((ulong)(left ^ right)));
+
+    private static double CosineSimilarity(IReadOnlyList<float> left, IReadOnlyList<float> right)
+    {
+        var length = Math.Min(left.Count, right.Count);
+        double dot = 0, leftNorm = 0, rightNorm = 0;
+        for (var index = 0; index < length; index++)
+        {
+            dot += left[index] * right[index];
+            leftNorm += left[index] * left[index];
+            rightNorm += right[index] * right[index];
+        }
+        return length == 0 || leftNorm <= 0 || rightNorm <= 0 ? -1 : dot / Math.Sqrt(leftNorm * rightNorm);
     }
 
     public int GetIgnoredFaceCount()
