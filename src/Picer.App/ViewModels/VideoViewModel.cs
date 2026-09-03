@@ -435,12 +435,13 @@ public sealed partial class VideoFaceItemViewModel(VideoFaceTimelineRecord recor
             using var stream = File.OpenRead(Record.KeyframePath);
             var decoder = BitmapDecoder.Create(stream, BitmapCreateOptions.PreservePixelFormat, BitmapCacheOption.OnLoad);
             var source = decoder.Frames[0];
-            var paddingX = Record.Box.Width * .15f;
-            var paddingY = Record.Box.Height * .15f;
+            var paddingX = Record.Box.Width * .35f;
+            var paddingTop = Record.Box.Height * .35f;
+            var paddingBottom = Record.Box.Height * .75f;
             var x = Math.Max(0, (int)((Record.Box.X - paddingX) * source.PixelWidth));
-            var y = Math.Max(0, (int)((Record.Box.Y - paddingY) * source.PixelHeight));
+            var y = Math.Max(0, (int)((Record.Box.Y - paddingTop) * source.PixelHeight));
             var right = Math.Min(source.PixelWidth, (int)((Record.Box.X + Record.Box.Width + paddingX) * source.PixelWidth));
-            var bottom = Math.Min(source.PixelHeight, (int)((Record.Box.Y + Record.Box.Height + paddingY) * source.PixelHeight));
+            var bottom = Math.Min(source.PixelHeight, (int)((Record.Box.Y + Record.Box.Height + paddingBottom) * source.PixelHeight));
             if (right <= x || bottom <= y) return null;
             var crop = new CroppedBitmap(source, new Int32Rect(x, y, right - x, bottom - y));
             crop.Freeze();
