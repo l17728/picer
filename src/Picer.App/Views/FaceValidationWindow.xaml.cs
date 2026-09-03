@@ -84,15 +84,48 @@ public partial class FaceValidationWindow : Window
 
     private async void ApplySFaceThreshold_Click(object sender, RoutedEventArgs e)
     {
-        if (_lastCalibration is null) return;
+        if (_lastCalibration is null)
+        {
+            MessageBox.Show("请先点击“计算推荐阈值与误识率”。", "应用 SFace 阈值",
+                MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
         if (!TryBeginOperation("正在应用 SFace 阈值…")) return;
+        SFaceProgressPanel.Visibility = Visibility.Visible;
+        SFaceProgress.IsIndeterminate = true;
+        SFaceProgressText.Text = "SFace：正在保存并验证新阈值…";
+        ApplySFaceThreshold.Content = "正在应用…";
         try
         {
             await UiWork.RunDatabaseAsync(() => _validation.ApplySFaceThreshold(_lastCalibration));
-            Status.Text = $"已将阈值 {_lastCalibration.RecommendedThreshold:F3} 应用于模型 {_lastCalibration.ModelVersion} 的人物自动匹配";
+            var applied = await UiWork.RunDatabaseAsync(() =>
+                _validation.GetAppliedSFaceThreshold(_lastCalibration.ModelVersion));
+            if (applied is null || Math.Abs(applied.Value - _lastCalibration.RecommendedThreshold) > 0.000_001)
+                throw new InvalidOperationException("数据库回读的阈值与待应用值不一致");
+            var message = $"阈值 {applied.Value:F3} 已成功应用到模型 {_lastCalibration.ModelVersion}。";
+            Status.Text = message;
+            SFaceProgress.IsIndeterminate = false;
+            SFaceProgress.Value = 100;
+            SFaceProgressText.Text = $"SFace：应用成功 · 当前阈值 {applied.Value:F3}";
+            AppLogger.Info($"SFace 阈值应用成功：model={_lastCalibration.ModelVersion}; threshold={applied.Value:F3}");
+            MessageBox.Show($"{message}\n\n现有人工分类不会改变。若要按新标准重算尚未确认的人脸，请返回人物页点击“更新自动归类”。",
+                "SFace 阈值应用成功", MessageBoxButton.OK, MessageBoxImage.Information);
         }
-        catch (Exception exception) { Status.Text = $"应用失败：{exception.Message}"; }
-        finally { EndOperation(); }
+        catch (Exception exception)
+        {
+            Status.Text = $"应用失败：{exception.Message}";
+            SFaceProgress.IsIndeterminate = false;
+            SFaceProgress.Value = 0;
+            SFaceProgressText.Text = $"SFace：应用失败——{exception.Message}";
+            AppLogger.Error("SFace 阈值应用失败", exception);
+            MessageBox.Show($"SFace 阈值没有成功应用：\n{exception.Message}", "应用失败",
+                MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+        finally
+        {
+            ApplySFaceThreshold.Content = "应用到人物自动匹配";
+            EndOperation();
+        }
     }
 
     private async void LoadYuNet_Click(object sender, RoutedEventArgs e)
