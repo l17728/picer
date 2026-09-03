@@ -34,6 +34,7 @@ public static class AppServices
     public static FaceSuggestionEngine FaceSuggestions { get; private set; } = null!;
     public static UnknownFaceClusterer UnknownFaceClusters { get; private set; } = null!;
     public static FaceValidationService FaceValidation { get; private set; } = null!;
+    public static FaceTrainingService FaceTraining { get; private set; } = null!;
     public static CloudVisionRepository CloudVisionRepository { get; private set; } = null!;
     public static VisualConceptRepository VisualConceptRepository { get; private set; } = null!;
     public static VideoRepository Videos { get; private set; } = null!;
@@ -77,6 +78,7 @@ public static class AppServices
         FaceSuggestions = new FaceSuggestionEngine(VisionRepository, People);
         UnknownFaceClusters = new UnknownFaceClusterer(VisionRepository);
         FaceValidation = new FaceValidationService(Db, VisionRepository);
+        FaceTraining = new FaceTrainingService(VisionRepository);
         CloudVisionRepository = new CloudVisionRepository(Db);
         VisualConceptRepository = new VisualConceptRepository(Db);
         Videos = new VideoRepository(Db);
@@ -215,10 +217,28 @@ public static class AppServices
         return null;
     }
 
+    public static OpenAiCompatibleChatClient? CreateAiChatClient(string featureId)
+    {
+        var settings = CloudVisionSettings.Load(AppPaths.CloudVisionSettingsPath);
+        if (!settings.Enabled) return null;
+        var resolved = settings.Resolve(featureId);
+        if (resolved is null) return null;
+        var provider = resolved.Value.Provider; var model = resolved.Value.Model;
+        var isLocal = AiProviderIds.IsLocal(provider.Id);
+        var key = isLocal ? "local-proxy" : new WindowsCredentialStore().Read(PicerCredentialTargets.AiProvider(provider.Id));
+        if (string.IsNullOrWhiteSpace(key)) return null;
+        var baseUrl = provider.BaseUrl.TrimEnd('/');
+        var target = isLocal || baseUrl.EndsWith("/chat/completions", StringComparison.OrdinalIgnoreCase)
+            ? baseUrl : baseUrl + "/chat/completions";
+        return Uri.TryCreate(target, UriKind.Absolute, out var endpoint)
+            ? new OpenAiCompatibleChatClient(endpoint, key, model.Id) : null;
+    }
+
     public static void Shutdown()
     {
         AppLogger.Info("AppServices 关闭");
         VisionAnalysis?.Dispose();
+        FaceTraining?.Dispose();
         FaceAnalyzer?.Dispose();
         ClipEncoder?.Dispose();
         Db?.Dispose();

@@ -66,6 +66,13 @@ public partial class VideoViewModel(VideoRepository repository, VideoIndexServic
 
     public Task ApplySearchAsync(string? query) => LoadAsync(query);
 
+    public async Task FocusVideoAsync(long videoId)
+    {
+        await LoadAsync();
+        SelectedVideo = Videos.FirstOrDefault(value => value.Record.Id == videoId);
+        if (SelectedVideo is not null) StatusText = $"已定位视频：{SelectedVideo.FileName}";
+    }
+
     public void UpdateSelection(IEnumerable<VideoItemViewModel> videos) => _selectedVideos = videos.Distinct().ToArray();
     public void UpdateVideoFaceSelection(IEnumerable<VideoFaceItemViewModel> faces) => _selectedVideoFaces = faces.Distinct().ToArray();
 

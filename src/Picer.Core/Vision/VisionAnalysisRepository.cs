@@ -405,7 +405,7 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
     public IReadOnlyList<RejectedFaceEmbeddingRecord> GetRejectedFaceEmbeddings()
     {
         using var command = database.Command("""
-            SELECT r.person_id, f.embedding
+            SELECT f.id, f.image_id, f.model_version, r.person_id, f.embedding
             FROM face_person_rejections r
             JOIN detected_faces f ON f.id=r.face_id
             JOIN images i ON i.id=f.image_id AND i.status='active'
@@ -414,7 +414,8 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
             """);
         var values = new List<RejectedFaceEmbeddingRecord>();
         using var reader = command.ExecuteReader();
-        while (reader.Read()) values.Add(new RejectedFaceEmbeddingRecord(reader.GetInt64(0), FromBytes((byte[])reader[1])));
+        while (reader.Read()) values.Add(new RejectedFaceEmbeddingRecord(reader.GetInt64(0), reader.GetInt64(1),
+            reader.GetString(2), reader.GetInt64(3), FromBytes((byte[])reader[4])));
         return values;
     }
 
@@ -423,6 +424,74 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
         using var command = database.Command("SELECT match_threshold FROM face_model_settings WHERE model_version=$version");
         command.Parameters.AddWithValue("$version", modelVersion);
         return command.ExecuteScalar() is { } value ? Convert.ToDouble(value) : null;
+    }
+
+    public IReadOnlyDictionary<long, FaceLearnedPolicy> GetLearnedFacePolicies(string modelVersion)
+    {
+        using var command = database.Command("""
+            SELECT person_id,artifact_id,model_version,prototype,match_threshold
+            FROM face_person_policies WHERE model_version=$model
+            """);
+        command.Parameters.AddWithValue("$model", modelVersion);
+        var values = new Dictionary<long, FaceLearnedPolicy>();
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            var value = new FaceLearnedPolicy(reader.GetInt64(0), reader.GetString(1), reader.GetString(2),
+                FromBytes((byte[])reader[3]), reader.GetDouble(4));
+            values[value.PersonId] = value;
+        }
+        return values;
+    }
+
+    public void ApplyLearnedFaceArtifact(string artifactId, string datasetId, string endpoint, string modelVersion,
+        string artifactJson, double falseAcceptRate, double falseRejectRate,
+        IReadOnlyCollection<FaceLearnedPolicy> policies)
+    {
+        using var transaction = database.BeginTransaction();
+        using (var supersede = database.Command("UPDATE face_training_artifacts SET state='superseded' WHERE state='active'"))
+        { supersede.Transaction = transaction; supersede.ExecuteNonQuery(); }
+        using (var artifact = database.Command("""
+            INSERT INTO face_training_artifacts(artifact_id,dataset_id,endpoint,model_version,artifact_json,
+                false_accept_rate,false_reject_rate,state,created_utc,applied_utc)
+            VALUES($id,$dataset,$endpoint,$model,$json,$far,$frr,'active',$now,$now)
+            ON CONFLICT(artifact_id) DO UPDATE SET state='active',applied_utc=excluded.applied_utc
+            """))
+        {
+            artifact.Transaction = transaction;
+            artifact.Parameters.AddWithValue("$id", artifactId); artifact.Parameters.AddWithValue("$dataset", datasetId);
+            artifact.Parameters.AddWithValue("$endpoint", endpoint); artifact.Parameters.AddWithValue("$model", modelVersion);
+            artifact.Parameters.AddWithValue("$json", artifactJson); artifact.Parameters.AddWithValue("$far", falseAcceptRate);
+            artifact.Parameters.AddWithValue("$frr", falseRejectRate); artifact.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("o"));
+            artifact.ExecuteNonQuery();
+        }
+        using (var clear = database.Command("DELETE FROM face_person_policies")) { clear.Transaction = transaction; clear.ExecuteNonQuery(); }
+        foreach (var policy in policies)
+        {
+            using var insert = database.Command("""
+                INSERT INTO face_person_policies(person_id,artifact_id,model_version,prototype,match_threshold,updated_utc)
+                VALUES($person,$artifact,$model,$prototype,$threshold,$now)
+                """);
+            insert.Transaction = transaction;
+            insert.Parameters.AddWithValue("$person", policy.PersonId); insert.Parameters.AddWithValue("$artifact", artifactId);
+            insert.Parameters.AddWithValue("$model", modelVersion); insert.Parameters.AddWithValue("$prototype", ToBytes(policy.Prototype));
+            insert.Parameters.AddWithValue("$threshold", policy.MatchThreshold); insert.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("o"));
+            insert.ExecuteNonQuery();
+        }
+        transaction.Commit();
+    }
+
+    public (string ArtifactId, string DatasetId, string Endpoint, string ModelVersion, string Json,
+        double FalseAcceptRate, double FalseRejectRate)? GetPreviousLearnedFaceArtifact()
+    {
+        using var command = database.Command("""
+            SELECT artifact_id,dataset_id,endpoint,model_version,artifact_json,false_accept_rate,false_reject_rate
+            FROM face_training_artifacts WHERE state='superseded' ORDER BY applied_utc DESC,created_utc DESC LIMIT 1
+            """);
+        using var reader = command.ExecuteReader();
+        return reader.Read()
+            ? (reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetString(3), reader.GetString(4),
+                reader.GetDouble(5), reader.GetDouble(6)) : null;
     }
 
     public void SaveFaceMatchThreshold(string modelVersion, double threshold, int samePairs, int differentPairs)

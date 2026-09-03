@@ -17,6 +17,7 @@ using Picer.Core.Models;
 using Picer.Core.Logging;
 using Picer.Core.Search;
 using Picer.Core.Vision;
+using Picer.Core.Video;
 using Picer.App.Infrastructure;
 using Picer.Core.FileOperations;
 using Picer.Core.Hashing;
@@ -35,6 +36,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private const int MaxLogLines = 2000;
     private SearchCursor? _searchCursor;
     private CancellationTokenSource? _searchCts;
+    private CancellationTokenSource? _aiQuestionCts;
     private CancellationTokenSource? _directoryLoadCts;
     private int _directoryLoadVersion;
     private CancellationTokenSource? _cloudCts;
@@ -58,6 +60,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     public ListCollectionView DirectoryImagesView { get; }
     public System.Collections.IEnumerable DirectoryDisplayItems => IsTimelineAlbumSelected ? DirectoryTimelineItems : DirectoryImagesView;
     public ObservableCollection<ImageItemViewModel> SelectedImages { get; } = new();
+    public ObservableCollection<AiVideoResultViewModel> AiVideoResults { get; } = new();
     public SemanticViewModel Semantic { get; }
     public PeopleViewModel People { get; }
     public VideoViewModel Video { get; }
@@ -81,6 +84,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     [ObservableProperty]
     private bool _isQuestionMode;
+
+    [ObservableProperty]
+    private bool _includeVideosInAiQuestion;
 
     [ObservableProperty]
     private string _questionAnswerText = "问答仅在本地索引上运行，不外发图片或元数据。";
@@ -304,10 +310,14 @@ public partial class MainViewModel : ObservableObject, IDisposable
     partial void OnIsQuestionModeChanged(bool value)
     {
         QuestionAnswerText = value
-            ? "AI 问答入口已开启。当前尚未连接大模型，可先输入：“有多少张照片？”或“这些照片用了什么相机？”。"
+            ? "## AI 问答已开启\n\n可按人物、地点、时间、标签、照片描述与场景提问；勾选“包含视频”后还会检索视频人物、转写和摘要。"
             : "AI 问答已关闭。";
-        StatusText = value ? "AI 问答已开启（当前为本地基础问答）" : "AI 问答已关闭";
+        StatusText = value ? "AI 问答已开启（索引检索 + VL 复核）" : "AI 问答已关闭";
         _ = ApplySearchAndFilterAsync();
+    }
+    partial void OnIncludeVideosInAiQuestionChanged(bool value)
+    {
+        if (IsQuestionMode && !string.IsNullOrWhiteSpace(SearchQuery)) _ = ApplySearchAndFilterAsync();
     }
     partial void OnSortByChanged(SortField value) => _ = ApplySearchAndFilterAsync();
     partial void OnSortDirChanged(SortDirection value) => _ = ApplySearchAndFilterAsync();
@@ -417,10 +427,17 @@ public partial class MainViewModel : ObservableObject, IDisposable
     public async Task ApplySearchAndFilterAsync()
     {
         _searchCts?.Cancel();
+        _aiQuestionCts?.Cancel();
+        _aiQuestionCts?.Dispose();
         var cts = _searchCts = new CancellationTokenSource();
         var version = Interlocked.Increment(ref _searchVersion);
         var sourceId = SelectedSource is null || SelectedSource.IsAll ? (long?)null : SelectedSource.SourceId;
         var filters = BuildSearchFilters(sourceId);
+        if (IsQuestionMode && !string.IsNullOrWhiteSpace(SearchQuery))
+        {
+            await ApplyAiQuestionAsync(version, cts);
+            return;
+        }
         LocalQuestionResult? question = null;
         if (IsQuestionMode)
         {
@@ -490,6 +507,53 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 ? $"搜索「{SearchQuery}」：显示 {TotalCount} / 共 {MatchedCount} 条"
                 : $"搜索「{SearchQuery}」：找到 {MatchedCount} 条")
             : (MatchedCount > TotalCount ? $"显示 {TotalCount} / 共 {MatchedCount} 张图片" : $"共 {MatchedCount} 张图片");
+    }
+
+    private async Task ApplyAiQuestionAsync(long version, CancellationTokenSource searchCancellation)
+    {
+        _aiQuestionCts?.Cancel(); _aiQuestionCts?.Dispose();
+        _aiQuestionCts = CancellationTokenSource.CreateLinkedTokenSource(searchCancellation.Token);
+        var token = _aiQuestionCts.Token;
+        using var chat = AppServices.CreateAiChatClient(AiFeatureIds.AiQuestion);
+        if (chat is null)
+        {
+            QuestionAnswerText = "## AI 问答尚未配置\n\n请在“AI 模型设置 → AI 问答与媒体检索”中选择可用模型。";
+            StatusText = "AI 问答模型尚未配置";
+            return;
+        }
+        var question = SearchQuery.Trim();
+        var includeVideos = IncludeVideosInAiQuestion;
+        try
+        {
+            StatusText = "AI 问答：正在理解问题…";
+            var progress = new Progress<(string Stage, int Percent)>(value =>
+            {
+                ProgressValue = value.Percent; StatusText = $"AI 问答：{value.Stage}（{value.Percent}%）";
+            });
+            AppLogger.Info($"AiQuestion started; includeVideos={includeVideos}; queryLength={question.Length}");
+            var service = new AiMediaRetrievalService(_db, AppServices.People, AppServices.Videos,
+                AppServices.CloudVisionRepository, chat);
+            var answer = await service.AskAsync(question, includeVideos, DateTime.Today, progress, token);
+            if (version != _searchVersion || token.IsCancellationRequested) return;
+            QuestionAnswerText = answer.Markdown;
+            MatchedCount = answer.Photos.Count;
+            _searchCursor = null; HasMoreResults = false;
+            Images.Clear(); _searchLoadedRecords.Clear(); _searchLoadedRecords.AddRange(answer.Photos);
+            var photoItems = await BuildBurstAwareItemsAsync(answer.Photos, token);
+            await UiWork.AddInBatchesAsync(photoItems, Images.Add, batchSize: 8, cancellationToken: token);
+            AiVideoResults.Clear();
+            foreach (var video in answer.Videos) AiVideoResults.Add(new AiVideoResultViewModel(video));
+            OnPropertyChanged(nameof(TotalCount)); OnPropertyChanged(nameof(ResultsSummary));
+            StatusText = $"AI 问答完成：照片 {answer.Photos.Count} 张，视频 {answer.Videos.Count} 个";
+            AppLogger.Info($"AiQuestion completed; photos={answer.Photos.Count}; videos={answer.Videos.Count}; person={answer.Plan.PersonName ?? "none"}; location={answer.Plan.Location ?? "none"}; keywords={string.Join(',', answer.Plan.Keywords)}");
+        }
+        catch (OperationCanceledException) { AppLogger.Info("AiQuestion superseded or canceled"); }
+        catch (Exception exception)
+        {
+            QuestionAnswerText = $"## 查询失败\n\n{exception.Message}";
+            StatusText = $"AI 问答失败：{exception.Message}";
+            AppLogger.Error("AiQuestion failed", exception);
+        }
     }
 
     private SearchFilters BuildSearchFilters(long? sourceId = null)
@@ -1277,6 +1341,40 @@ public partial class MainViewModel : ObservableObject, IDisposable
             foreach (var descendant in FlattenGeoNodes(child)) yield return descendant;
     }
 
+    public IReadOnlyList<string> GetVoiceLocationPaths()
+    {
+        var root = DirectoryTree.FirstOrDefault(node => node.IsGeoRoot);
+        if (root is null) return [];
+        var result = new List<string>();
+        AddVoiceLocationPaths(root, root.Name, result);
+        return result;
+    }
+
+    public bool OpenVoiceLocation(string path)
+    {
+        var root = DirectoryTree.FirstOrDefault(node => node.IsGeoRoot);
+        if (root is null) return false;
+        var parts = path.Split('/', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (parts.Length == 0 || !string.Equals(parts[0], root.Name, StringComparison.OrdinalIgnoreCase)) return false;
+        var current = root;
+        current.IsExpanded = true;
+        foreach (var part in parts.Skip(1))
+        {
+            var next = current.Children.FirstOrDefault(node => string.Equals(node.Name, part, StringComparison.OrdinalIgnoreCase));
+            if (next is null) return false;
+            current = next;
+            current.IsExpanded = true;
+        }
+        SelectedDirectory = current;
+        return true;
+    }
+
+    private static void AddVoiceLocationPaths(DirectoryNodeViewModel node, string path, ICollection<string> result)
+    {
+        result.Add(path);
+        foreach (var child in node.Children) AddVoiceLocationPaths(child, $"{path}/{child.Name}", result);
+    }
+
     [RelayCommand]
     private async Task ExpandDirectoryAsync(DirectoryNodeViewModel node)
     {
@@ -1760,6 +1858,15 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _locationEnrichmentCts.Dispose();
         People.Dispose();
     }
+}
+
+public sealed class AiVideoResultViewModel
+{
+    public AiVideoResultViewModel(VideoRecord record) => Record = record;
+    public VideoRecord Record { get; }
+    public long Id => Record.Id;
+    public string FileName => Path.GetFileName(Record.Path);
+    public string Detail => $"{(Record.TakenUtc ?? Record.ModifiedUtc):yyyy-MM-dd HH:mm} · {(Record.DurationSeconds is null ? "时长未知" : TimeSpan.FromSeconds(Record.DurationSeconds.Value).ToString(@"hh\:mm\:ss"))}";
 }
 
 public partial class DirectoryNodeViewModel : ObservableObject

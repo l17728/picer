@@ -20,6 +20,7 @@
             </MenuItem>
             <MenuItem Header="AI 功能(_A)" AutomationProperties.Name="AI 功能菜单">
                 <MenuItem Header="AI 模型设置" Click="CloudVisionSettings_Click"/>
+                <MenuItem Header="语音助手" Click="VoiceAssistant_Click"/>
                 <MenuItem Header="描述选中照片" Command="{Binding AnalyzeSelectedWithCloudCommand}"/>
                 <MenuItem Header="任务中心" Click="CloudVisionTasks_Click"/>
                 <Separator/>
@@ -323,12 +324,25 @@
                     <StackPanel DockPanel.Dock="Top" Margin="8,2,8,4">
                         <TextBlock Text="{Binding ActiveFiltersText}" TextWrapping="Wrap" Foreground="#444"/>
                         <TextBlock Text="{Binding MatchExplanation}" FontSize="11" Foreground="#666"/>
-                        <TextBlock Text="{Binding QuestionAnswerText}" FontWeight="SemiBold" TextWrapping="Wrap" Margin="0,2,0,0">
-                            <TextBlock.Style><Style TargetType="TextBlock"><Setter Property="Visibility" Value="Collapsed"/><Style.Triggers><DataTrigger Binding="{Binding IsQuestionMode}" Value="True"><Setter Property="Visibility" Value="Visible"/></DataTrigger></Style.Triggers></Style></TextBlock.Style>
-                        </TextBlock>
+                        <controls:MarkdownView Markdown="{Binding QuestionAnswerText}" MaxHeight="180" Margin="0,2,0,0">
+                            <controls:MarkdownView.Style><Style TargetType="controls:MarkdownView"><Setter Property="Visibility" Value="Collapsed"/><Style.Triggers><DataTrigger Binding="{Binding IsQuestionMode}" Value="True"><Setter Property="Visibility" Value="Visible"/></DataTrigger></Style.Triggers></Style></controls:MarkdownView.Style>
+                        </controls:MarkdownView>
+                        <CheckBox Content="包含视频" IsChecked="{Binding IncludeVideosInAiQuestion}" Margin="0,7,0,0"
+                                  ToolTip="同时检索视频人物、拍摄信息、语音转写和视频摘要">
+                            <CheckBox.Style><Style TargetType="CheckBox"><Setter Property="Visibility" Value="Collapsed"/><Style.Triggers><DataTrigger Binding="{Binding IsQuestionMode}" Value="True"><Setter Property="Visibility" Value="Visible"/></DataTrigger></Style.Triggers></Style></CheckBox.Style>
+                        </CheckBox>
                     </StackPanel>
+                    <TextBlock DockPanel.Dock="Top" Text="视频结果" FontWeight="SemiBold" Margin="8,2,8,0">
+                        <TextBlock.Style><Style TargetType="TextBlock"><Setter Property="Visibility" Value="Collapsed"/><Style.Triggers><DataTrigger Binding="{Binding IsQuestionMode}" Value="True"><Setter Property="Visibility" Value="Visible"/></DataTrigger></Style.Triggers></Style></TextBlock.Style>
+                    </TextBlock>
+                    <ItemsControl DockPanel.Dock="Top" ItemsSource="{Binding AiVideoResults}" Margin="8,0,8,6">
+                        <ItemsControl.ItemTemplate><DataTemplate><Button Click="AiVideoResult_Click" Tag="{Binding Id}" HorizontalContentAlignment="Stretch" Padding="8" Margin="0,2"><DockPanel><TextBlock DockPanel.Dock="Right" Text="打开视频 ›" Foreground="#3573A8"/><StackPanel><TextBlock Text="{Binding FileName}" FontWeight="SemiBold"/><TextBlock Text="{Binding Detail}" FontSize="11" Foreground="#666"/></StackPanel></DockPanel></Button></DataTemplate></ItemsControl.ItemTemplate>
+                    </ItemsControl>
                     <Button DockPanel.Dock="Bottom" Content="加载更多" Command="{Binding LoadMoreCommand}"
                             HorizontalAlignment="Center" Padding="18,5" Margin="4"/>
+                <TextBlock DockPanel.Dock="Top" Text="照片结果" FontWeight="SemiBold" Margin="8,2,8,2">
+                    <TextBlock.Style><Style TargetType="TextBlock"><Setter Property="Visibility" Value="Collapsed"/><Style.Triggers><DataTrigger Binding="{Binding IsQuestionMode}" Value="True"><Setter Property="Visibility" Value="Visible"/></DataTrigger></Style.Triggers></Style></TextBlock.Style>
+                </TextBlock>
                 <controls:PhotoGrid ItemsSource="{Binding Images}" SelectedItem="{Binding SelectedImage}"
                                     SelectedItemsTarget="{Binding SelectedImages}"
                                     SelectedInfoText="{Binding SelectedPhotoContext}"

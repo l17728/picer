@@ -25,10 +25,20 @@ public sealed class FaceSuggestionEngine(VisionAnalysisRepository repository, Pe
         var prototypes = confirmed
             .GroupBy(face => face.PersonId)
             .ToDictionary(group => group.Key, group => BuildPrototypes(group.Select(face => face.Embedding)));
+        var learnedPolicies = selectedVersion is null
+            ? new Dictionary<long, FaceLearnedPolicy>()
+            : repository.GetLearnedFacePolicies(selectedVersion).ToDictionary(pair => pair.Key, pair => pair.Value);
+        foreach (var policy in learnedPolicies.Values)
+        {
+            if (prototypes.TryGetValue(policy.PersonId, out var existing))
+                prototypes[policy.PersonId] = existing.Concat([policy.Prototype]).ToArray();
+        }
         var negativePrototypes = repository.GetRejectedFaceEmbeddings()
             .GroupBy(face => face.PersonId)
             .ToDictionary(group => group.Key, group => BuildPrototypes(group.Select(face => face.Embedding), 12));
         var adaptiveThresholds = BuildAdaptiveThresholds(appliedThreshold, prototypes, negativePrototypes);
+        foreach (var policy in learnedPolicies.Values)
+            adaptiveThresholds[policy.PersonId] = Math.Max(appliedThreshold, policy.MatchThreshold);
         var candidates = embeddings.Where(face => face.AssignmentState is null or "suggested").ToArray();
         var suggested = 0;
         var below = 0;
@@ -120,7 +130,7 @@ public sealed class FaceSuggestionEngine(VisionAnalysisRepository repository, Pe
         return Math.Min(0.98, baseline + adjustment);
     }
 
-    private static IReadOnlyDictionary<long, double> BuildAdaptiveThresholds(double baseline,
+    private static Dictionary<long, double> BuildAdaptiveThresholds(double baseline,
         IReadOnlyDictionary<long, IReadOnlyList<float[]>> positives,
         IReadOnlyDictionary<long, IReadOnlyList<float[]>> negatives)
     {

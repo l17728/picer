@@ -15,6 +15,12 @@
                         <Button x:Name="CalibrateSFaceButton" Content="计算推荐阈值与误识率" Click="CalibrateSFace_Click" Padding="14,7"/>
                         <Button x:Name="ApplySFaceThreshold" Content="应用到人物自动匹配" Click="ApplySFaceThreshold_Click"
                                 Padding="14,7" Margin="8,0,0,0" IsEnabled="False"/>
+                        <Button x:Name="TrainFaceButton" Content="提交训练并自动应用" Click="TrainFace_Click"
+                                Padding="14,7" Margin="8,0,0,0" ToolTip="向 AI 模型设置中的训练地址提交脱敏人脸向量、人工正样本和排他负样本"/>
+                        <Button x:Name="CancelTrainingButton" Content="取消训练" Click="CancelTraining_Click"
+                                Padding="14,7" Margin="8,0,0,0" IsEnabled="False"/>
+                        <Button x:Name="RollbackTrainingButton" Content="回滚上一版" Click="RollbackTraining_Click"
+                                Padding="14,7" Margin="8,0,0,0"/>
                     </StackPanel>
                     <Border x:Name="SFaceProgressPanel" Visibility="Collapsed" Background="#E7F2FF" BorderBrush="#4C87C2"
                             BorderThickness="1" CornerRadius="4" Padding="12" Margin="0,12,0,0">

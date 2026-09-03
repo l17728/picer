@@ -43,7 +43,7 @@ public sealed class VisionAnalysisTests : IDisposable
         connection.Open();
         using var version = connection.CreateCommand();
         version.CommandText = "PRAGMA user_version";
-        Assert.Equal(24L, (long)version.ExecuteScalar()!);
+        Assert.Equal(25L, (long)version.ExecuteScalar()!);
 
         using var tables = connection.CreateCommand();
         tables.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('vision_analyses','detected_faces')";
@@ -160,6 +160,30 @@ public sealed class VisionAnalysisTests : IDisposable
         Assert.Throws<InvalidOperationException>(() => people.Rename(other.Id, "Alice"));
         Assert.Equal(existing.Id, people.FindByName("ALICE")!.Id);
         Assert.Equal("Bob", people.Get(other.Id)!.DisplayName);
+    }
+
+    [Fact]
+    public void LearnedFaceArtifacts_CanBeAppliedAndRolledBackWithoutChangingPeople()
+    {
+        var people = new PeopleService(_database);
+        var first = people.Create("training-first");
+        var second = people.Create("training-second");
+        var repository = new VisionAnalysisRepository(_database);
+        const string firstJson = "{\"id\":\"artifact-1\",\"baseModelVersion\":\"sface-v1\",\"people\":[{\"personId\":1,\"prototype\":[1,0],\"threshold\":0.61}],\"metrics\":{\"falseAcceptRate\":0,\"falseRejectRate\":0,\"positiveEvaluated\":20,\"negativeEvaluated\":10}}";
+        const string secondJson = "{\"id\":\"artifact-2\",\"baseModelVersion\":\"sface-v1\",\"people\":[{\"personId\":2,\"prototype\":[0,1],\"threshold\":0.66}],\"metrics\":{\"falseAcceptRate\":0,\"falseRejectRate\":0,\"positiveEvaluated\":20,\"negativeEvaluated\":10}}";
+        repository.ApplyLearnedFaceArtifact("artifact-1", "dataset-1", "http://localhost", "sface-v1",
+            firstJson, 0, 0, [new(first.Id, "artifact-1", "sface-v1", [1, 0], .61)]);
+        repository.ApplyLearnedFaceArtifact("artifact-2", "dataset-2", "http://localhost", "sface-v1",
+            secondJson, 0, 0, [new(second.Id, "artifact-2", "sface-v1", [0, 1], .66)]);
+
+        using var training = new FaceTrainingService(repository);
+        Assert.Equal("artifact-1", training.Rollback());
+
+        var policies = repository.GetLearnedFacePolicies("sface-v1");
+        Assert.Single(policies);
+        Assert.Equal(first.Id, policies.Single().Key);
+        Assert.Equal(.61, policies.Single().Value.MatchThreshold, 3);
+        Assert.Equal(2, people.GetAll().Count);
     }
 
     [Fact]

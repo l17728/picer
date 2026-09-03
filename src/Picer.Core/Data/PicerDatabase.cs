@@ -7,7 +7,7 @@ namespace Picer.Core.Data;
 
 public sealed class PicerDatabase : IDisposable
 {
-    public const int CurrentSchemaVersion = 24;
+    public const int CurrentSchemaVersion = 25;
     private readonly SqliteConnection _conn;
     private readonly string _connectionString;
 
@@ -664,6 +664,36 @@ public sealed class PicerDatabase : IDisposable
                 PRAGMA user_version = 24;
                 """;
             uniqueNames.ExecuteNonQuery();
+        }
+        if (schemaVersion < 25)
+        {
+            using var trainingMigration = _conn.CreateCommand();
+            trainingMigration.CommandText = """
+                CREATE TABLE IF NOT EXISTS face_training_artifacts(
+                    artifact_id TEXT PRIMARY KEY,
+                    dataset_id TEXT NOT NULL,
+                    endpoint TEXT NOT NULL,
+                    model_version TEXT NOT NULL,
+                    artifact_json TEXT NOT NULL,
+                    false_accept_rate REAL NOT NULL,
+                    false_reject_rate REAL NOT NULL,
+                    state TEXT NOT NULL CHECK(state IN ('candidate','active','superseded','rejected')),
+                    created_utc TEXT NOT NULL,
+                    applied_utc TEXT
+                );
+                CREATE TABLE IF NOT EXISTS face_person_policies(
+                    person_id INTEGER PRIMARY KEY REFERENCES people(id) ON DELETE CASCADE,
+                    artifact_id TEXT NOT NULL REFERENCES face_training_artifacts(artifact_id) ON DELETE CASCADE,
+                    model_version TEXT NOT NULL,
+                    prototype BLOB NOT NULL,
+                    match_threshold REAL NOT NULL,
+                    updated_utc TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_face_training_artifacts_state
+                    ON face_training_artifacts(state,created_utc DESC);
+                PRAGMA user_version = 25;
+                """;
+            trainingMigration.ExecuteNonQuery();
         }
     }
 

@@ -2,6 +2,7 @@
 using System.Windows.Controls;
 using System.Windows.Input;
 using Picer.App.ViewModels;
+using Picer.Core.Search;
 
 namespace Picer.App;
 
@@ -58,6 +59,13 @@ public partial class MainWindow : Window
         MainTabs.SelectedIndex = 1;
     }
 
+    private async void AiVideoResult_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement { Tag: long videoId }) return;
+        await _mainVm.Video.FocusVideoAsync(videoId);
+        MainTabs.SelectedIndex = 4;
+    }
+
     private void QuestionMode_Click(object sender, RoutedEventArgs e)
     {
         MainTabs.SelectedIndex = 1;
@@ -82,6 +90,37 @@ public partial class MainWindow : Window
     private void CloudVisionSettings_Click(object sender, RoutedEventArgs e)
     {
         new CloudVisionSettingsWindow(AppPaths.CloudVisionSettingsPath) { Owner = this }.ShowDialog();
+    }
+
+    private void VoiceAssistant_Click(object sender, RoutedEventArgs e)
+    {
+        var chat = AppServices.CreateAiChatClient(AiFeatureIds.AiQuestion);
+        if (chat is null) { MessageBox.Show(this, "请先在 AI 模型设置中为 AI 问答选择可用的模型。", "语音助手"); return; }
+        var window = new Views.VoiceAssistantWindow(new VoiceCommandAgent(chat),
+            _mainVm.GetVoiceLocationPaths,
+            () => AppServices.People.GetAll().Select(person => person.DisplayName).ToArray(), ExecuteVoiceActionAsync)
+            { Owner = this };
+        window.Closed += (_, _) => chat.Dispose();
+        window.Show();
+    }
+
+    private async Task ExecuteVoiceActionAsync(VoiceAction action)
+    {
+        switch (action.Kind)
+        {
+            case VoiceActionKind.OpenLocation:
+                MainTabs.SelectedIndex = 0;
+                if (action.Target is not null) _mainVm.OpenVoiceLocation(action.Target);
+                break;
+            case VoiceActionKind.OpenModule:
+                MainTabs.SelectedIndex = action.Target switch { "目录浏览" => 0, "搜索" => 1, "人物" => 2, "标签与相册" => 3, "视频" => 4, _ => MainTabs.SelectedIndex };
+                break;
+            case VoiceActionKind.SearchMedia:
+                _mainVm.IsQuestionMode = true; _mainVm.IncludeVideosInAiQuestion = action.IncludeVideos;
+                _mainVm.SearchQuery = action.Query ?? ""; MainTabs.SelectedIndex = 1;
+                await _mainVm.ApplySearchAndFilterAsync();
+                break;
+        }
     }
 
     private void CloudVisionTasks_Click(object sender, RoutedEventArgs e)
@@ -131,7 +170,7 @@ public partial class MainWindow : Window
 
     private void FaceValidation_Click(object sender, RoutedEventArgs e)
     {
-        new Views.FaceValidationWindow(AppServices.FaceValidation, AppServices.VisionAnalysis, AppServices.VisionUnavailableReason)
+        new Views.FaceValidationWindow(AppServices.FaceValidation, AppServices.FaceTraining, AppServices.VisionAnalysis, AppServices.VisionUnavailableReason)
             { Owner = this }.ShowDialog();
     }
 

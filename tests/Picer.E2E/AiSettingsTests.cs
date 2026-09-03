@@ -40,7 +40,9 @@ public sealed class AiSettingsTests
         try
         {
             var settings=CloudVisionSettings.Load(path);Assert.Equal("zhipu",settings.Resolve(AiFeatureIds.PhotoAnalysis)?.Provider.Id);Assert.Equal("glm-4.6v-flash",settings.Resolve(AiFeatureIds.VideoSummary)?.Model.Id);
-            Assert.DoesNotContain(AiFeatureIds.AiQuestion,settings.Features.Keys);
+            var question = settings.Resolve(AiFeatureIds.AiQuestion);
+            Assert.NotNull(question);
+            Assert.Equal(AiModelCapability.Multimodal, question!.Value.Model.Capability);
         }
         finally{Directory.Delete(root,true);}
     }

@@ -12,16 +12,18 @@ namespace Picer.App.Views;
 public partial class FaceValidationWindow : Window
 {
     private readonly FaceValidationService _validation;
+    private readonly FaceTrainingService _training;
     private readonly VisionAnalysisService? _analysis;
     private readonly string? _unavailableReason;
     private readonly ObservableCollection<YuNetValidationItem> _rows = [];
     private SFaceCalibrationResult? _lastCalibration;
     private int _operationRunning;
+    private CancellationTokenSource? _trainingCancellation;
 
-    public FaceValidationWindow(FaceValidationService validation, VisionAnalysisService? analysis, string? unavailableReason)
+    public FaceValidationWindow(FaceValidationService validation, FaceTrainingService training, VisionAnalysisService? analysis, string? unavailableReason)
     {
         InitializeComponent();
-        _validation = validation; _analysis = analysis; _unavailableReason = unavailableReason;
+        _validation = validation; _training = training; _analysis = analysis; _unavailableReason = unavailableReason;
         YuNetGrid.ItemsSource = _rows;
     }
 
@@ -128,6 +130,72 @@ public partial class FaceValidationWindow : Window
         }
     }
 
+    private async void TrainFace_Click(object sender, RoutedEventArgs e)
+    {
+        if (!TryBeginOperation("正在准备训练数据快照…")) return;
+        _trainingCancellation = new CancellationTokenSource();
+        TrainFaceButton.Content = "训练进行中…";
+        CancelTrainingButton.IsEnabled = true;
+        SFaceProgressPanel.Visibility = Visibility.Visible;
+        try
+        {
+            var settings = CloudVisionSettings.Load(AppPaths.CloudVisionSettingsPath);
+            if (!Uri.TryCreate(settings.FaceTrainingEndpoint, UriKind.Absolute, out var endpoint))
+                throw new InvalidOperationException("请先在 AI 模型设置中配置有效的人脸训练提交地址。");
+            AppLogger.Info($"FaceTraining submit requested; endpoint={endpoint.GetLeftPart(UriPartial.Authority)}; no image paths or names will be sent");
+            var progress = new Progress<FaceTrainingProgress>(value =>
+            {
+                SFaceProgress.IsIndeterminate = false;
+                SFaceProgress.Value = value.Percent;
+                WorkProgress.IsIndeterminate = false;
+                WorkProgress.Value = value.Percent;
+                SFaceProgressText.Text = $"训练：{value.Detail}";
+                Status.Text = $"训练阶段 {value.Stage} · {value.Percent}%";
+            });
+            var result = await _training.SubmitAndApplyAsync(endpoint, progress, _trainingCancellation.Token);
+            SFaceResult.Text = $"训练快照：{result.DatasetId}\n任务：{result.JobId}\n制品：{result.ArtifactId}\n" +
+                $"样本：{result.Samples}；人物：{result.People}\n误识率：{result.FalseAcceptRate:P2}；漏识率：{result.FalseRejectRate:P2}\n{result.Message}";
+            Status.Text = result.Message;
+            AppLogger.Info($"FaceTraining completed; dataset={result.DatasetId}; job={result.JobId}; artifact={result.ArtifactId}; applied={result.Applied}; far={result.FalseAcceptRate}; frr={result.FalseRejectRate}");
+        }
+        catch (OperationCanceledException)
+        {
+            Status.Text = "训练已取消；当前生效模型未改变。";
+            AppLogger.Info("FaceTraining canceled by user");
+        }
+        catch (Exception exception)
+        {
+            Status.Text = $"训练失败：{exception.Message}";
+            AppLogger.Error("FaceTraining failed", exception);
+        }
+        finally
+        {
+            _trainingCancellation?.Dispose(); _trainingCancellation = null;
+            TrainFaceButton.Content = "提交训练并自动应用";
+            CancelTrainingButton.IsEnabled = false;
+            EndOperation();
+        }
+    }
+
+    private void CancelTraining_Click(object sender, RoutedEventArgs e)
+    {
+        Status.Text = "正在取消训练…";
+        _trainingCancellation?.Cancel();
+    }
+
+    private async void RollbackTraining_Click(object sender, RoutedEventArgs e)
+    {
+        if (!TryBeginOperation("正在回滚上一版人脸增强策略…")) return;
+        try
+        {
+            var artifact = await UiWork.RunDatabaseAsync(_training.Rollback);
+            Status.Text = $"已回滚并应用上一版制品 {artifact}；人工分类未改变。";
+            AppLogger.Info($"FaceTraining rollback applied; artifact={artifact}");
+        }
+        catch (Exception exception) { Status.Text = $"回滚失败：{exception.Message}"; AppLogger.Error("FaceTraining rollback failed", exception); }
+        finally { EndOperation(); }
+    }
+
     private async void LoadYuNet_Click(object sender, RoutedEventArgs e)
     {
         if (!TryBeginOperation("正在后台加载验证照片…")) return;
@@ -209,6 +277,8 @@ public partial class FaceValidationWindow : Window
     {
         YuNetGrid.IsEnabled = !busy;
         CalibrateSFaceButton.IsEnabled = !busy;
+        TrainFaceButton.IsEnabled = !busy;
+        RollbackTrainingButton.IsEnabled = !busy;
         LoadYuNetButton.IsEnabled = !busy;
         AnalyzeYuNetButton.IsEnabled = !busy;
         SaveYuNetButton.IsEnabled = !busy;

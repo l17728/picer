@@ -36,6 +36,7 @@ public sealed class CloudVisionSettings
     public bool UseComplexModel { get; set; }
     public decimal DailyBudgetYuan { get; set; } = 2m;
     public decimal MonthlyBudgetYuan { get; set; } = 20m;
+    public string FaceTrainingEndpoint { get; set; } = "http://127.0.0.1:8090/api/face-training";
     public List<AiProviderDefinition> Providers { get; set; } = [];
     public Dictionary<string, AiFeatureBinding> Features { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 
@@ -110,6 +111,7 @@ public sealed class CloudVisionSettings
 
     public void Save(string path)
     {
+        FaceTrainingEndpoint = FaceTrainingEndpoint.Trim().TrimEnd('/');
         MaximumImagesPerRun=Math.Clamp(MaximumImagesPerRun,1,1000);DailyBudgetYuan=Math.Clamp(DailyBudgetYuan,.1m,10000m);MonthlyBudgetYuan=Math.Clamp(MonthlyBudgetYuan,DailyBudgetYuan,100000m);
         var directory=Path.GetDirectoryName(path);if(!string.IsNullOrWhiteSpace(directory))Directory.CreateDirectory(directory);var temporary=path+".tmp";
         File.WriteAllText(temporary,JsonSerializer.Serialize(this,new JsonSerializerOptions{WriteIndented=true}));File.Move(temporary,path,true);
