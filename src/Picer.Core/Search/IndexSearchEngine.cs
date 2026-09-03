@@ -19,12 +19,30 @@ public static class IndexSearchEngine
         CancellationToken cancellationToken = default)
     {
         if (pageSize is < 1 or > 1000) throw new ArgumentOutOfRangeException(nameof(pageSize));
-        var itemsTask = Task.Run(() => SearchPaged(db.OpenReadConnection(), filters, pageSize, cursor,
-            cancellationToken, disposeConnection: true, includeCount: false), cancellationToken);
-        var countTask = Task.Run(() => CountMatches(db, filters, cancellationToken), cancellationToken);
-        await Task.WhenAll(itemsTask, countTask).ConfigureAwait(false);
-        var itemsPage = await itemsTask.ConfigureAwait(false);
-        return itemsPage with { TotalCount = await countTask.ConfigureAwait(false) };
+        for (var attempt = 0; ; attempt++)
+        {
+            try
+            {
+                var itemsTask = Task.Run(() => SearchPaged(db.OpenReadConnection(), filters, pageSize, cursor,
+                    cancellationToken, disposeConnection: true, includeCount: false), cancellationToken);
+                var countTask = Task.Run(() => CountMatches(db, filters, cancellationToken), cancellationToken);
+                await Task.WhenAll(itemsTask, countTask).ConfigureAwait(false);
+                var itemsPage = await itemsTask.ConfigureAwait(false);
+                return itemsPage with { TotalCount = await countTask.ConfigureAwait(false) };
+            }
+            catch (SqliteException exception) when (
+                cancellationToken.IsCancellationRequested && exception.SqliteErrorCode is 4 or 9)
+            {
+                throw new OperationCanceledException("Search superseded by a newer query.", exception,
+                    cancellationToken);
+            }
+            catch (SqliteException exception) when (attempt == 0 && exception.SqliteErrorCode == 4)
+            {
+                // SQLite may surface SQLITE_ABORT when a pooled connection has just been
+                // interrupted by a superseded query. A fresh connection succeeds immediately.
+                await Task.Yield();
+            }
+        }
     }
 
     public static SearchPage SearchPaged(PicerDatabase db, SearchFilters filters, int pageSize = 200, SearchCursor? cursor = null)

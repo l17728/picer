@@ -41,6 +41,10 @@ public partial class MainWindow : Window
     private void SearchBox_TextChanged(object sender, TextChangedEventArgs e)
     {
         if (MainTabs is null || sender is not TextBox box) return;
+        // IME composition can update TextBox.Text before its binding source. Synchronize
+        // explicitly so Chinese person names do not require Enter or a focus change.
+        if (!string.Equals(_mainVm.SearchQuery, box.Text, StringComparison.Ordinal))
+            _mainVm.SearchQuery = box.Text;
         if (MediaTypeBox?.SelectedIndex == 1)
         {
             _ = _mainVm.Video.ApplySearchAsync(box.Text);

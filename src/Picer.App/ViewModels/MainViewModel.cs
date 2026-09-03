@@ -297,6 +297,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
         else
         {
+            StatusText = $"准备搜索“{value.Trim()}”…";
             _searchDebounce.Start();
         }
     }
