@@ -18,6 +18,7 @@ public sealed class PeopleService(PicerDatabase database)
     public PersonRecord Create(string displayName, IEnumerable<string>? aliases = null)
     {
         displayName = NormalizeName(displayName);
+        EnsureDisplayNameAvailable(displayName);
         using var transaction = database.BeginTransaction();
         using var insert = database.Command("""
             INSERT INTO people(display_name, created_utc, updated_utc)
@@ -37,6 +38,7 @@ public sealed class PeopleService(PicerDatabase database)
     public PersonRecord CreateAndAssignFaces(string displayName, IEnumerable<long> faceIds)
     {
         displayName = NormalizeName(displayName);
+        EnsureDisplayNameAvailable(displayName);
         var ids = faceIds.Distinct().ToArray();
         using var transaction = database.BeginTransaction();
         using var insert = database.Command("""
@@ -78,6 +80,7 @@ public sealed class PeopleService(PicerDatabase database)
     public void Rename(long personId, string displayName)
     {
         displayName = NormalizeName(displayName);
+        EnsureDisplayNameAvailable(displayName, personId);
         using var transaction = database.BeginTransaction();
         EnsurePersonExists(personId, transaction);
         using var update = database.Command("UPDATE people SET display_name=$name, updated_utc=$now WHERE id=$id");
@@ -113,6 +116,21 @@ public sealed class PeopleService(PicerDatabase database)
         using var transaction = database.BeginTransaction();
         EnsurePersonExists(sourcePersonId, transaction);
         EnsurePersonExists(targetPersonId, transaction);
+        using (var description = database.Command("""
+            UPDATE people SET description=(
+                SELECT description FROM people WHERE id=$source
+            ), updated_utc=$now
+            WHERE id=$target AND trim(description)='' AND EXISTS(
+                SELECT 1 FROM people WHERE id=$source AND trim(description)<>''
+            )
+            """))
+        {
+            description.Transaction = transaction;
+            description.Parameters.AddWithValue("$source", sourcePersonId);
+            description.Parameters.AddWithValue("$target", targetPersonId);
+            description.Parameters.AddWithValue("$now", Format(DateTime.UtcNow));
+            description.ExecuteNonQuery();
+        }
         using (var corrections = database.Command("""
             INSERT INTO face_corrections(face_id,old_person_id,new_person_id,action,created_utc)
             SELECT face_id,$source,$target,'merge_person',$now FROM face_person_assignments WHERE person_id=$source
@@ -132,6 +150,22 @@ public sealed class PeopleService(PicerDatabase database)
             assignments.Parameters.AddWithValue("$now", Format(DateTime.UtcNow));
             assignments.ExecuteNonQuery();
         }
+        using (var videoAssignments = database.Command("""
+            UPDATE video_detected_faces SET
+                assigned_person_id=CASE WHEN assigned_person_id=$source THEN $target ELSE assigned_person_id END,
+                suggested_person_id=CASE WHEN suggested_person_id=$source THEN $target ELSE suggested_person_id END,
+                updated_utc=$now
+            WHERE assigned_person_id=$source OR suggested_person_id=$source
+            """))
+        {
+            videoAssignments.Transaction = transaction;
+            videoAssignments.Parameters.AddWithValue("$source", sourcePersonId);
+            videoAssignments.Parameters.AddWithValue("$target", targetPersonId);
+            videoAssignments.Parameters.AddWithValue("$now", Format(DateTime.UtcNow));
+            videoAssignments.ExecuteNonQuery();
+        }
+        MergeRejections("face_person_rejections", "face_id", sourcePersonId, targetPersonId, transaction);
+        MergeRejections("video_face_person_rejections", "video_face_id", sourcePersonId, targetPersonId, transaction);
         using (var duplicateAliases = database.Command("""
             DELETE FROM person_aliases AS source_alias
             WHERE source_alias.person_id=$source AND EXISTS(
@@ -158,6 +192,38 @@ public sealed class PeopleService(PicerDatabase database)
             remove.ExecuteNonQuery();
         }
         transaction.Commit();
+    }
+
+    private void MergeRejections(string table, string itemColumn, long sourcePersonId, long targetPersonId,
+        Microsoft.Data.Sqlite.SqliteTransaction transaction)
+    {
+        using (var copy = database.Command($"""
+            INSERT OR IGNORE INTO {table}({itemColumn},person_id,created_utc)
+            SELECT {itemColumn},$target,created_utc FROM {table} WHERE person_id=$source
+            """))
+        {
+            copy.Transaction = transaction;
+            copy.Parameters.AddWithValue("$source", sourcePersonId);
+            copy.Parameters.AddWithValue("$target", targetPersonId);
+            copy.ExecuteNonQuery();
+        }
+        using var remove = database.Command($"DELETE FROM {table} WHERE person_id=$source");
+        remove.Transaction = transaction;
+        remove.Parameters.AddWithValue("$source", sourcePersonId);
+        remove.ExecuteNonQuery();
+    }
+
+    private void EnsureDisplayNameAvailable(string displayName, long? exceptPersonId = null)
+    {
+        using var command = database.Command("""
+            SELECT p.id FROM people p LEFT JOIN person_aliases a ON a.person_id=p.id
+            WHERE (trim(p.display_name)=$name COLLATE NOCASE OR trim(a.alias)=$name COLLATE NOCASE)
+              AND ($except IS NULL OR p.id<>$except) LIMIT 1
+            """);
+        command.Parameters.AddWithValue("$name", displayName);
+        command.Parameters.AddWithValue("$except", (object?)exceptPersonId ?? DBNull.Value);
+        if (command.ExecuteScalar() is not null)
+            throw new InvalidOperationException($"人物“{displayName}”已经存在，请直接归入已有人物，不能重复创建。");
     }
 
     public void ConfirmFace(long faceId, long personId) => Assign(faceId, personId, "confirmed", "user", null);

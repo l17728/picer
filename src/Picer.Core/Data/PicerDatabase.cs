@@ -1,12 +1,13 @@
 using Microsoft.Data.Sqlite;
 using Picer.Core.Models;
 using Picer.Core.Search;
+using Picer.Core.People;
 
 namespace Picer.Core.Data;
 
 public sealed class PicerDatabase : IDisposable
 {
-    public const int CurrentSchemaVersion = 23;
+    public const int CurrentSchemaVersion = 24;
     private readonly SqliteConnection _conn;
     private readonly string _connectionString;
 
@@ -632,6 +633,37 @@ public sealed class PicerDatabase : IDisposable
                 PRAGMA user_version = 23;
                 """;
             burstMigration.ExecuteNonQuery();
+        }
+        if (schemaVersion < 24)
+        {
+            var duplicateSets = new List<long[]>();
+            using (var duplicates = _conn.CreateCommand())
+            {
+                duplicates.CommandText = """
+                    SELECT group_concat(id) FROM people
+                    GROUP BY trim(display_name) COLLATE NOCASE HAVING COUNT(*)>1
+                    """;
+                using var reader = duplicates.ExecuteReader();
+                while (reader.Read()) duplicateSets.Add(reader.GetString(0).Split(',').Select(long.Parse).ToArray());
+            }
+            var people = new PeopleService(this);
+            foreach (var ids in duplicateSets)
+            {
+                var target = ids.OrderByDescending(id =>
+                {
+                    using var count = Command("SELECT COUNT(*) FROM face_person_assignments WHERE person_id=$person AND state='confirmed'");
+                    count.Parameters.AddWithValue("$person", id);
+                    return Convert.ToInt32(count.ExecuteScalar());
+                }).ThenBy(id => id).First();
+                foreach (var source in ids.Where(id => id != target)) people.Merge(source, target);
+            }
+            using var uniqueNames = _conn.CreateCommand();
+            uniqueNames.CommandText = """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_people_display_name_unique
+                    ON people(trim(display_name) COLLATE NOCASE);
+                PRAGMA user_version = 24;
+                """;
+            uniqueNames.ExecuteNonQuery();
         }
     }
 

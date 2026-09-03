@@ -221,9 +221,16 @@ public partial class VideoViewModel(VideoRepository repository, VideoIndexServic
     public async Task CreatePersonAndAssignVideoFaceAsync(VideoFaceItemViewModel face, string name)
     {
         if (peopleService is null || faceTimeline is null) return;
-        var person = await UiWork.RunDatabaseAsync(() => peopleService.Create(name));
-        SelectedVideoFace = face;
-        await SaveVideoFaceIdentitiesAsync(() => faceTimeline.Confirm(face.Record.FaceId, person.Id), $"已创建并归入“{person.DisplayName}”");
+        try
+        {
+            var person = await UiWork.RunDatabaseAsync(() => peopleService.Create(name));
+            SelectedVideoFace = face;
+            await SaveVideoFaceIdentitiesAsync(() => faceTimeline.Confirm(face.Record.FaceId, person.Id), $"已创建并归入“{person.DisplayName}”");
+        }
+        catch (Exception exception)
+        {
+            StatusText = $"创建人物失败：{exception.Message}";
+        }
     }
 
 
@@ -231,11 +238,18 @@ public partial class VideoViewModel(VideoRepository repository, VideoIndexServic
     {
         var faces = GetSelectedVideoFaces();
         if (faces.Length == 0 || peopleService is null || faceTimeline is null) { StatusText = "请先选择视频人脸"; return; }
-        var person = await UiWork.RunDatabaseAsync(() => peopleService.Create(name));
-        await SaveVideoFaceIdentitiesAsync(() =>
+        try
         {
-            foreach (var face in faces) faceTimeline.Confirm(face.Record.FaceId, person.Id);
-        }, $"已创建“{person.DisplayName}”并归入 {faces.Length} 张视频人脸");
+            var person = await UiWork.RunDatabaseAsync(() => peopleService.Create(name));
+            await SaveVideoFaceIdentitiesAsync(() =>
+            {
+                foreach (var face in faces) faceTimeline.Confirm(face.Record.FaceId, person.Id);
+            }, $"已创建“{person.DisplayName}”并归入 {faces.Length} 张视频人脸");
+        }
+        catch (Exception exception)
+        {
+            StatusText = $"创建人物失败：{exception.Message}";
+        }
     }
 
     [RelayCommand(CanExecute = nameof(CanStartOperation))]

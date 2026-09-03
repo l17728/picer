@@ -680,15 +680,18 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         }
         var name = NewPersonName;
         var faces = SelectedCandidateCluster.Faces.ToArray();
-        var person = await UiWork.RunDatabaseAsync(() =>
+        try
         {
-            var created = _peopleService.Create(name);
-            foreach (var face in faces) _peopleService.ConfirmFace(face.FaceId, created.Id);
-            return created;
-        });
-        NewPersonName = "";
-        await RefreshAsync();
-        StatusText = $"已将候选组确认为“{person.DisplayName}”，可继续逐脸纠错";
+            var person = await UiWork.RunDatabaseAsync(() =>
+                _peopleService.CreateAndAssignFaces(name, faces.Select(face => face.FaceId)));
+            NewPersonName = "";
+            await RefreshAsync();
+            StatusText = $"已将候选组确认为“{person.DisplayName}”，可继续逐脸纠错";
+        }
+        catch (Exception exception)
+        {
+            StatusText = $"创建人物失败：{exception.Message}";
+        }
     }
 
     [RelayCommand]

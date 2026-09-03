@@ -43,7 +43,7 @@ public sealed class VisionAnalysisTests : IDisposable
         connection.Open();
         using var version = connection.CreateCommand();
         version.CommandText = "PRAGMA user_version";
-        Assert.Equal(23L, (long)version.ExecuteScalar()!);
+        Assert.Equal(24L, (long)version.ExecuteScalar()!);
 
         using var tables = connection.CreateCommand();
         tables.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('vision_analyses','detected_faces')";
@@ -145,6 +145,21 @@ public sealed class VisionAnalysisTests : IDisposable
 
         Assert.Equal(faceIds.Order(), repository.GetConfirmedFaces(person.Id).Select(face => face.FaceId).Order());
         Assert.Equal(faceIds.Count, people.GetAll().Single(value => value.Id == person.Id).ConfirmedFaceCount);
+    }
+
+    [Fact]
+    public void People_DuplicateNamesAndAliasesCannotBeCreatedOrRenamed()
+    {
+        var people = new PeopleService(_database);
+        var existing = people.Create("Alice", ["A Li Ce"]);
+        var other = people.Create("Bob");
+
+        Assert.Throws<InvalidOperationException>(() => people.Create("  alice  "));
+        Assert.Throws<InvalidOperationException>(() => people.CreateAndAssignFaces("ALICE", []));
+        Assert.Throws<InvalidOperationException>(() => people.Create("a li ce"));
+        Assert.Throws<InvalidOperationException>(() => people.Rename(other.Id, "Alice"));
+        Assert.Equal(existing.Id, people.FindByName("ALICE")!.Id);
+        Assert.Equal("Bob", people.Get(other.Id)!.DisplayName);
     }
 
     [Fact]
