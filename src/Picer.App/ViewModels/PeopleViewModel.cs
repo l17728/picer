@@ -307,7 +307,9 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         StatusText = "正在匹配已命名人物…";
         var result = await UiWork.RunDatabaseAsync(() => _suggestionEngine.Suggest());
         await RefreshAsync();
-        StatusText = $"候选匹配完成：检查 {result.Considered} 张脸，新增建议 {result.Suggested}，低于阈值 {result.BelowThreshold}；使用阈值 {result.AppliedThreshold:F3}";
+        StatusText = $"候选匹配完成：检查 {result.Considered} 张，新增建议 {result.Suggested}；" +
+                     $"暂缓：基础阈值 {result.BelowThreshold}、低质量 {result.LowQualityDeferred}、人物歧义 {result.AmbiguousDeferred}、负样本冲突 {result.NegativeConflictDeferred}；" +
+                     $"多原型人物 {result.MultiPrototypePeople} 位，负样本原型 {result.NegativeSamples} 个";
     }
 
     [RelayCommand]
@@ -342,7 +344,9 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             StatusText = $"正在使用最新标准更新自动归类（3/3：同步界面，80%；共 {clusters.ClusterCount} 个候选组）";
             await RefreshAsync();
             ProgressValue = 100;
-            StatusText = $"自动归类完成（100%）：使用阈值 {suggestions.AppliedThreshold:F3}，匹配已有分类 {suggestions.Suggested} 张，待命名 {clusters.ClusterCount} 组；用时 {stopwatch.Elapsed.TotalSeconds:F1} 秒";
+            StatusText = $"自动归类完成（100%）：新增推荐 {suggestions.Suggested} 张，待命名 {clusters.ClusterCount} 组；" +
+                         $"暂缓低质量 {suggestions.LowQualityDeferred}、人物歧义 {suggestions.AmbiguousDeferred}、负样本冲突 {suggestions.NegativeConflictDeferred}；" +
+                         $"已学习 {suggestions.MultiPrototypePeople} 位多原型人物和 {suggestions.NegativeSamples} 个负样本原型；用时 {stopwatch.Elapsed.TotalSeconds:F1} 秒";
             AppLogger.Info($"People.AutoOrganize completed in {stopwatch.ElapsedMilliseconds} ms; " +
                            $"considered={suggestions.Considered}; suggested={suggestions.Suggested}; clusters={clusters.ClusterCount}");
         }

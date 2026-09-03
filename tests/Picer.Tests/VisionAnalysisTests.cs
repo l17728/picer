@@ -498,10 +498,13 @@ public sealed class VisionAnalysisTests : IDisposable
         var rejected = await Add("negative-diagonal.jpg");
         people.MarkNotThisPerson(rejected, person.Id);
         var similarNegative = await Add("candidate-diagonal.jpg");
-        new FaceSuggestionEngine(repository, people).Suggest(0.6);
+        var learnedResult = new FaceSuggestionEngine(repository, people).Suggest(0.6);
 
         Assert.DoesNotContain(repository.GetSuggestedPersonGroups().SelectMany(group => group.Faces),
             face => face.FaceId == similarNegative);
+        Assert.Equal(1, learnedResult.MultiPrototypePeople);
+        Assert.True(learnedResult.NegativeConflictDeferred > 0);
+        Assert.True(learnedResult.NegativeSamples > 0);
     }
 
     [Fact]

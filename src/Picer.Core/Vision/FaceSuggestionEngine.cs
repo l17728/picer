@@ -2,7 +2,9 @@ using Picer.Core.People;
 
 namespace Picer.Core.Vision;
 
-public sealed record FaceSuggestionResult(int Considered, int Suggested, int BelowThreshold, double AppliedThreshold);
+public sealed record FaceSuggestionResult(int Considered, int Suggested, int BelowThreshold, double AppliedThreshold,
+    int LowQualityDeferred = 0, int AmbiguousDeferred = 0, int NegativeConflictDeferred = 0,
+    int MultiPrototypePeople = 0, int NegativeSamples = 0);
 
 /// <summary>Suggests matches against user-confirmed people; it never confirms an identity.</summary>
 public sealed class FaceSuggestionEngine(VisionAnalysisRepository repository, PeopleService people)
@@ -26,9 +28,13 @@ public sealed class FaceSuggestionEngine(VisionAnalysisRepository repository, Pe
         var negativePrototypes = repository.GetRejectedFaceEmbeddings()
             .GroupBy(face => face.PersonId)
             .ToDictionary(group => group.Key, group => BuildPrototypes(group.Select(face => face.Embedding), 12));
+        var adaptiveThresholds = BuildAdaptiveThresholds(appliedThreshold, prototypes, negativePrototypes);
         var candidates = embeddings.Where(face => face.AssignmentState is null or "suggested").ToArray();
         var suggested = 0;
         var below = 0;
+        var lowQualityDeferred = 0;
+        var ambiguousDeferred = 0;
+        var negativeConflictDeferred = 0;
         var staleSuggestionIds = new List<long>();
 
         for (var index = 0; index < candidates.Length; index++)
@@ -43,10 +49,20 @@ public sealed class FaceSuggestionEngine(VisionAnalysisRepository repository, Pe
             var requiredThreshold = QualityAdjustedThreshold(appliedThreshold, face);
             var rejectedSimilarity = negativePrototypes.TryGetValue(match.PersonId, out var negatives)
                 ? negatives.Max(prototype => Cosine(face.Embedding, prototype)) : -1;
-            if (match.Score < requiredThreshold || match.Score - secondBestScore < 0.025 ||
-                match.Score - rejectedSimilarity < 0.03)
+            var adaptiveThreshold = adaptiveThresholds.GetValueOrDefault(match.PersonId, appliedThreshold);
+            var deferred = false;
+            if (match.Score < appliedThreshold)
             {
                 below++;
+                deferred = true;
+            }
+            else if (match.Score < requiredThreshold) { lowQualityDeferred++; deferred = true; }
+            else if (match.Score - secondBestScore < 0.025) { ambiguousDeferred++; deferred = true; }
+            else if (match.Score < adaptiveThreshold || match.Score - rejectedSimilarity < 0.03)
+            { negativeConflictDeferred++; deferred = true; }
+
+            if (deferred)
+            {
                 if (face.AssignmentState == "suggested") staleSuggestionIds.Add(face.FaceId);
             }
             else if (!(face.AssignmentState == "suggested" && face.PersonId == match.PersonId) &&
@@ -55,7 +71,9 @@ public sealed class FaceSuggestionEngine(VisionAnalysisRepository repository, Pe
                 progress?.Report((index + 1, candidates.Length));
         }
         people.ClearAutomaticSuggestions(staleSuggestionIds);
-        return new FaceSuggestionResult(candidates.Length, suggested, below, appliedThreshold);
+        return new FaceSuggestionResult(candidates.Length, suggested, below, appliedThreshold,
+            lowQualityDeferred, ambiguousDeferred, negativeConflictDeferred,
+            prototypes.Count(pair => pair.Value.Count > 1), negativePrototypes.Sum(pair => pair.Value.Count));
     }
 
     private static float[] Mean(IEnumerable<float[]> vectors)
@@ -100,6 +118,23 @@ public sealed class FaceSuggestionEngine(VisionAnalysisRepository repository, Pe
         if (face.RelativeArea < 0.01f) adjustment += 0.05;
         else if (face.RelativeArea < 0.025f) adjustment += 0.03;
         return Math.Min(0.98, baseline + adjustment);
+    }
+
+    private static IReadOnlyDictionary<long, double> BuildAdaptiveThresholds(double baseline,
+        IReadOnlyDictionary<long, IReadOnlyList<float[]>> positives,
+        IReadOnlyDictionary<long, IReadOnlyList<float[]>> negatives)
+    {
+        var result = new Dictionary<long, double>();
+        foreach (var (personId, negativeSamples) in negatives)
+        {
+            if (negativeSamples.Count < 3 || !positives.TryGetValue(personId, out var positivePrototypes)) continue;
+            var scores = negativeSamples.Select(sample =>
+                    positivePrototypes.Max(prototype => Cosine(sample, prototype)))
+                .OrderBy(score => score).ToArray();
+            var percentileIndex = Math.Clamp((int)Math.Ceiling(scores.Length * 0.95) - 1, 0, scores.Length - 1);
+            result[personId] = Math.Min(0.98, Math.Max(baseline, scores[percentileIndex] + 0.03));
+        }
+        return result;
     }
 
     private static double Cosine(float[] left, float[] right)
