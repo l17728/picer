@@ -29,6 +29,12 @@ public partial class FaceValidationWindow : Window
     {
         if (!TryBeginOperation("正在后台计算 SFace 阈值，请勿重复点击…")) return;
         var stopwatch = Stopwatch.StartNew();
+        SFaceProgressPanel.Visibility = Visibility.Visible;
+        SFaceProgress.IsIndeterminate = true;
+        SFaceProgress.Value = 0;
+        SFaceProgressText.Text = "SFace：正在启动计算…";
+        CalibrateSFaceButton.Content = "正在计算…";
+        AppLogger.Info("SFace 标定已触发，正在等待后台计算");
         try
         {
             await Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.Render);
@@ -36,9 +42,13 @@ public partial class FaceValidationWindow : Window
             {
                 WorkProgress.IsIndeterminate = value.Total <= 1 && value.Completed == 0;
                 if (value.Total > 1) WorkProgress.Value = value.Completed * 100d / value.Total;
-                Status.Text = value.Total > 1
+                SFaceProgress.IsIndeterminate = value.Total <= 1 && value.Completed == 0;
+                if (value.Total > 1) SFaceProgress.Value = value.Completed * 100d / value.Total;
+                var message = value.Total > 1
                     ? $"SFace：{value.Stage} {value.Completed}/{value.Total}"
                     : $"SFace：{value.Stage}";
+                Status.Text = message;
+                SFaceProgressText.Text = message;
             });
             var result = await UiWork.RunDatabaseAsync("FaceValidation.CalibrateSFace",
                 () => _validation.CalibrateSFace(progress: progress));
@@ -52,14 +62,24 @@ public partial class FaceValidationWindow : Window
                 $"误识率：{result.FalseAcceptRate:P2}；漏识率：{result.FalseRejectRate:P2}\n" +
                 $"当前应用阈值：{(applied is null ? "尚未应用标定结果" : applied.Value.ToString("F3"))}";
             Status.Text = "SFace 标定完成";
+            SFaceProgress.IsIndeterminate = false;
+            SFaceProgress.Value = 100;
+            SFaceProgressText.Text = $"SFace：计算完成（{stopwatch.Elapsed.TotalSeconds:F1} 秒）";
             AppLogger.Info($"SFace 标定完成：faces={result.ConfirmedFaces}; same={result.SamePairs}; different={result.DifferentPairs}; elapsed={stopwatch.ElapsedMilliseconds}ms");
         }
         catch (Exception exception)
         {
             Status.Text = $"SFace 标定失败：{exception.Message}";
+            SFaceProgress.IsIndeterminate = false;
+            SFaceProgress.Value = 0;
+            SFaceProgressText.Text = $"SFace：计算失败——{exception.Message}";
             AppLogger.Error("SFace 标定失败", exception);
         }
-        finally { EndOperation(); }
+        finally
+        {
+            CalibrateSFaceButton.Content = "计算推荐阈值与误识率";
+            EndOperation();
+        }
     }
 
     private async void ApplySFaceThreshold_Click(object sender, RoutedEventArgs e)

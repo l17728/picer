@@ -16,6 +16,14 @@
                         <Button x:Name="ApplySFaceThreshold" Content="应用到人物自动匹配" Click="ApplySFaceThreshold_Click"
                                 Padding="14,7" Margin="8,0,0,0" IsEnabled="False"/>
                     </StackPanel>
+                    <Border x:Name="SFaceProgressPanel" Visibility="Collapsed" Background="#E7F2FF" BorderBrush="#4C87C2"
+                            BorderThickness="1" CornerRadius="4" Padding="12" Margin="0,12,0,0">
+                        <StackPanel>
+                            <TextBlock x:Name="SFaceProgressText" Text="准备计算…" FontWeight="SemiBold" FontSize="14"
+                                       Foreground="#173E63" Margin="0,0,0,8"/>
+                            <ProgressBar x:Name="SFaceProgress" Height="18" Minimum="0" Maximum="100"/>
+                        </StackPanel>
+                    </Border>
                     <Border Background="#F3F7FC" BorderBrush="#C8D8EA" BorderThickness="1" Padding="12" Margin="0,14,0,0">
                         <TextBlock x:Name="SFaceResult" Text="尚未计算" TextWrapping="Wrap" FontFamily="Consolas"/>
                     </Border>
