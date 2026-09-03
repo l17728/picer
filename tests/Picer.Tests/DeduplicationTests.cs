@@ -7,6 +7,8 @@ using Picer.Core.Models;
 using Picer.Core.Search;
 using Picer.Core.Thumbnails;
 using Picer.Tests.Stubs;
+using SixLabors.ImageSharp;
+using SixLabors.ImageSharp.PixelFormats;
 
 namespace Picer.Tests;
 
@@ -52,6 +54,23 @@ public sealed class DeduplicationTests : IDisposable
         var hash2 = 0L;
 
         Assert.Equal(0, PerceptualHasher.HammingDistance(hash1, hash2));
+    }
+
+    [Fact]
+    public void PerceptualHash_DifferenceHash_ProducesAll64Comparisons()
+    {
+        using var image = new Image<Rgba32>(17, 11);
+        image.ProcessPixelRows(rows =>
+        {
+            for (var y = 0; y < rows.Height; y++)
+            for (var x = 0; x < rows.Width; x++)
+                rows.GetRowSpan(y)[x] = new Rgba32((byte)(x * 13), (byte)(y * 19), (byte)(x + y));
+        });
+        using var stream = new MemoryStream();
+        image.SaveAsPng(stream);
+        stream.Position = 0;
+
+        _ = PerceptualHasher.ComputeDifferenceHash(stream);
     }
 
     [Fact]

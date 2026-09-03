@@ -51,7 +51,9 @@ public static class PerceptualHasher
     /// </summary>
     public static long ComputeDifferenceHash(Stream stream)
     {
-        var comparisons = new bool[56]; // 9x8 - 1 = 56 comparisons
+        // Nine columns produce eight horizontal comparisons on each of eight
+        // rows: 8 * 8 = 64 bits.
+        var comparisons = new bool[64];
 
         using var image = Image.Load<Rgba32>(stream);
         var tempImage = image.Clone(ctx => ctx.Resize(9, 8));
@@ -67,7 +69,7 @@ public static class PerceptualHasher
         }
 
         long hash = 0;
-        for (int i = 0; i < 56; i++)
+        for (int i = 0; i < 64; i++)
         {
             if (comparisons[i])
                 hash |= 1L << i;
