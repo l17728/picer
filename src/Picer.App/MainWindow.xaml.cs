@@ -150,6 +150,16 @@ public partial class MainWindow : Window
             _mainVm.Video.UpdateVideoFaceSelection(list.SelectedItems.Cast<VideoFaceItemViewModel>());
     }
 
+    private void VideoFaceReviewBadge_Click(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is not VideoItemViewModel video) return;
+        _mainVm.Video.SelectedVideo = video;
+        VideoGrid.SelectedItem = video;
+        VideoGrid.ScrollIntoView(video);
+        VideoDetailTabs.SelectedIndex = 1;
+        e.Handled = true;
+    }
+
     private void RejectVideoSuggestedFace_Click(object sender, RoutedEventArgs e)
     {
         if (sender is not FrameworkElement anchor || _mainVm.Video.SelectedVideoFace is not { } face) return;

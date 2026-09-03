@@ -83,6 +83,9 @@ public sealed class VideoIndexTests : IDisposable
 
         await service.AnalyzeAsync(video);
         var detected = Assert.Single(service.GetTimeline(video.Id));
+        var pending = videos.GetFaceReviewSummaries()[video.Id];
+        Assert.Equal(1, pending.Total);
+        Assert.Equal(1, pending.Pending);
         service.Confirm(detected.FaceId, person.Id);
         await service.AnalyzeAsync(video);
 
@@ -95,6 +98,9 @@ public sealed class VideoIndexTests : IDisposable
 
         service.MarkIgnored(reanalyzed.FaceId);
         Assert.Equal("ignored", Assert.Single(service.GetTimeline(video.Id)).AssignmentState);
+        var ignored = videos.GetFaceReviewSummaries()[video.Id];
+        Assert.Equal(0, ignored.Pending);
+        Assert.Equal(1, ignored.Ignored);
     }
 
     private sealed class StubFaceAnalyzer : IImageFaceAnalyzer

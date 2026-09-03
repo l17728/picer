@@ -52,8 +52,12 @@ public partial class VideoViewModel(VideoRepository repository, VideoIndexServic
         _loadCancellation?.Cancel();
         var cancellation = _loadCancellation = new CancellationTokenSource();
         var rows = await UiWork.RunDatabaseAsync(() =>
-            (string.IsNullOrWhiteSpace(query) ? repository.GetAll() : repository.Search(query))
-            .Select(video => new VideoItemViewModel(video, repository.GetKeyframes(video.Id).Count)).ToArray(), cancellation.Token);
+        {
+            var faceReviews = repository.GetFaceReviewSummaries();
+            return (string.IsNullOrWhiteSpace(query) ? repository.GetAll() : repository.Search(query))
+                .Select(video => new VideoItemViewModel(video, repository.GetKeyframes(video.Id).Count,
+                    faceReviews.GetValueOrDefault(video.Id) ?? new VideoFaceReviewSummary(0, 0, 0, 0))).ToArray();
+        }, cancellation.Token);
         cancellation.Token.ThrowIfCancellationRequested();
         Videos.Clear();
         await UiWork.AddInBatchesAsync(rows, Videos.Add, cancellation.Token);
@@ -439,13 +443,19 @@ public partial class VideoViewModel(VideoRepository repository, VideoIndexServic
 
 public sealed class VideoItemViewModel
 {
-    public VideoItemViewModel(VideoRecord record, int keyframeCount) { Record = record; KeyframeCount = keyframeCount; }
+    public VideoItemViewModel(VideoRecord record, int keyframeCount, VideoFaceReviewSummary? faceReview = null)
+    { Record = record; KeyframeCount = keyframeCount; FaceReview = faceReview ?? new(0, 0, 0, 0); }
     public VideoRecord Record { get; }
     public string FileName => System.IO.Path.GetFileName(Record.Path);
     public string Path => Record.Path;
     public string Duration => Record.DurationSeconds is null ? "未探测" : TimeSpan.FromSeconds(Record.DurationSeconds.Value).ToString(@"hh\:mm\:ss");
     public string Resolution => Record.Width > 0 ? $"{Record.Width}×{Record.Height}" : "未知";
     public int KeyframeCount { get; }
+    public VideoFaceReviewSummary FaceReview { get; }
+    public bool HasPendingFaces => FaceReview.Pending > 0;
+    public string FaceReviewText => FaceReview.Total == 0 ? "未分析" : FaceReview.Pending > 0
+        ? $"待确认 {FaceReview.Pending}"
+        : $"已完成 {FaceReview.Confirmed + FaceReview.Ignored}/{FaceReview.Total}";
 }
 
 public sealed class VideoKeyframeItemViewModel(VideoKeyframe frame)

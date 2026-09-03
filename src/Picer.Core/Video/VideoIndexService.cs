@@ -5,6 +5,7 @@ namespace Picer.Core.Video;
 
 public sealed record VideoRecord(long Id, long SourceId, string Path, long FileSize, DateTime ModifiedUtc,
     double? DurationSeconds, int Width, int Height, DateTime? TakenUtc, string? Gps, string Status);
+public sealed record VideoFaceReviewSummary(int Total, int Pending, int Confirmed, int Ignored);
 
 public static class VideoFormats
 {
@@ -101,6 +102,21 @@ public sealed class VideoRepository(PicerDatabase database)
             var frame = new VideoKeyframe(reader.GetDouble(0), reader.GetString(1), reader.GetInt64(2));
             if (!existingOnly || File.Exists(frame.Path)) result.Add(frame);
         }
+        return result;
+    }
+
+    public IReadOnlyDictionary<long, VideoFaceReviewSummary> GetFaceReviewSummaries()
+    {
+        using var command = database.Command("""
+            SELECT video_id,COUNT(*),
+                   SUM(CASE WHEN assignment_state IS NULL THEN 1 ELSE 0 END),
+                   SUM(CASE WHEN assignment_state='confirmed' THEN 1 ELSE 0 END),
+                   SUM(CASE WHEN assignment_state='ignored' THEN 1 ELSE 0 END)
+            FROM video_detected_faces GROUP BY video_id
+            """);
+        using var reader = command.ExecuteReader();
+        var result = new Dictionary<long, VideoFaceReviewSummary>();
+        while (reader.Read()) result[reader.GetInt64(0)] = new(reader.GetInt32(1), reader.GetInt32(2), reader.GetInt32(3), reader.GetInt32(4));
         return result;
     }
 

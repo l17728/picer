@@ -532,9 +532,18 @@
                             <DataGridTextColumn Header="时长" Binding="{Binding Duration}" Width="90"/>
                             <DataGridTextColumn Header="分辨率" Binding="{Binding Resolution}" Width="100"/>
                             <DataGridTextColumn Header="关键帧" Binding="{Binding KeyframeCount}" Width="75"/>
+                            <DataGridTemplateColumn Header="人物标注" Width="110">
+                                <DataGridTemplateColumn.CellTemplate><DataTemplate>
+                                    <Button Content="{Binding FaceReviewText}" Click="VideoFaceReviewBadge_Click" Padding="7,2" HorizontalAlignment="Left">
+                                        <Button.Style><Style TargetType="Button"><Setter Property="Foreground" Value="#4C5967"/><Setter Property="Background" Value="#EEF2F6"/>
+                                            <Style.Triggers><DataTrigger Binding="{Binding HasPendingFaces}" Value="True"><Setter Property="Foreground" Value="#7A3E00"/><Setter Property="Background" Value="#FFD991"/><Setter Property="FontWeight" Value="SemiBold"/><Setter Property="ToolTip" Value="点击直接打开该视频的待确认人物"/></DataTrigger></Style.Triggers>
+                                        </Style></Button.Style>
+                                    </Button>
+                                </DataTemplate></DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
                         </DataGrid.Columns>
                     </DataGrid>
-                    <TabControl Grid.Row="2" Margin="0,8,0,0">
+                    <TabControl x:Name="VideoDetailTabs" Grid.Row="2" Margin="0,8,0,0">
                         <TabItem Header="关键帧">
                             <ListBox ItemsSource="{Binding Frames}" ScrollViewer.HorizontalScrollBarVisibility="Disabled">
                                 <ListBox.ItemsPanel><ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate></ListBox.ItemsPanel>
