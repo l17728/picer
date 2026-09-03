@@ -223,14 +223,45 @@ public sealed class VisionAnalysisTests : IDisposable
         var copy = _database.UpsertImage(new ImageRecord
         {
             SourceId = _image.SourceId, Path = copyPath, FileSize = 5, ModifiedUtc = File.GetLastWriteTimeUtc(copyPath),
-            Sha256 = "identical-content", Status = ImageStatus.Active, IndexedUtc = DateTime.UtcNow
+            Sha256 = "reencoded-content", Width = 640, Height = 480, AverageHash = 12345,
+            Status = ImageStatus.Active, IndexedUtc = DateTime.UtcNow
         });
+        using (var visualHash = _database.Command("UPDATE images SET width=640,height=480,ahash=12345 WHERE id=$id"))
+        {
+            visualHash.Parameters.AddWithValue("$id", _image.Id);
+            visualHash.ExecuteNonQuery();
+        }
         var repository = new VisionAnalysisRepository(_database);
         using var analysis = new VisionAnalysisService(repository, new FakeFaceAnalyzer("model-1"));
         await analysis.AnalyzeAsync([_image, copy]);
 
         Assert.Equal(2, repository.GetFaceIds(_image.Id).Count + repository.GetFaceIds(copy.Id).Count);
         Assert.Single(repository.GetUnassignedFaces());
+
+        var people = new PeopleService(_database);
+        var person = people.Create("duplicate-test-person");
+        foreach (var faceId in repository.GetFaceIds(_image.Id).Concat(repository.GetFaceIds(copy.Id)))
+            people.ConfirmFace(faceId, person.Id);
+        Assert.Single(repository.GetPersonFaces(person.Id));
+        Assert.Single(repository.GetConfirmedFaces(person.Id));
+
+        foreach (var faceId in repository.GetFaceIds(_image.Id).Concat(repository.GetFaceIds(copy.Id)))
+            people.IgnoreFace(faceId);
+        Assert.Single(repository.GetIgnoredFaces());
+    }
+
+    [Fact]
+    public void SaveCompleted_DeduplicatesOverlappingDetectorResultsBeforeInsert()
+    {
+        var repository = new VisionAnalysisRepository(_database);
+        var analyzer = new FakeFaceAnalyzer("duplicate-detector-model");
+        var first = new FaceDetection(new NormalizedFaceBox(.1f, .1f, .3f, .3f), .98f, null, [1f, 0f]);
+        var duplicate = new FaceDetection(new NormalizedFaceBox(.102f, .101f, .299f, .301f), .91f, null, [1f, 0f]);
+
+        repository.SaveCompleted(_image, analyzer, new FaceAnalysisResult([first, duplicate]));
+
+        Assert.Equal(1, repository.GetFaceCount(_image.Id));
+        Assert.Equal(1, repository.Get(_image.Id, analyzer.AnalyzerName)!.FaceCount);
     }
 
     [Fact]
@@ -391,6 +422,42 @@ public sealed class VisionAnalysisTests : IDisposable
         Assert.Equal(1, result.ClusterCount);
         Assert.Equal(2, cluster.Faces.Count);
         Assert.Equal(2, cluster.Faces.Select(face => face.ImageId).Distinct().Count());
+    }
+
+    [Fact]
+    public async Task UnknownClustering_DeduplicatesCopiedPhotosByContentAndVisualIdentity()
+    {
+        var repository = new VisionAnalysisRepository(_database);
+        using var analysis = new VisionAnalysisService(repository, new SameIdentityAnalyzer());
+        await analysis.AnalyzeAsync([_image]);
+        var sourceId = _database.GetSources().Single().Id;
+
+        async Task<ImageRecord> AddCopy(string name, string sha256)
+        {
+            var path = Path.Combine(_root, name);
+            File.WriteAllBytes(path, [9, 8, 7]);
+            var image = _database.UpsertImage(new ImageRecord
+            {
+                SourceId = sourceId, Path = path, FileSize = 3, Sha256 = sha256,
+                Width = 640, Height = 480, AverageHash = 12345,
+                ModifiedUtc = File.GetLastWriteTimeUtc(path), Status = ImageStatus.Active,
+                IndexedUtc = DateTime.UtcNow
+            });
+            await analysis.AnalyzeAsync([image]);
+            return image;
+        }
+
+        var original = await AddCopy("copied-base.jpg", "same-content");
+        var exactCopy = await AddCopy("copied-exact.jpg", "same-content");
+        var reencodedCopy = await AddCopy("copied-reencoded.jpg", "different-bytes");
+
+        new UnknownFaceClusterer(repository).Rebuild(0.9);
+        var cluster = Assert.Single(repository.GetCandidateClusters());
+
+        Assert.Contains(cluster.Faces, face => face.ImageId == original.Id);
+        Assert.DoesNotContain(cluster.Faces, face => face.ImageId == exactCopy.Id);
+        Assert.DoesNotContain(cluster.Faces, face => face.ImageId == reencodedCopy.Id);
+        Assert.Equal(2, cluster.Faces.Count);
     }
 
     [Fact]

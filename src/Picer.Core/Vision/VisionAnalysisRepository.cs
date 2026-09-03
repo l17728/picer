@@ -27,12 +27,13 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
 
     public void SaveCompleted(ImageRecord image, IImageFaceAnalyzer analyzer, FaceAnalysisResult result)
     {
+        var uniqueFaces = DeduplicateDetections(result.Faces);
         using var transaction = database.BeginTransaction();
         DeleteFaces(image.Id, transaction);
 
-        for (var ordinal = 0; ordinal < result.Faces.Count; ordinal++)
+        for (var ordinal = 0; ordinal < uniqueFaces.Count; ordinal++)
         {
-            var face = result.Faces[ordinal];
+            var face = uniqueFaces[ordinal];
             Validate(face);
             using var insert = database.Command("""
                 INSERT INTO detected_faces
@@ -61,8 +62,36 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
             insert.ExecuteNonQuery();
         }
 
-        UpsertAnalysis(image, analyzer, "completed", result.Faces.Count, null, transaction);
+        UpsertAnalysis(image, analyzer, "completed", uniqueFaces.Count, null, transaction);
         transaction.Commit();
+    }
+
+    private static IReadOnlyList<FaceDetection> DeduplicateDetections(IReadOnlyList<FaceDetection> faces)
+    {
+        var unique = new List<FaceDetection>(faces.Count);
+        foreach (var face in faces.OrderByDescending(value => value.Confidence))
+        {
+            Validate(face);
+            if (unique.Any(existing => IntersectionOverUnion(existing.Box, face.Box) >= 0.90 &&
+                                       EmbeddingsMatch(existing.Embedding, face.Embedding))) continue;
+            unique.Add(face);
+        }
+        return unique;
+    }
+
+    private static bool EmbeddingsMatch(IReadOnlyList<float>? left, IReadOnlyList<float>? right)
+    {
+        if (left is null || right is null) return true;
+        var length = Math.Min(left.Count, right.Count);
+        double dot = 0, leftNorm = 0, rightNorm = 0;
+        for (var index = 0; index < length; index++)
+        {
+            dot += left[index] * right[index];
+            leftNorm += left[index] * left[index];
+            rightNorm += right[index] * right[index];
+        }
+        return length > 0 && leftNorm > 0 && rightNorm > 0 &&
+               dot / Math.Sqrt(leftNorm * rightNorm) >= 0.995;
     }
 
     public void SaveFailure(ImageRecord image, IImageFaceAnalyzer analyzer, string errorCode)
@@ -125,14 +154,15 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
         using var command = database.Command("""
             WITH ranked_faces AS (
                 SELECT f.*, ROW_NUMBER() OVER (
-                    PARTITION BY COALESCE(i.sha256, printf('image:%d', i.id)), f.ordinal
+                    PARTITION BY COALESCE(NULLIF(i.sha256,''), printf('image:%d', i.id)), f.ordinal
                     ORDER BY f.id) AS duplicate_rank
                 FROM detected_faces f JOIN images i ON i.id=f.image_id AND i.status='active'
             )
             SELECT f.id, f.image_id, i.path, i.thumb_path, f.ordinal,
                    f.box_x, f.box_y, f.box_width, f.box_height, f.confidence,
                    CASE WHEN a.state='suggested' THEN a.person_id END,
-                   CASE WHEN a.state='suggested' THEN p.display_name END
+                   CASE WHEN a.state='suggested' THEN p.display_name END,
+                   i.sha256, i.ahash, i.width, i.height
             FROM ranked_faces f
             JOIN images i ON i.id=f.image_id AND i.status='active'
             LEFT JOIN face_person_assignments a ON a.face_id=f.id
@@ -142,11 +172,14 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
             ORDER BY f.created_utc DESC, f.id DESC
             LIMIT $limit
             """);
-        command.Parameters.AddWithValue("$limit", Math.Clamp(limit, 1, 5000));
+        var requestedLimit = Math.Clamp(limit, 1, 5000);
+        command.Parameters.AddWithValue("$limit", Math.Min(20000, requestedLimit * 4));
         var values = new List<UnassignedFaceRecord>();
+        var deduplicator = new FaceSourceDeduplicator();
         using var reader = command.ExecuteReader();
-        while (reader.Read())
+        while (reader.Read() && values.Count < requestedLimit)
         {
+            if (deduplicator.IsDuplicateAndAdd(ReadSelectedFaceSignature(reader, 12))) continue;
             values.Add(new UnassignedFaceRecord(
                 reader.GetInt64(0), reader.GetInt64(1), reader.GetString(2),
                 reader.IsDBNull(3) ? null : reader.GetString(3), reader.GetInt32(4),
@@ -162,12 +195,13 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
         using var command = database.Command("""
             WITH ranked_faces AS (
                 SELECT f.*, ROW_NUMBER() OVER (
-                    PARTITION BY COALESCE(i.sha256, printf('image:%d', i.id)), f.ordinal
+                    PARTITION BY COALESCE(NULLIF(i.sha256,''), printf('image:%d', i.id)), f.ordinal
                     ORDER BY f.id) AS duplicate_rank
                 FROM detected_faces f JOIN images i ON i.id=f.image_id AND i.status='active'
             )
             SELECT f.id, f.image_id, i.path, i.thumb_path, f.ordinal,
-                   f.box_x, f.box_y, f.box_width, f.box_height, f.confidence
+                   f.box_x, f.box_y, f.box_width, f.box_height, f.confidence,
+                   i.sha256, i.ahash, i.width, i.height
             FROM face_person_assignments a
             JOIN ranked_faces f ON f.id=a.face_id AND f.duplicate_rank=1
             JOIN images i ON i.id=f.image_id AND i.status='active'
@@ -176,14 +210,20 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
             LIMIT $limit
             """);
         command.Parameters.AddWithValue("$person", personId);
-        command.Parameters.AddWithValue("$limit", Math.Clamp(limit, 1, 5000));
+        var requestedLimit = Math.Clamp(limit, 1, 5000);
+        command.Parameters.AddWithValue("$limit", Math.Min(20000, requestedLimit * 4));
         var values = new List<UnassignedFaceRecord>();
+        var deduplicator = new FaceSourceDeduplicator();
         using var reader = command.ExecuteReader();
-        while (reader.Read()) values.Add(new UnassignedFaceRecord(
-            reader.GetInt64(0), reader.GetInt64(1), reader.GetString(2),
-            reader.IsDBNull(3) ? null : reader.GetString(3), reader.GetInt32(4),
-            new NormalizedFaceBox(reader.GetFloat(5), reader.GetFloat(6), reader.GetFloat(7), reader.GetFloat(8)),
-            reader.GetFloat(9)));
+        while (reader.Read() && values.Count < requestedLimit)
+        {
+            if (deduplicator.IsDuplicateAndAdd(ReadSelectedFaceSignature(reader, 10))) continue;
+            values.Add(new UnassignedFaceRecord(
+                reader.GetInt64(0), reader.GetInt64(1), reader.GetString(2),
+                reader.IsDBNull(3) ? null : reader.GetString(3), reader.GetInt32(4),
+                new NormalizedFaceBox(reader.GetFloat(5), reader.GetFloat(6), reader.GetFloat(7), reader.GetFloat(8)),
+                reader.GetFloat(9)));
+        }
         return values;
     }
 
@@ -192,14 +232,15 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
         using var command = database.Command("""
             WITH ranked_faces AS (
                 SELECT f.*, ROW_NUMBER() OVER (
-                    PARTITION BY COALESCE(i.sha256, printf('image:%d', i.id)), f.ordinal
+                    PARTITION BY COALESCE(NULLIF(i.sha256,''), printf('image:%d', i.id)), f.ordinal
                     ORDER BY f.id) AS duplicate_rank
                 FROM detected_faces f JOIN images i ON i.id=f.image_id AND i.status='active'
             )
             SELECT f.id, f.image_id, i.path, i.thumb_path, f.ordinal,
                    f.box_x, f.box_y, f.box_width, f.box_height, f.confidence,
                    CASE WHEN a.state='suggested' THEN a.person_id END,
-                   CASE WHEN a.state='suggested' THEN p.display_name END
+                   CASE WHEN a.state='suggested' THEN p.display_name END,
+                   i.sha256, i.ahash, i.width, i.height
             FROM face_person_assignments a
             JOIN ranked_faces f ON f.id=a.face_id AND f.duplicate_rank=1
             JOIN images i ON i.id=f.image_id AND i.status='active'
@@ -209,15 +250,21 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
             LIMIT $limit
             """);
         command.Parameters.AddWithValue("$person", personId);
-        command.Parameters.AddWithValue("$limit", Math.Clamp(limit, 1, 5000));
+        var requestedLimit = Math.Clamp(limit, 1, 5000);
+        command.Parameters.AddWithValue("$limit", Math.Min(20000, requestedLimit * 4));
         var values = new List<UnassignedFaceRecord>();
+        var deduplicator = new FaceSourceDeduplicator();
         using var reader = command.ExecuteReader();
-        while (reader.Read()) values.Add(new UnassignedFaceRecord(
-            reader.GetInt64(0), reader.GetInt64(1), reader.GetString(2),
-            reader.IsDBNull(3) ? null : reader.GetString(3), reader.GetInt32(4),
-            new NormalizedFaceBox(reader.GetFloat(5), reader.GetFloat(6), reader.GetFloat(7), reader.GetFloat(8)),
-            reader.GetFloat(9), reader.IsDBNull(10) ? null : reader.GetInt64(10),
-            reader.IsDBNull(11) ? null : reader.GetString(11)));
+        while (reader.Read() && values.Count < requestedLimit)
+        {
+            if (deduplicator.IsDuplicateAndAdd(ReadSelectedFaceSignature(reader, 12))) continue;
+            values.Add(new UnassignedFaceRecord(
+                reader.GetInt64(0), reader.GetInt64(1), reader.GetString(2),
+                reader.IsDBNull(3) ? null : reader.GetString(3), reader.GetInt32(4),
+                new NormalizedFaceBox(reader.GetFloat(5), reader.GetFloat(6), reader.GetFloat(7), reader.GetFloat(8)),
+                reader.GetFloat(9), reader.IsDBNull(10) ? null : reader.GetInt64(10),
+                reader.IsDBNull(11) ? null : reader.GetString(11)));
+        }
         return values;
     }
 
@@ -226,12 +273,13 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
         using var command = database.Command("""
             WITH ranked_faces AS (
                 SELECT f.*, ROW_NUMBER() OVER (
-                    PARTITION BY COALESCE(i.sha256, printf('image:%d', i.id)), f.ordinal
+                    PARTITION BY COALESCE(NULLIF(i.sha256,''), printf('image:%d', i.id)), f.ordinal
                     ORDER BY f.id) AS duplicate_rank
                 FROM detected_faces f JOIN images i ON i.id=f.image_id AND i.status='active'
             )
             SELECT f.id, f.image_id, i.path, i.thumb_path, f.ordinal,
-                   f.box_x, f.box_y, f.box_width, f.box_height, f.confidence
+                   f.box_x, f.box_y, f.box_width, f.box_height, f.confidence,
+                   i.sha256, i.ahash, i.width, i.height
             FROM face_review_states r
             JOIN ranked_faces f ON f.id=r.face_id AND f.duplicate_rank=1
             JOIN images i ON i.id=f.image_id AND i.status='active'
@@ -239,22 +287,31 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
             ORDER BY r.updated_utc DESC, f.id DESC
             LIMIT $limit
             """);
-        command.Parameters.AddWithValue("$limit", Math.Clamp(limit, 1, 5000));
+        var requestedLimit = Math.Clamp(limit, 1, 5000);
+        command.Parameters.AddWithValue("$limit", Math.Min(20000, requestedLimit * 4));
         var values = new List<UnassignedFaceRecord>();
+        var deduplicator = new FaceSourceDeduplicator();
         using var reader = command.ExecuteReader();
-        while (reader.Read()) values.Add(new UnassignedFaceRecord(
-            reader.GetInt64(0), reader.GetInt64(1), reader.GetString(2),
-            reader.IsDBNull(3) ? null : reader.GetString(3), reader.GetInt32(4),
-            new NormalizedFaceBox(reader.GetFloat(5), reader.GetFloat(6), reader.GetFloat(7), reader.GetFloat(8)),
-            reader.GetFloat(9)));
+        while (reader.Read() && values.Count < requestedLimit)
+        {
+            if (deduplicator.IsDuplicateAndAdd(ReadSelectedFaceSignature(reader, 10))) continue;
+            values.Add(new UnassignedFaceRecord(
+                reader.GetInt64(0), reader.GetInt64(1), reader.GetString(2),
+                reader.IsDBNull(3) ? null : reader.GetString(3), reader.GetInt32(4),
+                new NormalizedFaceBox(reader.GetFloat(5), reader.GetFloat(6), reader.GetFloat(7), reader.GetFloat(8)),
+                reader.GetFloat(9)));
+        }
         return values;
     }
 
     public IReadOnlyList<FaceEmbeddingRecord> GetEmbeddingsForMatching()
     {
         using var command = database.Command("""
-            SELECT f.id, f.image_id, f.model_version, a.person_id, a.state, f.embedding
+            SELECT f.id, f.image_id, f.model_version, a.person_id, a.state, f.embedding,
+                   i.sha256, i.ahash, i.width, i.height,
+                   f.box_x, f.box_y, f.box_width, f.box_height
             FROM detected_faces f
+            JOIN images i ON i.id=f.image_id AND i.status='active'
             LEFT JOIN face_person_assignments a ON a.face_id=f.id
             LEFT JOIN face_review_states r ON r.face_id=f.id
             WHERE f.embedding IS NOT NULL AND r.face_id IS NULL
@@ -262,11 +319,17 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
             ORDER BY f.id
             """);
         var values = new List<FaceEmbeddingRecord>();
+        var deduplicator = new FaceSourceDeduplicator();
         using var reader = command.ExecuteReader();
-        while (reader.Read()) values.Add(new FaceEmbeddingRecord(
-            reader.GetInt64(0), reader.GetInt64(1), reader.GetString(2),
-            reader.IsDBNull(3) ? null : reader.GetInt64(3),
-            reader.IsDBNull(4) ? null : reader.GetString(4), FromBytes((byte[])reader[5])));
+        while (reader.Read())
+        {
+            var signature = ReadFaceSourceSignature(reader, 6);
+            if (deduplicator.IsDuplicateAndAdd(signature)) continue;
+            values.Add(new FaceEmbeddingRecord(
+                reader.GetInt64(0), reader.GetInt64(1), reader.GetString(2),
+                reader.IsDBNull(3) ? null : reader.GetInt64(3),
+                reader.IsDBNull(4) ? null : reader.GetString(4), FromBytes((byte[])reader[5])));
+        }
         return values;
     }
 
@@ -334,7 +397,8 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
     {
         using var command = database.Command("""
             SELECT c.id, c.model_version, f.id, f.image_id, i.path, i.thumb_path, f.ordinal,
-                   f.box_x, f.box_y, f.box_width, f.box_height, f.confidence
+                   f.box_x, f.box_y, f.box_width, f.box_height, f.confidence,
+                   i.sha256, i.ahash, i.width, i.height
             FROM face_candidate_clusters c
             JOIN face_candidate_members m ON m.cluster_id=c.id
             JOIN detected_faces f ON f.id=m.face_id
@@ -345,6 +409,7 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
             ORDER BY c.id, m.similarity DESC, f.id
             """);
         var groups = new Dictionary<long, (string Version, List<UnassignedFaceRecord> Faces)>();
+        var deduplicators = new Dictionary<long, FaceSourceDeduplicator>();
         using var reader = command.ExecuteReader();
         while (reader.Read())
         {
@@ -353,7 +418,13 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
             {
                 group = (reader.GetString(1), []);
                 groups.Add(clusterId, group);
+                deduplicators.Add(clusterId, new FaceSourceDeduplicator());
             }
+            var signature = new FaceSourceSignature(
+                reader.IsDBNull(12) ? null : reader.GetString(12), reader.GetInt64(13),
+                reader.GetInt32(14), reader.GetInt32(15),
+                new NormalizedFaceBox(reader.GetFloat(7), reader.GetFloat(8), reader.GetFloat(9), reader.GetFloat(10)));
+            if (deduplicators[clusterId].IsDuplicateAndAdd(signature)) continue;
             group.Faces.Add(new UnassignedFaceRecord(
                 reader.GetInt64(2), reader.GetInt64(3), reader.GetString(4),
                 reader.IsDBNull(5) ? null : reader.GetString(5), reader.GetInt32(6),
@@ -362,6 +433,69 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
         }
         return groups.Where(pair => pair.Value.Faces.Count >= 2)
             .Select(pair => new FaceCandidateClusterRecord(pair.Key, pair.Value.Version, pair.Value.Faces)).ToArray();
+    }
+
+    private static FaceSourceSignature ReadFaceSourceSignature(SqliteDataReader reader, int offset) => new(
+        reader.IsDBNull(offset) ? null : reader.GetString(offset), reader.GetInt64(offset + 1),
+        reader.GetInt32(offset + 2), reader.GetInt32(offset + 3),
+        new NormalizedFaceBox(reader.GetFloat(offset + 4), reader.GetFloat(offset + 5),
+            reader.GetFloat(offset + 6), reader.GetFloat(offset + 7)));
+
+    private static FaceSourceSignature ReadSelectedFaceSignature(SqliteDataReader reader, int signatureOffset) => new(
+        reader.IsDBNull(signatureOffset) ? null : reader.GetString(signatureOffset),
+        reader.GetInt64(signatureOffset + 1), reader.GetInt32(signatureOffset + 2),
+        reader.GetInt32(signatureOffset + 3),
+        new NormalizedFaceBox(reader.GetFloat(5), reader.GetFloat(6), reader.GetFloat(7), reader.GetFloat(8)));
+
+    private static bool IsDuplicateFaceSource(FaceSourceSignature left, FaceSourceSignature right)
+    {
+        var sameImage = !string.IsNullOrWhiteSpace(left.Sha256) &&
+                        string.Equals(left.Sha256, right.Sha256, StringComparison.OrdinalIgnoreCase);
+        var sameVisual = left.AverageHash != 0 && left.AverageHash == right.AverageHash &&
+                         left.Width == right.Width && left.Height == right.Height;
+        return (sameImage || sameVisual) && IntersectionOverUnion(left.Box, right.Box) >= 0.90;
+    }
+
+    private static double IntersectionOverUnion(NormalizedFaceBox left, NormalizedFaceBox right)
+    {
+        var intersectionWidth = Math.Max(0, Math.Min(left.X + left.Width, right.X + right.Width) - Math.Max(left.X, right.X));
+        var intersectionHeight = Math.Max(0, Math.Min(left.Y + left.Height, right.Y + right.Height) - Math.Max(left.Y, right.Y));
+        var intersection = intersectionWidth * intersectionHeight;
+        var union = left.Width * left.Height + right.Width * right.Height - intersection;
+        return union <= 0 ? 0 : intersection / union;
+    }
+
+    private sealed record FaceSourceSignature(string? Sha256, long AverageHash, int Width, int Height, NormalizedFaceBox Box);
+
+    private sealed class FaceSourceDeduplicator
+    {
+        private readonly Dictionary<string, List<FaceSourceSignature>> _bySha256 = new(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<(long Hash, int Width, int Height), List<FaceSourceSignature>> _byVisual = [];
+
+        public bool IsDuplicateAndAdd(FaceSourceSignature signature)
+        {
+            if (!string.IsNullOrWhiteSpace(signature.Sha256) &&
+                ContainsDuplicate(_bySha256.GetValueOrDefault(signature.Sha256), signature)) return true;
+            var visualKey = (signature.AverageHash, signature.Width, signature.Height);
+            if (signature.AverageHash != 0 &&
+                ContainsDuplicate(_byVisual.GetValueOrDefault(visualKey), signature)) return true;
+
+            if (!string.IsNullOrWhiteSpace(signature.Sha256))
+                Add(_bySha256, signature.Sha256, signature);
+            if (signature.AverageHash != 0)
+                Add(_byVisual, visualKey, signature);
+            return false;
+        }
+
+        private static bool ContainsDuplicate(List<FaceSourceSignature>? values, FaceSourceSignature candidate) =>
+            values is not null && values.Any(existing => IsDuplicateFaceSource(existing, candidate));
+
+        private static void Add<TKey>(Dictionary<TKey, List<FaceSourceSignature>> index, TKey key,
+            FaceSourceSignature value) where TKey : notnull
+        {
+            if (!index.TryGetValue(key, out var values)) index.Add(key, values = []);
+            values.Add(value);
+        }
     }
 
     public int GetIgnoredFaceCount()
