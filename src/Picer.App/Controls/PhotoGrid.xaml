@@ -72,7 +72,7 @@
                             <Grid Width="{Binding ThumbnailSize, RelativeSource={RelativeSource AncestorType={x:Type local:PhotoGrid}}}"
                                   Height="{Binding ThumbnailSize, RelativeSource={RelativeSource AncestorType={x:Type local:PhotoGrid}}}">
                                 <Border Background="#F0F0F0"/>
-                                <Image Source="{Binding Thumbnail}" Stretch="Uniform" Unloaded="Thumbnail_Unloaded"
+                                <Image Source="{Binding Thumbnail}" Stretch="Uniform" Loaded="Thumbnail_Loaded" Unloaded="Thumbnail_Unloaded"
                                        AutomationProperties.Name="{Binding FileName}"/>
                             </Grid>
                             <TextBlock Text="{Binding FileName}" TextTrimming="CharacterEllipsis" TextAlignment="Center"

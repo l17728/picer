@@ -72,6 +72,11 @@ public partial class ImageItemViewModel : ObservableObject
         }
     }
 
+    public void EnsureThumbnailLoad()
+    {
+        if (_thumbnail is null && !_isLoadingThumbnail) LoadThumbnailAsync();
+    }
+
     private async void LoadThumbnailAsync()
     {
         if (_isLoadingThumbnail) return;
@@ -82,29 +87,30 @@ public partial class ImageItemViewModel : ObservableObject
 
         try
         {
-            var thumbPath = GetImagePath();
-            if (string.IsNullOrWhiteSpace(thumbPath))
+            var imagePaths = GetImagePaths();
+            if (imagePaths.Count == 0)
                 return;
             await ThumbnailLoadGate.WaitAsync(cts.Token);
             acquired = true;
             var bi = await Task.Run(() =>
             {
                 cts.Token.ThrowIfCancellationRequested();
-                try
+                foreach (var imagePath in imagePaths)
                 {
-                    var image = new BitmapImage();
-                    image.BeginInit();
-                    image.CacheOption = BitmapCacheOption.OnLoad;
-                    image.DecodePixelWidth = 256;
-                    image.UriSource = new Uri(thumbPath, UriKind.Absolute);
-                    image.EndInit();
-                    image.Freeze();
-                    return image;
+                    try
+                    {
+                        var image = new BitmapImage();
+                        image.BeginInit();
+                        image.CacheOption = BitmapCacheOption.OnLoad;
+                        image.DecodePixelWidth = 256;
+                        image.UriSource = new Uri(imagePath, UriKind.Absolute);
+                        image.EndInit();
+                        image.Freeze();
+                        return image;
+                    }
+                    catch { }
                 }
-                catch
-                {
-                    return null;
-                }
+                return null;
             }, cts.Token);
 
             if (bi is not null && !cts.IsCancellationRequested)
@@ -117,16 +123,28 @@ public partial class ImageItemViewModel : ObservableObject
         finally
         {
             if (acquired) ThumbnailLoadGate.Release();
-            _isLoadingThumbnail = false;
+            if (ReferenceEquals(_thumbnailCts, cts))
+            {
+                _isLoadingThumbnail = false;
+                if (_thumbnail is null && cts.IsCancellationRequested && !_pageCancellation.IsCancellationRequested)
+                    OnPropertyChanged(nameof(Thumbnail));
+            }
         }
     }
 
     public void CancelThumbnailLoad() => _thumbnailCts?.Cancel();
 
-    private string? GetImagePath() =>
-        !string.IsNullOrWhiteSpace(_record.ThumbPath) && File.Exists(_record.ThumbPath)
-            ? _record.ThumbPath
-            : File.Exists(_record.Path) ? _record.Path : null;
+    private string? GetImagePath() => GetImagePaths().FirstOrDefault();
+
+    private IReadOnlyList<string> GetImagePaths()
+    {
+        var paths = new List<string>(2);
+        if (!string.IsNullOrWhiteSpace(_record.ThumbPath) && File.Exists(_record.ThumbPath))
+            paths.Add(_record.ThumbPath);
+        if (File.Exists(_record.Path) && !paths.Contains(_record.Path, StringComparer.OrdinalIgnoreCase))
+            paths.Add(_record.Path);
+        return paths;
+    }
 
     private static string FormatSize(long bytes)
     {

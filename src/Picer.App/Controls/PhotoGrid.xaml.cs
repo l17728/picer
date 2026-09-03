@@ -133,4 +133,8 @@ public partial class PhotoGrid : UserControl
     {
         if (sender is FrameworkElement { DataContext: ImageItemViewModel image }) image.CancelThumbnailLoad();
     }
+    private void Thumbnail_Loaded(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement { DataContext: ImageItemViewModel image }) image.EnsureThumbnailLoad();
+    }
 }
