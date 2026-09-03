@@ -365,22 +365,34 @@ public partial class VideoViewModel(VideoRepository repository, VideoIndexServic
         catch(Exception ex){AppLogger.Error($"本地音频转写失败：{SelectedVideo?.Record.Path}",ex);StatusText=$"转写失败：{CompactError(ex.Message)}";} finally{IsBusy=false;}
     }
 
-    [RelayCommand(CanExecute = nameof(CanStartOperation))]
+    [RelayCommand]
     private async Task AnalyzePeopleAsync()
     {
-        if(SelectedVideo is null){StatusText="请先选择视频";return;} if(faceTimeline is null){StatusText="人脸模型尚未就绪";return;}
-        if(await UiWork.RunDatabaseAsync(()=>repository.GetKeyframes(SelectedVideo.Record.Id).Count)==0){StatusText="请先生成关键帧";return;} IsBusy=true;
+        var selected = SelectedVideo;
+        if(selected is null){StatusText="请先选择视频";AppLogger.Warn("视频人物分析未启动：没有选择视频");return;}
+        if(faceTimeline is null){StatusText="人脸模型尚未就绪";AppLogger.Warn($"视频人物分析未启动：人脸模型不可用；video={selected.Record.Id}");return;}
+        if(IsBusy){StatusText=$"已有视频任务正在执行，请完成后再分析 {selected.FileName}";AppLogger.Info($"视频人物分析未启动：已有任务占用；video={selected.Record.Id}");return;}
+        StatusText=$"已收到人物分析请求：{selected.FileName}；正在检查关键帧…";
+        AppLogger.Info($"视频人物分析请求：video={selected.Record.Id}; path={selected.Record.Path}");
+        await Application.Current.Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.Render);
+        var keyframeCount=await UiWork.RunDatabaseAsync("VideoPeople.CheckKeyframes",()=>repository.GetKeyframes(selected.Record.Id).Count);
+        if(keyframeCount==0){StatusText=$"无法分析 {selected.FileName}：尚未生成关键帧";AppLogger.Warn($"视频人物分析未启动：无关键帧；video={selected.Record.Id}");return;}
+        IsBusy=true;
         try
         {
-            StatusText="正在准备视频人物分析…";
+            StatusText=$"正在准备人物分析：{selected.FileName}，共 {keyframeCount} 张关键帧…";
+            AppLogger.Info($"视频人物分析开始：video={selected.Record.Id}; keyframes={keyframeCount}");
             var progress = new Progress<(int Completed, int Total)>(value =>
-                StatusText = $"正在分析视频人物：关键帧 {value.Completed}/{value.Total}");
-            var count=await faceTimeline.AnalyzeAsync(SelectedVideo.Record, progress: progress);
-            var view=await UiWork.RunDatabaseAsync(()=>(Timeline:faceTimeline.GetTimeline(SelectedVideo.Record.Id),People:peopleService?.GetAll().ToArray()??[]));
-            PeopleTimelineText=FormatTimeline(view.Timeline);PopulateVideoFaces(view.Timeline,view.People);
-            StatusText=$"人物时间轴完成：{count} 个人脸片段";
+                StatusText = $"正在分析 {selected.FileName}：关键帧 {value.Completed}/{value.Total}");
+            var count=await faceTimeline.AnalyzeAsync(selected.Record, progress: progress);
+            var view=await UiWork.RunDatabaseAsync("VideoPeople.LoadResult",()=>(Timeline:faceTimeline.GetTimeline(selected.Record.Id),People:peopleService?.GetAll().ToArray()??[]));
+            if(SelectedVideo?.Record.Id==selected.Record.Id){PeopleTimelineText=FormatTimeline(view.Timeline);PopulateVideoFaces(view.Timeline,view.People);}
+            await LoadAsync();
+            SelectedVideo=Videos.FirstOrDefault(video=>video.Record.Id==selected.Record.Id);
+            StatusText=count==0?$"人物分析完成：{selected.FileName} 未检测到人脸":$"人物分析完成：{selected.FileName}，检测到 {count} 个人脸片段";
+            AppLogger.Info($"视频人物分析完成：video={selected.Record.Id}; faces={count}");
         }
-        catch(Exception ex){AppLogger.Error($"视频人物分析失败：{SelectedVideo?.Record.Path}", ex);StatusText=$"人物时间轴失败：{CompactError(ex.Message)}";}finally{IsBusy=false;}
+        catch(Exception ex){AppLogger.Error($"视频人物分析失败：{selected.Record.Path}", ex);StatusText=$"人物分析失败：{selected.FileName}；{CompactError(ex.Message)}；详细信息已写入日志";}finally{IsBusy=false;}
     }
 
     private static string FormatTimeline(IReadOnlyList<VideoFaceTimelineRecord>? faces)=>faces is null||faces.Count==0?"尚未识别到人物":string.Join(Environment.NewLine,faces.Select(face=>$"{TimeSpan.FromSeconds(face.TimestampSeconds):hh\\:mm\\:ss}  {face.EffectivePersonName??"未知人物"}  {(face.MatchConfidence is null?"":$"匹配 {face.MatchConfidence:P0}")}"));
