@@ -190,6 +190,35 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
         return values;
     }
 
+    public FaceWorkQueueCounts GetFaceWorkQueueCounts()
+    {
+        using var command = database.Command("""
+            SELECT a.state, i.sha256, i.ahash, i.width, i.height,
+                   f.box_x, f.box_y, f.box_width, f.box_height
+            FROM detected_faces f
+            JOIN images i ON i.id=f.image_id AND i.status='active'
+            LEFT JOIN face_person_assignments a ON a.face_id=f.id
+            LEFT JOIN face_review_states r ON r.face_id=f.id
+            WHERE (a.face_id IS NULL OR a.state='suggested') AND r.face_id IS NULL
+            ORDER BY CASE a.state WHEN 'suggested' THEN 0 ELSE 1 END, f.id
+            """);
+        var deduplicator = new FaceSourceDeduplicator();
+        var suggested = 0;
+        var unassigned = 0;
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            var signature = new FaceSourceSignature(
+                reader.IsDBNull(1) ? null : reader.GetString(1), reader.GetInt64(2),
+                reader.GetInt32(3), reader.GetInt32(4),
+                new NormalizedFaceBox(reader.GetFloat(5), reader.GetFloat(6), reader.GetFloat(7), reader.GetFloat(8)));
+            if (deduplicator.IsDuplicateAndAdd(signature)) continue;
+            if (string.Equals(reader.IsDBNull(0) ? null : reader.GetString(0), "suggested", StringComparison.Ordinal)) suggested++;
+            else unassigned++;
+        }
+        return new FaceWorkQueueCounts(suggested + unassigned, suggested, unassigned);
+    }
+
     public IReadOnlyList<UnassignedFaceRecord> GetConfirmedFaces(long personId, int limit = 500)
     {
         using var command = database.Command("""

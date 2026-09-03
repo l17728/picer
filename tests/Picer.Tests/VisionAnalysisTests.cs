@@ -237,6 +237,7 @@ public sealed class VisionAnalysisTests : IDisposable
 
         Assert.Equal(2, repository.GetFaceIds(_image.Id).Count + repository.GetFaceIds(copy.Id).Count);
         Assert.Single(repository.GetUnassignedFaces());
+        Assert.Equal(new FaceWorkQueueCounts(1, 0, 1), repository.GetFaceWorkQueueCounts());
 
         var people = new PeopleService(_database);
         var person = people.Create("duplicate-test-person");
@@ -244,6 +245,7 @@ public sealed class VisionAnalysisTests : IDisposable
             people.ConfirmFace(faceId, person.Id);
         Assert.Single(repository.GetPersonFaces(person.Id));
         Assert.Single(repository.GetConfirmedFaces(person.Id));
+        Assert.Equal(new FaceWorkQueueCounts(0, 0, 0), repository.GetFaceWorkQueueCounts());
 
         foreach (var faceId in repository.GetFaceIds(_image.Id).Concat(repository.GetFaceIds(copy.Id)))
             people.IgnoreFace(faceId);

@@ -65,6 +65,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
     [ObservableProperty] private UnassignedFaceViewModel? _selectedClusterFace;
     [ObservableProperty] private UnassignedFaceViewModel? _selectedDisplayedFace;
     [ObservableProperty] private string _displayedFacesTitle = "选择左侧分类查看人脸";
+    [ObservableProperty] private string _unassignedSummary = "待处理人脸";
     public DisplayedFaceCollectionKind DisplayedCollectionKind { get; private set; }
     [ObservableProperty] private string _newPersonName = "";
     [ObservableProperty] private string _statusText = "人物分析尚未开始";
@@ -111,6 +112,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             People: _peopleService.GetAll().ToArray(),
             Faces: _repository.GetUnassignedFaces().ToArray(),
             Clusters: _repository.GetCandidateClusters().ToArray(),
+            WorkQueue: _repository.GetFaceWorkQueueCounts(),
             IgnoredCount: _repository.GetIgnoredFaceCount(),
             Summary: _repository.GetSummary()), cancellation.Token);
         cancellation.Token.ThrowIfCancellationRequested();
@@ -145,6 +147,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             CandidateClusters.Add(item);
             _ = LoadClusterThumbnailAsync(item);
         }
+        UnassignedSummary = $"待处理人脸 · {snapshot.WorkQueue.Total}（待确认 {snapshot.WorkQueue.Suggested} / 未匹配 {snapshot.WorkQueue.Unassigned}）";
         var summary = snapshot.Summary;
         StatusText = _unavailableReason ??
             $"已分析 {summary.CompletedImages}/{summary.TotalImages} 张照片，发现 {summary.FaceCount} 张人脸，失败 {summary.FailedImages} 张";
@@ -558,7 +561,10 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         var cancellation = _collectionLoadCancellation = new CancellationTokenSource();
         try
         {
-            var records = await UiWork.RunDatabaseAsync(() => _repository.GetUnassignedFaces(5000).ToArray(), cancellation.Token);
+            var snapshot = await UiWork.RunDatabaseAsync(() => (
+                Records: _repository.GetUnassignedFaces(5000).ToArray(),
+                Counts: _repository.GetFaceWorkQueueCounts()), cancellation.Token);
+            var records = snapshot.Records;
             UnassignedFaces.Clear();
             await UiWork.AddInBatchesAsync(records, record =>
             {
@@ -567,7 +573,10 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
                 LoadDisplayedFaceThumbnailAsync(item, cancellation.Token).Forget();
                 DisplayedFacesTitle = $"待分类人脸 · {DisplayedFaces.Count}/{records.Length}";
             }, cancellation.Token, batchSize: 30);
-            DisplayedFacesTitle = $"待分类人脸（{records.Length}）";
+            UnassignedSummary = $"待处理人脸 · {snapshot.Counts.Total}（待确认 {snapshot.Counts.Suggested} / 未匹配 {snapshot.Counts.Unassigned}）";
+            DisplayedFacesTitle = records.Length < snapshot.Counts.Total
+                ? $"待处理人脸（已显示 {records.Length} / 共 {snapshot.Counts.Total}）"
+                : $"待处理人脸（{snapshot.Counts.Total}）";
         }
         catch (OperationCanceledException) { }
     }
