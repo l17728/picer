@@ -22,27 +22,39 @@ public sealed class FaceSuggestionEngine(VisionAnalysisRepository repository, Pe
             .Concat(people.GetConfirmedVideoFaceEmbeddings().Select(face => (face.PersonId, face.Embedding)));
         var prototypes = confirmed
             .GroupBy(face => face.PersonId)
-            .ToDictionary(group => group.Key, group => Mean(group.Select(face => face.Embedding)));
+            .ToDictionary(group => group.Key, group => BuildPrototypes(group.Select(face => face.Embedding)));
+        var negativePrototypes = repository.GetRejectedFaceEmbeddings()
+            .GroupBy(face => face.PersonId)
+            .ToDictionary(group => group.Key, group => BuildPrototypes(group.Select(face => face.Embedding), 12));
         var candidates = embeddings.Where(face => face.AssignmentState is null or "suggested").ToArray();
         var suggested = 0;
         var below = 0;
+        var staleSuggestionIds = new List<long>();
 
         for (var index = 0; index < candidates.Length; index++)
         {
             var face = candidates[index];
-            var match = prototypes
-                .Select(pair => (PersonId: pair.Key, Score: Cosine(face.Embedding, pair.Value)))
+            var matches = prototypes
+                .Select(pair => (PersonId: pair.Key, Score: pair.Value.Max(prototype => Cosine(face.Embedding, prototype))))
                 .OrderByDescending(value => value.Score)
-                .FirstOrDefault();
-            if (match.Score < appliedThreshold)
+                .Take(2).ToArray();
+            var match = matches.FirstOrDefault();
+            var secondBestScore = matches.Length > 1 ? matches[1].Score : -1;
+            var requiredThreshold = QualityAdjustedThreshold(appliedThreshold, face);
+            var rejectedSimilarity = negativePrototypes.TryGetValue(match.PersonId, out var negatives)
+                ? negatives.Max(prototype => Cosine(face.Embedding, prototype)) : -1;
+            if (match.Score < requiredThreshold || match.Score - secondBestScore < 0.025 ||
+                match.Score - rejectedSimilarity < 0.03)
             {
                 below++;
+                if (face.AssignmentState == "suggested") staleSuggestionIds.Add(face.FaceId);
             }
             else if (!(face.AssignmentState == "suggested" && face.PersonId == match.PersonId) &&
                      people.SuggestFace(face.FaceId, match.PersonId, match.Score)) suggested++;
             if ((index + 1) % 100 == 0 || index + 1 == candidates.Length)
                 progress?.Report((index + 1, candidates.Length));
         }
+        people.ClearAutomaticSuggestions(staleSuggestionIds);
         return new FaceSuggestionResult(candidates.Length, suggested, below, appliedThreshold);
     }
 
@@ -59,6 +71,35 @@ public sealed class FaceSuggestionEngine(VisionAnalysisRepository repository, Pe
         if (norm > double.Epsilon)
             for (var index = 0; index < result.Length; index++) result[index] = (float)(result[index] / norm);
         return result;
+    }
+
+    private static IReadOnlyList<float[]> BuildPrototypes(IEnumerable<float[]> vectors, int maximum = 8)
+    {
+        var samples = vectors.Where(vector => vector.Length > 0).ToArray();
+        if (samples.Length == 0) return [];
+        var mean = Mean(samples);
+        var prototypes = new List<float[]>
+        {
+            samples.OrderByDescending(sample => Cosine(sample, mean)).First()
+        };
+        while (prototypes.Count < maximum)
+        {
+            var candidate = samples
+                .Select(sample => (Sample: sample, Similarity: prototypes.Max(prototype => Cosine(sample, prototype))))
+                .OrderBy(value => value.Similarity).First();
+            if (candidate.Similarity >= 0.92) break;
+            prototypes.Add(candidate.Sample);
+        }
+        return prototypes;
+    }
+
+    private static double QualityAdjustedThreshold(double baseline, FaceEmbeddingRecord face)
+    {
+        var adjustment = 0d;
+        if (face.DetectionConfidence < 0.85f) adjustment += 0.04;
+        if (face.RelativeArea < 0.01f) adjustment += 0.05;
+        else if (face.RelativeArea < 0.025f) adjustment += 0.03;
+        return Math.Min(0.98, baseline + adjustment);
     }
 
     private static double Cosine(float[] left, float[] right)

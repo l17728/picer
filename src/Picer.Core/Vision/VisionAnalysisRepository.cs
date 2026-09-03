@@ -194,7 +194,7 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
     {
         using var command = database.Command("""
             SELECT a.state, i.sha256, i.ahash, i.width, i.height,
-                   f.box_x, f.box_y, f.box_width, f.box_height
+                   f.box_x, f.box_y, f.box_width, f.box_height, f.confidence
             FROM detected_faces f
             JOIN images i ON i.id=f.image_id AND i.status='active'
             LEFT JOIN face_person_assignments a ON a.face_id=f.id
@@ -376,7 +376,7 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
         using var command = database.Command("""
             SELECT f.id, f.image_id, f.model_version, a.person_id, a.state, f.embedding,
                    i.sha256, i.ahash, i.width, i.height,
-                   f.box_x, f.box_y, f.box_width, f.box_height
+                   f.box_x, f.box_y, f.box_width, f.box_height, f.confidence
             FROM detected_faces f
             JOIN images i ON i.id=f.image_id AND i.status='active'
             LEFT JOIN face_person_assignments a ON a.face_id=f.id
@@ -395,8 +395,25 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
             values.Add(new FaceEmbeddingRecord(
                 reader.GetInt64(0), reader.GetInt64(1), reader.GetString(2),
                 reader.IsDBNull(3) ? null : reader.GetInt64(3),
-                reader.IsDBNull(4) ? null : reader.GetString(4), FromBytes((byte[])reader[5])));
+                reader.IsDBNull(4) ? null : reader.GetString(4), FromBytes((byte[])reader[5]),
+                reader.GetFloat(14), reader.GetFloat(12) * reader.GetFloat(13)));
         }
+        return values;
+    }
+
+    public IReadOnlyList<RejectedFaceEmbeddingRecord> GetRejectedFaceEmbeddings()
+    {
+        using var command = database.Command("""
+            SELECT r.person_id, f.embedding
+            FROM face_person_rejections r
+            JOIN detected_faces f ON f.id=r.face_id
+            JOIN images i ON i.id=f.image_id AND i.status='active'
+            WHERE f.embedding IS NOT NULL
+            ORDER BY r.person_id, r.face_id
+            """);
+        var values = new List<RejectedFaceEmbeddingRecord>();
+        using var reader = command.ExecuteReader();
+        while (reader.Read()) values.Add(new RejectedFaceEmbeddingRecord(reader.GetInt64(0), FromBytes((byte[])reader[1])));
         return values;
     }
 

@@ -148,6 +148,24 @@ public sealed class PeopleService(PicerDatabase database)
         return true;
     }
 
+    public int ClearAutomaticSuggestions(IEnumerable<long> faceIds)
+    {
+        var ids = faceIds.Distinct().ToArray();
+        if (ids.Length == 0) return 0;
+        using var transaction = database.BeginTransaction();
+        var changed = 0;
+        foreach (var faceId in ids)
+        {
+            using var command = database.Command(
+                "DELETE FROM face_person_assignments WHERE face_id=$face AND state='suggested'");
+            command.Transaction = transaction;
+            command.Parameters.AddWithValue("$face", faceId);
+            changed += command.ExecuteNonQuery();
+        }
+        transaction.Commit();
+        return changed;
+    }
+
     public void MarkNotThisPerson(long faceId, long personId)
     {
         using var transaction = database.BeginTransaction();

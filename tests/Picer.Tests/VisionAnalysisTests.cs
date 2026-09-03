@@ -468,6 +468,43 @@ public sealed class VisionAnalysisTests : IDisposable
     }
 
     [Fact]
+    public async Task Suggestions_UseMultiplePersonPrototypesAndGeneralizedNegativeSamples()
+    {
+        var repository = new VisionAnalysisRepository(_database);
+        using var analysis = new VisionAnalysisService(repository, new VectorByNameAnalyzer());
+        var sourceId = _database.GetSources().Single().Id;
+        async Task<long> Add(string name)
+        {
+            var path = Path.Combine(_root, name); File.WriteAllBytes(path, [1, 2, 3]);
+            var image = _database.UpsertImage(new ImageRecord
+            {
+                SourceId = sourceId, Path = path, FileSize = 3, ModifiedUtc = File.GetLastWriteTimeUtc(path),
+                Status = ImageStatus.Active, IndexedUtc = DateTime.UtcNow
+            });
+            await analysis.AnalyzeAsync([image]);
+            return Assert.Single(repository.GetFaceIds(image.Id));
+        }
+
+        var people = new PeopleService(_database);
+        var person = people.Create("multi-prototype-person");
+        people.ConfirmFace(await Add("prototype-x.jpg"), person.Id);
+        people.ConfirmFace(await Add("prototype-y.jpg"), person.Id);
+        var yCandidate = await Add("candidate-y.jpg");
+
+        new FaceSuggestionEngine(repository, people).Suggest(0.9);
+        Assert.Equal(person.Id, repository.GetSuggestedPersonGroups().Single().PersonId);
+        Assert.Contains(repository.GetSuggestedPersonGroups().Single().Faces, face => face.FaceId == yCandidate);
+
+        var rejected = await Add("negative-diagonal.jpg");
+        people.MarkNotThisPerson(rejected, person.Id);
+        var similarNegative = await Add("candidate-diagonal.jpg");
+        new FaceSuggestionEngine(repository, people).Suggest(0.6);
+
+        Assert.DoesNotContain(repository.GetSuggestedPersonGroups().SelectMany(group => group.Faces),
+            face => face.FaceId == similarNegative);
+    }
+
+    [Fact]
     public async Task FaceValidation_PersistsYuNetGroundTruthAndCalculatesMissRate()
     {
         var repository = new VisionAnalysisRepository(_database);
@@ -650,6 +687,21 @@ public sealed class VisionAnalysisTests : IDisposable
             return Task.FromResult(new FaceAnalysisResult(Enumerable.Range(0, count).Select(index =>
                 new FaceDetection(new NormalizedFaceBox(0.1f + index * 0.4f, 0.2f, 0.2f, 0.3f),
                     0.95f, null, [1f, 0f, 0f])).ToArray()));
+        }
+    }
+
+    private sealed class VectorByNameAnalyzer : IImageFaceAnalyzer
+    {
+        public string AnalyzerName => "face";
+        public string ModelVersion => "multi-prototype-test";
+        public Task<FaceAnalysisResult> AnalyzeAsync(ImageRecord image, CancellationToken cancellationToken)
+        {
+            var name = Path.GetFileName(image.Path);
+            IReadOnlyList<float> vector = name.Contains("diagonal", StringComparison.Ordinal) ? [0.7071f, 0.7071f]
+                : name.Contains("-y", StringComparison.Ordinal) ? [0f, 1f] : [1f, 0f];
+            return Task.FromResult(new FaceAnalysisResult([
+                new FaceDetection(new NormalizedFaceBox(.1f, .1f, .3f, .3f), .99f, null, vector)
+            ]));
         }
     }
 
