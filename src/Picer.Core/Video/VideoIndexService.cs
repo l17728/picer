@@ -5,7 +5,7 @@ namespace Picer.Core.Video;
 
 public sealed record VideoRecord(long Id, long SourceId, string Path, long FileSize, DateTime ModifiedUtc,
     double? DurationSeconds, int Width, int Height, DateTime? TakenUtc, string? Gps, string Status);
-public sealed record VideoFaceReviewSummary(int Total, int Pending, int Confirmed, int Ignored);
+public sealed record VideoFaceReviewSummary(int Total, int Pending, int Confirmed, int Ignored, string? AnalysisStatus = null);
 
 public static class VideoFormats
 {
@@ -108,16 +108,24 @@ public sealed class VideoRepository(PicerDatabase database)
     public IReadOnlyDictionary<long, VideoFaceReviewSummary> GetFaceReviewSummaries()
     {
         using var command = database.Command("""
-            SELECT video_id,COUNT(*),
-                   SUM(CASE WHEN assignment_state IS NULL THEN 1 ELSE 0 END),
-                   SUM(CASE WHEN assignment_state='confirmed' THEN 1 ELSE 0 END),
-                   SUM(CASE WHEN assignment_state='ignored' THEN 1 ELSE 0 END)
-            FROM video_detected_faces GROUP BY video_id
+            SELECT v.id,COUNT(vf.id),
+                   SUM(CASE WHEN vf.id IS NOT NULL AND vf.assignment_state IS NULL THEN 1 ELSE 0 END),
+                   SUM(CASE WHEN vf.assignment_state='confirmed' THEN 1 ELSE 0 END),
+                   SUM(CASE WHEN vf.assignment_state='ignored' THEN 1 ELSE 0 END),v.person_analysis_status
+            FROM videos v LEFT JOIN video_detected_faces vf ON vf.video_id=v.id
+            WHERE v.status='active' GROUP BY v.id,v.person_analysis_status
             """);
         using var reader = command.ExecuteReader();
         var result = new Dictionary<long, VideoFaceReviewSummary>();
-        while (reader.Read()) result[reader.GetInt64(0)] = new(reader.GetInt32(1), reader.GetInt32(2), reader.GetInt32(3), reader.GetInt32(4));
+        while (reader.Read()) result[reader.GetInt64(0)] = new(reader.GetInt32(1), reader.GetInt32(2), reader.GetInt32(3), reader.GetInt32(4), reader.IsDBNull(5) ? null : reader.GetString(5));
         return result;
+    }
+
+    public void SavePersonAnalysisStatus(long videoId, string status)
+    {
+        if (status is not ("completed" or "failed")) throw new ArgumentOutOfRangeException(nameof(status));
+        using var command = database.Command("UPDATE videos SET person_analysis_status=$status,person_analyzed_utc=$now WHERE id=$id");
+        command.Parameters.AddWithValue("$status", status);command.Parameters.AddWithValue("$now",DateTime.UtcNow.ToString("o"));command.Parameters.AddWithValue("$id",videoId);command.ExecuteNonQuery();
     }
 
     public void SaveTranscript(long videoId, string modelVersion, string transcriptJson)

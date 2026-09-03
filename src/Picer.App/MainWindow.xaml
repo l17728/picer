@@ -536,7 +536,11 @@
                                 <DataGridTemplateColumn.CellTemplate><DataTemplate>
                                     <Button Content="{Binding FaceReviewText}" Click="VideoFaceReviewBadge_Click" Padding="7,2" HorizontalAlignment="Left">
                                         <Button.Style><Style TargetType="Button"><Setter Property="Foreground" Value="#4C5967"/><Setter Property="Background" Value="#EEF2F6"/>
-                                            <Style.Triggers><DataTrigger Binding="{Binding HasPendingFaces}" Value="True"><Setter Property="Foreground" Value="#7A3E00"/><Setter Property="Background" Value="#FFD991"/><Setter Property="FontWeight" Value="SemiBold"/><Setter Property="ToolTip" Value="点击直接打开该视频的待确认人物"/></DataTrigger></Style.Triggers>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding HasPendingFaces}" Value="True"><Setter Property="Foreground" Value="#7A3E00"/><Setter Property="Background" Value="#FFD991"/><Setter Property="FontWeight" Value="SemiBold"/><Setter Property="ToolTip" Value="点击直接打开该视频的待确认人物"/></DataTrigger>
+                                                <DataTrigger Binding="{Binding HasCompletedWithoutFaces}" Value="True"><Setter Property="Foreground" Value="#356047"/><Setter Property="Background" Value="#DDEFE4"/><Setter Property="ToolTip" Value="已经执行人物分析，但没有检测到人脸"/></DataTrigger>
+                                                <DataTrigger Binding="{Binding HasFailedFaceAnalysis}" Value="True"><Setter Property="Foreground" Value="#8B1E1E"/><Setter Property="Background" Value="#F8D7DA"/><Setter Property="ToolTip" Value="上次人物分析失败，可选择视频后重试"/></DataTrigger>
+                                            </Style.Triggers>
                                         </Style></Button.Style>
                                     </Button>
                                 </DataTemplate></DataGridTemplateColumn.CellTemplate>

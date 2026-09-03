@@ -6,7 +6,7 @@ namespace Picer.Core.Data;
 
 public sealed class PicerDatabase : IDisposable
 {
-    public const int CurrentSchemaVersion = 21;
+    public const int CurrentSchemaVersion = 22;
     private readonly SqliteConnection _conn;
     private readonly string _connectionString;
 
@@ -591,6 +591,14 @@ public sealed class PicerDatabase : IDisposable
                 PRAGMA user_version = 21;
                 """;
             videoFaceReviewMigration.ExecuteNonQuery();
+        }
+        if (schemaVersion < 22)
+        {
+            AddColumnIfMissing("videos", "person_analysis_status", "TEXT CHECK(person_analysis_status IN ('completed','failed'))");
+            AddColumnIfMissing("videos", "person_analyzed_utc", "TEXT");
+            using var finishVideoPersonStatus = _conn.CreateCommand();
+            finishVideoPersonStatus.CommandText = "PRAGMA user_version = 22";
+            finishVideoPersonStatus.ExecuteNonQuery();
         }
     }
 

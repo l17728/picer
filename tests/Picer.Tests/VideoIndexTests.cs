@@ -43,7 +43,7 @@ public sealed class VideoIndexTests : IDisposable
         using var connection = new SqliteConnection($"Data Source={Path.Combine(_root, "video.db")}");
         connection.Open();
         using var version = connection.CreateCommand(); version.CommandText = "PRAGMA user_version";
-        Assert.Equal(21L, (long)version.ExecuteScalar()!);
+        Assert.Equal(22L, (long)version.ExecuteScalar()!);
         using var tables = connection.CreateCommand();
         tables.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('videos','video_keyframes','video_transcripts')";
         Assert.Equal(3L, (long)tables.ExecuteScalar()!);
@@ -101,6 +101,14 @@ public sealed class VideoIndexTests : IDisposable
         var ignored = videos.GetFaceReviewSummaries()[video.Id];
         Assert.Equal(0, ignored.Pending);
         Assert.Equal(1, ignored.Ignored);
+
+        var emptyVideoPath = Path.Combine(_root, "no-faces.mp4");
+        File.WriteAllBytes(emptyVideoPath, [7, 8, 9]);
+        var emptyVideo = videos.Upsert(source.Id, emptyVideoPath);
+        videos.SavePersonAnalysisStatus(emptyVideo.Id, "completed");
+        var noFaces = videos.GetFaceReviewSummaries()[emptyVideo.Id];
+        Assert.Equal(0, noFaces.Total);
+        Assert.Equal("completed", noFaces.AnalysisStatus);
     }
 
     private sealed class StubFaceAnalyzer : IImageFaceAnalyzer

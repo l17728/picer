@@ -483,7 +483,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
 
     public async Task IgnoreCandidateClusterAsync(CandidateClusterViewModel cluster)
     {
-        var faceIds = cluster.Record.Faces.Select(face => face.FaceId).Distinct().ToArray();
+        var faceIds = cluster.Faces.Select(face => face.FaceId).Distinct().ToArray();
         if (faceIds.Length == 0) return;
         if (SelectedCandidateCluster?.Record.Id == cluster.Record.Id)
         {
@@ -582,7 +582,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             return;
         }
         var name = NewPersonName;
-        var faces = SelectedCandidateCluster.Record.Faces.ToArray();
+        var faces = SelectedCandidateCluster.Faces.ToArray();
         var person = await UiWork.RunDatabaseAsync(() =>
         {
             var created = _peopleService.Create(name);
@@ -603,7 +603,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             return;
         }
         var person = CandidateTargetPerson;
-        var faceIds = SelectedCandidateCluster.Record.Faces.Select(face => face.FaceId).Distinct().ToArray();
+        var faceIds = SelectedCandidateCluster.Faces.Select(face => face.FaceId).Distinct().ToArray();
         await UiWork.RunDatabaseAsync(() =>
         {
             foreach (var faceId in faceIds) _peopleService.MoveFace(faceId, person.Id);
@@ -631,7 +631,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
     {
         try
         {
-            var faces = cluster.Record.Faces.ToArray();
+            var faces = cluster.Faces.ToArray();
             await UiWork.AddInBatchesAsync(faces, face =>
             {
                 var item = CreateFaceItem(face);
@@ -677,7 +677,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
 
     private async Task LoadClusterThumbnailAsync(CandidateClusterViewModel item)
     {
-        var representative = item.Record.Faces.FirstOrDefault();
+        var representative = item.Faces.FirstOrDefault();
         if (representative is null) return;
         var path = await _faceThumbnails.GetOrCreateAsync(representative);
         if (path is not null && CandidateClusters.Contains(item)) item.RepresentativeThumbnailPath = path;
@@ -764,6 +764,13 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         foreach (var item in AssignedFaces.Where(item => ids.Contains(item.FaceId)).ToArray()) AssignedFaces.Remove(item);
         foreach (var item in SelectedClusterFaces.Where(item => ids.Contains(item.FaceId)).ToArray()) SelectedClusterFaces.Remove(item);
         foreach (var item in UnassignedFaces.Where(item => ids.Contains(item.FaceId)).ToArray()) UnassignedFaces.Remove(item);
+        foreach (var cluster in CandidateClusters.ToArray())
+        {
+            cluster.RemoveFaces(ids);
+            if (cluster.FaceCount >= 2) continue;
+            CandidateClusters.Remove(cluster);
+            if (SelectedCandidateCluster?.Record.Id == cluster.Record.Id) SelectedCandidateCluster = null;
+        }
         if (SelectedDisplayedFace is not null && ids.Contains(SelectedDisplayedFace.FaceId)) SelectedDisplayedFace = null;
         DisplayedFacesTitle = DisplayedCollectionKind switch
         {
@@ -842,8 +849,18 @@ public partial class UnassignedFaceViewModel(UnassignedFaceRecord record, string
 public partial class CandidateClusterViewModel(FaceCandidateClusterRecord record) : ObservableObject
 {
     public FaceCandidateClusterRecord Record { get; } = record;
-    public int FaceCount => Record.Faces.Count;
+    private readonly List<UnassignedFaceRecord> _faces = record.Faces.ToList();
+    public IReadOnlyList<UnassignedFaceRecord> Faces => _faces;
+    public int FaceCount => _faces.Count;
     public string Summary => $"候选人物 · {FaceCount} 张脸";
+
+    public void RemoveFaces(IReadOnlySet<long> faceIds)
+    {
+        if (_faces.RemoveAll(face => faceIds.Contains(face.FaceId)) == 0) return;
+        OnPropertyChanged(nameof(Faces));
+        OnPropertyChanged(nameof(FaceCount));
+        OnPropertyChanged(nameof(Summary));
+    }
 
     [ObservableProperty]
     private string? _representativeThumbnailPath;

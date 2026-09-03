@@ -56,7 +56,7 @@ public partial class VideoViewModel(VideoRepository repository, VideoIndexServic
             var faceReviews = repository.GetFaceReviewSummaries();
             return (string.IsNullOrWhiteSpace(query) ? repository.GetAll() : repository.Search(query))
                 .Select(video => new VideoItemViewModel(video, repository.GetKeyframes(video.Id).Count,
-                    faceReviews.GetValueOrDefault(video.Id) ?? new VideoFaceReviewSummary(0, 0, 0, 0))).ToArray();
+                    faceReviews.GetValueOrDefault(video.Id) ?? new VideoFaceReviewSummary(0, 0, 0, 0, null))).ToArray();
         }, cancellation.Token);
         cancellation.Token.ThrowIfCancellationRequested();
         Videos.Clear();
@@ -195,9 +195,12 @@ public partial class VideoViewModel(VideoRepository repository, VideoIndexServic
     private async Task SaveVideoFaceIdentitiesAsync(Action save, string message)
     {
         var selectedFaceId = SelectedVideoFace?.Record.FaceId;
+        var selectedVideoId = SelectedVideo?.Record.Id;
         await UiWork.RunDatabaseAsync(save);
         if (_identityChanged is not null) await _identityChanged();
-        if (SelectedVideo is not null) await LoadSelectedVideoAsync(SelectedVideo);
+        _selectedVideoFaces = [];
+        await LoadAsync();
+        SelectedVideo = selectedVideoId is null ? null : Videos.FirstOrDefault(video => video.Record.Id == selectedVideoId);
         SelectedVideoFace = FilteredVideoFaces.FirstOrDefault(face => face.Record.FaceId == selectedFaceId);
         StatusText = message;
     }
@@ -385,6 +388,7 @@ public partial class VideoViewModel(VideoRepository repository, VideoIndexServic
             var progress = new Progress<(int Completed, int Total)>(value =>
                 StatusText = $"正在分析 {selected.FileName}：关键帧 {value.Completed}/{value.Total}");
             var count=await faceTimeline.AnalyzeAsync(selected.Record, progress: progress);
+            await UiWork.RunDatabaseAsync("VideoPeople.SaveCompleted",()=>repository.SavePersonAnalysisStatus(selected.Record.Id,"completed"));
             var view=await UiWork.RunDatabaseAsync("VideoPeople.LoadResult",()=>(Timeline:faceTimeline.GetTimeline(selected.Record.Id),People:peopleService?.GetAll().ToArray()??[]));
             if(SelectedVideo?.Record.Id==selected.Record.Id){PeopleTimelineText=FormatTimeline(view.Timeline);PopulateVideoFaces(view.Timeline,view.People);}
             await LoadAsync();
@@ -392,7 +396,7 @@ public partial class VideoViewModel(VideoRepository repository, VideoIndexServic
             StatusText=count==0?$"人物分析完成：{selected.FileName} 未检测到人脸":$"人物分析完成：{selected.FileName}，检测到 {count} 个人脸片段";
             AppLogger.Info($"视频人物分析完成：video={selected.Record.Id}; faces={count}");
         }
-        catch(Exception ex){AppLogger.Error($"视频人物分析失败：{selected.Record.Path}", ex);StatusText=$"人物分析失败：{selected.FileName}；{CompactError(ex.Message)}；详细信息已写入日志";}finally{IsBusy=false;}
+        catch(Exception ex){AppLogger.Error($"视频人物分析失败：{selected.Record.Path}", ex);await UiWork.RunDatabaseAsync("VideoPeople.SaveFailed",()=>repository.SavePersonAnalysisStatus(selected.Record.Id,"failed"));StatusText=$"人物分析失败：{selected.FileName}；{CompactError(ex.Message)}；详细信息已写入日志";}finally{IsBusy=false;}
     }
 
     private static string FormatTimeline(IReadOnlyList<VideoFaceTimelineRecord>? faces)=>faces is null||faces.Count==0?"尚未识别到人物":string.Join(Environment.NewLine,faces.Select(face=>$"{TimeSpan.FromSeconds(face.TimestampSeconds):hh\\:mm\\:ss}  {face.EffectivePersonName??"未知人物"}  {(face.MatchConfidence is null?"":$"匹配 {face.MatchConfidence:P0}")}"));
@@ -456,7 +460,7 @@ public partial class VideoViewModel(VideoRepository repository, VideoIndexServic
 public sealed class VideoItemViewModel
 {
     public VideoItemViewModel(VideoRecord record, int keyframeCount, VideoFaceReviewSummary? faceReview = null)
-    { Record = record; KeyframeCount = keyframeCount; FaceReview = faceReview ?? new(0, 0, 0, 0); }
+    { Record = record; KeyframeCount = keyframeCount; FaceReview = faceReview ?? new(0, 0, 0, 0, null); }
     public VideoRecord Record { get; }
     public string FileName => System.IO.Path.GetFileName(Record.Path);
     public string Path => Record.Path;
@@ -465,7 +469,11 @@ public sealed class VideoItemViewModel
     public int KeyframeCount { get; }
     public VideoFaceReviewSummary FaceReview { get; }
     public bool HasPendingFaces => FaceReview.Pending > 0;
-    public string FaceReviewText => FaceReview.Total == 0 ? "未分析" : FaceReview.Pending > 0
+    public bool HasFailedFaceAnalysis => FaceReview.AnalysisStatus == "failed";
+    public bool HasCompletedWithoutFaces => FaceReview.AnalysisStatus == "completed" && FaceReview.Total == 0;
+    public string FaceReviewText => FaceReview.AnalysisStatus == "failed" ? "分析失败" : FaceReview.Total == 0
+        ? FaceReview.AnalysisStatus == "completed" ? "已分析·未发现人脸" : "未分析"
+        : FaceReview.Pending > 0
         ? $"待确认 {FaceReview.Pending}"
         : $"已完成 {FaceReview.Confirmed + FaceReview.Ignored}/{FaceReview.Total}";
 }
