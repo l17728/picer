@@ -7,7 +7,8 @@ public sealed record FaceSuggestionResult(int Considered, int Suggested, int Bel
 /// <summary>Suggests matches against user-confirmed people; it never confirms an identity.</summary>
 public sealed class FaceSuggestionEngine(VisionAnalysisRepository repository, PeopleService people)
 {
-    public FaceSuggestionResult Suggest(double? cosineThreshold = null)
+    public FaceSuggestionResult Suggest(double? cosineThreshold = null,
+        IProgress<(int Completed, int Total)>? progress = null)
     {
         if (cosineThreshold is < 0 or > 1) throw new ArgumentOutOfRangeException(nameof(cosineThreshold));
         var embeddings = repository.GetEmbeddingsForMatching();
@@ -26,8 +27,9 @@ public sealed class FaceSuggestionEngine(VisionAnalysisRepository repository, Pe
         var suggested = 0;
         var below = 0;
 
-        foreach (var face in candidates)
+        for (var index = 0; index < candidates.Length; index++)
         {
+            var face = candidates[index];
             var match = prototypes
                 .Select(pair => (PersonId: pair.Key, Score: Cosine(face.Embedding, pair.Value)))
                 .OrderByDescending(value => value.Score)
@@ -35,9 +37,11 @@ public sealed class FaceSuggestionEngine(VisionAnalysisRepository repository, Pe
             if (match.Score < appliedThreshold)
             {
                 below++;
-                continue;
             }
-            if (people.SuggestFace(face.FaceId, match.PersonId, match.Score)) suggested++;
+            else if (!(face.AssignmentState == "suggested" && face.PersonId == match.PersonId) &&
+                     people.SuggestFace(face.FaceId, match.PersonId, match.Score)) suggested++;
+            if ((index + 1) % 100 == 0 || index + 1 == candidates.Length)
+                progress?.Report((index + 1, candidates.Length));
         }
         return new FaceSuggestionResult(candidates.Length, suggested, below, appliedThreshold);
     }

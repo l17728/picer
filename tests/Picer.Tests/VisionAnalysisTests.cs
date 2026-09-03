@@ -389,8 +389,10 @@ public sealed class VisionAnalysisTests : IDisposable
         var person = people.Create("家人", ["老婆"]);
         people.ConfirmFace(firstFace, person.Id);
         var suggestions = new FaceSuggestionEngine(repository, people).Suggest(0.9);
+        var unchangedSuggestions = new FaceSuggestionEngine(repository, people).Suggest(0.9);
 
         Assert.Equal(1, suggestions.Suggested);
+        Assert.Equal(0, unchangedSuggestions.Suggested);
         Assert.Empty(IndexSearchEngine.Search(_database, new SearchFilters { PersonId = person.Id })
             .Where(image => image.Id == secondImage.Id));
 

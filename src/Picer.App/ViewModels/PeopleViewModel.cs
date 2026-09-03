@@ -26,6 +26,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
     private readonly string? _unavailableReason;
     private CancellationTokenSource? _analysisCancellation;
     private readonly SemaphoreSlim _analysisGate = new(1, 1);
+    private readonly SemaphoreSlim _organizeGate = new(1, 1);
     private readonly SemaphoreSlim _thumbnailGate = new(6, 6);
     private CancellationTokenSource? _pageLoadCancellation;
     private CancellationTokenSource? _personLoadCancellation;
@@ -300,12 +301,52 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
     [RelayCommand]
     private async Task OrganizeFacesAsync(CancellationToken cancellationToken = default)
     {
-        StatusText = "正在使用最新标准更新自动归类…";
-        var suggestions = await UiWork.RunDatabaseAsync(() => _suggestionEngine.Suggest(), cancellationToken);
-        var clusters = await UiWork.RunDatabaseAsync(
-            () => _unknownFaceClusterer.Rebuild(suggestions.AppliedThreshold), cancellationToken);
-        await RefreshAsync();
-        StatusText = $"自动归类完成：使用阈值 {suggestions.AppliedThreshold:F3}，匹配已有分类 {suggestions.Suggested} 张，待命名 {clusters.ClusterCount} 组";
+        if (!await _organizeGate.WaitAsync(0, cancellationToken))
+        {
+            StatusText = "自动归类正在执行，请勿重复点击；当前进度会持续显示";
+            return;
+        }
+
+        var stopwatch = Stopwatch.StartNew();
+        try
+        {
+            ProgressValue = 5;
+            StatusText = "正在使用最新标准更新自动归类（1/3：匹配已命名人物，5%）";
+            var suggestionProgress = new Progress<(int Completed, int Total)>(value =>
+            {
+                var percent = value.Total == 0 ? 35 : 5 + value.Completed * 30d / value.Total;
+                ProgressValue = percent;
+                StatusText = $"正在使用最新标准更新自动归类（1/3：匹配已命名人物 {value.Completed}/{value.Total}，{percent:F0}%）";
+            });
+            var suggestions = await UiWork.RunDatabaseAsync("People.AutoOrganize.Suggest",
+                () => _suggestionEngine.Suggest(progress: suggestionProgress), cancellationToken);
+
+            ProgressValue = 35;
+            StatusText = $"正在使用最新标准更新自动归类（2/3：重建待命名人物组，35%；已检查 {suggestions.Considered} 张脸）";
+            var clusters = await UiWork.RunDatabaseAsync("People.AutoOrganize.Cluster",
+                () => _unknownFaceClusterer.Rebuild(suggestions.AppliedThreshold), cancellationToken);
+
+            ProgressValue = 80;
+            StatusText = $"正在使用最新标准更新自动归类（3/3：同步界面，80%；共 {clusters.ClusterCount} 个候选组）";
+            await RefreshAsync();
+            ProgressValue = 100;
+            StatusText = $"自动归类完成（100%）：使用阈值 {suggestions.AppliedThreshold:F3}，匹配已有分类 {suggestions.Suggested} 张，待命名 {clusters.ClusterCount} 组；用时 {stopwatch.Elapsed.TotalSeconds:F1} 秒";
+            AppLogger.Info($"People.AutoOrganize completed in {stopwatch.ElapsedMilliseconds} ms; " +
+                           $"considered={suggestions.Considered}; suggested={suggestions.Suggested}; clusters={clusters.ClusterCount}");
+        }
+        catch (OperationCanceledException)
+        {
+            StatusText = "自动归类已取消；已经保存的人工标记不受影响";
+        }
+        catch (Exception exception)
+        {
+            StatusText = $"自动归类失败：{exception.Message}";
+            AppLogger.Error("People.AutoOrganize failed", exception);
+        }
+        finally
+        {
+            _organizeGate.Release();
+        }
     }
 
     [RelayCommand]
@@ -659,6 +700,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
     {
         _analysisCancellation?.Cancel();
         _analysisCancellation?.Dispose();
+        _organizeGate.Dispose();
         _pageLoadCancellation?.Cancel();
         _pageLoadCancellation?.Dispose();
         _personLoadCancellation?.Cancel();

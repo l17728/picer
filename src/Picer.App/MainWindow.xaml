@@ -363,7 +363,8 @@
                     <GroupBox Grid.Row="2" Header="人物分类" Margin="4" Padding="8">
                         <DockPanel>
                             <StackPanel DockPanel.Dock="Top">
-                                <Button Content="待分类人脸" AutomationProperties.Name="待分类人脸" Command="{Binding ShowUnassignedFacesCommand}" HorizontalContentAlignment="Left" Padding="10,7" Margin="0,0,0,3"/>
+                                <Button Content="待分类人脸" AutomationProperties.Name="待分类人脸" Command="{Binding ShowUnassignedFacesCommand}" HorizontalContentAlignment="Left" Padding="10,7" Margin="0,0,0,3"
+                                        ToolTip="尚未人工确认归属的单张人脸，包括未匹配人脸和等待确认的自动建议"/>
                                 <Button Content="不分类" AutomationProperties.Name="不分类" Command="{Binding ShowIgnoredFacesCommand}" HorizontalContentAlignment="Left" Padding="10,7" Margin="0,0,0,8"/>
                                 <TextBlock Text="已命名人物" FontWeight="SemiBold" Margin="2,3"/>
                                 <ComboBox ItemsSource="{Binding People}" SelectedItem="{Binding SelectedPerson}"
@@ -374,7 +375,8 @@
                                         Padding="10,5" Margin="0,6,0,0"/>
                             </StackPanel>
                             <StackPanel DockPanel.Dock="Bottom" Margin="0,8,0,0">
-                                <TextBlock Text="待命名人物组" FontWeight="SemiBold" Margin="2,3"/>
+                                <TextBlock Text="待命名人物组" FontWeight="SemiBold" Margin="2,3"
+                                           ToolTip="系统把多张相似且尚无姓名的人脸聚成候选人物组；可整组命名或归入已有人物"/>
                                 <ListBox x:Name="CandidateClustersList" Height="190" ItemsSource="{Binding CandidateClusters}"
                                          SelectedItem="{Binding SelectedCandidateCluster}" PreviewMouseRightButtonDown="CandidateCluster_PreviewMouseRightButtonDown">
                                     <ListBox.ContextMenu><ContextMenu Opened="CandidateClusterMenu_Opened"/></ListBox.ContextMenu>
