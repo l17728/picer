@@ -487,7 +487,7 @@
                                             <Button Content="接受" Command="{Binding AcceptCommand}" Padding="8,2" Margin="3,0"/>
                                             <Button Content="拒绝" Command="{Binding RejectCommand}" Padding="8,2"/>
                                         </StackPanel>
-                                        <TextBlock VerticalAlignment="Center"><Run Text="{Binding TagName}"/><Run Text=" · "/><Run Text="{Binding ConfidenceLabel}"/></TextBlock>
+                                        <TextBlock VerticalAlignment="Center"><Run Text="{Binding TagName, Mode=OneWay}"/><Run Text=" · "/><Run Text="{Binding ConfidenceLabel, Mode=OneWay}"/></TextBlock>
                                     </DockPanel>
                                 </DataTemplate></ItemsControl.ItemTemplate>
                             </ItemsControl>

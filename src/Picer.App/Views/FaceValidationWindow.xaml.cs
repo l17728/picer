@@ -4,6 +4,8 @@ using System.Windows;
 using Picer.Core.Models;
 using Picer.Core.Vision;
 using Picer.App.Infrastructure;
+using Picer.Core.Logging;
+using System.Diagnostics;
 
 namespace Picer.App.Views;
 
@@ -26,9 +28,20 @@ public partial class FaceValidationWindow : Window
     private async void CalibrateSFace_Click(object sender, RoutedEventArgs e)
     {
         if (!TryBeginOperation("正在后台计算 SFace 阈值，请勿重复点击…")) return;
+        var stopwatch = Stopwatch.StartNew();
         try
         {
-            var result = await UiWork.RunDatabaseAsync(() => _validation.CalibrateSFace());
+            await Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.Render);
+            var progress = new Progress<(string Stage, int Completed, int Total)>(value =>
+            {
+                WorkProgress.IsIndeterminate = value.Total <= 1 && value.Completed == 0;
+                if (value.Total > 1) WorkProgress.Value = value.Completed * 100d / value.Total;
+                Status.Text = value.Total > 1
+                    ? $"SFace：{value.Stage} {value.Completed}/{value.Total}"
+                    : $"SFace：{value.Stage}";
+            });
+            var result = await UiWork.RunDatabaseAsync("FaceValidation.CalibrateSFace",
+                () => _validation.CalibrateSFace(progress: progress));
             var applied = await UiWork.RunDatabaseAsync(() => _validation.GetAppliedSFaceThreshold(result.ModelVersion));
             _lastCalibration = result;
             var ready = result.QualifiedPeople >= 5 ? "样本人数已达标" : $"还需补足 {5 - result.QualifiedPeople} 位达到 20 张照片的成员";
@@ -39,8 +52,13 @@ public partial class FaceValidationWindow : Window
                 $"误识率：{result.FalseAcceptRate:P2}；漏识率：{result.FalseRejectRate:P2}\n" +
                 $"当前应用阈值：{(applied is null ? "尚未应用标定结果" : applied.Value.ToString("F3"))}";
             Status.Text = "SFace 标定完成";
+            AppLogger.Info($"SFace 标定完成：faces={result.ConfirmedFaces}; same={result.SamePairs}; different={result.DifferentPairs}; elapsed={stopwatch.ElapsedMilliseconds}ms");
         }
-        catch (Exception exception) { Status.Text = $"SFace 标定失败：{exception.Message}"; }
+        catch (Exception exception)
+        {
+            Status.Text = $"SFace 标定失败：{exception.Message}";
+            AppLogger.Error("SFace 标定失败", exception);
+        }
         finally { EndOperation(); }
     }
 

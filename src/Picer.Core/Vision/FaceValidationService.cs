@@ -29,8 +29,10 @@ public sealed class FaceValidationService(PicerDatabase database, VisionAnalysis
             calibration.SamePairs, calibration.DifferentPairs);
     }
 
-    public SFaceCalibrationResult CalibrateSFace(int minimumPhotosPerPerson = 20, int maximumPairsPerClass = 200_000)
+    public SFaceCalibrationResult CalibrateSFace(int minimumPhotosPerPerson = 20, int maximumPairsPerClass = 200_000,
+        IProgress<(string Stage, int Completed, int Total)>? progress = null)
     {
+        progress?.Report(("加载已确认人脸", 0, 1));
         var confirmed = repository.GetEmbeddingsForMatching()
             .Where(face => face.AssignmentState == "confirmed" && face.PersonId is not null)
             .ToArray();
@@ -44,7 +46,11 @@ public sealed class FaceValidationService(PicerDatabase database, VisionAnalysis
             var items = group.ToArray();
             for (var left = 0; left < items.Length && same.Count < maximumPairsPerClass; left++)
             for (var right = left + 1; right < items.Length && same.Count < maximumPairsPerClass; right++)
-                if (items[left].ImageId != items[right].ImageId) same.Add(Cosine(items[left].Embedding, items[right].Embedding));
+                if (items[left].ImageId != items[right].ImageId)
+                {
+                    same.Add(Cosine(items[left].Embedding, items[right].Embedding));
+                    if (same.Count % 5000 == 0) progress?.Report(("生成同人样本对", same.Count, maximumPairsPerClass));
+                }
         }
 
         var different = new List<double>();
@@ -55,23 +61,50 @@ public sealed class FaceValidationService(PicerDatabase database, VisionAnalysis
         {
             if (different.Count >= maximumPairsPerClass) break;
             different.Add(Cosine(left.Embedding, right.Embedding));
+            if (different.Count % 5000 == 0) progress?.Report(("生成异人样本对", different.Count, maximumPairsPerClass));
         }
 
+        progress?.Report(("搜索最佳阈值", 0, 121));
+        same.Sort();
+        different.Sort();
         var bestThreshold = 0.62;
-        var bestFar = different.Count == 0 ? 0 : different.Count(score => score >= bestThreshold) / (double)different.Count;
-        var bestFrr = same.Count == 0 ? 0 : same.Count(score => score < bestThreshold) / (double)same.Count;
+        var bestFar = RateAtOrAbove(different, bestThreshold);
+        var bestFrr = RateBelow(same, bestThreshold);
         var bestLoss = bestFar + bestFrr;
+        var thresholdIndex = 0;
         for (var threshold = 0.30; threshold <= 0.900001; threshold += 0.005)
         {
-            var far = different.Count == 0 ? 0 : different.Count(score => score >= threshold) / (double)different.Count;
-            var frr = same.Count == 0 ? 0 : same.Count(score => score < threshold) / (double)same.Count;
-            if (far + frr >= bestLoss) continue;
-            (bestThreshold, bestFar, bestFrr, bestLoss) = (threshold, far, frr, far + frr);
+            var far = RateAtOrAbove(different, threshold);
+            var frr = RateBelow(same, threshold);
+            if (far + frr < bestLoss)
+                (bestThreshold, bestFar, bestFrr, bestLoss) = (threshold, far, frr, far + frr);
+            progress?.Report(("搜索最佳阈值", ++thresholdIndex, 121));
         }
+
+        progress?.Report(("计算完成", 1, 1));
 
         return new(groups.Length,
             groups.Count(group => group.Select(face => face.ImageId).Distinct().Count() >= minimumPhotosPerPerson),
             faces.Length, same.Count, different.Count, bestThreshold, bestFar, bestFrr, selectedVersion);
+    }
+
+    private static double RateAtOrAbove(List<double> sorted, double threshold) => sorted.Count == 0
+        ? 0 : (sorted.Count - LowerBound(sorted, threshold)) / (double)sorted.Count;
+
+    private static double RateBelow(List<double> sorted, double threshold) => sorted.Count == 0
+        ? 0 : LowerBound(sorted, threshold) / (double)sorted.Count;
+
+    private static int LowerBound(List<double> sorted, double value)
+    {
+        var low = 0;
+        var high = sorted.Count;
+        while (low < high)
+        {
+            var middle = low + (high - low) / 2;
+            if (sorted[middle] < value) low = middle + 1;
+            else high = middle;
+        }
+        return low;
     }
 
     public IReadOnlyList<YuNetValidationRow> GetYuNetRows(int limit = 1000)
