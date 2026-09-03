@@ -13,6 +13,26 @@ namespace Picer.E2E;
 public sealed class DesktopSmokeTests
 {
     [Fact]
+    public void SuggestedPersonGroup_RemovesProcessedFacesAndUpdatesCount()
+    {
+        static Picer.Core.Vision.UnassignedFaceRecord Face(long id) => new(
+            id, id, $"face-{id}.jpg", null, 0,
+            new Picer.Core.Vision.NormalizedFaceBox(0, 0, 1, 1), 0.99f, 7, "测试人物");
+
+        var group = new Picer.App.ViewModels.SuggestedPersonGroupViewModel(
+            new Picer.Core.Vision.SuggestedPersonGroupRecord(7, "测试人物", [Face(1), Face(2)]));
+
+        group.RemoveFaces(new HashSet<long> { 1 });
+        Assert.Equal(1, group.FaceCount);
+        Assert.Equal("测试人物 · 1 张待确认", group.Summary);
+        Assert.Equal(2, Assert.Single(group.Faces).FaceId);
+
+        group.RemoveFaces(new HashSet<long> { 2 });
+        Assert.Empty(group.Faces);
+        Assert.Equal(0, group.FaceCount);
+    }
+
+    [Fact]
     public void FaceDetailWindow_ReadOnlyBindingsRenderWithoutDispatcherFailures()
     {
         var root = Path.Combine(Path.GetTempPath(), "picer-face-detail-" + Guid.NewGuid().ToString("N"));

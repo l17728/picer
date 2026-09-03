@@ -412,7 +412,9 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
     {
         if (face.Record.SuggestedPersonId is not long personId) return;
         face.IsAutomaticSuggestion = false;
-        if (DisplayedCollectionKind is DisplayedFaceCollectionKind.Unassigned or DisplayedFaceCollectionKind.CandidateCluster)
+        if (DisplayedCollectionKind is DisplayedFaceCollectionKind.Unassigned
+            or DisplayedFaceCollectionKind.CandidateCluster
+            or DisplayedFaceCollectionKind.SuggestedGroup)
             RemoveFacesFromCurrentView([face.FaceId]);
         StatusText = "正在后台保存人工确认…";
         try
@@ -708,12 +710,13 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
     {
         try
         {
-            await UiWork.AddInBatchesAsync(group.Record.Faces, record =>
+            var faces = group.Faces.ToArray();
+            await UiWork.AddInBatchesAsync(faces, record =>
             {
                 var item = CreateFaceItem(record);
                 DisplayedFaces.Add(item);
                 LoadDisplayedFaceThumbnailAsync(item, cancellationToken).Forget();
-                DisplayedFacesTitle = $"推荐为 {group.Record.PersonName} · {DisplayedFaces.Count}/{group.Record.Faces.Count}";
+                DisplayedFacesTitle = $"推荐为 {group.Record.PersonName} · {DisplayedFaces.Count}/{faces.Length}";
             }, cancellationToken, batchSize: 30);
             DisplayedFacesTitle = $"推荐为 {group.Record.PersonName}（{DisplayedFaces.Count}）";
         }
@@ -724,7 +727,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
     private async Task ConfirmSuggestedPersonGroupAsync()
     {
         if (SelectedSuggestedPersonGroup is not { } group) { StatusText = "请先选择一个待确认推荐组"; return; }
-        var faceIds = group.Record.Faces.Select(face => face.FaceId).Distinct().ToArray();
+        var faceIds = group.Faces.Select(face => face.FaceId).Distinct().ToArray();
         StatusText = $"正在确认推荐组“{group.Record.PersonName}”的 {faceIds.Length} 张人脸…";
         await UiWork.RunDatabaseAsync("People.ConfirmSuggestedGroup",
             () => _peopleService.MoveFaces(faceIds, group.Record.PersonId));
@@ -879,11 +882,22 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             CandidateClusters.Remove(cluster);
             if (SelectedCandidateCluster?.Record.Id == cluster.Record.Id) SelectedCandidateCluster = null;
         }
+        foreach (var group in SuggestedPersonGroups.ToArray())
+        {
+            group.RemoveFaces(ids);
+            if (group.FaceCount > 0) continue;
+            SuggestedPersonGroups.Remove(group);
+            if (SelectedSuggestedPersonGroup?.Record.PersonId == group.Record.PersonId)
+                SelectedSuggestedPersonGroup = null;
+        }
         if (SelectedDisplayedFace is not null && ids.Contains(SelectedDisplayedFace.FaceId)) SelectedDisplayedFace = null;
         DisplayedFacesTitle = DisplayedCollectionKind switch
         {
             DisplayedFaceCollectionKind.NamedPerson => $"{SelectedPerson?.DisplayName ?? "人物"} · {DisplayedFaces.Count} 张人脸",
             DisplayedFaceCollectionKind.CandidateCluster => $"候选人物 · {DisplayedFaces.Count} 张人脸",
+            DisplayedFaceCollectionKind.SuggestedGroup => SelectedSuggestedPersonGroup is { } group
+                ? $"推荐为 {group.Record.PersonName}（{DisplayedFaces.Count}）"
+                : "待确认推荐组已处理完毕",
             DisplayedFaceCollectionKind.Unassigned => $"待分类人脸（{DisplayedFaces.Count}）",
             DisplayedFaceCollectionKind.Ignored => $"不分类（{DisplayedFaces.Count}）",
             _ => DisplayedFacesTitle
@@ -939,10 +953,21 @@ public enum DisplayedFaceCollectionKind
     Ignored
 }
 
-public sealed class SuggestedPersonGroupViewModel(SuggestedPersonGroupRecord record)
+public sealed partial class SuggestedPersonGroupViewModel(SuggestedPersonGroupRecord record) : ObservableObject
 {
     public SuggestedPersonGroupRecord Record { get; } = record;
-    public string Summary => $"{Record.PersonName} · {Record.Faces.Count} 张待确认";
+    private readonly List<UnassignedFaceRecord> _faces = record.Faces.ToList();
+    public IReadOnlyList<UnassignedFaceRecord> Faces => _faces;
+    public int FaceCount => _faces.Count;
+    public string Summary => $"{Record.PersonName} · {FaceCount} 张待确认";
+
+    public void RemoveFaces(IReadOnlySet<long> faceIds)
+    {
+        if (_faces.RemoveAll(face => faceIds.Contains(face.FaceId)) == 0) return;
+        OnPropertyChanged(nameof(Faces));
+        OnPropertyChanged(nameof(FaceCount));
+        OnPropertyChanged(nameof(Summary));
+    }
 }
 
 public partial class UnassignedFaceViewModel(UnassignedFaceRecord record, string? initialThumbnailPath = null) : ObservableObject
