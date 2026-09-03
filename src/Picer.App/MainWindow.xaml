@@ -348,7 +348,7 @@
                         <DockPanel>
                             <StackPanel Orientation="Horizontal" DockPanel.Dock="Right">
                                 <Button Content="检查新照片" Command="{Binding AnalyzeAllCommand}" Padding="12,5" Margin="4,0" ToolTip="已分析的照片会使用缓存跳过"/>
-                                <Button Content="更新自动归类" Command="{Binding OrganizeFacesCommand}" Padding="12,5" Margin="4,0"
+                                <Button Content="{Binding OrganizeButtonText}" Command="{Binding OrganizeFacesCommand}" Padding="12,5" Margin="4,0"
                                         ToolTip="使用最新已应用阈值匹配已命名人物，并重建待命名候选组；保留人工确认与排除结果"/>
                                 <Button Content="人脸精度验证" Click="FaceValidation_Click" Padding="12,5" Margin="4,0"/>
                                 <Button Content="取消" Command="{Binding CancelAnalysisCommand}" Padding="12,5" Margin="4,0"/>
@@ -358,7 +358,15 @@
                             <TextBlock Text="{Binding StatusText}" TextWrapping="Wrap" VerticalAlignment="Center"/>
                         </DockPanel>
                     </Border>
-                    <ProgressBar Grid.Row="1" Grid.ColumnSpan="2" Height="8" Margin="4,0,4,8" Minimum="0" Maximum="100" Value="{Binding ProgressValue}"/>
+                    <Border Grid.Row="1" Grid.ColumnSpan="2" Background="#E7F2FF" BorderBrush="#4C87C2" BorderThickness="1"
+                            CornerRadius="4" Padding="10" Margin="4,0,4,8"
+                            Visibility="{Binding ShowOrganizeProgress, Converter={StaticResource BoolToVis}}">
+                        <Grid>
+                            <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                            <TextBlock Text="{Binding OrganizeProgressText}" FontWeight="SemiBold" Foreground="#173E63" TextWrapping="Wrap"/>
+                            <ProgressBar Grid.Row="1" Height="16" Margin="0,7,0,0" Minimum="0" Maximum="100" Value="{Binding ProgressValue}"/>
+                        </Grid>
+                    </Border>
 
                     <GroupBox Grid.Row="2" Header="人物分类" Margin="4" Padding="8">
                         <DockPanel>

@@ -72,11 +72,19 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
     [ObservableProperty] private string _newPersonName = "";
     [ObservableProperty] private string _statusText = "人物分析尚未开始";
     [ObservableProperty] private double _progressValue;
+    [ObservableProperty] private bool _showOrganizeProgress;
+    [ObservableProperty] private string _organizeProgressText = "尚未运行自动归类";
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(AnalyzeAllCommand))]
     [NotifyCanExecuteChangedFor(nameof(CancelAnalysisCommand))]
     private bool _isAnalyzing;
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(OrganizeButtonText))]
+    [NotifyCanExecuteChangedFor(nameof(OrganizeFacesCommand))]
+    private bool _isOrganizing;
     [ObservableProperty] private bool _isLoading;
+
+    public string OrganizeButtonText => IsOrganizing ? "自动归类进行中…" : "更新自动归类";
 
     public bool IsModelAvailable => _analysisService is not null;
     public PersonRecord? FindByName(string name) => _peopleService.FindByName(name);
@@ -314,58 +322,80 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
                      $"多原型人物 {result.MultiPrototypePeople} 位，负样本原型 {result.NegativeSamples} 个";
     }
 
-    [RelayCommand]
+    [RelayCommand(CanExecute = nameof(CanOrganizeFaces))]
     private async Task OrganizeFacesAsync(CancellationToken cancellationToken = default)
     {
         if (!await _organizeGate.WaitAsync(0, cancellationToken))
         {
             StatusText = "自动归类正在执行，请勿重复点击；当前进度会持续显示";
+            ShowOrganizeProgress = true;
+            OrganizeProgressText = "已有一个自动归类任务正在执行；本次重复点击已忽略";
             return;
         }
 
         var stopwatch = Stopwatch.StartNew();
+        IsOrganizing = true;
+        ShowOrganizeProgress = true;
         try
         {
             ProgressValue = 5;
             StatusText = "正在使用最新标准更新自动归类（1/3：匹配已命名人物，5%）";
+            OrganizeProgressText = StatusText;
             var suggestionProgress = new Progress<(int Completed, int Total)>(value =>
             {
                 var percent = value.Total == 0 ? 35 : 5 + value.Completed * 30d / value.Total;
                 ProgressValue = percent;
                 StatusText = $"正在使用最新标准更新自动归类（1/3：匹配已命名人物 {value.Completed}/{value.Total}，{percent:F0}%）";
+                OrganizeProgressText = StatusText;
             });
             var suggestions = await UiWork.RunDatabaseAsync("People.AutoOrganize.Suggest",
                 () => _suggestionEngine.Suggest(progress: suggestionProgress), cancellationToken);
 
             ProgressValue = 35;
             StatusText = $"正在使用最新标准更新自动归类（2/3：重建待命名人物组，35%；已检查 {suggestions.Considered} 张脸）";
+            OrganizeProgressText = StatusText;
+            var clusterProgress = new Progress<(string Stage, int Completed, int Total)>(value =>
+            {
+                var ratio = value.Total <= 0 ? 0 : Math.Clamp(value.Completed / (double)value.Total, 0, 1);
+                var percent = 35 + ratio * 43;
+                ProgressValue = percent;
+                OrganizeProgressText = $"正在使用最新标准更新自动归类（2/3：{value.Stage} {value.Completed}/{value.Total}，{percent:F0}%）";
+                StatusText = OrganizeProgressText;
+            });
             var clusters = await UiWork.RunDatabaseAsync("People.AutoOrganize.Cluster",
-                () => _unknownFaceClusterer.Rebuild(suggestions.AppliedThreshold), cancellationToken);
+                () => _unknownFaceClusterer.Rebuild(suggestions.AppliedThreshold, progress: clusterProgress), cancellationToken);
 
             ProgressValue = 80;
             StatusText = $"正在使用最新标准更新自动归类（3/3：同步界面，80%；共 {clusters.ClusterCount} 个候选组）";
+            OrganizeProgressText = StatusText;
             await RefreshAsync();
             ProgressValue = 100;
             StatusText = $"自动归类完成（100%）：新增推荐 {suggestions.Suggested} 张，待命名 {clusters.ClusterCount} 组；" +
                          $"暂缓低质量 {suggestions.LowQualityDeferred}、人物歧义 {suggestions.AmbiguousDeferred}、负样本冲突 {suggestions.NegativeConflictDeferred}；" +
                          $"已学习 {suggestions.MultiPrototypePeople} 位多原型人物和 {suggestions.NegativeSamples} 个负样本原型；用时 {stopwatch.Elapsed.TotalSeconds:F1} 秒";
+            OrganizeProgressText = StatusText;
             AppLogger.Info($"People.AutoOrganize completed in {stopwatch.ElapsedMilliseconds} ms; " +
                            $"considered={suggestions.Considered}; suggested={suggestions.Suggested}; clusters={clusters.ClusterCount}");
         }
         catch (OperationCanceledException)
         {
             StatusText = "自动归类已取消；已经保存的人工标记不受影响";
+            OrganizeProgressText = StatusText;
         }
         catch (Exception exception)
         {
             StatusText = $"自动归类失败：{exception.Message}";
+            OrganizeProgressText = StatusText;
             AppLogger.Error("People.AutoOrganize failed", exception);
         }
         finally
         {
+            IsOrganizing = false;
             _organizeGate.Release();
         }
     }
+
+    private bool CanOrganizeFaces() => !IsOrganizing;
 
     [RelayCommand]
     private async Task RejectSuggestionAsync()

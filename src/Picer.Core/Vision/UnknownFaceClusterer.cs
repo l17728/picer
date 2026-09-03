@@ -5,7 +5,8 @@ public sealed record CandidateClusteringResult(int Considered, int ClusterCount,
 /// <summary>Groups unknown faces into review-only candidates without assigning identities.</summary>
 public sealed class UnknownFaceClusterer(VisionAnalysisRepository repository)
 {
-    public CandidateClusteringResult Rebuild(double cosineThreshold = 0.62, int maximumFaces = int.MaxValue)
+    public CandidateClusteringResult Rebuild(double cosineThreshold = 0.62, int maximumFaces = int.MaxValue,
+        IProgress<(string Stage, int Completed, int Total)>? progress = null)
     {
         if (cosineThreshold is < 0 or > 1) throw new ArgumentOutOfRangeException(nameof(cosineThreshold));
         if (maximumFaces <= 0) throw new ArgumentOutOfRangeException(nameof(maximumFaces));
@@ -23,9 +24,12 @@ public sealed class UnknownFaceClusterer(VisionAnalysisRepository repository)
         var deferred = all.Length - faces.Length;
         var sets = Enumerable.Range(0, faces.Length).Select(index => new ClusterSet(index, faces[index].ImageId)).ToArray();
 
+        progress?.Report(("构建近邻索引", 0, faces.Length));
         var index = new AngularNeighborIndex(faces.Select(face => face.Embedding).ToArray());
+        progress?.Report(("比较相似人脸", 0, faces.Length));
         var edges = new List<(int Left, int Right, double Score)>();
         for (var left = 0; left < faces.Length; left++)
+        {
         foreach (var right in index.FindWithin(left, cosineThreshold))
         {
             if (right <= left) continue;
@@ -33,13 +37,18 @@ public sealed class UnknownFaceClusterer(VisionAnalysisRepository repository)
             var score = Cosine(faces[left].Embedding, faces[right].Embedding);
             if (score >= cosineThreshold) edges.Add((left, right, score));
         }
+            if ((left + 1) % 100 == 0 || left + 1 == faces.Length)
+                progress?.Report(("比较相似人脸", left + 1, faces.Length));
+        }
 
+        var merged = 0;
         foreach (var edge in edges.OrderByDescending(value => value.Score))
         {
             var leftRoot = Find(sets, edge.Left);
             var rightRoot = Find(sets, edge.Right);
             if (leftRoot == rightRoot || sets[leftRoot].ImageIds.Overlaps(sets[rightRoot].ImageIds)) continue;
             Union(sets, leftRoot, rightRoot);
+            if (++merged % 500 == 0) progress?.Report(("合并候选组", merged, Math.Max(1, edges.Count)));
         }
 
         var drafts = Enumerable.Range(0, faces.Length)
@@ -53,7 +62,9 @@ public sealed class UnknownFaceClusterer(VisionAnalysisRepository repository)
                     .Select(index => (faces[index].FaceId, Cosine(faces[index].Embedding, prototype)))
                     .OrderByDescending(value => value.Item2).ToArray());
             }).ToArray();
+        progress?.Report(("保存候选组", 0, Math.Max(1, drafts.Length)));
         repository.ReplaceCandidateClusters(selectedVersion, drafts);
+        progress?.Report(("保存候选组", drafts.Length, Math.Max(1, drafts.Length)));
         return new CandidateClusteringResult(faces.Length, drafts.Length,
             drafts.Sum(cluster => cluster.Members.Count), deferred);
     }
