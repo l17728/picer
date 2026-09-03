@@ -15,6 +15,7 @@ public partial class CloudVisionSettingsWindow : Window
         new(AiFeatureIds.VideoSummary,"视频内容总结","多模态模型","分析视频关键帧拼图并结合本地转写生成摘要。",AiModelCapability.Multimodal),
         new(AiFeatureIds.SceneDescription,"未分类场景描述","多模态模型","分析代表照片，为时间场景生成名称和检索词。",AiModelCapability.Multimodal)
         ,new(AiFeatureIds.VideoTranscription,"视频语音转文字","语音模型","从视频提取完整音频，使用所选本地语音模型转写。",AiModelCapability.Language)
+        ,new(AiFeatureIds.AiQuestion,"AI 问答与媒体检索","多模态模型","拆解自然语言条件，检索照片及可选的视频，并复核候选结果。",AiModelCapability.Multimodal)
     ];
 
     public CloudVisionSettingsWindow(string settingsPath,ICredentialStore? credentials=null)

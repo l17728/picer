@@ -86,6 +86,8 @@ public sealed class CloudVisionSettings
         AddFeatureIfMissing(AiFeatureIds.PhotoAnalysis, provider, model); AddFeatureIfMissing(AiFeatureIds.VideoSummary, provider, model);
         AddFeatureIfMissing(AiFeatureIds.SceneDescription, provider, model);
         AddFeatureIfMissing(AiFeatureIds.VideoTranscription, AiProviderIds.LocalQwenAsr, "qwen3-asr-1.7b");
+        AddFeatureIfMissing(AiFeatureIds.AiQuestion, AiProviderIds.LocalQwenVl,
+            "Qwen/Qwen3-VL-8B-Instruct-GGUF:Q4_K_M");
     }
 
     public void MergeProviders(IEnumerable<AiProviderDefinition> providers)

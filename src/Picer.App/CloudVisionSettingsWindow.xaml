@@ -13,7 +13,7 @@
                 </ListBox>
                 <TextBlock Text="本地 AI 能力" FontWeight="SemiBold" Margin="0,16,0,7"/>
                 <Border BorderBrush="#DDD" BorderThickness="1" Padding="10"><StackPanel>
-                    <TextBlock Text="AI 问答 · 语言模型（后续接入）"/><TextBlock Text="人脸识别 · YuNet / SFace" Margin="0,6,0,0"/><TextBlock Text="语义搜索 · Chinese-CLIP" Margin="0,6,0,0"/><TextBlock Text="OCR / 图片描述 · Florence" Margin="0,6,0,0"/><TextBlock Text="语音转写 · 可选 Qwen3-ASR / Whisper" Margin="0,6,0,0"/>
+                    <TextBlock Text="AI 问答 · 可选本地 Qwen3-VL"/><TextBlock Text="人脸识别 · YuNet / SFace" Margin="0,6,0,0"/><TextBlock Text="语义搜索 · Chinese-CLIP" Margin="0,6,0,0"/><TextBlock Text="OCR / 图片描述 · Florence" Margin="0,6,0,0"/><TextBlock Text="语音转写 · 可选 Qwen3-ASR / Whisper" Margin="0,6,0,0"/>
                     <TextBlock Text="Qwen3-VL 和 Qwen3-ASR 可通过本机统一模型平台运行。" Foreground="#666" FontSize="11" TextWrapping="Wrap" Margin="0,9,0,0"/>
                 </StackPanel></Border>
             </StackPanel>
