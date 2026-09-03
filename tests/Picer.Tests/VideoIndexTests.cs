@@ -50,5 +50,18 @@ public sealed class VideoIndexTests : IDisposable
     [InlineData("a.mp4")][InlineData("a.MOV")][InlineData("a.m2ts")]
     public void VideoFormats_AcceptsCommonFamilyVideoFormats(string path) => Assert.True(VideoFormats.IsSupported(path));
 
+    [Fact]
+    public void FfmpegProbeFallback_ParsesDurationAndResolution()
+    {
+        const string output = "Duration: 00:01:23.45, start: 0.000000, bitrate: 1000 kb/s\n" +
+                              "Stream #0:0: Video: h264, yuv420p(progressive), 1920x1080, 30 fps";
+
+        var result = FfmpegKeyframeService.ParseFfmpegProbeOutput(output);
+
+        Assert.Equal(83.45, result.DurationSeconds, 2);
+        Assert.Equal(1920, result.Width);
+        Assert.Equal(1080, result.Height);
+    }
+
     public void Dispose() { _database.Dispose(); try { Directory.Delete(_root, true); } catch { } }
 }

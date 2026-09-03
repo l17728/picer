@@ -138,6 +138,12 @@ public partial class MainWindow : Window
         else if (MainTabs.SelectedIndex == 3) await _mainVm.Semantic.InitializePageAsync();
     }
 
+    private void VideoGrid_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (sender is DataGrid grid)
+            _mainVm.Video.UpdateSelection(grid.SelectedItems.Cast<VideoItemViewModel>());
+    }
+
     private async void PeopleFace_DoubleClick(object sender, MouseButtonEventArgs e)
     {
         if (FindDataContext<UnassignedFaceViewModel>(e.OriginalSource as DependencyObject) is { } face)

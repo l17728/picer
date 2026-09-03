@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Globalization;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Picer.Core.Data;
 using Picer.Core.Hashing;
 
@@ -16,7 +17,10 @@ public sealed class FfmpegKeyframeService(string ffmpegPath, string cacheRoot)
     public async Task<VideoProbeResult> ProbeAsync(string videoPath, CancellationToken cancellationToken = default)
     {
         if (!File.Exists(_ffprobePath))
-            throw new FileNotFoundException("FFprobe 未随程序安装，已跳过视频时长和分辨率探测。", _ffprobePath);
+        {
+            var fallback = await RunAsync(ffmpegPath, ["-hide_banner", "-i", videoPath], cancellationToken, throwOnError: false);
+            return ParseFfmpegProbeOutput(fallback.StdErr);
+        }
         var output = await RunAsync(_ffprobePath,
             ["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height:format=duration", "-of", "json", videoPath], cancellationToken);
         using var json = JsonDocument.Parse(output.StdOut);
@@ -24,6 +28,22 @@ public sealed class FfmpegKeyframeService(string ffmpegPath, string cacheRoot)
         var format = json.RootElement.GetProperty("format");
         return new VideoProbeResult(double.Parse(format.GetProperty("duration").GetString()!, CultureInfo.InvariantCulture),
             stream.GetProperty("width").GetInt32(), stream.GetProperty("height").GetInt32());
+    }
+
+    public static VideoProbeResult ParseFfmpegProbeOutput(string output)
+    {
+        var durationMatch = Regex.Match(output, @"Duration:\s*(\d{2}):(\d{2}):(\d{2}(?:\.\d+)?)", RegexOptions.CultureInvariant);
+        var videoLine = output.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
+            .FirstOrDefault(line => line.Contains("Video:", StringComparison.OrdinalIgnoreCase)) ?? "";
+        var resolutionMatch = Regex.Match(videoLine, @"(?<!\d)(\d{2,5})x(\d{2,5})(?!\d)", RegexOptions.CultureInvariant);
+        if (!durationMatch.Success || !resolutionMatch.Success)
+            throw new InvalidOperationException("FFmpeg 未返回可识别的视频时长或分辨率信息。");
+        var duration = TimeSpan.FromHours(int.Parse(durationMatch.Groups[1].Value, CultureInfo.InvariantCulture)) +
+                       TimeSpan.FromMinutes(int.Parse(durationMatch.Groups[2].Value, CultureInfo.InvariantCulture)) +
+                       TimeSpan.FromSeconds(double.Parse(durationMatch.Groups[3].Value, CultureInfo.InvariantCulture));
+        return new VideoProbeResult(duration.TotalSeconds,
+            int.Parse(resolutionMatch.Groups[1].Value, CultureInfo.InvariantCulture),
+            int.Parse(resolutionMatch.Groups[2].Value, CultureInfo.InvariantCulture));
     }
 
     public async Task<IReadOnlyList<VideoKeyframe>> ExtractAsync(VideoRecord video, CancellationToken cancellationToken = default)

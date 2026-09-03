@@ -18,6 +18,7 @@ public partial class VideoViewModel(VideoRepository repository, VideoIndexServic
     private CancellationTokenSource? _loadCancellation;
     public ObservableCollection<VideoItemViewModel> Videos { get; } = new();
     public ObservableCollection<VideoKeyframeItemViewModel> Frames { get; } = new();
+    private VideoItemViewModel[] _selectedVideos = [];
     [ObservableProperty] private VideoItemViewModel? _selectedVideo;
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(ScanCommand))]
@@ -46,6 +47,8 @@ public partial class VideoViewModel(VideoRepository repository, VideoIndexServic
     }
 
     public Task ApplySearchAsync(string? query) => LoadAsync(query);
+
+    public void UpdateSelection(IEnumerable<VideoItemViewModel> videos) => _selectedVideos = videos.Distinct().ToArray();
 
     partial void OnSelectedVideoChanged(VideoItemViewModel? value)
     {
@@ -89,35 +92,53 @@ public partial class VideoViewModel(VideoRepository repository, VideoIndexServic
     [RelayCommand(CanExecute = nameof(CanStartOperation))]
     private async Task GenerateKeyframesAsync()
     {
-        if (SelectedVideo is null) { StatusText = "请先选择视频"; return; }
+        var targets = (_selectedVideos.Length > 0 ? _selectedVideos : SelectedVideo is null ? [] : [SelectedVideo]).ToArray();
+        if (targets.Length == 0) { StatusText = "请先选择视频"; return; }
         if (keyframes is null) { StatusText = "FFmpeg尚未安装或路径无效"; return; }
-        var cached = await UiWork.RunDatabaseAsync(() => repository.GetKeyframes(SelectedVideo.Record.Id));
-        if (cached.Count > 0) { await LoadSelectedVideoAsync(SelectedVideo); StatusText = $"已复用 {cached.Count} 张缓存关键帧"; return; }
         IsBusy = true;
+        var generated = 0;
+        var reused = 0;
+        var failed = 0;
+        var generatedFrames = 0;
+        var selectedId = SelectedVideo?.Record.Id;
         try
         {
-            StatusText = "正在读取视频信息…";
-            try
+            for (var index = 0; index < targets.Length; index++)
             {
-                var probe = await keyframes.ProbeAsync(SelectedVideo.Record.Path);
-                await UiWork.RunDatabaseAsync(() => repository.SaveProbe(SelectedVideo.Record.Id, probe));
+                var video = targets[index].Record;
+                StatusText = $"关键帧 {index + 1}/{targets.Length}：正在检查 {Path.GetFileName(video.Path)}；生成 {generated}，复用 {reused}，失败 {failed}";
+                try
+                {
+                    if (video.DurationSeconds is null || video.Width <= 0 || video.Height <= 0)
+                    {
+                        try
+                        {
+                            var probe = await keyframes.ProbeAsync(video.Path);
+                            await UiWork.RunDatabaseAsync(() => repository.SaveProbe(video.Id, probe));
+                        }
+                        catch (Exception ex)
+                        {
+                            AppLogger.Warn($"视频元数据探测失败，将继续处理关键帧：{video.Path}；{CompactError(ex.Message)}");
+                        }
+                    }
+                    var cached = await UiWork.RunDatabaseAsync(() => repository.GetKeyframes(video.Id));
+                    if (cached.Count > 0) { reused++; continue; }
+                    StatusText = $"关键帧 {index + 1}/{targets.Length}：正在处理 {Path.GetFileName(video.Path)}；生成 {generated}，复用 {reused}，失败 {failed}";
+                    var frames = await keyframes.ExtractAsync(video);
+                    if (frames.Count == 0) throw new InvalidOperationException("FFmpeg 未能从该视频提取任何画面");
+                    await UiWork.RunDatabaseAsync(() => repository.SaveKeyframes(video.Id, frames));
+                    generated++;
+                    generatedFrames += frames.Count;
+                }
+                catch (Exception ex)
+                {
+                    failed++;
+                    AppLogger.Error($"关键帧生成失败：{video.Path}", ex);
+                }
             }
-            catch (FileNotFoundException ex)
-            {
-                AppLogger.Info($"跳过视频元数据探测，继续生成关键帧：{ex.Message}");
-            }
-            StatusText = "正在识别镜头并生成关键帧…";
-            var frames = await keyframes.ExtractAsync(SelectedVideo.Record);
-            if (frames.Count == 0) throw new InvalidOperationException("FFmpeg 未能从该视频提取任何画面");
-            await UiWork.RunDatabaseAsync(() => repository.SaveKeyframes(SelectedVideo.Record.Id, frames));
-            var selectedId = SelectedVideo.Record.Id;
-            await LoadAsync(); SelectedVideo = Videos.FirstOrDefault(item => item.Record.Id == selectedId);
-            StatusText = $"关键帧完成：{frames.Count} 张";
-        }
-        catch (Exception ex)
-        {
-            AppLogger.Error($"关键帧生成失败：{SelectedVideo?.Record.Path}", ex);
-            StatusText = $"关键帧失败：{CompactError(ex.Message)}；详细信息已写入日志";
+            await LoadAsync();
+            SelectedVideo = selectedId is null ? null : Videos.FirstOrDefault(item => item.Record.Id == selectedId);
+            StatusText = $"批量关键帧完成：选择 {targets.Length} 个，生成 {generated} 个（{generatedFrames} 帧），复用 {reused} 个，失败 {failed} 个";
         }
         finally { IsBusy = false; }
     }
