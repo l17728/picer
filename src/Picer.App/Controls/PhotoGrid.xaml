@@ -108,8 +108,10 @@
                                         <ItemsControl.ItemTemplate><DataTemplate>
                                             <Button Click="BurstMember_Click" MouseDoubleClick="BurstMember_DoubleClick" Padding="3" Margin="3"
                                                     Background="White" BorderBrush="#CCD5DE" ToolTip="{Binding Path}">
-                                                <StackPanel Width="120">
-                                                    <Image Source="{Binding Thumbnail}" Width="120" Height="100" Stretch="Uniform"
+                                                <StackPanel Width="{Binding ThumbnailSize, Source={x:Reference Root}}">
+                                                    <Image Source="{Binding Thumbnail}"
+                                                           Width="{Binding ThumbnailSize, Source={x:Reference Root}}"
+                                                           Height="{Binding ThumbnailSize, Source={x:Reference Root}}" Stretch="Uniform"
                                                            Loaded="Thumbnail_Loaded" Unloaded="Thumbnail_Unloaded"/>
                                                     <TextBlock Text="{Binding FileName}" TextTrimming="CharacterEllipsis" TextAlignment="Center"/>
                                                 </StackPanel>
