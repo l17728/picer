@@ -5,6 +5,7 @@ namespace Picer.Core.People;
 public sealed record PersonRecord(long Id, string DisplayName, string Description, IReadOnlyList<string> Aliases);
 public sealed record PersonSummary(long Id, string DisplayName, int ConfirmedFaceCount, int PhotoCount);
 public sealed record FaceMoveResult(int Requested, int Changed, int AlreadyAssigned);
+public sealed record ConfirmedVideoFaceEmbedding(long VideoFaceId, long PersonId, float[] Embedding);
 public sealed record FaceIgnoreResult(int Requested, int Changed, int AlreadyIgnored);
 public sealed record PersonQueryMention(PersonRecord Person, string MatchedName, string RemainingQuery);
 
@@ -359,11 +360,14 @@ public sealed class PeopleService(PicerDatabase database)
     {
         using var command = database.Command("""
             SELECT p.id, p.display_name,
-                   COUNT(CASE WHEN a.state='confirmed' THEN 1 END),
-                   COUNT(DISTINCT CASE WHEN a.state='confirmed' THEN f.image_id END)
+                   COUNT(DISTINCT CASE WHEN a.state='confirmed' THEN 'p:'||a.face_id END) +
+                   COUNT(DISTINCT CASE WHEN vf.assignment_state='confirmed' THEN 'v:'||vf.id END),
+                   COUNT(DISTINCT CASE WHEN a.state='confirmed' THEN 'p:'||f.image_id END) +
+                   COUNT(DISTINCT CASE WHEN vf.assignment_state='confirmed' THEN 'v:'||vf.video_id END)
             FROM people p
             LEFT JOIN face_person_assignments a ON a.person_id=p.id
             LEFT JOIN detected_faces f ON f.id=a.face_id
+            LEFT JOIN video_detected_faces vf ON vf.assigned_person_id=p.id
             GROUP BY p.id, p.display_name
             ORDER BY p.display_name COLLATE NOCASE
             """);
@@ -372,6 +376,24 @@ public sealed class PeopleService(PicerDatabase database)
         while (reader.Read()) people.Add(new PersonSummary(
             reader.GetInt64(0), reader.GetString(1), reader.GetInt32(2), reader.GetInt32(3)));
         return people;
+    }
+
+    public IReadOnlyList<ConfirmedVideoFaceEmbedding> GetConfirmedVideoFaceEmbeddings()
+    {
+        using var command = database.Command("""
+            SELECT id,assigned_person_id,embedding FROM video_detected_faces
+            WHERE assignment_state='confirmed' AND assigned_person_id IS NOT NULL AND embedding IS NOT NULL
+            """);
+        using var reader = command.ExecuteReader();
+        var values = new List<ConfirmedVideoFaceEmbedding>();
+        while (reader.Read())
+        {
+            var bytes = (byte[])reader[2];
+            var embedding = new float[bytes.Length / sizeof(float)];
+            Buffer.BlockCopy(bytes, 0, embedding, 0, bytes.Length);
+            values.Add(new ConfirmedVideoFaceEmbedding(reader.GetInt64(0), reader.GetInt64(1), embedding));
+        }
+        return values;
     }
 
     private void Assign(long faceId, long personId, string state, string assignedBy, double? confidence)

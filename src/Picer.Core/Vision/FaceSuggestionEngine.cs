@@ -15,9 +15,12 @@ public sealed class FaceSuggestionEngine(VisionAnalysisRepository repository, Pe
             .GroupBy(face => face.ModelVersion).OrderByDescending(group => group.Count())
             .Select(group => group.Key).FirstOrDefault();
         var appliedThreshold = cosineThreshold ?? (selectedVersion is null ? null : repository.GetFaceMatchThreshold(selectedVersion)) ?? 0.55;
-        var prototypes = embeddings
+        var confirmed = embeddings
             .Where(face => face.AssignmentState == "confirmed" && face.PersonId is not null)
-            .GroupBy(face => face.PersonId!.Value)
+            .Select(face => (PersonId: face.PersonId!.Value, face.Embedding))
+            .Concat(people.GetConfirmedVideoFaceEmbeddings().Select(face => (face.PersonId, face.Embedding)));
+        var prototypes = confirmed
+            .GroupBy(face => face.PersonId)
             .ToDictionary(group => group.Key, group => Mean(group.Select(face => face.Embedding)));
         var candidates = embeddings.Where(face => face.AssignmentState is null or "suggested").ToArray();
         var suggested = 0;

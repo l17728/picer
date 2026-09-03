@@ -55,6 +55,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
     public ObservableCollection<CandidateClusterViewModel> CandidateClusters { get; } = [];
     public ObservableCollection<UnassignedFaceViewModel> SelectedClusterFaces { get; } = [];
     public ObservableCollection<UnassignedFaceViewModel> DisplayedFaces { get; } = [];
+    public ObservableCollection<VideoFaceItemViewModel> PersonVideoFaces { get; } = [];
 
     [ObservableProperty] private PersonSummary? _selectedPerson;
     [ObservableProperty] private PersonSummary? _candidateTargetPerson;
@@ -76,6 +77,8 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
     public bool IsModelAvailable => _analysisService is not null;
     public PersonRecord? FindByName(string name) => _peopleService.FindByName(name);
     public PersonQueryMention? FindMention(string query) => _peopleService.FindMention(query);
+
+    public Task RefreshSharedIdentityAsync() => _isLoaded ? RefreshAsync() : Task.CompletedTask;
 
     public async Task InitializePageAsync()
     {
@@ -118,6 +121,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         SelectedDisplayedFace = null;
         DisplayedFaces.Clear();
         AssignedFaces.Clear();
+        PersonVideoFaces.Clear();
         SelectedClusterFaces.Clear();
         People.Clear();
         foreach (var person in snapshot.People) People.Add(person);
@@ -692,6 +696,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         _personLoadCancellation?.Cancel();
         _personLoadCancellation?.Dispose();
         AssignedFaces.Clear();
+        PersonVideoFaces.Clear();
         if (value is null) return;
         var cancellation = _personLoadCancellation = new CancellationTokenSource();
         SelectedCandidateCluster = null;
@@ -705,7 +710,10 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
     {
         try
         {
-            var faces = await UiWork.RunDatabaseAsync(() => _repository.GetPersonFaces(person.Id).ToArray(), cancellationToken);
+            var snapshot = await UiWork.RunDatabaseAsync(() => (
+                Photos: _repository.GetPersonFaces(person.Id).ToArray(),
+                Videos: AppServices.VideoFaceTimeline?.GetPersonFaces(person.Id).ToArray() ?? []), cancellationToken);
+            var faces = snapshot.Photos;
             if (cancellationToken.IsCancellationRequested || SelectedPerson?.Id != person.Id) return;
             await UiWork.AddInBatchesAsync(faces, face =>
                 {
@@ -716,6 +724,13 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
                 DisplayedFacesTitle = $"{person.DisplayName} · {AssignedFaces.Count} / {faces.Length} 张人脸";
                 }, cancellationToken);
             DisplayedFacesTitle = $"{person.DisplayName} · {AssignedFaces.Count} 张人脸";
+            foreach (var record in snapshot.Videos)
+            {
+                var item = new VideoFaceItemViewModel(record);
+                PersonVideoFaces.Add(item);
+                _ = item.LoadThumbnailAsync();
+            }
+            if (PersonVideoFaces.Count > 0) DisplayedFacesTitle += $" + {PersonVideoFaces.Count} 张视频人脸";
         }
         catch (OperationCanceledException) { }
     }

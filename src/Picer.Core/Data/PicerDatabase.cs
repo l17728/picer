@@ -6,7 +6,7 @@ namespace Picer.Core.Data;
 
 public sealed class PicerDatabase : IDisposable
 {
-    public const int CurrentSchemaVersion = 20;
+    public const int CurrentSchemaVersion = 21;
     private readonly SqliteConnection _conn;
     private readonly string _connectionString;
 
@@ -30,7 +30,7 @@ public sealed class PicerDatabase : IDisposable
         using (var currentVersion = _conn.CreateCommand())
         {
             currentVersion.CommandText = "PRAGMA user_version";
-            if (Convert.ToInt32(currentVersion.ExecuteScalar()) >= 20)
+            if (Convert.ToInt32(currentVersion.ExecuteScalar()) >= CurrentSchemaVersion)
                 return;
         }
 
@@ -572,6 +572,25 @@ public sealed class PicerDatabase : IDisposable
                 PRAGMA user_version = 20;
                 """;
             locationHierarchyMigration.ExecuteNonQuery();
+        }
+        if (schemaVersion < 21)
+        {
+            AddColumnIfMissing("video_detected_faces", "assigned_person_id", "INTEGER REFERENCES people(id) ON DELETE SET NULL");
+            AddColumnIfMissing("video_detected_faces", "assignment_state", "TEXT CHECK(assignment_state IN ('confirmed','ignored'))");
+            AddColumnIfMissing("video_detected_faces", "updated_utc", "TEXT");
+            using var videoFaceReviewMigration = _conn.CreateCommand();
+            videoFaceReviewMigration.CommandText = """
+                CREATE TABLE IF NOT EXISTS video_face_person_rejections(
+                    video_face_id INTEGER NOT NULL REFERENCES video_detected_faces(id) ON DELETE CASCADE,
+                    person_id INTEGER NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+                    created_utc TEXT NOT NULL,
+                    PRIMARY KEY(video_face_id,person_id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_video_faces_assigned_person
+                    ON video_detected_faces(assigned_person_id,assignment_state);
+                PRAGMA user_version = 21;
+                """;
+            videoFaceReviewMigration.ExecuteNonQuery();
         }
     }
 

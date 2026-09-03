@@ -94,7 +94,7 @@ public static class AppServices
         {
             FaceAnalyzer = new YuNetSFaceAnalyzer(AppPaths.YuNetModelPath, AppPaths.SFaceModelPath);
             VisionAnalysis = new VisionAnalysisService(VisionRepository, FaceAnalyzer);
-            VideoFaceTimeline = new VideoFaceTimelineService(Db, FaceAnalyzer, VisionRepository);
+            VideoFaceTimeline = new VideoFaceTimelineService(Db, FaceAnalyzer, VisionRepository, People);
             VisionUnavailableReason = null;
         }
         catch (Exception ex) when (ex is FileNotFoundException or InvalidOperationException)

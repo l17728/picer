@@ -43,7 +43,7 @@ public sealed class VisionAnalysisTests : IDisposable
         connection.Open();
         using var version = connection.CreateCommand();
         version.CommandText = "PRAGMA user_version";
-        Assert.Equal(20L, (long)version.ExecuteScalar()!);
+        Assert.Equal(21L, (long)version.ExecuteScalar()!);
 
         using var tables = connection.CreateCommand();
         tables.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('vision_analyses','detected_faces')";

@@ -217,7 +217,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _geocoder = geocoder;
         People = people;
         Video = new VideoViewModel(AppServices.Videos, AppServices.VideoIndex, AppServices.VideoKeyframes,
-            AppServices.VideoTranscription, AppServices.VideoFaceTimeline, AppServices.VideoSummaries);
+            AppServices.VideoTranscription, AppServices.VideoFaceTimeline, AppServices.VideoSummaries, AppServices.People);
+        Video.SetIdentityChangedCallback(People.RefreshSharedIdentityAsync);
         Semantic = new SemanticViewModel(db, () =>
         {
             LoadTags();

@@ -3,21 +3,29 @@ using System.Diagnostics;
 using System.IO;
 using System.Text.Json;
 using System.Windows;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Picer.Core.Video;
 using Picer.Core.Logging;
+using Picer.Core.People;
 using Picer.App.Infrastructure;
 
 namespace Picer.App.ViewModels;
 
 public partial class VideoViewModel(VideoRepository repository, VideoIndexService index, FfmpegKeyframeService? keyframes,
     WhisperTranscriptionService? transcription = null, VideoFaceTimelineService? faceTimeline = null,
-    VideoSummaryService? summaryService = null) : ObservableObject
+    VideoSummaryService? summaryService = null, PeopleService? peopleService = null) : ObservableObject
 {
     private CancellationTokenSource? _loadCancellation;
     public ObservableCollection<VideoItemViewModel> Videos { get; } = new();
     public ObservableCollection<VideoKeyframeItemViewModel> Frames { get; } = new();
+    public ObservableCollection<VideoFaceItemViewModel> VideoFaces { get; } = new();
+    public ObservableCollection<VideoFaceItemViewModel> FilteredVideoFaces { get; } = new();
+    public ObservableCollection<VideoFaceGroupViewModel> VideoFaceGroups { get; } = new();
+    public ObservableCollection<PersonSummary> VideoPeople { get; } = new();
+    private Func<Task>? _identityChanged;
     private VideoItemViewModel[] _selectedVideos = [];
     [ObservableProperty] private VideoItemViewModel? _selectedVideo;
     [ObservableProperty]
@@ -30,8 +38,13 @@ public partial class VideoViewModel(VideoRepository repository, VideoIndexServic
     [ObservableProperty] private string _statusText = keyframes is null ? "FFmpeg尚未就绪" : "就绪";
     [ObservableProperty] private string _transcriptText = "尚未转写";
     [ObservableProperty] private string _peopleTimelineText = "尚未分析视频人物";
+    [ObservableProperty] private VideoFaceItemViewModel? _selectedVideoFace;
+    [ObservableProperty] private VideoFaceGroupViewModel? _selectedVideoFaceGroup;
+    [ObservableProperty] private PersonSummary? _selectedVideoPerson;
 
     [ObservableProperty] private string _summaryText = "尚未生成融合摘要";
+
+    public void SetIdentityChangedCallback(Func<Task> callback) => _identityChanged = callback;
 
     public async Task LoadAsync(string? query = null)
     {
@@ -56,6 +69,7 @@ public partial class VideoViewModel(VideoRepository repository, VideoIndexServic
         if (value is null)
         {
             TranscriptText = "尚未转写"; PeopleTimelineText = "尚未分析视频人物"; SummaryText = "尚未生成融合摘要";
+            VideoFaces.Clear(); FilteredVideoFaces.Clear(); VideoFaceGroups.Clear();
             return;
         }
         _ = LoadSelectedVideoAsync(value);
@@ -67,12 +81,110 @@ public partial class VideoViewModel(VideoRepository repository, VideoIndexServic
             Transcript: repository.GetTranscript(selected.Record.Id),
             Timeline: faceTimeline?.GetTimeline(selected.Record.Id),
             Summary: repository.GetSummary(selected.Record.Id),
-            Frames: repository.GetKeyframes(selected.Record.Id).ToArray()));
+            Frames: repository.GetKeyframes(selected.Record.Id).ToArray(),
+            People: peopleService?.GetAll().ToArray() ?? []));
         if (SelectedVideo?.Record.Id != selected.Record.Id) return;
         TranscriptText = ExtractTranscriptText(snapshot.Transcript);
         PeopleTimelineText = FormatTimeline(snapshot.Timeline);
+        PopulateVideoFaces(snapshot.Timeline ?? [], snapshot.People);
         SummaryText = snapshot.Summary ?? "尚未生成融合摘要";
         await UiWork.AddInBatchesAsync(snapshot.Frames, frame => Frames.Add(new VideoKeyframeItemViewModel(frame)), batchSize: 30);
+    }
+
+    partial void OnSelectedVideoFaceGroupChanged(VideoFaceGroupViewModel? value) => ApplyVideoFaceFilter();
+
+    private void PopulateVideoFaces(IReadOnlyList<VideoFaceTimelineRecord> faces, IReadOnlyList<PersonSummary>? people = null)
+    {
+        VideoFaces.Clear();
+        foreach (var face in faces)
+        {
+            var item = new VideoFaceItemViewModel(face);
+            VideoFaces.Add(item);
+            _ = item.LoadThumbnailAsync();
+        }
+        VideoPeople.Clear();
+        foreach (var person in people ?? []) VideoPeople.Add(person);
+        var selectedKey = SelectedVideoFaceGroup?.Key ?? "all";
+        VideoFaceGroups.Clear();
+        VideoFaceGroups.Add(new("all", $"全部人脸（{faces.Count}）"));
+        VideoFaceGroups.Add(new("pending", $"待确认（{faces.Count(face => face.AssignmentState is null)}）"));
+        foreach (var group in faces.Where(face => face.AssignmentState == "confirmed" && face.AssignedPersonId is not null)
+                     .GroupBy(face => new { Id = face.AssignedPersonId!.Value, Name = face.AssignedPersonName }).OrderBy(group => group.Key.Name))
+            VideoFaceGroups.Add(new($"person:{group.Key.Id}", $"{group.Key.Name}（{group.Count()}）", group.Key.Id));
+        VideoFaceGroups.Add(new("ignored", $"不分类（{faces.Count(face => face.AssignmentState == "ignored")}）"));
+        SelectedVideoFaceGroup = VideoFaceGroups.FirstOrDefault(group => group.Key == selectedKey) ?? VideoFaceGroups[0];
+        ApplyVideoFaceFilter();
+    }
+
+    private void ApplyVideoFaceFilter()
+    {
+        var group = SelectedVideoFaceGroup;
+        var values = group?.Key switch
+        {
+            "pending" => VideoFaces.Where(face => face.Record.AssignmentState is null),
+            "ignored" => VideoFaces.Where(face => face.Record.AssignmentState == "ignored"),
+            _ when group?.PersonId is long personId => VideoFaces.Where(face => face.Record.AssignedPersonId == personId),
+            _ => VideoFaces
+        };
+        FilteredVideoFaces.Clear();
+        foreach (var face in values) FilteredVideoFaces.Add(face);
+    }
+
+    [RelayCommand]
+    private async Task ConfirmVideoFaceAsync()
+    {
+        if (SelectedVideoFace is null || faceTimeline is null) { StatusText = "请先选择一张视频人脸"; return; }
+        var personId = SelectedVideoFace.Record.SuggestedPersonId ?? SelectedVideoPerson?.Id;
+        if (personId is null) { StatusText = "该人脸没有推荐人物，请先选择正确人物"; return; }
+        await SaveVideoFaceIdentityAsync(() => faceTimeline.Confirm(SelectedVideoFace.Record.FaceId, personId.Value), "视频人脸身份已确认");
+    }
+
+    [RelayCommand]
+    private async Task AssignVideoFaceAsync()
+    {
+        if (SelectedVideoFace is null || SelectedVideoPerson is null || faceTimeline is null) { StatusText = "请选择视频人脸和正确人物"; return; }
+        if (SelectedVideoFace.Record.SuggestedPersonId is long suggested && suggested != SelectedVideoPerson.Id)
+            await UiWork.RunDatabaseAsync(() => faceTimeline.RejectSuggestion(SelectedVideoFace.Record.FaceId, suggested));
+        await SaveVideoFaceIdentityAsync(() => faceTimeline.Confirm(SelectedVideoFace.Record.FaceId, SelectedVideoPerson.Id), $"已归入“{SelectedVideoPerson.DisplayName}”");
+    }
+
+    [RelayCommand]
+    private async Task RejectVideoFaceSuggestionAsync()
+    {
+        if (SelectedVideoFace?.Record.SuggestedPersonId is not long personId || faceTimeline is null) { StatusText = "所选人脸没有推荐人物"; return; }
+        await SaveVideoFaceIdentityAsync(() => faceTimeline.RejectSuggestion(SelectedVideoFace.Record.FaceId, personId), "已否定推荐，请选择正确人物");
+    }
+
+    [RelayCommand]
+    private async Task IgnoreVideoFaceAsync()
+    {
+        if (SelectedVideoFace is null || faceTimeline is null) { StatusText = "请先选择一张视频人脸"; return; }
+        await SaveVideoFaceIdentityAsync(() => faceTimeline.MarkIgnored(SelectedVideoFace.Record.FaceId), "已标记为不分类");
+    }
+
+    private async Task SaveVideoFaceIdentityAsync(Action save, string message)
+    {
+        var selectedFaceId = SelectedVideoFace?.Record.FaceId;
+        await UiWork.RunDatabaseAsync(save);
+        if (_identityChanged is not null) await _identityChanged();
+        if (SelectedVideo is not null) await LoadSelectedVideoAsync(SelectedVideo);
+        SelectedVideoFace = FilteredVideoFaces.FirstOrDefault(face => face.Record.FaceId == selectedFaceId);
+        StatusText = message;
+    }
+
+    public async Task AssignVideoFaceToPersonAsync(VideoFaceItemViewModel face, PersonSummary person)
+    {
+        SelectedVideoFace = face;
+        SelectedVideoPerson = person;
+        await AssignVideoFaceAsync();
+    }
+
+    public async Task CreatePersonAndAssignVideoFaceAsync(VideoFaceItemViewModel face, string name)
+    {
+        if (peopleService is null || faceTimeline is null) return;
+        var person = await UiWork.RunDatabaseAsync(() => peopleService.Create(name));
+        SelectedVideoFace = face;
+        await SaveVideoFaceIdentityAsync(() => faceTimeline.Confirm(face.Record.FaceId, person.Id), $"已创建并归入“{person.DisplayName}”");
     }
 
     [RelayCommand(CanExecute = nameof(CanStartOperation))]
@@ -172,6 +284,20 @@ public partial class VideoViewModel(VideoRepository repository, VideoIndexServic
         catch (Exception exception) { StatusText = $"无法打开视频：{exception.Message}"; }
     }
 
+    [RelayCommand]
+    private void RevealSelected()
+    {
+        if (SelectedVideo is null) { StatusText = "请先选择视频"; return; }
+        var path = SelectedVideo.Record.Path;
+        if (!File.Exists(path)) { StatusText = "原视频已移动或删除，请重新扫描或重新定位"; return; }
+        try
+        {
+            Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{path}\"") { UseShellExecute = true });
+            StatusText = $"已在资源管理器中定位 {Path.GetFileName(path)}";
+        }
+        catch (Exception exception) { StatusText = $"无法在资源管理器中定位视频：{exception.Message}"; }
+    }
+
     [RelayCommand(CanExecute = nameof(CanStartOperation))]
     private async Task TranscribeAsync()
     {
@@ -202,13 +328,14 @@ public partial class VideoViewModel(VideoRepository repository, VideoIndexServic
             var progress = new Progress<(int Completed, int Total)>(value =>
                 StatusText = $"正在分析视频人物：关键帧 {value.Completed}/{value.Total}");
             var count=await faceTimeline.AnalyzeAsync(SelectedVideo.Record, progress: progress);
-            PeopleTimelineText=FormatTimeline(await UiWork.RunDatabaseAsync(()=>faceTimeline.GetTimeline(SelectedVideo.Record.Id)));
+            var view=await UiWork.RunDatabaseAsync(()=>(Timeline:faceTimeline.GetTimeline(SelectedVideo.Record.Id),People:peopleService?.GetAll().ToArray()??[]));
+            PeopleTimelineText=FormatTimeline(view.Timeline);PopulateVideoFaces(view.Timeline,view.People);
             StatusText=$"人物时间轴完成：{count} 个人脸片段";
         }
         catch(Exception ex){AppLogger.Error($"视频人物分析失败：{SelectedVideo?.Record.Path}", ex);StatusText=$"人物时间轴失败：{CompactError(ex.Message)}";}finally{IsBusy=false;}
     }
 
-    private static string FormatTimeline(IReadOnlyList<VideoFaceTimelineRecord>? faces)=>faces is null||faces.Count==0?"尚未识别到人物":string.Join(Environment.NewLine,faces.Select(face=>$"{TimeSpan.FromSeconds(face.TimestampSeconds):hh\\:mm\\:ss}  {face.SuggestedPersonName??"未知人物"}  {(face.MatchConfidence is null?"":$"匹配 {face.MatchConfidence:P0}")}"));
+    private static string FormatTimeline(IReadOnlyList<VideoFaceTimelineRecord>? faces)=>faces is null||faces.Count==0?"尚未识别到人物":string.Join(Environment.NewLine,faces.Select(face=>$"{TimeSpan.FromSeconds(face.TimestampSeconds):hh\\:mm\\:ss}  {face.EffectivePersonName??"未知人物"}  {(face.MatchConfidence is null?"":$"匹配 {face.MatchConfidence:P0}")}"));
 
     [RelayCommand(CanExecute = nameof(CanStartOperation))]
     private async Task GenerateSummaryAsync()
@@ -281,4 +408,43 @@ public sealed class VideoKeyframeItemViewModel(VideoKeyframe frame)
 {
     public string Path { get; } = frame.Path;
     public string Timestamp => TimeSpan.FromSeconds(frame.TimestampSeconds).ToString(@"hh\:mm\:ss");
+}
+
+public sealed record VideoFaceGroupViewModel(string Key, string DisplayName, long? PersonId = null);
+
+public sealed partial class VideoFaceItemViewModel(VideoFaceTimelineRecord record) : ObservableObject
+{
+    public VideoFaceTimelineRecord Record { get; } = record;
+    public string KeyframePath => Record.KeyframePath;
+    public string Timestamp => TimeSpan.FromSeconds(Record.TimestampSeconds).ToString(@"hh\:mm\:ss");
+    public string Identity => Record.AssignmentState switch
+    {
+        "confirmed" => $"已确认：{Record.AssignedPersonName}",
+        "ignored" => "不分类",
+        _ when Record.SuggestedPersonName is not null => $"推荐：{Record.SuggestedPersonName}（{Record.MatchConfidence:P0}）",
+        _ => "待确认"
+    };
+    public bool HasSuggestion => Record.IsSuggested;
+    [ObservableProperty] private ImageSource? _thumbnail;
+
+    public async Task LoadThumbnailAsync()
+    {
+        Thumbnail = await Task.Run(() =>
+        {
+            if (!File.Exists(Record.KeyframePath)) return null;
+            using var stream = File.OpenRead(Record.KeyframePath);
+            var decoder = BitmapDecoder.Create(stream, BitmapCreateOptions.PreservePixelFormat, BitmapCacheOption.OnLoad);
+            var source = decoder.Frames[0];
+            var paddingX = Record.Box.Width * .15f;
+            var paddingY = Record.Box.Height * .15f;
+            var x = Math.Max(0, (int)((Record.Box.X - paddingX) * source.PixelWidth));
+            var y = Math.Max(0, (int)((Record.Box.Y - paddingY) * source.PixelHeight));
+            var right = Math.Min(source.PixelWidth, (int)((Record.Box.X + Record.Box.Width + paddingX) * source.PixelWidth));
+            var bottom = Math.Min(source.PixelHeight, (int)((Record.Box.Y + Record.Box.Height + paddingY) * source.PixelHeight));
+            if (right <= x || bottom <= y) return null;
+            var crop = new CroppedBitmap(source, new Int32Rect(x, y, right - x, bottom - y));
+            crop.Freeze();
+            return (ImageSource)crop;
+        });
+    }
 }

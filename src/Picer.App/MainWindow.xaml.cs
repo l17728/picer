@@ -144,6 +144,33 @@ public partial class MainWindow : Window
             _mainVm.Video.UpdateSelection(grid.SelectedItems.Cast<VideoItemViewModel>());
     }
 
+    private void RejectVideoSuggestedFace_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement anchor || _mainVm.Video.SelectedVideoFace is not { } face) return;
+        var menu = new ContextMenu();
+        foreach (var person in _mainVm.Video.VideoPeople.Where(person => person.Id != face.Record.SuggestedPersonId))
+        {
+            var target = person;
+            var item = new MenuItem { Header = target.DisplayName };
+            item.Click += async (_, _) => await _mainVm.Video.AssignVideoFaceToPersonAsync(face, target);
+            menu.Items.Add(item);
+        }
+        if (menu.Items.Count > 0) menu.Items.Add(new Separator());
+        var create = new MenuItem { Header = "创建新人物并归入…" };
+        create.Click += async (_, _) =>
+        {
+            var dialog = new Views.CreatePersonWindow { Owner = this };
+            if (dialog.ShowDialog() == true) await _mainVm.Video.CreatePersonAndAssignVideoFaceAsync(face, dialog.PersonName);
+        };
+        menu.Items.Add(create);
+        var pending = new MenuItem { Header = "否定推荐，保留待确认" };
+        pending.Click += async (_, _) => await _mainVm.Video.RejectVideoFaceSuggestionCommand.ExecuteAsync(null);
+        menu.Items.Add(pending);
+        menu.PlacementTarget = anchor;
+        menu.IsOpen = true;
+        e.Handled = true;
+    }
+
     private async void PeopleFace_DoubleClick(object sender, MouseButtonEventArgs e)
     {
         if (FindDataContext<UnassignedFaceViewModel>(e.OriginalSource as DependencyObject) is { } face)

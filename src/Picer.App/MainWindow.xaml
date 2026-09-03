@@ -408,6 +408,15 @@
                     <GroupBox Grid.Row="2" Grid.Column="1" Header="{Binding DisplayedFacesTitle}" Margin="4" Padding="8">
                         <DockPanel>
                             <TextBlock DockPanel.Dock="Top" Text="双击人脸查看关联原图；右击可移动到人物、待分类或不分类。" Foreground="#555" Margin="4,0,4,8"/>
+                            <Expander DockPanel.Dock="Bottom" Header="该人物的视频人脸证据" IsExpanded="True" Margin="0,6,0,0">
+                                <ListBox ItemsSource="{Binding PersonVideoFaces}" Height="150" ScrollViewer.HorizontalScrollBarVisibility="Auto" ScrollViewer.VerticalScrollBarVisibility="Disabled">
+                                    <ListBox.ItemsPanel><ItemsPanelTemplate><StackPanel Orientation="Horizontal"/></ItemsPanelTemplate></ListBox.ItemsPanel>
+                                    <ListBox.ItemTemplate><DataTemplate><Border Width="130" Margin="4" Padding="4" BorderBrush="#CCC" BorderThickness="1"><StackPanel>
+                                        <Image Source="{Binding Thumbnail}" Height="92" Stretch="UniformToFill"/>
+                                        <TextBlock Text="{Binding Timestamp}" HorizontalAlignment="Center"/>
+                                    </StackPanel></Border></DataTemplate></ListBox.ItemTemplate>
+                                </ListBox>
+                            </Expander>
                             <ListBox x:Name="PeopleFacesList" ItemsSource="{Binding DisplayedFaces}" SelectedItem="{Binding SelectedDisplayedFace}"
                                      SelectionMode="Extended"
                                      AutomationProperties.Name="人物人脸列表" AutomationProperties.HelpText="双击打开关联照片；右击可移动到已有分类、待分类或不分类"
@@ -504,11 +513,19 @@
                             <Button Content="生成融合摘要" Command="{Binding GenerateSummaryCommand}" Padding="12,5" Margin="4"
                                     ToolTip="确认后仅上传去元数据的关键帧拼图及可选转写文本，不上传原视频"/>
                             <Button Content="打开视频" Command="{Binding OpenSelectedCommand}" Padding="12,5" Margin="4"/>
+                            <Button Content="定位文件" Command="{Binding RevealSelectedCommand}" Padding="12,5" Margin="4"
+                                    ToolTip="打开视频所在目录并选中该文件，便于复制或转发"/>
                         </StackPanel>
                     </DockPanel>
                     <DataGrid x:Name="VideoGrid" Grid.Row="1" ItemsSource="{Binding Videos}" SelectedItem="{Binding SelectedVideo}"
                               SelectionMode="Extended" SelectionUnit="FullRow" SelectionChanged="VideoGrid_SelectionChanged"
                               AutoGenerateColumns="False" IsReadOnly="True">
+                        <DataGrid.ContextMenu>
+                            <ContextMenu DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}">
+                                <MenuItem Header="打开视频" Command="{Binding OpenSelectedCommand}"/>
+                                <MenuItem Header="在文件资源管理器中显示" Command="{Binding RevealSelectedCommand}"/>
+                            </ContextMenu>
+                        </DataGrid.ContextMenu>
                         <DataGrid.Columns>
                             <DataGridTextColumn Header="文件" Binding="{Binding FileName}" Width="2*"/>
                             <DataGridTextColumn Header="路径" Binding="{Binding Path}" Width="3*"/>
@@ -517,15 +534,46 @@
                             <DataGridTextColumn Header="关键帧" Binding="{Binding KeyframeCount}" Width="75"/>
                         </DataGrid.Columns>
                     </DataGrid>
-                    <Grid Grid.Row="2" Margin="0,8,0,0"><Grid.ColumnDefinitions><ColumnDefinition Width="2*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-                    <GroupBox Header="关键帧时间轴（缓存位于数据盘）">
-                        <ListBox ItemsSource="{Binding Frames}" ScrollViewer.HorizontalScrollBarVisibility="Disabled">
-                            <ListBox.ItemsPanel><ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate></ListBox.ItemsPanel>
-                            <ListBox.ItemTemplate><DataTemplate><Border Width="170" Margin="5" BorderBrush="#CCC" BorderThickness="1" Padding="4"><StackPanel>
-                                <Image Source="{Binding Path}" Height="105" Stretch="Uniform"/><TextBlock Text="{Binding Timestamp}" HorizontalAlignment="Center" Margin="0,4,0,0"/>
-                            </StackPanel></Border></DataTemplate></ListBox.ItemTemplate>
-                        </ListBox>
-                    </GroupBox><Grid Grid.Column="1" Margin="8,0,0,0"><Grid.RowDefinitions><RowDefinition/><RowDefinition/><RowDefinition/></Grid.RowDefinitions><GroupBox Header="视频融合摘要"><TextBox Text="{Binding SummaryText}" IsReadOnly="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"/></GroupBox><GroupBox Grid.Row="1" Header="本地语音转写" Margin="0,8,0,0"><TextBox Text="{Binding TranscriptText}" IsReadOnly="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"/></GroupBox><GroupBox Grid.Row="2" Header="人物时间轴" Margin="0,8,0,0"><TextBox Text="{Binding PeopleTimelineText}" IsReadOnly="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"/></GroupBox></Grid></Grid>
+                    <TabControl Grid.Row="2" Margin="0,8,0,0">
+                        <TabItem Header="关键帧">
+                            <ListBox ItemsSource="{Binding Frames}" ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                                <ListBox.ItemsPanel><ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate></ListBox.ItemsPanel>
+                                <ListBox.ItemTemplate><DataTemplate><Border Width="170" Margin="5" BorderBrush="#CCC" BorderThickness="1" Padding="4"><StackPanel>
+                                    <Image Source="{Binding Path}" Height="105" Stretch="Uniform"/><TextBlock Text="{Binding Timestamp}" HorizontalAlignment="Center" Margin="0,4,0,0"/>
+                                </StackPanel></Border></DataTemplate></ListBox.ItemTemplate>
+                            </ListBox>
+                        </TabItem>
+                        <TabItem Header="人物标注">
+                            <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="210"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                <ListBox ItemsSource="{Binding VideoFaceGroups}" SelectedItem="{Binding SelectedVideoFaceGroup}" DisplayMemberPath="DisplayName" Margin="0,0,8,0"/>
+                                <Grid Grid.Column="1"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                                    <DockPanel Margin="0,0,0,6">
+                                        <Button DockPanel.Dock="Right" Content="不分类" Command="{Binding IgnoreVideoFaceCommand}" Padding="10,4" Margin="5,0,0,0"/>
+                                        <Button DockPanel.Dock="Right" Content="否" Click="RejectVideoSuggestedFace_Click" Padding="10,4" Margin="5,0,0,0"
+                                                ToolTip="否定推荐并选择正确人物、创建新人物或保留待确认"/>
+                                        <Button DockPanel.Dock="Right" Content="是" Command="{Binding ConfirmVideoFaceCommand}" Padding="10,4" Margin="5,0,0,0"/>
+                                        <Button DockPanel.Dock="Right" Content="归入选择人物" Command="{Binding AssignVideoFaceCommand}" Padding="10,4" Margin="5,0,0,0"/>
+                                        <ComboBox ItemsSource="{Binding VideoPeople}" SelectedItem="{Binding SelectedVideoPerson}" DisplayMemberPath="DisplayName" MinWidth="150"/>
+                                    </DockPanel>
+                                    <ListBox Grid.Row="1" ItemsSource="{Binding FilteredVideoFaces}" SelectedItem="{Binding SelectedVideoFace}" ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                                        <ListBox.ItemsPanel><ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate></ListBox.ItemsPanel>
+                                        <ListBox.ItemTemplate><DataTemplate><Border Width="190" Margin="5" BorderBrush="#CCC" BorderThickness="1" Padding="4"><StackPanel>
+                                            <Image Source="{Binding Thumbnail}" Height="110" Stretch="UniformToFill"/>
+                                            <TextBlock Text="{Binding Identity}" TextWrapping="Wrap" Margin="0,4,0,0"/>
+                                            <TextBlock Text="{Binding Timestamp}" Foreground="#666"/>
+                                        </StackPanel></Border></DataTemplate></ListBox.ItemTemplate>
+                                    </ListBox>
+                                </Grid>
+                            </Grid>
+                        </TabItem>
+                        <TabItem Header="转写与摘要">
+                            <Grid><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions>
+                                <GroupBox Header="视频融合摘要"><TextBox Text="{Binding SummaryText}" IsReadOnly="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"/></GroupBox>
+                                <GroupBox Grid.Column="1" Header="本地语音转写" Margin="8,0"><TextBox Text="{Binding TranscriptText}" IsReadOnly="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"/></GroupBox>
+                                <GroupBox Grid.Column="2" Header="人物时间轴"><TextBox Text="{Binding PeopleTimelineText}" IsReadOnly="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"/></GroupBox>
+                            </Grid>
+                        </TabItem>
+                    </TabControl>
                 </Grid>
             </TabItem>
         </TabControl>
