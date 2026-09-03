@@ -1,8 +1,10 @@
 using System.IO;
 using System.Globalization;
+using System.Collections.ObjectModel;
 using System.Windows;
 using System.Windows.Media.Imaging;
 using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.Input;
 using Picer.Core.Models;
 
 namespace Picer.App.ViewModels;
@@ -28,6 +30,30 @@ public partial class ImageItemViewModel : ObservableObject
     public string FileName => System.IO.Path.GetFileName(_record.Path);
     public bool IsMissing => _record.Status == ImageStatus.Missing;
     public bool IsTimelineAnchor => false;
+    public ObservableCollection<ImageItemViewModel> BurstMembers { get; } = [];
+    public bool IsBurstStack => BurstMembers.Count > 1;
+    public int BurstCount => Math.Max(1, BurstMembers.Count);
+    public string BurstBadge => IsBurstStack ? $"连拍 · {BurstCount} 张" : "";
+    public string BurstToggleText => IsBurstExpanded ? "−" : "+";
+    public string BurstTimeRange { get; private set; } = "";
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(BurstToggleText))]
+    private bool _isBurstExpanded;
+
+    public void ConfigureBurst(IReadOnlyList<ImageRecord> records, DateTime startedUtc, DateTime endedUtc)
+    {
+        BurstMembers.Clear();
+        foreach (var record in records) BurstMembers.Add(new ImageItemViewModel(record, _pageCancellation));
+        BurstTimeRange = $"{startedUtc.ToLocalTime():yyyy-MM-dd HH:mm:ss} – {endedUtc.ToLocalTime():HH:mm:ss}";
+        OnPropertyChanged(nameof(IsBurstStack));
+        OnPropertyChanged(nameof(BurstCount));
+        OnPropertyChanged(nameof(BurstBadge));
+        OnPropertyChanged(nameof(BurstTimeRange));
+    }
+
+    [RelayCommand]
+    private void ToggleBurst() => IsBurstExpanded = !IsBurstExpanded;
     public DateTime EffectiveTime => (_record.TakenUtc ?? _record.CreatedUtc ?? _record.ModifiedUtc).ToLocalTime();
 
     [ObservableProperty]

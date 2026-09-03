@@ -40,7 +40,7 @@ public sealed class CloudVisionTests : IDisposable
         connection.Open();
         using var version = connection.CreateCommand();
         version.CommandText = "PRAGMA user_version";
-        Assert.Equal(22L, (long)version.ExecuteScalar()!);
+        Assert.Equal(23L, (long)version.ExecuteScalar()!);
         using var table = connection.CreateCommand();
         table.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='cloud_vision_analyses'";
         Assert.Equal(1L, (long)table.ExecuteScalar()!);

@@ -217,11 +217,13 @@ public sealed class DatabaseTests : IDisposable
     public void Schema_IsMigratedToLatestVersionWithLocationHierarchy()
     {
         using var version = _db.Command("PRAGMA user_version");
-        Assert.Equal(22L, (long)version.ExecuteScalar()!);
+        Assert.Equal(23L, (long)version.ExecuteScalar()!);
         using var table = _db.Command("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='rejected_suggestions'");
         Assert.Equal(1L, (long)table.ExecuteScalar()!);
         using var locationTable = _db.Command("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='image_locations'");
         Assert.Equal(1L, (long)locationTable.ExecuteScalar()!);
+        using var burstTables = _db.Command("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('burst_groups','burst_group_members','burst_source_state')");
+        Assert.Equal(3L, (long)burstTables.ExecuteScalar()!);
     }
 
     [Fact]

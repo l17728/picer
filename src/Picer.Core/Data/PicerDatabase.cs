@@ -6,7 +6,7 @@ namespace Picer.Core.Data;
 
 public sealed class PicerDatabase : IDisposable
 {
-    public const int CurrentSchemaVersion = 22;
+    public const int CurrentSchemaVersion = 23;
     private readonly SqliteConnection _conn;
     private readonly string _connectionString;
 
@@ -599,6 +599,39 @@ public sealed class PicerDatabase : IDisposable
             using var finishVideoPersonStatus = _conn.CreateCommand();
             finishVideoPersonStatus.CommandText = "PRAGMA user_version = 22";
             finishVideoPersonStatus.ExecuteNonQuery();
+        }
+        if (schemaVersion < 23)
+        {
+            using var burstMigration = _conn.CreateCommand();
+            burstMigration.CommandText = """
+                CREATE TABLE IF NOT EXISTS burst_groups(
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    source_id INTEGER NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+                    representative_image_id INTEGER NOT NULL REFERENCES images(id) ON DELETE CASCADE,
+                    started_utc TEXT NOT NULL,
+                    ended_utc TEXT NOT NULL,
+                    algorithm_version TEXT NOT NULL,
+                    updated_utc TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS burst_group_members(
+                    group_id INTEGER NOT NULL REFERENCES burst_groups(id) ON DELETE CASCADE,
+                    image_id INTEGER NOT NULL REFERENCES images(id) ON DELETE CASCADE,
+                    sequence_index INTEGER NOT NULL,
+                    similarity REAL NOT NULL,
+                    PRIMARY KEY(group_id,image_id),
+                    UNIQUE(image_id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_burst_groups_source ON burst_groups(source_id);
+                CREATE INDEX IF NOT EXISTS idx_burst_members_image ON burst_group_members(image_id);
+                CREATE TABLE IF NOT EXISTS burst_source_state(
+                    source_id INTEGER PRIMARY KEY REFERENCES sources(id) ON DELETE CASCADE,
+                    algorithm_version TEXT NOT NULL,
+                    last_indexed_utc TEXT,
+                    updated_utc TEXT NOT NULL
+                );
+                PRAGMA user_version = 23;
+                """;
+            burstMigration.ExecuteNonQuery();
         }
     }
 

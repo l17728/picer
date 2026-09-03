@@ -34,6 +34,47 @@ public sealed class PeopleService(PicerDatabase database)
         return Get(id)!;
     }
 
+    public PersonRecord CreateAndAssignFaces(string displayName, IEnumerable<long> faceIds)
+    {
+        displayName = NormalizeName(displayName);
+        var ids = faceIds.Distinct().ToArray();
+        using var transaction = database.BeginTransaction();
+        using var insert = database.Command("""
+            INSERT INTO people(display_name, created_utc, updated_utc)
+            VALUES ($name, $now, $now); SELECT last_insert_rowid();
+            """);
+        insert.Transaction = transaction;
+        insert.Parameters.AddWithValue("$name", displayName);
+        insert.Parameters.AddWithValue("$now", Format(DateTime.UtcNow));
+        var personId = (long)insert.ExecuteScalar()!;
+        AddAliasCore(personId, displayName, transaction);
+        foreach (var faceId in ids)
+        {
+            EnsureFaceExists(faceId, transaction);
+            using var old = database.Command("SELECT person_id FROM face_person_assignments WHERE face_id=$face");
+            old.Transaction = transaction;
+            old.Parameters.AddWithValue("$face", faceId);
+            var previous = old.ExecuteScalar();
+            var oldPersonId = previous is null ? (long?)null : Convert.ToInt64(previous);
+            AssignCore(faceId, personId, "confirmed", "user", null, transaction);
+            if (oldPersonId is not null && oldPersonId != personId)
+            {
+                using var reject = database.Command("""
+                    INSERT OR IGNORE INTO face_person_rejections(face_id, person_id, created_utc)
+                    VALUES($face, $person, $now)
+                    """);
+                reject.Transaction = transaction;
+                reject.Parameters.AddWithValue("$face", faceId);
+                reject.Parameters.AddWithValue("$person", oldPersonId.Value);
+                reject.Parameters.AddWithValue("$now", Format(DateTime.UtcNow));
+                reject.ExecuteNonQuery();
+            }
+            InsertCorrection(faceId, oldPersonId, personId, "create_and_move", transaction);
+        }
+        transaction.Commit();
+        return Get(personId)!;
+    }
+
     public void Rename(long personId, string displayName)
     {
         displayName = NormalizeName(displayName);

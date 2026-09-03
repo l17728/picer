@@ -65,6 +65,17 @@ public partial class PhotoGrid : UserControl
     private void Details_Click(object sender, RoutedEventArgs e) => Execute(ShowDetailsCommand);
     private void EditLocation_Click(object sender, RoutedEventArgs e) => Execute(EditLocationCommand);
     private void EditTags_Click(object sender, RoutedEventArgs e) => Execute(EditTagsCommand);
+    private void BurstMember_Click(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is not ImageItemViewModel image) return;
+        SelectedItem = image;
+    }
+    private void BurstMember_DoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        BurstMember_Click(sender, e);
+        Execute(OpenCommand);
+        e.Handled = true;
+    }
     private void List_PreviewMouseRightButtonDown(object sender, MouseButtonEventArgs e)
     {
         if (sender is not ListBox) return;

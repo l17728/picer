@@ -67,6 +67,10 @@
             <ListBox.ItemTemplate>
                 <DataTemplate>
                     <Grid>
+                    <Border x:Name="StackBack2" BorderBrush="#8FA6BC" BorderThickness="1" Background="#E7EEF5"
+                            Margin="11,11,0,0" Visibility="Collapsed"/>
+                    <Border x:Name="StackBack1" BorderBrush="#6F8DA8" BorderThickness="1" Background="#F2F6FA"
+                            Margin="7,7,4,4" Visibility="Collapsed"/>
                     <Border x:Name="PhotoCard" BorderBrush="#CCC" BorderThickness="1" Padding="4" Margin="3">
                         <StackPanel Width="{Binding ThumbnailSize, RelativeSource={RelativeSource AncestorType={x:Type local:PhotoGrid}}}">
                             <Grid Width="{Binding ThumbnailSize, RelativeSource={RelativeSource AncestorType={x:Type local:PhotoGrid}}}"
@@ -80,6 +84,42 @@
                             <TextBlock Text="{Binding InfoText}" Foreground="#555" FontSize="11" TextAlignment="Center"/>
                         </StackPanel>
                     </Border>
+                    <Border x:Name="BurstBadge" Visibility="Collapsed" HorizontalAlignment="Left" VerticalAlignment="Top"
+                            Background="#CC294A69" CornerRadius="3" Padding="6,3" Margin="7">
+                        <TextBlock Text="{Binding BurstBadge}" Foreground="White" FontWeight="SemiBold" FontSize="11"/>
+                    </Border>
+                    <Button x:Name="BurstToggle" Visibility="Collapsed" Content="{Binding BurstToggleText}"
+                            Command="{Binding ToggleBurstCommand}" HorizontalAlignment="Right" VerticalAlignment="Top"
+                            Width="28" Height="28" Margin="7" FontWeight="Bold" FontSize="16"
+                            ToolTip="{Binding BurstTimeRange}" AutomationProperties.Name="展开或收起连拍照片"/>
+                    <Popup x:Name="BurstPopup" IsOpen="{Binding IsBurstExpanded}" Placement="MousePoint"
+                           AllowsTransparency="True" StaysOpen="True">
+                        <Border Background="White" BorderBrush="#52738F" BorderThickness="1" CornerRadius="5" Padding="10"
+                                MaxWidth="760" MaxHeight="560">
+                            <DockPanel>
+                                <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,8">
+                                    <TextBlock Text="{Binding BurstBadge}" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                                    <TextBlock Text="{Binding BurstTimeRange}" Foreground="#526779" Margin="12,0" VerticalAlignment="Center"/>
+                                    <Button Content="− 收起" Command="{Binding ToggleBurstCommand}" Padding="9,3"/>
+                                </StackPanel>
+                                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                    <ItemsControl ItemsSource="{Binding BurstMembers}">
+                                        <ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+                                        <ItemsControl.ItemTemplate><DataTemplate>
+                                            <Button Click="BurstMember_Click" MouseDoubleClick="BurstMember_DoubleClick" Padding="3" Margin="3"
+                                                    Background="White" BorderBrush="#CCD5DE" ToolTip="{Binding Path}">
+                                                <StackPanel Width="120">
+                                                    <Image Source="{Binding Thumbnail}" Width="120" Height="100" Stretch="Uniform"
+                                                           Loaded="Thumbnail_Loaded" Unloaded="Thumbnail_Unloaded"/>
+                                                    <TextBlock Text="{Binding FileName}" TextTrimming="CharacterEllipsis" TextAlignment="Center"/>
+                                                </StackPanel>
+                                            </Button>
+                                        </DataTemplate></ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </ScrollViewer>
+                            </DockPanel>
+                        </Border>
+                    </Popup>
                     <Border x:Name="TimelineAnchor" Visibility="Collapsed" Background="#E7F0FA" BorderBrush="#BCD0E5"
                             BorderThickness="0,0,0,1" Padding="12,8" Margin="3,7,3,3">
                         <TextBlock Text="{Binding Label}" FontSize="15" FontWeight="SemiBold" Foreground="#294A69"/>
@@ -89,6 +129,12 @@
                         <DataTrigger Binding="{Binding IsTimelineAnchor}" Value="True">
                             <Setter TargetName="PhotoCard" Property="Visibility" Value="Collapsed"/>
                             <Setter TargetName="TimelineAnchor" Property="Visibility" Value="Visible"/>
+                        </DataTrigger>
+                        <DataTrigger Binding="{Binding IsBurstStack}" Value="True">
+                            <Setter TargetName="StackBack1" Property="Visibility" Value="Visible"/>
+                            <Setter TargetName="StackBack2" Property="Visibility" Value="Visible"/>
+                            <Setter TargetName="BurstBadge" Property="Visibility" Value="Visible"/>
+                            <Setter TargetName="BurstToggle" Property="Visibility" Value="Visible"/>
                         </DataTrigger>
                     </DataTemplate.Triggers>
                 </DataTemplate>

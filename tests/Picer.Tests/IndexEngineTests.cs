@@ -93,6 +93,42 @@ public sealed class IndexEngineTests : IDisposable
     }
 
     [Fact]
+    public void BurstGroups_UseCaptureTimeAndVisualHashesAndRebuildIncrementally()
+    {
+        var engine = CreateEngine();
+        var source = _db!.AddSource(_dataDir);
+        var start = new DateTime(2026, 9, 3, 8, 0, 0, DateTimeKind.Utc);
+        ImageRecord Add(string name, int seconds, long hash)
+        {
+            var path = Path.Combine(_dataDir, name);
+            File.WriteAllBytes(path, [1, 2, 3]);
+            return _db.UpsertImage(new ImageRecord
+            {
+                SourceId = source.Id, Path = path, FileSize = 3, ModifiedUtc = start.AddSeconds(seconds),
+                TakenUtc = start.AddSeconds(seconds), Width = 1920, Height = 1080, Camera = "Camera A",
+                AverageHash = hash, DifferenceHash = 0, Status = ImageStatus.Active, IndexedUtc = DateTime.UtcNow
+            });
+        }
+
+        var first = Add("burst-1.jpg", 0, 0x1110);
+        var second = Add("burst-2.jpg", 2, 0x1111);
+        var separate = Add("separate.jpg", 10, 0x7777);
+        var service = new BurstGroupService(_db);
+
+        Assert.True(service.NeedsRebuild(source.Id));
+        Assert.Equal(1, service.RebuildSource(source.Id));
+        Assert.False(service.NeedsRebuild(source.Id));
+        var group = Assert.Single(service.GetGroupsForImages([first.Id, second.Id, separate.Id]).Values);
+        Assert.Equal([first.Id, second.Id], group.ImageIds);
+
+        var third = Add("burst-3.jpg", 3, 0x1113);
+        Assert.True(service.NeedsRebuild(source.Id));
+        Assert.Equal(1, service.RebuildSource(source.Id));
+        group = Assert.Single(service.GetGroupsForImages([first.Id, second.Id, third.Id]).Values);
+        Assert.Equal([first.Id, second.Id, third.Id], group.ImageIds);
+    }
+
+    [Fact]
     public async Task IndexSource_Incremental_ReindexesChangedFile()
     {
         AddFile("photos/a.jpg", 0x41, 100);

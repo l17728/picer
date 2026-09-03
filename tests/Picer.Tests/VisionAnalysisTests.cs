@@ -43,7 +43,7 @@ public sealed class VisionAnalysisTests : IDisposable
         connection.Open();
         using var version = connection.CreateCommand();
         version.CommandText = "PRAGMA user_version";
-        Assert.Equal(22L, (long)version.ExecuteScalar()!);
+        Assert.Equal(23L, (long)version.ExecuteScalar()!);
 
         using var tables = connection.CreateCommand();
         tables.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('vision_analyses','detected_faces')";
@@ -130,6 +130,21 @@ public sealed class VisionAnalysisTests : IDisposable
 
         Assert.Equal(wife.Id, people.FindByName("老婆")!.Id);
         Assert.Equal([_image.Id], people.GetImageIds(wife.Id));
+    }
+
+    [Fact]
+    public async Task People_CreateAndAssignFaces_IsAtomicAndConfirmsEveryFace()
+    {
+        var repository = new VisionAnalysisRepository(_database);
+        using var analysis = new VisionAnalysisService(repository, new SameIdentityAnalyzer());
+        await analysis.AnalyzeAsync([_image]);
+        var faceIds = repository.GetFaceIds(_image.Id);
+        var people = new PeopleService(_database);
+
+        var person = people.CreateAndAssignFaces("新人物", faceIds);
+
+        Assert.Equal(faceIds.Order(), repository.GetConfirmedFaces(person.Id).Select(face => face.FaceId).Order());
+        Assert.Equal(faceIds.Count, people.GetAll().Single(value => value.Id == person.Id).ConfirmedFaceCount);
     }
 
     [Fact]

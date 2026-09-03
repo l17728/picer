@@ -139,6 +139,9 @@ public sealed class IndexEngine
         {
             tx?.Dispose();
         }
+        progress?.Report(new IndexProgress("更新连拍照片组", 1, 0, source.Path));
+        var burstGroups = new BurstGroupService(_db).RebuildSource(dbSource.Id);
+        progress?.Report(new IndexProgress("更新连拍照片组", 1, 1, $"{burstGroups} 组"));
         AppLogger.Info($"索引完成: 扫描 {files.Count}, 新增 {indexed}, 跳过 {skipped}, 缺失 {gone.Count}");
         return new IndexResult(files.Count, indexed, skipped, gone.Count);
     }

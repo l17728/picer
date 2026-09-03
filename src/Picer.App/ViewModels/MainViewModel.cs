@@ -46,6 +46,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private string? _resolvedGeoQuery;
     private readonly DirectoryClassificationPreferences _directoryClassification = new(AppPaths.DirectoryClassificationSettingsPath);
     private GeoBounds? _resolvedGeoBounds;
+    private readonly List<ImageRecord> _searchLoadedRecords = [];
 
     public ObservableCollection<SourceNodeViewModel> Sources { get; } = new();
     public ObservableCollection<ImageItemViewModel> Images { get; } = new();
@@ -174,7 +175,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty] private string? _selectedCameraBrand;
     [ObservableProperty] private bool _includeMissing;
 
-    public int TotalCount => Images.Count;
+    public int TotalCount => Images.Sum(image => image.BurstCount);
 
     public void ReplaceIndexEngine(IndexEngine engine)
     {
@@ -184,7 +185,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     public string ResultsSummary => MatchedCount > TotalCount
         ? $"已加载 {TotalCount} / 共 {MatchedCount} 张"
         : $"共 {MatchedCount} 张";
-    public int DirectoryImageCount => DirectoryImages.Count;
+    public int DirectoryImageCount => DirectoryImages.Sum(image => image.BurstCount);
     public bool IsLibraryEmpty => Sources.FirstOrDefault(source => source.IsAll)?.ImageCount == 0;
     public string ActiveFiltersText
     {
@@ -252,6 +253,33 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _ = Video.LoadAsync();
         _ = EnrichLocationHierarchyAsync();
         PicerEventSource.Log.StartupStage("first-page-ready", Stopwatch.GetElapsedTime(started).TotalMilliseconds);
+        BackfillBurstGroupsAsync().Forget();
+    }
+
+    private async Task BackfillBurstGroupsAsync()
+    {
+        try
+        {
+            var sources = await UiWork.RunDatabaseAsync(() => _db.GetSources().ToArray());
+            var rebuilt = 0;
+            foreach (var source in sources)
+            {
+                var changed = await UiWork.RunDatabaseAsync("BurstGroups.Backfill", () =>
+                {
+                    var service = new BurstGroupService(_db);
+                    return service.NeedsRebuild(source.Id) ? service.RebuildSource(source.Id) : -1;
+                });
+                if (changed >= 0) rebuilt += changed;
+            }
+            if (rebuilt == 0) return;
+            await ApplySearchAndFilterAsync();
+            if (SelectedDirectory is not null) LoadImagesForSelectedDirectory();
+            StatusText = $"连拍照片索引已更新：{rebuilt} 组";
+        }
+        catch (Exception exception)
+        {
+            AppLogger.Error("后台构建连拍照片索引失败", exception);
+        }
     }
 
     partial void OnSelectedSourceChanged(SourceNodeViewModel? value) => LoadImages();
@@ -420,15 +448,18 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _searchCursor = page.NextCursor;
         HasMoreResults = _searchCursor is not null;
         Images.Clear();
+        _searchLoadedRecords.Clear();
+        _searchLoadedRecords.AddRange(page.Items);
         try
         {
             var rendered = 0;
-            foreach (var row in page.Items.Chunk(8))
+            var displayItems = await BuildBurstAwareItemsAsync(page.Items, cts.Token);
+            foreach (var row in displayItems.Chunk(8))
             {
                 cts.Token.ThrowIfCancellationRequested();
                 if (version != _searchVersion) return;
-                foreach (var record in row) Images.Add(new ImageItemViewModel(record));
-                rendered += row.Length;
+                foreach (var item in row) Images.Add(item);
+                rendered += row.Sum(item => item.BurstCount);
                 OnPropertyChanged(nameof(TotalCount));
                 OnPropertyChanged(nameof(ResultsSummary));
                 if (rendered < page.Items.Count)
@@ -548,7 +579,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         if (_searchCursor is null) return;
         var page = await IndexSearchEngine.SearchPagedAsync(_db, BuildSearchFilters(), cursor: _searchCursor);
-        await UiWork.AddInBatchesAsync(page.Items, record => Images.Add(new ImageItemViewModel(record)), batchSize: 8);
+        _searchLoadedRecords.AddRange(page.Items);
+        var rebuilt = await BuildBurstAwareItemsAsync(_searchLoadedRecords, _searchCts?.Token ?? default);
+        Images.Clear();
+        await UiWork.AddInBatchesAsync(rebuilt, Images.Add, batchSize: 8);
         _searchCursor = page.NextCursor;
         HasMoreResults = _searchCursor is not null;
         OnPropertyChanged(nameof(TotalCount));
@@ -557,6 +591,42 @@ public partial class MainViewModel : ObservableObject, IDisposable
     }
 
     private bool CanLoadMore() => HasMoreResults;
+
+    private async Task<IReadOnlyList<ImageItemViewModel>> BuildBurstAwareItemsAsync(
+        IReadOnlyList<ImageRecord> records, CancellationToken cancellationToken)
+    {
+        if (records.Count == 0) return [];
+        var groups = await UiWork.RunDatabaseAsync("BurstGroups.Load",
+            () => new BurstGroupService(_db).GetGroupsForImages(records.Select(record => record.Id)), cancellationToken);
+        var recordsById = records.GroupBy(record => record.Id).ToDictionary(group => group.Key, group => group.First());
+        var groupByImage = groups.Values.SelectMany(group => group.ImageIds.Select(id => (id, group)))
+            .Where(pair => recordsById.ContainsKey(pair.id)).ToDictionary(pair => pair.id, pair => pair.group);
+        var visibleByGroup = records.Where(record => groupByImage.ContainsKey(record.Id))
+            .GroupBy(record => groupByImage[record.Id].Id)
+            .ToDictionary(group => group.Key, group => group.ToArray());
+        var handledGroups = new HashSet<long>();
+        var result = new List<ImageItemViewModel>(records.Count);
+        foreach (var record in records)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!groupByImage.TryGetValue(record.Id, out var group))
+            {
+                result.Add(new ImageItemViewModel(record, cancellationToken));
+                continue;
+            }
+            if (!handledGroups.Add(group.Id)) continue;
+            var visibleMembers = visibleByGroup[group.Id];
+            if (visibleMembers.Length < 2)
+            {
+                result.Add(new ImageItemViewModel(record, cancellationToken));
+                continue;
+            }
+            var stack = new ImageItemViewModel(visibleMembers[0], cancellationToken);
+            stack.ConfigureBurst(visibleMembers, group.StartedUtc, group.EndedUtc);
+            result.Add(stack);
+        }
+        return result;
+    }
 
     [RelayCommand]
     private void ClearFilters()
@@ -1514,11 +1584,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     : records.OrderByDescending(SceneTimeClusterService.EffectiveTime).ThenByDescending(image => image.Id))
                 .ToList();
             var indexedPaths = records.Select(record => record.Path).ToHashSet(StringComparer.OrdinalIgnoreCase);
-            await UiWork.AddInBatchesAsync(records.Where(image => image.Status == ImageStatus.Active),
-                image =>
+            var displayItems = await BuildBurstAwareItemsAsync(
+                records.Where(image => image.Status == ImageStatus.Active).ToArray(), cts.Token);
+            await UiWork.AddInBatchesAsync(displayItems,
+                item =>
                 {
                     if (!IsCurrentLoad()) return;
-                    var item = new ImageItemViewModel(image, cts.Token);
                     item.SetTimelineGranularity(TimelineGranularityIndex);
                     DirectoryImages.Add(item);
                     AddTimelineItem(item);

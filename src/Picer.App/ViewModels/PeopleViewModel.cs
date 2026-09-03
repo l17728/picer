@@ -256,22 +256,24 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
     public async Task CreatePersonWithFacesAsync(string name, IReadOnlyCollection<UnassignedFaceViewModel> faces)
     {
         if (string.IsNullOrWhiteSpace(name)) { StatusText = "请输入人物名称"; return; }
+        var faceIds = faces.Select(face => face.FaceId).Distinct().ToArray();
+        RemoveFacesFromCurrentView(faceIds);
+        StatusText = faceIds.Length == 0 ? "正在创建人物…" : $"正在创建人物并归入 {faceIds.Length} 张人脸…";
         try
         {
-            var faceIds = faces.Select(face => face.FaceId).Distinct().ToArray();
-            var person = await UiWork.RunDatabaseAsync(() =>
-            {
-                var created = _peopleService.Create(name);
-                foreach (var faceId in faceIds) _peopleService.MoveFace(faceId, created.Id);
-                return created;
-            });
-            RemoveFacesFromCurrentView(faceIds);
+            var person = await UiWork.RunDatabaseAsync("People.CreateAndAssignFaces",
+                () => _peopleService.CreateAndAssignFaces(name, faceIds));
             await RefreshPeopleDropdownAsync(person.Id);
             StatusText = faceIds.Length == 0
                 ? $"已创建人物“{person.DisplayName}”"
                 : $"已创建人物“{person.DisplayName}”并归入 {faceIds.Length} 张人脸";
         }
-        catch (Exception exception) { StatusText = $"创建人物失败：{exception.Message}"; }
+        catch (Exception exception)
+        {
+            AppLogger.Error($"创建人物并归类失败：name={name}; faces={string.Join(',', faceIds)}", exception);
+            await RefreshAsync();
+            StatusText = $"创建人物并归类失败，界面已恢复：{exception.Message}";
+        }
     }
 
     [RelayCommand]
