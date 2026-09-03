@@ -96,17 +96,24 @@ public partial class VideoViewModel(VideoRepository repository, VideoIndexServic
         if (targets.Length == 0) { StatusText = "请先选择视频"; return; }
         if (keyframes is null) { StatusText = "FFmpeg尚未安装或路径无效"; return; }
         IsBusy = true;
+        var concurrency = Math.Min(3, Math.Max(2, Environment.ProcessorCount / 2));
         var generated = 0;
         var reused = 0;
         var failed = 0;
         var generatedFrames = 0;
+        var completed = 0;
+        var active = 0;
         var selectedId = SelectedVideo?.Record.Id;
+        using var gate = new SemaphoreSlim(concurrency, concurrency);
+        IProgress<string> progress = new Progress<string>(message => StatusText = message);
         try
         {
-            for (var index = 0; index < targets.Length; index++)
+            async Task ProcessAsync(VideoItemViewModel target)
             {
-                var video = targets[index].Record;
-                StatusText = $"关键帧 {index + 1}/{targets.Length}：正在检查 {Path.GetFileName(video.Path)}；生成 {generated}，复用 {reused}，失败 {failed}";
+                await gate.WaitAsync();
+                var video = target.Record;
+                var running = Interlocked.Increment(ref active);
+                progress.Report($"并行关键帧：完成 {Volatile.Read(ref completed)}/{targets.Length}，正在处理 {running} 个（最多 {concurrency} 个）");
                 try
                 {
                     if (video.DurationSeconds is null || video.Width <= 0 || video.Height <= 0)
@@ -122,23 +129,36 @@ public partial class VideoViewModel(VideoRepository repository, VideoIndexServic
                         }
                     }
                     var cached = await UiWork.RunDatabaseAsync(() => repository.GetKeyframes(video.Id));
-                    if (cached.Count > 0) { reused++; continue; }
-                    StatusText = $"关键帧 {index + 1}/{targets.Length}：正在处理 {Path.GetFileName(video.Path)}；生成 {generated}，复用 {reused}，失败 {failed}";
+                    if (cached.Count > 0)
+                    {
+                        Interlocked.Increment(ref reused);
+                        return;
+                    }
                     var frames = await keyframes.ExtractAsync(video);
                     if (frames.Count == 0) throw new InvalidOperationException("FFmpeg 未能从该视频提取任何画面");
                     await UiWork.RunDatabaseAsync(() => repository.SaveKeyframes(video.Id, frames));
-                    generated++;
-                    generatedFrames += frames.Count;
+                    Interlocked.Increment(ref generated);
+                    Interlocked.Add(ref generatedFrames, frames.Count);
                 }
                 catch (Exception ex)
                 {
-                    failed++;
+                    Interlocked.Increment(ref failed);
                     AppLogger.Error($"关键帧生成失败：{video.Path}", ex);
                 }
+                finally
+                {
+                    Interlocked.Decrement(ref active);
+                    var done = Interlocked.Increment(ref completed);
+                    progress.Report($"并行关键帧：完成 {done}/{targets.Length}；生成 {Volatile.Read(ref generated)}，复用 {Volatile.Read(ref reused)}，失败 {Volatile.Read(ref failed)}");
+                    gate.Release();
+                }
             }
+
+            StatusText = $"正在启动并行关键帧任务（最多同时 {concurrency} 个）…";
+            await Task.WhenAll(targets.Select(ProcessAsync));
             await LoadAsync();
             SelectedVideo = selectedId is null ? null : Videos.FirstOrDefault(item => item.Record.Id == selectedId);
-            StatusText = $"批量关键帧完成：选择 {targets.Length} 个，生成 {generated} 个（{generatedFrames} 帧），复用 {reused} 个，失败 {failed} 个";
+            StatusText = $"并行关键帧完成：选择 {targets.Length} 个，生成 {generated} 个（{generatedFrames} 帧），复用 {reused} 个，失败 {failed} 个；并发数 {concurrency}";
         }
         finally { IsBusy = false; }
     }
