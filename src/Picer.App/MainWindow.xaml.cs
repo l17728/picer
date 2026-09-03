@@ -144,6 +144,12 @@ public partial class MainWindow : Window
             _mainVm.Video.UpdateSelection(grid.SelectedItems.Cast<VideoItemViewModel>());
     }
 
+    private void VideoFaces_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (sender is ListBox list)
+            _mainVm.Video.UpdateVideoFaceSelection(list.SelectedItems.Cast<VideoFaceItemViewModel>());
+    }
+
     private void RejectVideoSuggestedFace_Click(object sender, RoutedEventArgs e)
     {
         if (sender is not FrameworkElement anchor || _mainVm.Video.SelectedVideoFace is not { } face) return;
@@ -152,7 +158,7 @@ public partial class MainWindow : Window
         {
             var target = person;
             var item = new MenuItem { Header = target.DisplayName };
-            item.Click += async (_, _) => await _mainVm.Video.AssignVideoFaceToPersonAsync(face, target);
+            item.Click += async (_, _) => await _mainVm.Video.AssignSelectedVideoFacesToPersonAsync(target);
             menu.Items.Add(item);
         }
         if (menu.Items.Count > 0) menu.Items.Add(new Separator());
@@ -160,7 +166,7 @@ public partial class MainWindow : Window
         create.Click += async (_, _) =>
         {
             var dialog = new Views.CreatePersonWindow { Owner = this };
-            if (dialog.ShowDialog() == true) await _mainVm.Video.CreatePersonAndAssignVideoFaceAsync(face, dialog.PersonName);
+            if (dialog.ShowDialog() == true) await _mainVm.Video.CreatePersonAndAssignSelectedVideoFacesAsync(dialog.PersonName);
         };
         menu.Items.Add(create);
         var pending = new MenuItem { Header = "否定推荐，保留待确认" };
@@ -169,6 +175,23 @@ public partial class MainWindow : Window
         menu.PlacementTarget = anchor;
         menu.IsOpen = true;
         e.Handled = true;
+    }
+
+    private async void ConfirmVideoSuggestedFace_Click(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is not VideoFaceItemViewModel face) return;
+        _mainVm.Video.SelectedVideoFace = face;
+        _mainVm.Video.UpdateVideoFaceSelection([face]);
+        await _mainVm.Video.ConfirmVideoFaceCommand.ExecuteAsync(null);
+        e.Handled = true;
+    }
+
+    private void RejectVideoSuggestedCard_Click(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is not VideoFaceItemViewModel face) return;
+        _mainVm.Video.SelectedVideoFace = face;
+        _mainVm.Video.UpdateVideoFaceSelection([face]);
+        RejectVideoSuggestedFace_Click(sender, e);
     }
 
     private async void PeopleFace_DoubleClick(object sender, MouseButtonEventArgs e)

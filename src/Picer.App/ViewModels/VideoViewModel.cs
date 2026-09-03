@@ -27,6 +27,7 @@ public partial class VideoViewModel(VideoRepository repository, VideoIndexServic
     public ObservableCollection<PersonSummary> VideoPeople { get; } = new();
     private Func<Task>? _identityChanged;
     private VideoItemViewModel[] _selectedVideos = [];
+    private VideoFaceItemViewModel[] _selectedVideoFaces = [];
     [ObservableProperty] private VideoItemViewModel? _selectedVideo;
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(ScanCommand))]
@@ -62,6 +63,7 @@ public partial class VideoViewModel(VideoRepository repository, VideoIndexServic
     public Task ApplySearchAsync(string? query) => LoadAsync(query);
 
     public void UpdateSelection(IEnumerable<VideoItemViewModel> videos) => _selectedVideos = videos.Distinct().ToArray();
+    public void UpdateVideoFaceSelection(IEnumerable<VideoFaceItemViewModel> faces) => _selectedVideoFaces = faces.Distinct().ToArray();
 
     partial void OnSelectedVideoChanged(VideoItemViewModel? value)
     {
@@ -133,36 +135,60 @@ public partial class VideoViewModel(VideoRepository repository, VideoIndexServic
     [RelayCommand]
     private async Task ConfirmVideoFaceAsync()
     {
-        if (SelectedVideoFace is null || faceTimeline is null) { StatusText = "请先选择一张视频人脸"; return; }
-        var personId = SelectedVideoFace.Record.SuggestedPersonId ?? SelectedVideoPerson?.Id;
-        if (personId is null) { StatusText = "该人脸没有推荐人物，请先选择正确人物"; return; }
-        await SaveVideoFaceIdentityAsync(() => faceTimeline.Confirm(SelectedVideoFace.Record.FaceId, personId.Value), "视频人脸身份已确认");
+        var faces = GetSelectedVideoFaces();
+        if (faces.Length == 0 || faceTimeline is null) { StatusText = "请先选择视频人脸"; return; }
+        var confirmable = faces.Where(face => face.Record.SuggestedPersonId is not null).ToArray();
+        if (confirmable.Length == 0) { StatusText = "所选人脸没有推荐人物，请先选择正确人物"; return; }
+        await SaveVideoFaceIdentitiesAsync(() =>
+        {
+            foreach (var face in confirmable)
+                faceTimeline.Confirm(face.Record.FaceId, face.Record.SuggestedPersonId!.Value);
+        }, $"已确认 {confirmable.Length} 张视频人脸");
     }
 
     [RelayCommand]
     private async Task AssignVideoFaceAsync()
     {
-        if (SelectedVideoFace is null || SelectedVideoPerson is null || faceTimeline is null) { StatusText = "请选择视频人脸和正确人物"; return; }
-        if (SelectedVideoFace.Record.SuggestedPersonId is long suggested && suggested != SelectedVideoPerson.Id)
-            await UiWork.RunDatabaseAsync(() => faceTimeline.RejectSuggestion(SelectedVideoFace.Record.FaceId, suggested));
-        await SaveVideoFaceIdentityAsync(() => faceTimeline.Confirm(SelectedVideoFace.Record.FaceId, SelectedVideoPerson.Id), $"已归入“{SelectedVideoPerson.DisplayName}”");
+        var faces = GetSelectedVideoFaces();
+        if (faces.Length == 0 || SelectedVideoPerson is null || faceTimeline is null) { StatusText = "请选择视频人脸和正确人物"; return; }
+        var person = SelectedVideoPerson;
+        await SaveVideoFaceIdentitiesAsync(() =>
+        {
+            foreach (var face in faces)
+            {
+                if (face.Record.SuggestedPersonId is long suggested && suggested != person.Id)
+                    faceTimeline.RejectSuggestion(face.Record.FaceId, suggested);
+                faceTimeline.Confirm(face.Record.FaceId, person.Id);
+            }
+        }, $"已将 {faces.Length} 张视频人脸归入“{person.DisplayName}”");
     }
 
     [RelayCommand]
     private async Task RejectVideoFaceSuggestionAsync()
     {
-        if (SelectedVideoFace?.Record.SuggestedPersonId is not long personId || faceTimeline is null) { StatusText = "所选人脸没有推荐人物"; return; }
-        await SaveVideoFaceIdentityAsync(() => faceTimeline.RejectSuggestion(SelectedVideoFace.Record.FaceId, personId), "已否定推荐，请选择正确人物");
+        var faces = GetSelectedVideoFaces().Where(face => face.Record.SuggestedPersonId is not null).ToArray();
+        if (faces.Length == 0 || faceTimeline is null) { StatusText = "所选人脸没有推荐人物"; return; }
+        await SaveVideoFaceIdentitiesAsync(() =>
+        {
+            foreach (var face in faces) faceTimeline.RejectSuggestion(face.Record.FaceId, face.Record.SuggestedPersonId!.Value);
+        }, $"已否定 {faces.Length} 张人脸的推荐，请选择正确人物");
     }
 
     [RelayCommand]
     private async Task IgnoreVideoFaceAsync()
     {
-        if (SelectedVideoFace is null || faceTimeline is null) { StatusText = "请先选择一张视频人脸"; return; }
-        await SaveVideoFaceIdentityAsync(() => faceTimeline.MarkIgnored(SelectedVideoFace.Record.FaceId), "已标记为不分类");
+        var faces = GetSelectedVideoFaces();
+        if (faces.Length == 0 || faceTimeline is null) { StatusText = "请先选择视频人脸"; return; }
+        await SaveVideoFaceIdentitiesAsync(() =>
+        {
+            foreach (var face in faces) faceTimeline.MarkIgnored(face.Record.FaceId);
+        }, $"已将 {faces.Length} 张视频人脸标记为不分类");
     }
 
-    private async Task SaveVideoFaceIdentityAsync(Action save, string message)
+    private VideoFaceItemViewModel[] GetSelectedVideoFaces() =>
+        _selectedVideoFaces.Length > 0 ? _selectedVideoFaces : SelectedVideoFace is null ? [] : [SelectedVideoFace];
+
+    private async Task SaveVideoFaceIdentitiesAsync(Action save, string message)
     {
         var selectedFaceId = SelectedVideoFace?.Record.FaceId;
         await UiWork.RunDatabaseAsync(save);
@@ -179,12 +205,30 @@ public partial class VideoViewModel(VideoRepository repository, VideoIndexServic
         await AssignVideoFaceAsync();
     }
 
+    public async Task AssignSelectedVideoFacesToPersonAsync(PersonSummary person)
+    {
+        SelectedVideoPerson = person;
+        await AssignVideoFaceAsync();
+    }
+
     public async Task CreatePersonAndAssignVideoFaceAsync(VideoFaceItemViewModel face, string name)
     {
         if (peopleService is null || faceTimeline is null) return;
         var person = await UiWork.RunDatabaseAsync(() => peopleService.Create(name));
         SelectedVideoFace = face;
-        await SaveVideoFaceIdentityAsync(() => faceTimeline.Confirm(face.Record.FaceId, person.Id), $"已创建并归入“{person.DisplayName}”");
+        await SaveVideoFaceIdentitiesAsync(() => faceTimeline.Confirm(face.Record.FaceId, person.Id), $"已创建并归入“{person.DisplayName}”");
+    }
+
+
+    public async Task CreatePersonAndAssignSelectedVideoFacesAsync(string name)
+    {
+        var faces = GetSelectedVideoFaces();
+        if (faces.Length == 0 || peopleService is null || faceTimeline is null) { StatusText = "请先选择视频人脸"; return; }
+        var person = await UiWork.RunDatabaseAsync(() => peopleService.Create(name));
+        await SaveVideoFaceIdentitiesAsync(() =>
+        {
+            foreach (var face in faces) faceTimeline.Confirm(face.Record.FaceId, person.Id);
+        }, $"已创建“{person.DisplayName}”并归入 {faces.Length} 张视频人脸");
     }
 
     [RelayCommand(CanExecute = nameof(CanStartOperation))]

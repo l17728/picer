@@ -546,7 +546,7 @@
                         <TabItem Header="人物标注">
                             <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="210"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
                                 <ListBox ItemsSource="{Binding VideoFaceGroups}" SelectedItem="{Binding SelectedVideoFaceGroup}" DisplayMemberPath="DisplayName" Margin="0,0,8,0"/>
-                                <Grid Grid.Column="1"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                                <Grid Grid.Column="1"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
                                     <DockPanel Margin="0,0,0,6">
                                         <Button DockPanel.Dock="Right" Content="不分类" Command="{Binding IgnoreVideoFaceCommand}" Padding="10,4" Margin="5,0,0,0"/>
                                         <Button DockPanel.Dock="Right" Content="否" Click="RejectVideoSuggestedFace_Click" Padding="10,4" Margin="5,0,0,0"
@@ -555,11 +555,26 @@
                                         <Button DockPanel.Dock="Right" Content="归入选择人物" Command="{Binding AssignVideoFaceCommand}" Padding="10,4" Margin="5,0,0,0"/>
                                         <ComboBox ItemsSource="{Binding VideoPeople}" SelectedItem="{Binding SelectedVideoPerson}" DisplayMemberPath="DisplayName" MinWidth="150"/>
                                     </DockPanel>
-                                    <ListBox Grid.Row="1" ItemsSource="{Binding FilteredVideoFaces}" SelectedItem="{Binding SelectedVideoFace}" ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                                    <TextBlock Grid.Row="1" Margin="2,2,2,6" Foreground="#8A4B08"
+                                               Text="橙色“待确认”卡片可直接点 是/不是；Ctrl 或 Shift 可多选后批量操作。"
+                                               TextWrapping="Wrap" IsHitTestVisible="False"/>
+                                    <ListBox x:Name="VideoFacesList" Grid.Row="2" ItemsSource="{Binding FilteredVideoFaces}" SelectedItem="{Binding SelectedVideoFace}"
+                                             SelectionMode="Extended" SelectionChanged="VideoFaces_SelectionChanged"
+                                             AutomationProperties.Name="视频人物人脸列表" AutomationProperties.HelpText="支持 Ctrl 或 Shift 多选后批量确认与归类"
+                                             ScrollViewer.HorizontalScrollBarVisibility="Disabled">
                                         <ListBox.ItemsPanel><ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate></ListBox.ItemsPanel>
-                                        <ListBox.ItemTemplate><DataTemplate><Border Width="190" Margin="5" BorderBrush="#CCC" BorderThickness="1" Padding="4"><StackPanel>
-                                            <Image Source="{Binding Thumbnail}" Height="110" Stretch="Uniform"/>
-                                            <TextBlock Text="{Binding Identity}" TextWrapping="Wrap" Margin="0,4,0,0"/>
+                                        <ListBox.ItemTemplate><DataTemplate><Border Width="190" Margin="5" BorderThickness="2" Padding="4">
+                                            <Border.Style><Style TargetType="Border"><Setter Property="BorderBrush" Value="#BCC6D2"/><Setter Property="Background" Value="#FFFFFF"/>
+                                                <Style.Triggers><DataTrigger Binding="{Binding HasSuggestion}" Value="True"><Setter Property="BorderBrush" Value="#E58A00"/><Setter Property="Background" Value="#FFF7E6"/><Setter Property="ToolTip" Value="系统已推荐人物，等待人工确认"/></DataTrigger></Style.Triggers>
+                                            </Style></Border.Style><StackPanel>
+                                            <Grid><Image Source="{Binding Thumbnail}" Height="110" Stretch="Uniform"/>
+                                                <Border HorizontalAlignment="Left" VerticalAlignment="Top" Background="#E58A00" Padding="5,2" Visibility="{Binding HasSuggestion, Converter={StaticResource BoolToVis}}"><TextBlock Text="待确认" Foreground="White" FontWeight="SemiBold"/></Border>
+                                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="3" Visibility="{Binding HasSuggestion, Converter={StaticResource BoolToVis}}">
+                                                    <Button Content="是" Padding="8,2" Margin="0,0,3,0" Click="ConfirmVideoSuggestedFace_Click" ToolTip="确认推荐人物正确"/>
+                                                    <Button Content="不是" Padding="8,2" Click="RejectVideoSuggestedCard_Click" ToolTip="否定推荐并选择正确人物"/>
+                                                </StackPanel>
+                                            </Grid>
+                                            <TextBlock Text="{Binding Identity}" TextWrapping="Wrap" Margin="0,4,0,0" FontWeight="SemiBold"/>
                                             <TextBlock Text="{Binding Timestamp}" Foreground="#666"/>
                                         </StackPanel></Border></DataTemplate></ListBox.ItemTemplate>
                                     </ListBox>
