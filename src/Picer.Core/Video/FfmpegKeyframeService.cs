@@ -54,16 +54,20 @@ public sealed class FfmpegKeyframeService(string ffmpegPath, string cacheRoot)
             File.Delete(stale);
         var pattern = Path.Combine(directory, "scene-%05d.jpg");
         var run = await RunAsync(ffmpegPath, ["-hide_banner", "-loglevel", "info", "-i", video.Path,
-            "-vf", "select=gt(scene\\,0.35),showinfo,scale=1280:-2,format=yuvj420p", "-vsync", "vfr",
+            "-vf", "select=gt(scene\\,0.35),showinfo,scale=1280:-2,format=yuvj420p", "-fps_mode", "vfr",
             "-c:v", "mjpeg", "-strict", "unofficial", "-q:v", "3", pattern], cancellationToken, throwOnError: false);
         var files = Directory.EnumerateFiles(directory, "scene-*.jpg").Order().Take(200).ToArray();
         if (files.Length == 0)
         {
             pattern = Path.Combine(directory, "interval-%05d.jpg");
-            await RunAsync(ffmpegPath, ["-hide_banner", "-loglevel", "error", "-i", video.Path,
-                "-vf", "fps=1/10,scale=1280:-2,format=yuvj420p", "-frames:v", "200",
-                "-c:v", "mjpeg", "-strict", "unofficial", "-q:v", "3", pattern], cancellationToken);
+            var fallback = await RunAsync(ffmpegPath, ["-hide_banner", "-loglevel", "error", "-i", video.Path,
+                "-vf", "select=isnan(prev_selected_t)+gte(t-prev_selected_t\\,10),scale=1280:-2,format=yuvj420p",
+                "-fps_mode", "vfr", "-frames:v", "200", "-c:v", "mjpeg", "-strict", "unofficial", "-q:v", "3", pattern],
+                cancellationToken, throwOnError: false);
             files = Directory.EnumerateFiles(directory, "interval-*.jpg").Order().ToArray();
+            if (files.Length == 0)
+                throw new InvalidOperationException("FFmpeg 未生成关键帧。场景检测：" + CompactDiagnostic(run.StdErr) +
+                                                    "；定时抽帧：" + CompactDiagnostic(fallback.StdErr));
             return Deduplicate(files.Select((path, index) => new VideoKeyframe(index * 10d, path)));
         }
         var timestamps = run.StdErr.Split('\n').Select(line =>
@@ -74,6 +78,12 @@ public sealed class FfmpegKeyframeService(string ffmpegPath, string cacheRoot)
             return double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var time) ? time : null;
         }).Where(value => value.HasValue).Select(value => value!.Value).ToArray();
         return Deduplicate(files.Select((path, index) => new VideoKeyframe(index < timestamps.Length ? timestamps[index] : index, path)));
+    }
+
+    private static string CompactDiagnostic(string value)
+    {
+        var lines = value.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        return string.Join(" | ", lines.TakeLast(4)).Trim() is { Length: > 0 } message ? message : "没有错误输出";
     }
 
     private static IReadOnlyList<VideoKeyframe> Deduplicate(IEnumerable<VideoKeyframe> frames)
