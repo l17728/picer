@@ -7,7 +7,7 @@ namespace Picer.Core.Data;
 
 public sealed class PicerDatabase : IDisposable
 {
-    public const int CurrentSchemaVersion = 25;
+    public const int CurrentSchemaVersion = 26;
     private readonly SqliteConnection _conn;
     private readonly string _connectionString;
 
@@ -111,6 +111,16 @@ public sealed class PicerDatabase : IDisposable
                 filename, camera, gps, width, height, file_size
             );
 
+            CREATE TABLE IF NOT EXISTS media_text_documents(
+                media_id INTEGER PRIMARY KEY,
+                media_type TEXT NOT NULL,
+                content TEXT NOT NULL DEFAULT '',
+                fingerprint TEXT NOT NULL,
+                source_version TEXT NOT NULL,
+                updated_utc TEXT NOT NULL
+            );
+            CREATE VIRTUAL TABLE IF NOT EXISTS media_text_fts USING fts5(content);
+
             DROP TRIGGER IF EXISTS images_ai;
             DROP TRIGGER IF EXISTS images_ad;
             DROP TRIGGER IF EXISTS images_au;
@@ -122,6 +132,8 @@ public sealed class PicerDatabase : IDisposable
 
             CREATE TRIGGER images_ad AFTER DELETE ON images BEGIN
                 DELETE FROM images_fts WHERE rowid = old.id;
+                DELETE FROM media_text_fts WHERE rowid = old.id;
+                DELETE FROM media_text_documents WHERE media_id = old.id;
             END;
 
             CREATE TRIGGER images_au AFTER UPDATE ON images BEGIN
@@ -694,6 +706,23 @@ public sealed class PicerDatabase : IDisposable
                 PRAGMA user_version = 25;
                 """;
             trainingMigration.ExecuteNonQuery();
+        }
+        if (schemaVersion < 26)
+        {
+            using var textMigration = _conn.CreateCommand();
+            textMigration.CommandText = """
+                CREATE TABLE IF NOT EXISTS media_text_documents(
+                    media_id INTEGER PRIMARY KEY,
+                    media_type TEXT NOT NULL,
+                    content TEXT NOT NULL DEFAULT '',
+                    fingerprint TEXT NOT NULL,
+                    source_version TEXT NOT NULL,
+                    updated_utc TEXT NOT NULL
+                );
+                CREATE VIRTUAL TABLE IF NOT EXISTS media_text_fts USING fts5(content);
+                PRAGMA user_version = 26;
+                """;
+            textMigration.ExecuteNonQuery();
         }
     }
 

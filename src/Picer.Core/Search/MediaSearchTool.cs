@@ -1,5 +1,6 @@
 using Picer.Core.Data;
 using Picer.Core.Models;
+using Picer.Core.Video;
 
 namespace Picer.Core.Search;
 
@@ -27,7 +28,7 @@ public sealed record MediaSearchResult(IReadOnlyList<MediaSearchHit> Items, int 
     MediaSearchRequest AppliedRequest, IReadOnlyList<string> Warnings);
 
 /// <summary>Read-only, validated search boundary for AI and voice callers.</summary>
-public sealed class MediaSearchTool(PicerDatabase database)
+public sealed class MediaSearchTool(PicerDatabase database, VideoRepository? videoRepository = null)
 {
     public MediaSearchResult Execute(MediaSearchRequest request)
     {
@@ -57,8 +58,7 @@ public sealed class MediaSearchTool(PicerDatabase database)
         else
             foreach (var term in terms)
             {
-                filters.Query = term;
-                candidateSets.Add(IndexSearchEngine.Search(database, filters));
+                candidateSets.Add(IndexSearchEngine.Search(database, CloneFilters(filters, term, null)));
             }
         var photos = candidateSets.SelectMany(value => value).DistinctBy(image => image.Id);
         if (people.Length > 0)
@@ -66,15 +66,24 @@ public sealed class MediaSearchTool(PicerDatabase database)
             var allowed = new HashSet<long>();
             foreach (var personId in people)
             {
-                filters.PersonId = personId;
-                foreach (var image in IndexSearchEngine.Search(database, filters)) allowed.Add(image.Id);
+                foreach (var image in IndexSearchEngine.Search(database, CloneFilters(filters, "", personId))) allowed.Add(image.Id);
             }
             photos = photos.Where(image => allowed.Contains(image.Id));
         }
-        var hits = photos.Take(request.Limit).Select(image => new MediaSearchHit(image.Id, image.Path,
+        var photoHits = request.MediaType == MediaTypeFilter.Video ? [] : photos.Take(request.Limit).Select(image => new MediaSearchHit(image.Id, image.Path,
             MediaTypeFilter.Photo, image.TakenUtc, null, terms.Length == 0 ? [] : ["text"])).ToArray();
-        if (request.MediaType == MediaTypeFilter.Video)
-            hits = [];
+        var videoHits = Array.Empty<MediaSearchHit>();
+        if (request.MediaType is MediaTypeFilter.Video or MediaTypeFilter.All && videoRepository is not null)
+        {
+            IEnumerable<VideoRecord> videos = terms.Length == 0 ? videoRepository.GetAll() : terms.SelectMany(videoRepository.Search).DistinctBy(v => v.Id);
+            videos = videos.Where(v => request.IncludeMissing || v.Status == "active");
+            if (request.StartDate is not null) videos = videos.Where(v => v.TakenUtc is null || v.TakenUtc >= request.StartDate);
+            if (request.EndDate is not null) videos = videos.Where(v => v.TakenUtc is null || v.TakenUtc <= request.EndDate);
+            if (request.TimeOfDay != TimeOfDayFilter.Any) videos = videos.Where(v => v.TakenUtc is not null &&
+                (request.TimeOfDay == TimeOfDayFilter.Day ? v.TakenUtc.Value.ToLocalTime().Hour is >= 6 and < 18 : v.TakenUtc.Value.ToLocalTime().Hour is < 6 or >= 18));
+            videoHits = videos.Take(request.Limit).Select(v => new MediaSearchHit(v.Id, v.Path, MediaTypeFilter.Video, v.TakenUtc, null, terms.Length == 0 ? [] : ["text"])).ToArray();
+        }
+        var hits = request.MediaType == MediaTypeFilter.Video ? videoHits : request.MediaType == MediaTypeFilter.All ? photoHits.Concat(videoHits).Take(request.Limit).ToArray() : photoHits;
         return new(hits, hits.Length, request with { Terms = terms }, warnings);
     }
 
@@ -87,5 +96,18 @@ public sealed class MediaSearchTool(PicerDatabase database)
             throw new ArgumentException("开始时间不能晚于结束时间。", nameof(request));
         if (request.PersonIds?.Any(id => id <= 0) == true) throw new ArgumentException("人物 ID 必须为正数。", nameof(request));
         if (request.TagIds?.Any(id => id <= 0) == true) throw new ArgumentException("标签 ID 必须为正数。", nameof(request));
+    }
+
+    private static SearchFilters CloneFilters(SearchFilters source, string query, long? personId)
+    {
+        return new SearchFilters
+        {
+            Query = query, SourceId = source.SourceId, IncludeMissing = source.IncludeMissing,
+            TakenAfter = source.TakenAfter, TakenBefore = source.TakenBefore, TimeOfDay = source.TimeOfDay,
+            MinWidth = source.MinWidth, MaxWidth = source.MaxWidth, MinHeight = source.MinHeight, MaxHeight = source.MaxHeight,
+            MinFileSize = source.MinFileSize, MaxFileSize = source.MaxFileSize, CameraBrand = source.CameraBrand,
+            TagId = source.TagId, GeoBounds = source.GeoBounds, PersonId = personId,
+            VisualConceptIds = source.VisualConceptIds, SortBy = source.SortBy, SortDir = source.SortDir
+        };
     }
 }

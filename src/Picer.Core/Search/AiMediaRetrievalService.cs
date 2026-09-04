@@ -56,16 +56,33 @@ public sealed class AiMediaRetrievalService(PicerDatabase database, PeopleServic
         baseFilter.TimeOfDay = dayPart switch { DayPart.Day => TimeOfDayFilter.Day, DayPart.Night => TimeOfDayFilter.Night, _ => TimeOfDayFilter.Any };
         var searchTerms = plan.Keywords
             .Where(term => !IsDayPartToken(term))
-            .Concat(bounds is null && !string.IsNullOrWhiteSpace(plan.Location) ? [plan.Location!] : [])
+            // Keep the literal location as a text fallback even when geocoding
+            // returned bounds; older analyses may have place names but no GPS.
+            .Concat(!string.IsNullOrWhiteSpace(plan.Location) ? [plan.Location!] : [])
             .ToArray();
-        if (searchTerms.Length == 0)
-            foreach (var image in IndexSearchEngine.Search(database, baseFilter).Take(100)) photoCandidates[image.Id] = image;
-        else
-            foreach (var term in searchTerms)
+        var toolResult = new MediaSearchTool(database, videos).Execute(new MediaSearchRequest(
+            MediaTypeFilter.Photo, mention is null ? null : [mention.Id], bounds, start, end,
+            baseFilter.TimeOfDay, Terms: searchTerms, IncludeMissing: false, Limit: 200,
+            SortDirection: SortDirection.Descending));
+        foreach (var hit in toolResult.Items)
+        {
+            var image = database.GetImage(hit.Id);
+            if (image is not null) photoCandidates[image.Id] = image;
+        }
+        if (bounds is not null && !string.IsNullOrWhiteSpace(plan.Location))
+        {
+            // Preserve recall for legacy descriptions that contain a place name
+            // but have no GPS; the second pass is still bounded by the FTS terms.
+            var textFallback = new MediaSearchTool(database).Execute(new MediaSearchRequest(
+                MediaTypeFilter.Photo, mention is null ? null : [mention.Id], null, start, end,
+                baseFilter.TimeOfDay, Terms: [plan.Location!], IncludeMissing: false, Limit: 200,
+                SortDirection: SortDirection.Descending));
+            foreach (var hit in textFallback.Items)
             {
-                var filter = Clone(baseFilter); filter.Query = term;
-                foreach (var image in IndexSearchEngine.Search(database, filter).Take(100)) photoCandidates[image.Id] = image;
+                var image = database.GetImage(hit.Id);
+                if (image is not null) photoCandidates[image.Id] = image;
             }
+        }
 
         progress?.Report(("检索视频索引", 45));
         var videoCandidates = includeVideos ? RetrieveVideos(plan, mention?.Id, start, end).Take(50).ToArray() : [];

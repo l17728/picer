@@ -349,7 +349,8 @@ public static class IndexSearchEngine
                         WHERE it.image_id=t.id AND tag.name LIKE $cloudQuery)
              OR EXISTS (SELECT 1 FROM scene_group_descriptions sg, json_each(sg.image_ids_json) member
                         WHERE member.value=t.id AND sg.state='accepted'
-                          AND (sg.scene_name LIKE $cloudQuery OR sg.summary LIKE $cloudQuery OR sg.search_terms_json LIKE $cloudQuery)))
+                          AND (sg.scene_name LIKE $cloudQuery OR sg.summary LIKE $cloudQuery OR sg.search_terms_json LIKE $cloudQuery))
+             OR t.id IN (SELECT rowid FROM media_text_fts WHERE media_text_fts MATCH $ftsQuery))
             """);
         parameters.Add(("ftsQuery", BuildFtsQuery(query)));
         parameters.Add(("cloudQuery", "%" + query.Trim() + "%"));

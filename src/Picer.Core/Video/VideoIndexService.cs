@@ -1,5 +1,6 @@
 using Picer.Core.Data;
 using Picer.Core.Vision;
+using Picer.Core.Search;
 
 namespace Picer.Core.Video;
 
@@ -16,6 +17,7 @@ public static class VideoFormats
 
 public sealed class VideoRepository(PicerDatabase database)
 {
+    private readonly MediaTextIndexRepository _textIndex = new(database);
     public VideoRecord Upsert(long sourceId, string path)
     {
         var info = new FileInfo(path);
@@ -176,6 +178,9 @@ public sealed class VideoRepository(PicerDatabase database)
             VALUES($video,$provider,$model,$prompt,$size,$modified,$summary,$json,$input,$output,$cost,$now)
             ON CONFLICT(video_id) DO UPDATE SET provider=excluded.provider,model_version=excluded.model_version,prompt_version=excluded.prompt_version,source_file_size=excluded.source_file_size,source_modified_utc=excluded.source_modified_utc,summary=excluded.summary,result_json=excluded.result_json,input_tokens=excluded.input_tokens,output_tokens=excluded.output_tokens,estimated_cost_yuan=excluded.estimated_cost_yuan,created_utc=excluded.created_utc
             """);command.Parameters.AddWithValue("$video",videoId);command.Parameters.AddWithValue("$provider",analyzer.Provider);command.Parameters.AddWithValue("$model",analyzer.ModelVersion);command.Parameters.AddWithValue("$prompt",analyzer.PromptVersion);command.Parameters.AddWithValue("$size",video.FileSize);command.Parameters.AddWithValue("$modified",video.ModifiedUtc.ToString("o"));command.Parameters.AddWithValue("$summary",result.Summary);command.Parameters.AddWithValue("$json",System.Text.Json.JsonSerializer.Serialize(result));command.Parameters.AddWithValue("$input",result.Usage?.InputTokens??0);command.Parameters.AddWithValue("$output",result.Usage?.OutputTokens??0);command.Parameters.AddWithValue("$cost",result.Usage?.EstimatedCostYuan??0);command.Parameters.AddWithValue("$now",DateTime.UtcNow.ToString("o"));command.ExecuteNonQuery();
+        _textIndex.UpsertVideo(video, [video.Path, video.Gps, video.TakenUtc?.ToString("O"), result.Summary,
+            .. (result.Scenes ?? []), .. (result.Activities ?? []), .. (result.Objects ?? []), .. (result.SearchTerms ?? [])],
+            $"cloud:{analyzer.Provider}:{analyzer.ModelVersion}:{analyzer.PromptVersion}");
     }
     public string? GetSummary(long videoId){using var command=database.Command("SELECT summary FROM video_summaries WHERE video_id=$video");command.Parameters.AddWithValue("$video",videoId);return command.ExecuteScalar() as string;}
 }

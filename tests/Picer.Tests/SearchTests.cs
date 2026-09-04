@@ -127,6 +127,22 @@ public sealed class SearchTests : IDisposable
     }
 
     [Fact]
+    public async Task Search_UsesIncrementalMediaTextIndex()
+    {
+        AddFile("photos/unknown.jpg", 0x41, 100);
+        _db = new PicerDatabase(Path.Combine(_dataDir, "test.db"));
+        var engine = new IndexEngine(_db, _storage = new DiskBackedStorageProvider(),
+            _thumbService = new ThumbnailService(Path.Combine(_dataDir, "thumbs")));
+        await engine.IndexSourceAsync(new SourceFolder { Id = 1, Path = Path.GetFullPath(_dataDir) });
+        var image = _db.GetImages(1).Single();
+        new MediaTextIndexRepository(_db).UpsertImage(image, ["上海 外滩 红色裙子", "登山"], "test:v1");
+
+        var result = IndexSearchEngine.Search(_db, new SearchFilters { Query = "外滩" });
+        Assert.Single(result);
+        Assert.Equal(image.Id, result[0].Id);
+    }
+
+    [Fact]
     public async Task Search_ExcludesMissingWhenFlagSet()
     {
         AddFile("photos/a.jpg", 0x41, 100);

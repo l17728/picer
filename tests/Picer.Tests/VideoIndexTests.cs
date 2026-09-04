@@ -44,7 +44,7 @@ public sealed class VideoIndexTests : IDisposable
         using var connection = new SqliteConnection($"Data Source={Path.Combine(_root, "video.db")}");
         connection.Open();
         using var version = connection.CreateCommand(); version.CommandText = "PRAGMA user_version";
-        Assert.Equal(25L, (long)version.ExecuteScalar()!);
+        Assert.Equal((long)PicerDatabase.CurrentSchemaVersion, (long)version.ExecuteScalar()!);
         using var tables = connection.CreateCommand();
         tables.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('videos','video_keyframes','video_transcripts')";
         Assert.Equal(3L, (long)tables.ExecuteScalar()!);

@@ -41,7 +41,7 @@ public sealed class CloudVisionTests : IDisposable
         connection.Open();
         using var version = connection.CreateCommand();
         version.CommandText = "PRAGMA user_version";
-        Assert.Equal(25L, (long)version.ExecuteScalar()!);
+        Assert.Equal((long)PicerDatabase.CurrentSchemaVersion, (long)version.ExecuteScalar()!);
         using var table = connection.CreateCommand();
         table.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='cloud_vision_analyses'";
         Assert.Equal(1L, (long)table.ExecuteScalar()!);

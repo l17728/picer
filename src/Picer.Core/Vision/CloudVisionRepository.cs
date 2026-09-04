@@ -1,11 +1,13 @@
 using System.Text.Json;
 using Picer.Core.Data;
 using Picer.Core.Models;
+using Picer.Core.Search;
 
 namespace Picer.Core.Vision;
 
 public sealed class CloudVisionRepository(PicerDatabase database)
 {
+    private readonly MediaTextIndexRepository _textIndex = new(database);
     public sealed record TaskRecord(long ImageId, string ImagePath, string Provider, string ModelVersion,
         string Status, string? Reason, string? Summary, string? ErrorCode, DateTime UpdatedUtc,
         long InputTokens, long OutputTokens, decimal EstimatedCostYuan);
@@ -93,6 +95,9 @@ public sealed class CloudVisionRepository(PicerDatabase database)
     {
         Upsert(image, analyzer, locationFingerprint, "completed", reason, result.Summary,
             JsonSerializer.Serialize(result), null);
+        _textIndex.UpsertImage(image, [image.Path, image.Camera, image.Gps, image.TakenUtc?.ToString("O"), result.Summary,
+            .. (result.Scenes ?? []), .. (result.Activities ?? []), .. (result.Objects ?? []), .. (result.SearchTerms ?? [])],
+            $"cloud:{analyzer.Provider}:{analyzer.ModelVersion}:{analyzer.PromptVersion}");
     }
 
     public void SaveFailure(ImageRecord image, ICloudVisionAnalyzer analyzer, string locationFingerprint,

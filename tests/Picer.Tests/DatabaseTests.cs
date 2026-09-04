@@ -217,7 +217,7 @@ public sealed class DatabaseTests : IDisposable
     public void Schema_IsMigratedToLatestVersionWithLocationHierarchy()
     {
         using var version = _db.Command("PRAGMA user_version");
-        Assert.Equal(25L, (long)version.ExecuteScalar()!);
+        Assert.Equal((long)PicerDatabase.CurrentSchemaVersion, (long)version.ExecuteScalar()!);
         using var table = _db.Command("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='rejected_suggestions'");
         Assert.Equal(1L, (long)table.ExecuteScalar()!);
         using var locationTable = _db.Command("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='image_locations'");
