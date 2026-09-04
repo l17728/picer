@@ -166,10 +166,13 @@ public partial class FaceValidationWindow : Window
                 Status.Text = $"训练阶段 {value.Stage} · {value.Percent}%";
             });
             var result = await _training.SubmitAndApplyAsync(endpoint, progress, _trainingCancellation.Token, plan.SnapshotId);
+            var baseline = result.BaselineFalseAcceptRate is double baselineFar && result.BaselineFalseRejectRate is double baselineFrr
+                ? $"当前基线：误识 {baselineFar:P2} / 漏识 {baselineFrr:P2}\n候选版本：误识 {result.FalseAcceptRate:P2} / 漏识 {result.FalseRejectRate:P2}\n"
+                : $"候选版本：误识 {result.FalseAcceptRate:P2} / 漏识 {result.FalseRejectRate:P2}\n";
             SFaceResult.Text = $"训练快照：{result.DatasetId}\n任务：{result.JobId}\n制品：{result.ArtifactId}\n" +
                 $"样本：{result.Samples}；人物：{result.People}\n" +
                 $"配方选用训练样本：{result.SelectedTrainingSamples}；同源折叠：{result.ExcludedSameSource}；人物上限平衡：{result.ExcludedPersonCap}\n" +
-                $"误识率：{result.FalseAcceptRate:P2}；漏识率：{result.FalseRejectRate:P2}\n{result.Message}";
+                baseline + result.Message;
             Status.Text = result.Message;
             AppLogger.Info($"FaceTraining completed; dataset={result.DatasetId}; job={result.JobId}; artifact={result.ArtifactId}; applied={result.Applied}; far={result.FalseAcceptRate}; frr={result.FalseRejectRate}");
         }

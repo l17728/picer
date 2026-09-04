@@ -9,7 +9,8 @@ namespace Picer.Core.Vision;
 public sealed record FaceTrainingProgress(string Stage, int Percent, string Detail);
 public sealed record FaceTrainingResult(string DatasetId, string JobId, string ArtifactId, int Samples,
     int People, double FalseAcceptRate, double FalseRejectRate, bool Applied, string Message,
-    int SelectedTrainingSamples = 0, int ExcludedSameSource = 0, int ExcludedPersonCap = 0);
+    int SelectedTrainingSamples = 0, int ExcludedSameSource = 0, int ExcludedPersonCap = 0,
+    double? BaselineFalseAcceptRate = null, double? BaselineFalseRejectRate = null);
 public sealed record FaceTrainingPlan(string SnapshotId, string ModelVersion, int Samples, int People,
     int PositiveSamples, int NegativeSamples, int LeakageGroups, int TrainSamples, int ValidationSamples,
     int TestSamples, int VideoSamples, IReadOnlyList<string> Warnings);
@@ -89,7 +90,8 @@ public sealed class FaceTrainingService(
         if (artifact.BaseModelVersion != modelVersion) throw new InvalidDataException("训练制品基础模型版本不匹配。");
         if (artifact.People.Any(value => !people.Contains(value.PersonId))) throw new InvalidDataException("训练制品包含快照以外的人物编号。");
         var applied = artifact.Metrics.FalseAcceptRate <= 0.01 && artifact.Metrics.PositiveEvaluated >= 20 &&
-                      artifact.Metrics.NegativeEvaluated >= 10 && artifact.People.Count >= 2;
+                      artifact.Metrics.NegativeEvaluated >= 10 && artifact.People.Count >= 2 &&
+                      artifact.Comparison is { NoFalseAcceptRegression: true, AcceptableFalseRejectRegression: true };
         if (applied)
         {
             repository.ApplyLearnedFaceArtifact(artifact.Id, dataset.Id, root.ToString(), modelVersion, artifactJson,
@@ -103,7 +105,8 @@ public sealed class FaceTrainingService(
             artifact.Metrics.FalseAcceptRate, artifact.Metrics.FalseRejectRate, applied,
             applied ? "训练完成并已应用；人工分类未改变。" : ExplainGateFailure(artifact),
             artifact.RecipeReport?.SelectedTrainingPositives ?? 0,
-            artifact.RecipeReport?.ExcludedSameSource ?? 0, artifact.RecipeReport?.ExcludedPersonCap ?? 0);
+            artifact.RecipeReport?.ExcludedSameSource ?? 0, artifact.RecipeReport?.ExcludedPersonCap ?? 0,
+            artifact.BaselineMetrics?.FalseAcceptRate, artifact.BaselineMetrics?.FalseRejectRate);
     }
 
     public string Rollback()
@@ -174,6 +177,8 @@ public sealed class FaceTrainingService(
         if (artifact.Metrics.PositiveEvaluated < 20) reasons.Add($"独立正样本仅 {artifact.Metrics.PositiveEvaluated} 个（至少 20）");
         if (artifact.Metrics.NegativeEvaluated < 10) reasons.Add($"独立负样本仅 {artifact.Metrics.NegativeEvaluated} 个（至少 10）");
         if (artifact.People.Count < 2) reasons.Add("有效人物不足两位");
+        if (artifact.Comparison is { NoFalseAcceptRegression: false }) reasons.Add("候选版本的误识风险高于当前基线");
+        if (artifact.Comparison is { AcceptableFalseRejectRegression: false }) reasons.Add("候选版本的漏识率比当前基线退化超过 2%" );
         return "训练完成但未应用：" + string.Join("；", reasons.DefaultIfEmpty("评估门禁未通过")) + "。当前版本保持不变。";
     }
 
@@ -187,6 +192,10 @@ public sealed class FaceTrainingService(
     private sealed record PersonPolicyResponse(long PersonId, float[] Prototype, double Threshold);
     private sealed record RecipeReportResponse(int RawTrainingPositives, int SelectedTrainingPositives,
         int ExcludedSameSource, int ExcludedPersonCap, int PerPersonCap);
+    private sealed record BaselineMetricsResponse(double FalseAcceptRate, double FalseRejectRate);
+    private sealed record ComparisonResponse(double FalseAcceptRateDelta, double FalseRejectRateDelta,
+        bool NoFalseAcceptRegression, bool AcceptableFalseRejectRegression);
     private sealed record ArtifactResponse(string Id, string BaseModelVersion, List<PersonPolicyResponse> People,
-        MetricsResponse Metrics, RecipeReportResponse? RecipeReport = null);
+        MetricsResponse Metrics, RecipeReportResponse? RecipeReport = null,
+        BaselineMetricsResponse? BaselineMetrics = null, ComparisonResponse? Comparison = null);
 }
