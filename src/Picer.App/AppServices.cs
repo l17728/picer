@@ -13,6 +13,7 @@ using Picer.Core.Thumbnails;
 using Picer.Core.Vision;
 using Picer.Core.Video;
 using Picer.Core.SemanticSearch;
+using Picer.Core.Search;
 
 namespace Picer.App;
 
@@ -36,6 +37,7 @@ public static class AppServices
     public static FaceValidationService FaceValidation { get; private set; } = null!;
     public static FaceTrainingService FaceTraining { get; private set; } = null!;
     public static CloudVisionRepository CloudVisionRepository { get; private set; } = null!;
+    public static MediaSearchTool MediaSearch { get; private set; } = null!;
     public static VisualConceptRepository VisualConceptRepository { get; private set; } = null!;
     public static VideoRepository Videos { get; private set; } = null!;
     public static VideoIndexService VideoIndex { get; private set; } = null!;
@@ -96,6 +98,7 @@ public static class AppServices
         });
         VisualConceptRepository = new VisualConceptRepository(Db);
         Videos = new VideoRepository(Db);
+        MediaSearch = new MediaSearchTool(Db, Videos);
         VideoIndex = new VideoIndexService(Db, Videos);
         VideoSummaries = new VideoSummaryService(Videos, Path.Combine(AppPaths.DataRoot, "video-summary-cache"));
         ClipRepository = new ClipSemanticRepository(Db);

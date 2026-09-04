@@ -15,9 +15,9 @@ public sealed class MediaTextIndexRepository
         EnsureSchema();
     }
 
-    public void UpsertImage(ImageRecord image, IEnumerable<string> fields, string sourceVersion = "v1")
+    public void UpsertImage(ImageRecord image, IEnumerable<string?> fields, string sourceVersion = "v1")
     {
-        var content = string.Join(" ", fields.Where(value => !string.IsNullOrWhiteSpace(value)).Select(value => value.Trim()).Distinct(StringComparer.OrdinalIgnoreCase));
+        var content = string.Join(" ", fields.Where(value => !string.IsNullOrWhiteSpace(value)).Select(value => value!.Trim()).Distinct(StringComparer.OrdinalIgnoreCase));
         var fingerprint = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(
             $"{image.Id}|{image.FileSize}|{image.ModifiedUtc:o}|{sourceVersion}|{content}")));
         using var tx = _database.BeginTransaction();
@@ -39,7 +39,7 @@ public sealed class MediaTextIndexRepository
         tx.Commit();
     }
 
-    public void UpsertVideo(VideoRecord video, IEnumerable<string> fields, string sourceVersion = "v1")
+    public void UpsertVideo(VideoRecord video, IEnumerable<string?> fields, string sourceVersion = "v1")
     {
         var content = string.Join(" ", fields.Where(value => !string.IsNullOrWhiteSpace(value)).Select(value => value!.Trim()).Distinct(StringComparer.OrdinalIgnoreCase));
         var key = -video.Id; // image ids are positive; negative keys avoid cross-media collisions.

@@ -500,7 +500,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         SearchPage page;
         try
         {
-            page = await IndexSearchEngine.SearchPagedAsync(_db, filters, cancellationToken: cts.Token);
+            page = await AppServices.MediaSearch.ExecutePagedAsync(filters, cancellationToken: cts.Token);
         }
         catch (OperationCanceledException)
         {
@@ -704,7 +704,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private async Task LoadMoreAsync()
     {
         if (_searchCursor is null) return;
-        var page = await IndexSearchEngine.SearchPagedAsync(_db, BuildSearchFilters(), cursor: _searchCursor);
+        var page = await AppServices.MediaSearch.ExecutePagedAsync(BuildSearchFilters(), cursor: _searchCursor);
         _searchLoadedRecords.AddRange(page.Items);
         var rebuilt = await BuildBurstAwareItemsAsync(_searchLoadedRecords, _searchCts?.Token ?? default);
         Images.Clear();

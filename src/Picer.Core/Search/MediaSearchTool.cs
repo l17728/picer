@@ -31,6 +31,15 @@ public sealed record MediaSearchResult(IReadOnlyList<MediaSearchHit> Items, int 
 /// <summary>Read-only, validated search boundary for AI and voice callers.</summary>
 public sealed class MediaSearchTool(PicerDatabase database, VideoRepository? videoRepository = null)
 {
+    /// <summary>Common paged adapter for the ordinary library UI.</summary>
+    public Task<SearchPage> ExecutePagedAsync(SearchFilters filters, int pageSize = 200,
+        SearchCursor? cursor = null, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(filters);
+        if (pageSize is < 1 or > 1000) throw new ArgumentOutOfRangeException(nameof(pageSize));
+        return IndexSearchEngine.SearchPagedAsync(database, filters, pageSize, cursor, cancellationToken);
+    }
+
     public MediaSearchResult Execute(MediaSearchRequest request)
     {
         Validate(request);
