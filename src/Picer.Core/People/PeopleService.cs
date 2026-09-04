@@ -15,6 +15,23 @@ public sealed record PersonQueryMention(PersonRecord Person, string MatchedName,
 /// </summary>
 public sealed class PeopleService(PicerDatabase database)
 {
+    public IReadOnlyList<string> GetConfirmedPersonNamesForImage(long imageId)
+    {
+        using var command = database.Command("""
+            SELECT DISTINCT p.display_name
+            FROM detected_faces f
+            JOIN face_person_assignments a ON a.face_id=f.id AND a.state='confirmed'
+            JOIN people p ON p.id=a.person_id
+            WHERE f.image_id=$image
+            ORDER BY p.display_name COLLATE NOCASE
+            """);
+        command.Parameters.AddWithValue("$image", imageId);
+        using var reader = command.ExecuteReader();
+        var names = new List<string>();
+        while (reader.Read()) names.Add(reader.GetString(0));
+        return names;
+    }
+
     public PersonRecord Create(string displayName, IEnumerable<string>? aliases = null)
     {
         displayName = NormalizeName(displayName);

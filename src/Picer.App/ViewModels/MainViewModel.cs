@@ -1069,9 +1069,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
         var locationText = "无 GPS 信息";
         var attribution = "";
         var cloud = await UiWork.RunDatabaseAsync(() => AppServices.CloudVisionRepository.GetLatestCompleted(record.Id));
+        var markedPeople = await UiWork.RunDatabaseAsync(() => AppServices.People.GetConfirmedPersonNamesForImage(record.Id));
+        var peopleText = markedPeople.Count == 0 ? "无已标记人物" : string.Join("、", markedPeople);
         var cloudText = cloud is not null
-            ? $"\n\n云端描述（{cloud.Value.Provider} / {cloud.Value.ModelVersion}）：{cloud.Value.Result.Summary}"
-            : "\n\n云端描述：尚未分析";
+            ? $"\n\nAI 描述（{cloud.Value.Provider} / {cloud.Value.ModelVersion}）：{cloud.Value.Result.Summary}"
+            : "\n\nAI 描述：尚未分析";
 
         if (GeoPlaceResolver.TryParseCoordinates(record.Gps, out var latitude, out var longitude))
         {
@@ -1095,7 +1097,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
         StatusText = $"正在查看 {image.FileName} 的信息";
         MessageBox.Show(
-            $"文件：{image.FileName}\n\n拍摄时间：{timeText}\n文件大小：{FormatFileSize(record.FileSize)}\n尺寸：{record.Width} × {record.Height}\n\n地点：{locationText}{attribution}{cloudText}",
+            $"文件：{image.FileName}\n\n拍摄时间：{timeText}\n文件大小：{FormatFileSize(record.FileSize)}\n尺寸：{record.Width} × {record.Height}\n\n标记人物：{peopleText}\n\n地点：{locationText}{attribution}{cloudText}",
             "图片信息", MessageBoxButton.OK, MessageBoxImage.Information);
     }
 

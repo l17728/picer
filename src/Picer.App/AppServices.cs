@@ -167,9 +167,9 @@ public static class AppServices
         var endpointText = isLocal || baseUrl.EndsWith("/chat/completions", StringComparison.OrdinalIgnoreCase)
             ? baseUrl : baseUrl + "/chat/completions";
         if (!Uri.TryCreate(endpointText, UriKind.Absolute, out var endpoint)) return null;
-        var options = new CloudVisionApiOptions(endpoint, key, model.Id, provider.Id, PromptVersion: "picer-photo-v1");
+        var options = new CloudVisionApiOptions(endpoint, key, model.Id, provider.Id, PromptVersion: "picer-photo-v2-concise");
         var analyzer = new OpenAiCompatibleCloudVisionAnalyzer(options);
-        return (new CloudVisionAnalysisService(CloudVisionRepository, analyzer, Geocoder), analyzer,
+        return (new CloudVisionAnalysisService(CloudVisionRepository, analyzer, Geocoder, People), analyzer,
             new CloudVisionRunPolicy(true, settings.MaximumImagesPerRun, settings.IncludePreciseGps,
                 isLocal ? decimal.MaxValue : settings.DailyBudgetYuan,
                 isLocal ? decimal.MaxValue : settings.MonthlyBudgetYuan),

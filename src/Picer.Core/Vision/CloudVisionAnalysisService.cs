@@ -1,16 +1,19 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Encodings.Web;
 using Picer.Core.Geocoding;
 using Picer.Core.Models;
 using Picer.Core.Search;
+using Picer.Core.People;
 
 namespace Picer.Core.Vision;
 
 public sealed class CloudVisionAnalysisService(
     CloudVisionRepository repository,
     ICloudVisionAnalyzer analyzer,
-    IReverseGeocoder geocoder)
+    IReverseGeocoder geocoder,
+    PeopleService? people = null)
 {
     private readonly SemaphoreSlim _singleWorker = new(1, 1);
 
@@ -46,8 +49,16 @@ public sealed class CloudVisionAnalysisService(
                 {
                     repository.Queue(item.Image, analyzer, fingerprint, item.Reason);
                     repository.MarkProcessing(item.Image, analyzer, fingerprint, item.Reason);
+                    var confirmedPeople = people?.GetConfirmedPersonNamesForImage(item.Image.Id) ?? [];
+                    var effectiveTime = item.Image.TakenUtc ?? item.Image.CreatedUtc;
+                    var trustedContext = JsonSerializer.Serialize(new
+                    {
+                        confirmedPeople,
+                        takenAtLocal = effectiveTime?.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss"),
+                        timeSource = item.Image.TakenUtc is not null ? "photo-metadata" : item.Image.CreatedUtc is not null ? "file-metadata" : "unknown"
+                    }, TrustedContextJson);
                     var result = await analyzer.AnalyzeAsync(
-                        new CloudVisionRequest(item.Image, location, item.LocalConcepts), cancellationToken).ConfigureAwait(false);
+                        new CloudVisionRequest(item.Image, location, item.LocalConcepts, trustedContext), cancellationToken).ConfigureAwait(false);
                     repository.Save(item.Image, analyzer, fingerprint, item.Reason, result);
                     completed++;
                 }
@@ -84,4 +95,9 @@ public sealed class CloudVisionAnalysisService(
         var json = JsonSerializer.Serialize(location);
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(json)));
     }
+
+    private static readonly JsonSerializerOptions TrustedContextJson = new()
+    {
+        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+    };
 }

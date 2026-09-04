@@ -130,6 +130,7 @@ public sealed class VisionAnalysisTests : IDisposable
 
         Assert.Equal(wife.Id, people.FindByName("老婆")!.Id);
         Assert.Equal([_image.Id], people.GetImageIds(wife.Id));
+        Assert.Equal(["张华"], people.GetConfirmedPersonNamesForImage(_image.Id));
     }
 
     [Fact]

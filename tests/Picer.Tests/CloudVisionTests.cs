@@ -5,6 +5,7 @@ using System.Text.Json;
 using Picer.Core.Data;
 using Picer.Core.Geocoding;
 using Picer.Core.Models;
+using Picer.Core.People;
 using Picer.Core.Search;
 using Picer.Core.Vision;
 using SixLabors.ImageSharp;
@@ -51,7 +52,16 @@ public sealed class CloudVisionTests : IDisposable
     {
         var analyzer = new FakeCloudAnalyzer();
         var repository = new CloudVisionRepository(_database);
-        var service = new CloudVisionAnalysisService(repository, analyzer, new FakeGeocoder());
+        var people = new PeopleService(_database); var person = people.Create("牟");
+        using (var insert = _database.Command("""
+            INSERT INTO detected_faces(image_id,model_version,ordinal,box_x,box_y,box_width,box_height,confidence,created_utc)
+            VALUES($image,'test-face',0,0.1,0.1,0.3,0.3,0.99,$now); SELECT last_insert_rowid();
+            """))
+        {
+            insert.Parameters.AddWithValue("$image", _image.Id); insert.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("O"));
+            people.ConfirmFace((long)insert.ExecuteScalar()!, person.Id);
+        }
+        var service = new CloudVisionAnalysisService(repository, analyzer, new FakeGeocoder(), people);
         var candidates = new[] { (_image, (IReadOnlyList<VisualConceptScore>)[new("scene.mountain", .8f)], "complex-scene") };
 
         var first = await service.AnalyzeAsync(candidates);
@@ -63,6 +73,8 @@ public sealed class CloudVisionTests : IDisposable
         Assert.Equal("九寨沟风景名胜区", analyzer.LastRequest!.Location!.Poi);
         Assert.Null(analyzer.LastRequest.Location.Latitude);
         Assert.Equal("scene.mountain", Assert.Single(analyzer.LastRequest.LocalConcepts).ConceptId);
+        Assert.Contains("牟", analyzer.LastRequest.AdditionalContext);
+        Assert.Contains("timeSource", analyzer.LastRequest.AdditionalContext);
         var stored = repository.Get(_image.Id, analyzer.Provider);
         Assert.Equal("completed", stored?.Status);
         Assert.Contains("九寨沟", stored?.Summary);
@@ -171,6 +183,35 @@ public sealed class CloudVisionTests : IDisposable
     }
 
     [Fact]
+    public void SceneTimeClusters_PreserveAcceptedTitleForModelSplitSubgroup()
+    {
+        var start = DateTime.UtcNow.AddHours(-1);
+        var images = new List<ImageRecord>();
+        for (var index = 0; index < 3; index++)
+        {
+            var path = Path.Combine(_root, $"split-{index}.jpg"); File.WriteAllBytes(path, [4, 5, (byte)index]);
+            images.Add(_database.UpsertImage(new ImageRecord
+            {
+                SourceId = _image.SourceId, Path = path, FileSize = 3, ModifiedUtc = File.GetLastWriteTimeUtc(path),
+                CreatedUtc = start.AddMinutes(index * 10), Status = ImageStatus.Active, IndexedUtc = DateTime.UtcNow
+            }));
+        }
+        var analyzer = new FakeCloudAnalyzer(); var cloud = new CloudVisionRepository(_database);
+        cloud.Save(images[0], analyzer, "none", "test", new CloudVisionResult("室内", ["indoor"], [], [], []));
+        foreach (var image in images.Skip(1))
+            cloud.Save(image, analyzer, "none", "test", new CloudVisionResult("爬山", ["mountain"], ["hiking"], [], []));
+        var descriptions = new SceneGroupDescriptionService(_database, cloud);
+        var subgroup = images.Skip(1).ToArray(); var plan = descriptions.BuildPlan(_root, subgroup);
+        descriptions.SaveAccepted(plan, new SceneGroupDescription(plan.Fingerprint, "商洛登山", "两人在商洛登山",
+            ["商洛", "登山"], "fake", "test", "scene-v1", "accepted"));
+
+        var clusters = new SceneTimeClusterService(_database).Build(images);
+
+        Assert.Equal(2, clusters.Count);
+        Assert.Equal("商洛登山", clusters.Single(cluster => cluster.ImageIds.Count == 2).SceneName);
+    }
+
+    [Fact]
     public async Task SceneDescription_SendsRepresentativeDescriptionsToModelInTimeOrder()
     {
         var start = DateTime.UtcNow.AddHours(-3);
@@ -217,12 +258,15 @@ public sealed class CloudVisionTests : IDisposable
             NearbyLandmarks: [new("五花海", 420)]);
 
         var result = await analyzer.AnalyzeAsync(new CloudVisionRequest(_image, location,
-            [new("scene.mountain", .8f)]), CancellationToken.None);
+            [new("scene.mountain", .8f)], "{\"confirmedPeople\":[\"牟\"]}"), CancellationToken.None);
 
         Assert.Contains("九寨沟", result.Summary);
         Assert.Equal("Bearer secret-key", handler.Authorization);
         Assert.Contains("gps_reverse_geocoding", handler.ResponseBody);
         Assert.Contains("五花海", handler.RequestedText);
+        Assert.Contains("confirmedPeople", handler.RequestedText);
+        Assert.Contains("牟", handler.RequestedText);
+        Assert.Contains("summary必须是言简意赅", handler.SystemText);
         Assert.Contains("data:image/jpeg;base64,", handler.RequestBody);
         Assert.DoesNotContain(_image.Path, handler.RequestBody);
     }
@@ -279,6 +323,7 @@ public sealed class CloudVisionTests : IDisposable
     {
         public string RequestBody { get; private set; } = "";
         public string RequestedText { get; private set; } = "";
+        public string SystemText { get; private set; } = "";
         public string ResponseBody { get; private set; } = "";
         public string Authorization { get; private set; } = "";
 
@@ -287,8 +332,11 @@ public sealed class CloudVisionTests : IDisposable
             Authorization = request.Headers.Authorization?.ToString() ?? "";
             RequestBody = await request.Content!.ReadAsStringAsync(cancellationToken);
             using (var payload = JsonDocument.Parse(RequestBody))
+            {
+                SystemText = payload.RootElement.GetProperty("messages")[0].GetProperty("content").GetString() ?? "";
                 RequestedText = payload.RootElement.GetProperty("messages")[1].GetProperty("content")[0]
                     .GetProperty("text").GetString() ?? "";
+            }
             var content = JsonSerializer.Serialize(new CloudVisionResult("九寨沟五花海附近的山景照片",
                 ["mountain"], [], ["trees"], ["九寨沟"], "九寨沟景区", "gps_reverse_geocoding"));
             ResponseBody = JsonSerializer.Serialize(new { choices = new[] { new { message = new { content } } } });

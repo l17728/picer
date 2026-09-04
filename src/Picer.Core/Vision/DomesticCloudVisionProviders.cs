@@ -13,14 +13,14 @@ public static class DomesticCloudVisionProviders
         apiKey,
         complex ? "qwen3-vl-plus" : "qwen3-vl-8b-instruct",
         "bailian",
-        PromptVersion: "picer-photo-v1");
+        PromptVersion: "picer-photo-v2-concise");
 
     public static CloudVisionApiOptions ZhipuFree(string apiKey) => new(
         new Uri("https://open.bigmodel.cn/api/paas/v4/chat/completions"),
         apiKey,
         "glm-4.6v-flash",
         "zhipu",
-        PromptVersion: "picer-photo-v1");
+        PromptVersion: "picer-photo-v2-concise");
 }
 
 public static class DomesticCloudVisionPricing

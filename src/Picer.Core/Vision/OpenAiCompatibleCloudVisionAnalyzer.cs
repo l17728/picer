@@ -15,7 +15,7 @@ public sealed record CloudVisionApiOptions(
     string Provider,
     int MaximumImageEdge = 1280,
     int MaximumOutputTokens = 500,
-    string PromptVersion = "picer-photo-v1");
+    string PromptVersion = "picer-photo-v2-concise");
 
 public sealed class OpenAiCompatibleCloudVisionAnalyzer : ICloudVisionAnalyzer, IDisposable
 {
@@ -129,7 +129,9 @@ public sealed class OpenAiCompatibleCloudVisionAnalyzer : ICloudVisionAnalyzer, 
         你是私人照片库的结构化视觉分析器。只输出JSON，字段必须为：
         summary, scenes, activities, objects, searchTerms, locationDisplayName, locationSource。
         scenes、activities、objects、searchTerms必须是字符串数组。
-        不得猜测人物姓名、身份、亲属关系或精确地点。
+        summary必须是言简意赅、自然通顺的一句中文，只写画面的主要信息；按画面实际可见内容优先包含时间段、地点、人物、行为、神态或状态、背景环境，不要逐项罗列，不要重复，不要使用“这张照片展示了”等套话。
+        confirmedPeople是用户已确认的人物标签：存在时必须原样使用这些姓名，不得改名或推断关系；不存在时不得猜测姓名、身份或亲属关系，应使用可见的中性外观描述，例如“一个穿粉色连衣裙、戴遮阳帽的女孩”。
+        只有上下文明确提供且与画面不冲突时才能写具体时间和地点；不得仅凭画面猜测精确地点。
         location只来自提供的GPS逆地理编码上下文；没有location时locationSource为none。
         附近地标必须使用“附近/周边”等措辞，不能声称照片一定在地标内部。
         本地标签只是候选线索，应由画面核验。描述保持客观、简洁、适合中文检索。

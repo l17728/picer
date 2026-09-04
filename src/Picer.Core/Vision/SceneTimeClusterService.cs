@@ -59,19 +59,26 @@ public sealed class SceneTimeClusterService(PicerDatabase database)
                 var imageScene = sceneByImage[image.Id];
                 if (sceneGroup.Count > 0 && !string.Equals(sceneName, imageScene, StringComparison.OrdinalIgnoreCase))
                 {
-                    result.Add(Create(sceneGroup, sceneName!));
+                    result.Add(CreateWithAccepted(sceneGroup, sceneName!, descriptions));
                     sceneGroup = [];
                 }
                 sceneName = imageScene;
                 sceneGroup.Add(image);
             }
-            if (sceneGroup.Count > 0) result.Add(Create(sceneGroup, sceneName!));
+            if (sceneGroup.Count > 0) result.Add(CreateWithAccepted(sceneGroup, sceneName!, descriptions));
         }
         return result;
     }
 
     private static SceneTimeCluster Create(IReadOnlyList<ImageRecord> images, string sceneName) =>
         new(EffectiveTime(images[0]), EffectiveTime(images[^1]), sceneName, images.Select(image => image.Id).ToArray());
+
+    private static SceneTimeCluster CreateWithAccepted(IReadOnlyList<ImageRecord> images, string fallbackSceneName,
+        SceneGroupDescriptionService descriptions)
+    {
+        var accepted = descriptions.GetAccepted(SceneGroupDescriptionService.CreateFingerprint(images));
+        return Create(images, accepted?.SceneName ?? fallbackSceneName);
+    }
 
     private Dictionary<long, string> LoadScenes(IEnumerable<long> imageIds)
     {
