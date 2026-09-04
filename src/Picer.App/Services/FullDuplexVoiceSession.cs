@@ -26,6 +26,9 @@ public sealed class FullDuplexVoiceSession : IDisposable
     private bool _processing;
 
     public event Action<string>? StateChanged;
+    /// Raised when speech is detected while TTS is playing. The host must cancel
+    /// the in-flight agent turn as well as stopping audio playback.
+    public event Action? SpeechDetectedDuringPlayback;
     public event Func<string, Task>? UtteranceRecognized;
     public bool IsListening => _input is not null;
 
@@ -71,7 +74,11 @@ public sealed class FullDuplexVoiceSession : IDisposable
         {
             _lastSpeechUtc = DateTime.UtcNow;
             _speechFrames++;
-            if (_speaking) CancelPlayback();
+            if (_speaking)
+            {
+                SpeechDetectedDuringPlayback?.Invoke();
+                CancelPlayback();
+            }
         }
         if (_speechFrames > 0)
         {

@@ -22,6 +22,13 @@ public partial class VoiceAssistantWindow : Window
         _agent = agent; _locations = locations; _people = people; _execute = execute;
         _voice = new FullDuplexVoiceSession(asrEndpoint, asrModel, ttsEndpoint);
         _voice.StateChanged += value => Dispatcher.BeginInvoke(() => StatusText.Text = value);
+        _voice.SpeechDetectedDuringPlayback += () => Dispatcher.BeginInvoke(() =>
+        {
+            // Stopping TTS alone leaves the agent request running. Cancel the
+            // whole turn so an interrupted answer cannot later speak stale text.
+            _turn?.Cancel();
+            StatusText.Text = "已检测到插话，正在重新聆听";
+        });
         _voice.UtteranceRecognized += text => Dispatcher.InvokeAsync(() => RunTurnAsync(text)).Task.Unwrap();
         Conversation.Items.Add("助手：可以说“打开目录浏览，看看日本的照片”。目标不明确时我会继续询问。");
     }
