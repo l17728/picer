@@ -38,6 +38,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private CancellationTokenSource? _searchCts;
     private CancellationTokenSource? _aiQuestionCts;
     private CancellationTokenSource? _directoryLoadCts;
+    private CancellationTokenSource? _sceneContextCts;
     private int _directoryLoadVersion;
     private CancellationTokenSource? _cloudCts;
     private CancellationTokenSource? _photoContextCts;
@@ -90,6 +91,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     [ObservableProperty]
     private string _questionAnswerText = "问答仅在本地索引上运行，不外发图片或元数据。";
+
+    [ObservableProperty]
+    private bool _showSceneContext;
+
+    [ObservableProperty]
+    private string _sceneContextText = "";
 
     [ObservableProperty]
     private string _statusText = "就绪";
@@ -345,7 +352,42 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         IsTimelineAlbumSelected = value?.IsTimelineAlbum == true;
         OnPropertyChanged(nameof(DirectoryDisplayItems));
+        _ = LoadSceneContextAsync(value);
         LoadImagesForSelectedDirectory();
+    }
+
+    private async Task LoadSceneContextAsync(DirectoryNodeViewModel? node)
+    {
+        _sceneContextCts?.Cancel(); _sceneContextCts?.Dispose();
+        var cancellation = _sceneContextCts = new CancellationTokenSource();
+        ShowSceneContext = node?.IsSceneAnchor == true;
+        SceneContextText = ShowSceneContext ? $"场景：{node!.SceneName}　正在读取摘要…" : "";
+        if (!ShowSceneContext) return;
+        try
+        {
+            var text = await UiWork.RunDatabaseAsync(() =>
+            {
+                var images = node!.AnchorImageIds.Select(id => _db.GetImage(id))
+                    .Where(image => image is { Status: ImageStatus.Active }).Cast<ImageRecord>().ToArray();
+                if (images.Length == 0) return $"场景：{node.SceneName}　没有可用照片记录";
+                var service = new SceneGroupDescriptionService(_db, AppServices.CloudVisionRepository);
+                var accepted = service.GetAccepted(SceneGroupDescriptionService.CreateFingerprint(images));
+                if (accepted is not null) return $"场景：{accepted.SceneName}　摘要：{accepted.Summary}";
+                var descriptions = images.Select(image => AppServices.CloudVisionRepository.GetLatestCompleted(image.Id)?.Result.Summary)
+                    .Where(value => !string.IsNullOrWhiteSpace(value)).Distinct(StringComparer.CurrentCultureIgnoreCase).Take(2).ToArray();
+                return descriptions.Length > 0
+                    ? $"场景：{node.SceneName}　照片描述：{string.Join("；", descriptions)}（尚未生成场景级摘要）"
+                    : $"场景：{node.SceneName}　尚未生成场景级摘要，照片也没有可用描述";
+            }, cancellation.Token);
+            if (!cancellation.IsCancellationRequested && ReferenceEquals(SelectedDirectory, node)) SceneContextText = text;
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception exception)
+        {
+            if (!cancellation.IsCancellationRequested && ReferenceEquals(SelectedDirectory, node))
+                SceneContextText = $"场景：{node!.SceneName}　摘要读取失败：{exception.Message}";
+            AppLogger.Error($"读取场景摘要失败：{node!.Name}", exception);
+        }
     }
     partial void OnSelectedImageChanged(ImageItemViewModel? value)
     {
@@ -1852,8 +1894,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _locationEnrichmentCts.Cancel();
         _searchCts?.Cancel();
         _directoryLoadCts?.Cancel();
+        _sceneContextCts?.Cancel();
         foreach (var item in DirectoryImages) item.CancelThumbnailLoad();
         _directoryLoadCts?.Dispose();
+        _sceneContextCts?.Dispose();
         _indexCts?.Cancel();
         _cloudCts?.Cancel();
         _cloudCts?.Dispose();
