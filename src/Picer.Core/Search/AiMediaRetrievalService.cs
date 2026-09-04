@@ -45,6 +45,7 @@ public sealed class AiMediaRetrievalService(PicerDatabase database, PeopleServic
         var bounds = string.IsNullOrWhiteSpace(plan.Location) ? null : GeoPlaceResolver.Resolve(plan.Location);
         DateTime? start = DateTime.TryParse(plan.StartDate, out var startValue) ? startValue.Date.ToUniversalTime() : null;
         DateTime? end = DateTime.TryParse(plan.EndDate, out var endValue) ? endValue.Date.AddDays(1).AddTicks(-1).ToUniversalTime() : null;
+        var dayPart = ResolveDayPart(question, plan.Keywords);
         var baseFilter = new SearchFilters { PersonId = mention?.Id, GeoBounds = bounds, TakenAfter = start,
             TakenBefore = end, IncludeMissing = false, SortBy = SortField.TakenDate, SortDir = SortDirection.Descending };
         var photoCandidates = new Dictionary<long, ImageRecord>();
@@ -52,7 +53,7 @@ public sealed class AiMediaRetrievalService(PicerDatabase database, PeopleServic
         // in a description. Searching for "白天" literally used to discard all
         // otherwise matching photos because descriptions usually contain a clock
         // time (or no time phrase at all).
-        var dayPart = ResolveDayPart(question, plan.Keywords);
+        baseFilter.TimeOfDay = dayPart switch { DayPart.Day => TimeOfDayFilter.Day, DayPart.Night => TimeOfDayFilter.Night, _ => TimeOfDayFilter.Any };
         var searchTerms = plan.Keywords
             .Where(term => !IsDayPartToken(term))
             .Concat(bounds is null && !string.IsNullOrWhiteSpace(plan.Location) ? [plan.Location!] : [])
@@ -68,9 +69,7 @@ public sealed class AiMediaRetrievalService(PicerDatabase database, PeopleServic
 
         progress?.Report(("检索视频索引", 45));
         var videoCandidates = includeVideos ? RetrieveVideos(plan, mention?.Id, start, end).Take(50).ToArray() : [];
-        var photos = photoCandidates.Values
-            .Where(image => MatchesDayPart(image, dayPart))
-            .Take(50).ToArray();
+        var photos = photoCandidates.Values.Take(50).ToArray();
         progress?.Report(("AI复核候选", 65));
         var evidence = new
         {
@@ -118,6 +117,7 @@ public sealed class AiMediaRetrievalService(PicerDatabase database, PeopleServic
 
     private static SearchFilters Clone(SearchFilters value) => new() { PersonId = value.PersonId, GeoBounds = value.GeoBounds,
         TakenAfter = value.TakenAfter, TakenBefore = value.TakenBefore, IncludeMissing = value.IncludeMissing,
+        TimeOfDay = value.TimeOfDay,
         SortBy = value.SortBy, SortDir = value.SortDir };
     private static string? Truncate(string? value, int length) => string.IsNullOrWhiteSpace(value) ? null : value[..Math.Min(length, value.Length)];
     private enum DayPart { None, Day, Night }
@@ -137,12 +137,5 @@ public sealed class AiMediaRetrievalService(PicerDatabase database, PeopleServic
         value.Contains("夜间", StringComparison.OrdinalIgnoreCase) || value.Contains("夜晚", StringComparison.OrdinalIgnoreCase) ||
         value.Contains("深夜", StringComparison.OrdinalIgnoreCase);
 
-    private static bool MatchesDayPart(ImageRecord image, DayPart dayPart)
-    {
-        if (dayPart == DayPart.None) return true;
-        var timestamp = image.TakenUtc ?? image.CreatedUtc ?? image.ModifiedUtc;
-        var hour = timestamp.ToLocalTime().Hour;
-        return dayPart == DayPart.Day ? hour >= 6 && hour < 18 : hour < 6 || hour >= 18;
-    }
     private sealed record Review(string? Markdown, IReadOnlyList<long>? PhotoIds, IReadOnlyList<long>? VideoIds);
 }

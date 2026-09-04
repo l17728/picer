@@ -88,6 +88,27 @@ public sealed class SearchTests : IDisposable
     }
 
     [Fact]
+    public async Task Search_TimeOfDayFiltersUsingLocalCaptureHour()
+    {
+        AddFile("photos/day.jpg", 0x41, 100);
+        AddFile("photos/night.jpg", 0x42, 100);
+        var root = Path.GetFullPath(_dataDir);
+        _db = new PicerDatabase(Path.Combine(_dataDir, "test.db"));
+        var engine = new IndexEngine(_db, _storage = new DiskBackedStorageProvider(),
+            _thumbService = new ThumbnailService(Path.Combine(_dataDir, "thumbs")));
+        await engine.IndexSourceAsync(new SourceFolder { Id = 1, Path = root });
+        var day = _db.GetImages(1).Single(image => image.Path.EndsWith("day.jpg"));
+        var night = _db.GetImages(1).Single(image => image.Path.EndsWith("night.jpg"));
+        using (var command = _db.Command("UPDATE images SET taken_utc=$time WHERE id=$id"))
+        {
+            command.Parameters.AddWithValue("$time", DateTime.Today.AddHours(10).ToUniversalTime().ToString("o")); command.Parameters.AddWithValue("$id", day.Id); command.ExecuteNonQuery();
+            command.Parameters.Clear(); command.Parameters.AddWithValue("$time", DateTime.Today.AddHours(22).ToUniversalTime().ToString("o")); command.Parameters.AddWithValue("$id", night.Id); command.ExecuteNonQuery();
+        }
+        Assert.Equal("day.jpg", Path.GetFileName(Assert.Single(IndexSearchEngine.Search(_db, new SearchFilters { TimeOfDay = TimeOfDayFilter.Day })).Path));
+        Assert.Equal("night.jpg", Path.GetFileName(Assert.Single(IndexSearchEngine.Search(_db, new SearchFilters { TimeOfDay = TimeOfDayFilter.Night })).Path));
+    }
+
+    [Fact]
     public async Task Search_ExcludesMissingWhenFlagSet()
     {
         AddFile("photos/a.jpg", 0x41, 100);

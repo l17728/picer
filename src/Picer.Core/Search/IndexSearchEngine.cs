@@ -138,6 +138,7 @@ public static class IndexSearchEngine
             conditions.Add("t.taken_utc <= $takenBefore");
             parameters.Add(("takenBefore", Fmt(filters.TakenBefore.Value)));
         }
+        AddTimeOfDayCondition(filters, conditions);
 
         // Dimensions
         AddIfInt(conditions, parameters, "t.width >= $minW", filters.MinWidth, "minW");
@@ -242,6 +243,7 @@ public static class IndexSearchEngine
             conditions.Add("t.taken_utc <= $takenBefore");
             parameters.Add(("takenBefore", Fmt(filters.TakenBefore.Value)));
         }
+        AddTimeOfDayCondition(filters, conditions);
         AddIfInt(conditions, parameters, "t.width >= $minW", filters.MinWidth, "minW");
         AddIfInt(conditions, parameters, "t.width <= $maxW", filters.MaxWidth, "maxW");
         AddIfInt(conditions, parameters, "t.height >= $minH", filters.MinHeight, "minH");
@@ -282,6 +284,7 @@ public static class IndexSearchEngine
         if (!filters.IncludeMissing) conditions.Add("t.status = 'active'");
         if (filters.TakenAfter.HasValue) { conditions.Add("t.taken_utc >= $takenAfter"); parameters.Add(("takenAfter", Fmt(filters.TakenAfter.Value))); }
         if (filters.TakenBefore.HasValue) { conditions.Add("t.taken_utc <= $takenBefore"); parameters.Add(("takenBefore", Fmt(filters.TakenBefore.Value))); }
+        AddTimeOfDayCondition(filters, conditions);
         AddIfInt(conditions, parameters, "t.width >= $minW", filters.MinWidth, "minW");
         AddIfInt(conditions, parameters, "t.width <= $maxW", filters.MaxWidth, "maxW");
         AddIfInt(conditions, parameters, "t.height >= $minH", filters.MinHeight, "minH");
@@ -400,6 +403,17 @@ public static class IndexSearchEngine
             conds.Add(sql);
             parms.Add((paramName, val.Value));
         }
+    }
+
+    private static void AddTimeOfDayCondition(SearchFilters filters, List<string> conditions)
+    {
+        if (filters.TimeOfDay == TimeOfDayFilter.Any) return;
+        // Timestamps are stored in UTC. SQLite's localtime modifier keeps the
+        // query aligned with the same local-time interpretation used by the UI.
+        const string hour = "CAST(strftime('%H', COALESCE(t.taken_utc, t.file_created_utc, t.modified_utc), 'localtime') AS INTEGER)";
+        conditions.Add(filters.TimeOfDay == TimeOfDayFilter.Day
+            ? $"({hour} >= 6 AND {hour} < 18)"
+            : $"({hour} < 6 OR {hour} >= 18)");
     }
 
     private static string Fmt(DateTime dt) => dt.ToUniversalTime().ToString("o");

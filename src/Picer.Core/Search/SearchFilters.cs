@@ -16,6 +16,13 @@ public enum SortField
     IndexedTime
 }
 
+public enum TimeOfDayFilter
+{
+    Any,
+    Day,
+    Night
+}
+
 public sealed class SearchFilters
 {
     public string Query { get; set; } = "";
@@ -25,6 +32,7 @@ public sealed class SearchFilters
     // EXIF/date filters
     public DateTime? TakenAfter { get; set; } = null;
     public DateTime? TakenBefore { get; set; } = null;
+    public TimeOfDayFilter TimeOfDay { get; set; } = TimeOfDayFilter.Any;
 
     // Dimension filters
     public int? MinWidth { get; set; } = null;
