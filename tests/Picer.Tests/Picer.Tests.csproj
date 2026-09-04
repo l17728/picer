@@ -26,4 +26,8 @@
     <ProjectReference Include="..\..\src\Picer.Core\Picer.Core.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Update="Fixtures\semantic-retrieval-acceptance-v1.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

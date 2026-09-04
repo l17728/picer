@@ -164,6 +164,15 @@ public sealed class SearchTests : IDisposable
     }
 
     [Fact]
+    public void AcceptanceFixture_IsVersionedAndLoadable()
+    {
+        var path = Path.Combine(AppContext.BaseDirectory, "Fixtures", "semantic-retrieval-acceptance-v1.json");
+        var cases = SemanticRetrievalEvaluator.LoadCasesJson(path);
+        Assert.Equal(3, cases.Count);
+        Assert.Contains(cases, item => item.Group == "person-location-time");
+    }
+
+    [Fact]
     public async Task Search_ExcludesMissingWhenFlagSet()
     {
         AddFile("photos/a.jpg", 0x41, 100);

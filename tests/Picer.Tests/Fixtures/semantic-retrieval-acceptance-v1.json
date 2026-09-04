@@ -1,0 +1,5 @@
+[
+  { "query": "牟在上海白天爬山", "relevantIds": [101, 102], "group": "person-location-time" },
+  { "query": "墨尔本红色裙子", "relevantIds": [201], "group": "location-visual" },
+  { "query": "日本的视频语音", "relevantIds": [301], "group": "video-transcript" }
+]

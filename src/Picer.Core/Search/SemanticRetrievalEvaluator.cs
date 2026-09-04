@@ -51,6 +51,12 @@ public static class SemanticRetrievalEvaluator
         JsonSerializer.Deserialize<RetrievalEvaluationReport>(File.ReadAllText(path))
         ?? throw new InvalidDataException("检索验收集为空。");
 
+    public static IReadOnlyList<RetrievalEvaluationCase> LoadCasesJson(string path)
+    {
+        var cases = JsonSerializer.Deserialize<List<RetrievalEvaluationCase>>(File.ReadAllText(path));
+        return cases is { Count: > 0 } ? cases : throw new InvalidDataException("检索验收集为空。");
+    }
+
     public static void AssertReleaseGate(RetrievalEvaluationMetrics metrics)
     {
         if (metrics.CandidateRecall < 1d || metrics.FailedRecallCases > 0)
