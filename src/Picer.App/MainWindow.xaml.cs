@@ -106,9 +106,16 @@ public partial class MainWindow : Window
     {
         var chat = AppServices.CreateAiChatClient(AiFeatureIds.AiQuestion);
         if (chat is null) { MessageBox.Show(this, "请先在 AI 模型设置中为 AI 问答选择可用的模型。", "语音助手"); return; }
+        var settings = CloudVisionSettings.Load(AppPaths.CloudVisionSettingsPath);
+        var speech = settings.Resolve(AiFeatureIds.VideoTranscription);
+        if (speech is null || !Uri.TryCreate(speech.Value.Provider.BaseUrl, UriKind.Absolute, out var asrEndpoint))
+        {
+            chat.Dispose(); MessageBox.Show(this, "请先在 AI 模型设置中配置本地语音转写模型。", "语音助手"); return;
+        }
         var window = new Views.VoiceAssistantWindow(new VoiceCommandAgent(chat),
             _mainVm.GetVoiceLocationPaths,
-            () => AppServices.People.GetAll().Select(person => person.DisplayName).ToArray(), ExecuteVoiceActionAsync)
+            () => AppServices.People.GetAll().Select(person => person.DisplayName).ToArray(), ExecuteVoiceActionAsync,
+            asrEndpoint, speech.Value.Model.Id, new Uri("http://127.0.0.1:8090/api/tts/speech"))
             { Owner = this };
         window.Closed += (_, _) => chat.Dispose();
         window.Show();

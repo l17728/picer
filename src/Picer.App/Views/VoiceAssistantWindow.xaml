@@ -1,20 +1,9 @@
-<Window x:Class="Picer.App.Views.VoiceAssistantWindow"
-        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="语音助手" Width="560" Height="420" MinWidth="460" MinHeight="320"
-        WindowStartupLocation="CenterOwner">
+<Window x:Class="Picer.App.Views.VoiceAssistantWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" Title="全双工语音助手" Width="600" Height="460" MinWidth="500" MinHeight="360" WindowStartupLocation="CenterOwner">
     <Grid Margin="14">
-        <Grid.RowDefinitions><RowDefinition/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-        <ListBox x:Name="Conversation" Grid.Row="0" AutomationProperties.Name="语音助手对话记录"/>
-        <TextBox x:Name="InputBox" Grid.Row="1" Margin="0,10,0,8" MinHeight="52" TextWrapping="Wrap"
-                 AutomationProperties.Name="语音指令文本" KeyDown="InputBox_KeyDown"
-                 ToolTip="可先键入指令验证动作；麦克风接入后识别文字也进入同一安全动作协议"/>
-        <DockPanel Grid.Row="2">
-            <TextBlock x:Name="StatusText" Text="就绪" VerticalAlignment="Center" Foreground="#555"/>
-            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                <Button x:Name="StopButton" Content="停止" Click="Stop_Click" IsEnabled="False" Padding="14,6" Margin="4,0"/>
-                <Button x:Name="SendButton" Content="发送指令" Click="Send_Click" Padding="14,6" Margin="4,0" IsDefault="True"/>
-            </StackPanel>
-        </DockPanel>
+        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+        <Border Grid.Row="0" Background="#EEF6FF" CornerRadius="5" Padding="10" Margin="0,0,0,10"><DockPanel><ToggleButton x:Name="ListenButton" DockPanel.Dock="Right" Content="开始语音" Checked="Listen_Checked" Unchecked="Listen_Unchecked" Padding="14,6"/><StackPanel><TextBlock Text="全双工对话" FontWeight="SemiBold"/><TextBlock Text="持续聆听；助手播报时直接说话即可打断" Foreground="#52606D"/></StackPanel></DockPanel></Border>
+        <ListBox x:Name="Conversation" Grid.Row="1" AutomationProperties.Name="语音助手对话记录"/>
+        <TextBox x:Name="InputBox" Grid.Row="2" Margin="0,10,0,8" MinHeight="52" TextWrapping="Wrap" AutomationProperties.Name="语音指令文本" KeyDown="InputBox_KeyDown" ToolTip="也可键入指令；Enter 发送，Shift+Enter 换行"/>
+        <DockPanel Grid.Row="3"><TextBlock x:Name="StatusText" Text="就绪" VerticalAlignment="Center" Foreground="#555"/><StackPanel Orientation="Horizontal" HorizontalAlignment="Right"><Button x:Name="StopButton" Content="停止当前回答" Click="Stop_Click" IsEnabled="False" Padding="14,6" Margin="4,0"/><Button x:Name="SendButton" Content="发送指令" Click="Send_Click" Padding="14,6" Margin="4,0" IsDefault="True"/></StackPanel></DockPanel>
     </Grid>
 </Window>

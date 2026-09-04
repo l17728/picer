@@ -9,6 +9,8 @@ namespace Picer.Core.Vision;
 public sealed record FaceTrainingProgress(string Stage, int Percent, string Detail);
 public sealed record FaceTrainingResult(string DatasetId, string JobId, string ArtifactId, int Samples,
     int People, double FalseAcceptRate, double FalseRejectRate, bool Applied, string Message);
+public sealed record FaceTrainingPlan(string SnapshotId, string ModelVersion, int Samples, int People,
+    int PositiveSamples, int NegativeSamples, int LeakageGroups, IReadOnlyList<string> Warnings);
 
 public sealed class FaceTrainingService(
     VisionAnalysisRepository repository,
@@ -18,8 +20,32 @@ public sealed class FaceTrainingService(
     private readonly bool _ownsClient = client is null;
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
+    public FaceTrainingPlan Prepare()
+    {
+        var confirmed = repository.GetEmbeddingsForMatching()
+            .Where(face => face.AssignmentState == "confirmed" && face.PersonId is not null).ToArray();
+        var modelVersion = confirmed.GroupBy(face => face.ModelVersion).OrderByDescending(group => group.Count())
+            .Select(group => group.Key).FirstOrDefault() ?? throw new InvalidOperationException("没有可训练的已确认人脸向量。");
+        confirmed = confirmed.Where(face => face.ModelVersion == modelVersion).ToArray();
+        var rejected = repository.GetRejectedFaceEmbeddings().Where(face => face.ModelVersion == modelVersion).ToArray();
+        var people = confirmed.Select(face => face.PersonId!.Value).Distinct().ToArray();
+        if (people.Length < 2) throw new InvalidOperationException("至少需要两位已有人工确认样本的人物。");
+        var groups = confirmed.Select(face => $"image:{face.ImageId}")
+            .Concat(rejected.Select(face => $"image:{face.ImageId}")).Distinct().Order().ToArray();
+        var identity = string.Join('|', confirmed.Select(face => $"{face.FaceId}:{face.PersonId}:positive:image:{face.ImageId}")
+            .Concat(rejected.Select(face => $"{face.FaceId}:{face.PersonId}:negative:image:{face.ImageId}"))
+            .OrderBy(value => long.Parse(value[..value.IndexOf(':')])));
+        var snapshotId = "picer-" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(identity)))[..20].ToLowerInvariant();
+        var warnings = new List<string>();
+        if (confirmed.GroupBy(face => face.PersonId).Any(group => group.Count() < 10)) warnings.Add("部分人物少于 10 个正样本");
+        if (rejected.Length < 10) warnings.Add("排他负样本少于 10 个");
+        return new(snapshotId, modelVersion, confirmed.Length + rejected.Length, people.Length,
+            confirmed.Length, rejected.Length, groups.Length, warnings);
+    }
+
     public async Task<FaceTrainingResult> SubmitAndApplyAsync(Uri endpoint,
-        IProgress<FaceTrainingProgress>? progress = null, CancellationToken cancellationToken = default)
+        IProgress<FaceTrainingProgress>? progress = null, CancellationToken cancellationToken = default,
+        string? expectedSnapshotId = null)
     {
         progress?.Report(new("snapshot", 2, "正在冻结人工确认与排他负样本"));
         var confirmed = repository.GetEmbeddingsForMatching()
@@ -37,6 +63,8 @@ public sealed class FaceTrainingService(
         var fingerprintText = string.Join('|', samples.OrderBy(value => value.FaceId)
             .Select(value => $"{value.FaceId}:{value.PersonId}:{value.Label}:{value.LeakageGroup}"));
         var snapshotId = "picer-" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(fingerprintText)))[..20].ToLowerInvariant();
+        if (expectedSnapshotId is not null && !snapshotId.Equals(expectedSnapshotId, StringComparison.Ordinal))
+            throw new InvalidOperationException("确认后人工标注发生了变化；为避免提交错位数据，请重新确认训练快照。");
         var root = new Uri(endpoint.ToString().TrimEnd('/') + "/");
         progress?.Report(new("upload", 10, $"正在提交 {samples.Length} 个脱敏向量样本"));
         using var datasetResponse = await _client.PostAsJsonAsync(new Uri(root, "datasets"),

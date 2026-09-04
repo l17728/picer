@@ -142,7 +142,19 @@ public partial class FaceValidationWindow : Window
             var settings = CloudVisionSettings.Load(AppPaths.CloudVisionSettingsPath);
             if (!Uri.TryCreate(settings.FaceTrainingEndpoint, UriKind.Absolute, out var endpoint))
                 throw new InvalidOperationException("请先在 AI 模型设置中配置有效的人脸训练提交地址。");
-            AppLogger.Info($"FaceTraining submit requested; endpoint={endpoint.GetLeftPart(UriPartial.Authority)}; no image paths or names will be sent");
+            Status.Text = "正在冻结训练数据快照…";
+            var plan = await UiWork.RunDatabaseAsync(_training.Prepare);
+            var warning = plan.Warnings.Count == 0 ? "数据检查通过" : string.Join("；", plan.Warnings);
+            var location = endpoint.IsLoopback ? "本机统一模型平台" : endpoint.GetLeftPart(UriPartial.Authority);
+            var confirmation = $"已生成不可变训练快照：{plan.SnapshotId}\n\n" +
+                               $"人物 {plan.People} 位；正样本 {plan.PositiveSamples}；排他负样本 {plan.NegativeSamples}\n" +
+                               $"来源隔离组 {plan.LeakageGroups}；基础模型 {plan.ModelVersion}\n" +
+                               $"提交位置：{location}\n检查：{warning}\n\n" +
+                               "只提交脱敏向量和内部编号，不提交姓名或照片。是否启动优化？";
+            if (MessageBox.Show(confirmation, "确认人物识别优化", MessageBoxButton.OKCancel,
+                    MessageBoxImage.Question) != MessageBoxResult.OK)
+                throw new OperationCanceledException();
+            AppLogger.Info($"FaceTraining submit confirmed; snapshot={plan.SnapshotId}; endpoint={endpoint.GetLeftPart(UriPartial.Authority)}; samples={plan.Samples}; no image paths or names will be sent");
             var progress = new Progress<FaceTrainingProgress>(value =>
             {
                 SFaceProgress.IsIndeterminate = false;
@@ -152,7 +164,7 @@ public partial class FaceValidationWindow : Window
                 SFaceProgressText.Text = $"训练：{value.Detail}";
                 Status.Text = $"训练阶段 {value.Stage} · {value.Percent}%";
             });
-            var result = await _training.SubmitAndApplyAsync(endpoint, progress, _trainingCancellation.Token);
+            var result = await _training.SubmitAndApplyAsync(endpoint, progress, _trainingCancellation.Token, plan.SnapshotId);
             SFaceResult.Text = $"训练快照：{result.DatasetId}\n任务：{result.JobId}\n制品：{result.ArtifactId}\n" +
                 $"样本：{result.Samples}；人物：{result.People}\n误识率：{result.FalseAcceptRate:P2}；漏识率：{result.FalseRejectRate:P2}\n{result.Message}";
             Status.Text = result.Message;
