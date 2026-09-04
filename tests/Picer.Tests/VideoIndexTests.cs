@@ -93,6 +93,10 @@ public sealed class VideoIndexTests : IDisposable
         var reanalyzed = Assert.Single(service.GetTimeline(video.Id));
         Assert.Equal(person.Id, reanalyzed.AssignedPersonId);
         Assert.Equal("confirmed", reanalyzed.AssignmentState);
+        var trainingFace = Assert.Single(new VisionAnalysisRepository(_database).GetVideoTrainingFaces());
+        Assert.Equal(video.Id, trainingFace.VideoId);
+        Assert.Equal(person.Id, trainingFace.PersonId);
+        Assert.Equal("positive", trainingFace.Label);
         var summary = Assert.Single(people.GetAll());
         Assert.Equal(1, summary.ConfirmedFaceCount);
         Assert.Equal(1, summary.PhotoCount);

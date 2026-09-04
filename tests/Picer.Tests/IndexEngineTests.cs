@@ -5,6 +5,7 @@ using Picer.Core.Indexing;
 using Picer.Core.Models;
 using Picer.Core.Storage;
 using Picer.Core.Thumbnails;
+using Picer.Core.Vision;
 using Picer.Tests.Stubs;
 
 namespace Picer.Tests;
@@ -126,6 +127,10 @@ public sealed class IndexEngineTests : IDisposable
         Assert.Equal(1, service.RebuildSource(source.Id));
         group = Assert.Single(service.GetGroupsForImages([first.Id, second.Id, third.Id]).Values);
         Assert.Equal([first.Id, second.Id, third.Id], group.ImageIds);
+        var leakage = new VisionAnalysisRepository(_db).GetTrainingLeakageGroups([first.Id, second.Id, third.Id, separate.Id]);
+        Assert.Equal(leakage[first.Id], leakage[second.Id]);
+        Assert.Equal(leakage[first.Id], leakage[third.Id]);
+        Assert.NotEqual(leakage[first.Id], leakage[separate.Id]);
     }
 
     [Fact]

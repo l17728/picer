@@ -4,6 +4,7 @@ using Picer.Core.Models;
 using Picer.Core.People;
 using Picer.Core.Search;
 using Picer.Core.Vision;
+using Picer.Core.Indexing;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.PixelFormats;
 
@@ -185,6 +186,38 @@ public sealed class VisionAnalysisTests : IDisposable
         Assert.Equal(first.Id, policies.Single().Key);
         Assert.Equal(.61, policies.Single().Value.MatchThreshold, 3);
         Assert.Equal(2, people.GetAll().Count);
+    }
+
+    [Fact]
+    public async Task FaceTrainingPlan_KeepsBurstFacesInOneDeterministicLeakageGroup()
+    {
+        var secondPath = Path.Combine(_root, "burst-second.jpg");
+        File.WriteAllBytes(secondPath, [6, 7, 8]);
+        var source = _database.GetSources().Single();
+        var taken = new DateTime(2026, 9, 4, 8, 0, 0, DateTimeKind.Utc);
+        using (var update = _database.Command("UPDATE images SET taken_utc=$taken,ahash=$hash,dhash=0,width=100,height=100 WHERE id=$id"))
+        {
+            update.Parameters.AddWithValue("$taken", taken.ToString("o")); update.Parameters.AddWithValue("$hash", 0x1110);
+            update.Parameters.AddWithValue("$id", _image.Id); update.ExecuteNonQuery();
+        }
+        var second = _database.UpsertImage(new ImageRecord { SourceId = source.Id, Path = secondPath, FileSize = 3,
+            ModifiedUtc = taken.AddSeconds(2), TakenUtc = taken.AddSeconds(2), Width = 100, Height = 100,
+            AverageHash = 0x1111, DifferenceHash = 0, Status = ImageStatus.Active, IndexedUtc = DateTime.UtcNow });
+        var repository = new VisionAnalysisRepository(_database);
+        using var analysis = new VisionAnalysisService(repository, new FakeFaceAnalyzer("training-model"));
+        await analysis.AnalyzeAsync([_image, second]);
+        var people = new PeopleService(_database);
+        people.MoveFace(repository.GetFaceIds(_image.Id).Single(), people.Create("训练甲").Id);
+        people.MoveFace(repository.GetFaceIds(second.Id).Single(), people.Create("训练乙").Id);
+        Assert.Equal(1, new BurstGroupService(_database).RebuildSource(source.Id));
+
+        using var training = new FaceTrainingService(repository);
+        var first = training.Prepare();
+        var again = training.Prepare();
+
+        Assert.Equal(1, first.LeakageGroups);
+        Assert.Equal(first.SnapshotId, again.SnapshotId);
+        Assert.True(first.TrainSamples == 2 || first.ValidationSamples == 2 || first.TestSamples == 2);
     }
 
     [Fact]

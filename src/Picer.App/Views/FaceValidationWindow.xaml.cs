@@ -148,7 +148,8 @@ public partial class FaceValidationWindow : Window
             var location = endpoint.IsLoopback ? "本机统一模型平台" : endpoint.GetLeftPart(UriPartial.Authority);
             var confirmation = $"已生成不可变训练快照：{plan.SnapshotId}\n\n" +
                                $"人物 {plan.People} 位；正样本 {plan.PositiveSamples}；排他负样本 {plan.NegativeSamples}\n" +
-                               $"来源隔离组 {plan.LeakageGroups}；基础模型 {plan.ModelVersion}\n" +
+                               $"来源隔离组 {plan.LeakageGroups}；训练/验证/测试 {plan.TrainSamples}/{plan.ValidationSamples}/{plan.TestSamples}\n" +
+                               $"其中视频人脸 {plan.VideoSamples}；基础模型 {plan.ModelVersion}\n" +
                                $"提交位置：{location}\n检查：{warning}\n\n" +
                                "只提交脱敏向量和内部编号，不提交姓名或照片。是否启动优化？";
             if (MessageBox.Show(confirmation, "确认人物识别优化", MessageBoxButton.OKCancel,

@@ -419,6 +419,53 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
         return values;
     }
 
+    public IReadOnlyDictionary<long, string> GetTrainingLeakageGroups(IEnumerable<long> imageIds)
+    {
+        var ids = imageIds.Distinct().ToArray();
+        var result = new Dictionary<long, string>();
+        foreach (var batch in ids.Chunk(400))
+        {
+            var names = batch.Select((_, index) => $"$id{index}").ToArray();
+            using var command = database.Command($"""
+                SELECT i.id,i.sha256,bgm.group_id
+                FROM images i
+                LEFT JOIN burst_group_members bgm ON bgm.image_id=i.id
+                WHERE i.id IN ({string.Join(',', names)})
+                """);
+            for (var index = 0; index < batch.Length; index++) command.Parameters.AddWithValue(names[index], batch[index]);
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                var imageId = reader.GetInt64(0);
+                result[imageId] = !reader.IsDBNull(2) ? $"burst:{reader.GetInt64(2)}"
+                    : !reader.IsDBNull(1) && !string.IsNullOrWhiteSpace(reader.GetString(1)) ? $"sha256:{reader.GetString(1)}"
+                    : $"image:{imageId}";
+            }
+        }
+        return result;
+    }
+
+    public IReadOnlyList<VideoTrainingFaceRecord> GetVideoTrainingFaces()
+    {
+        using var command = database.Command("""
+            SELECT vf.id,vf.video_id,vf.assigned_person_id,'positive',vf.embedding
+            FROM video_detected_faces vf JOIN videos v ON v.id=vf.video_id AND v.status='active'
+            WHERE vf.assignment_state='confirmed' AND vf.assigned_person_id IS NOT NULL AND vf.embedding IS NOT NULL
+            UNION ALL
+            SELECT vf.id,vf.video_id,r.person_id,'negative',vf.embedding
+            FROM video_face_person_rejections r
+            JOIN video_detected_faces vf ON vf.id=r.video_face_id
+            JOIN videos v ON v.id=vf.video_id AND v.status='active'
+            WHERE vf.embedding IS NOT NULL
+            ORDER BY 2,1,3
+            """);
+        var result = new List<VideoTrainingFaceRecord>();
+        using var reader = command.ExecuteReader();
+        while (reader.Read()) result.Add(new(reader.GetInt64(0), reader.GetInt64(1), reader.GetInt64(2),
+            reader.GetString(3), FromBytes((byte[])reader[4])));
+        return result;
+    }
+
     public double? GetFaceMatchThreshold(string modelVersion)
     {
         using var command = database.Command("SELECT match_threshold FROM face_model_settings WHERE model_version=$version");

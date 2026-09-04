@@ -10,7 +10,8 @@ public sealed record FaceTrainingProgress(string Stage, int Percent, string Deta
 public sealed record FaceTrainingResult(string DatasetId, string JobId, string ArtifactId, int Samples,
     int People, double FalseAcceptRate, double FalseRejectRate, bool Applied, string Message);
 public sealed record FaceTrainingPlan(string SnapshotId, string ModelVersion, int Samples, int People,
-    int PositiveSamples, int NegativeSamples, int LeakageGroups, IReadOnlyList<string> Warnings);
+    int PositiveSamples, int NegativeSamples, int LeakageGroups, int TrainSamples, int ValidationSamples,
+    int TestSamples, int VideoSamples, IReadOnlyList<string> Warnings);
 
 public sealed class FaceTrainingService(
     VisionAnalysisRepository repository,
@@ -22,25 +23,23 @@ public sealed class FaceTrainingService(
 
     public FaceTrainingPlan Prepare()
     {
-        var confirmed = repository.GetEmbeddingsForMatching()
-            .Where(face => face.AssignmentState == "confirmed" && face.PersonId is not null).ToArray();
-        var modelVersion = confirmed.GroupBy(face => face.ModelVersion).OrderByDescending(group => group.Count())
-            .Select(group => group.Key).FirstOrDefault() ?? throw new InvalidOperationException("没有可训练的已确认人脸向量。");
-        confirmed = confirmed.Where(face => face.ModelVersion == modelVersion).ToArray();
-        var rejected = repository.GetRejectedFaceEmbeddings().Where(face => face.ModelVersion == modelVersion).ToArray();
-        var people = confirmed.Select(face => face.PersonId!.Value).Distinct().ToArray();
+        var samples = BuildSamples(out var modelVersion);
+        var people = samples.Where(sample => sample.Label == "positive").Select(sample => sample.PersonId).Distinct().ToArray();
         if (people.Length < 2) throw new InvalidOperationException("至少需要两位已有人工确认样本的人物。");
-        var groups = confirmed.Select(face => $"image:{face.ImageId}")
-            .Concat(rejected.Select(face => $"image:{face.ImageId}")).Distinct().Order().ToArray();
-        var identity = string.Join('|', confirmed.Select(face => $"{face.FaceId}:{face.PersonId}:positive:image:{face.ImageId}")
-            .Concat(rejected.Select(face => $"{face.FaceId}:{face.PersonId}:negative:image:{face.ImageId}"))
-            .OrderBy(value => long.Parse(value[..value.IndexOf(':')])));
-        var snapshotId = "picer-" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(identity)))[..20].ToLowerInvariant();
+        var snapshotId = Fingerprint(samples);
         var warnings = new List<string>();
-        if (confirmed.GroupBy(face => face.PersonId).Any(group => group.Count() < 10)) warnings.Add("部分人物少于 10 个正样本");
-        if (rejected.Length < 10) warnings.Add("排他负样本少于 10 个");
-        return new(snapshotId, modelVersion, confirmed.Length + rejected.Length, people.Length,
-            confirmed.Length, rejected.Length, groups.Length, warnings);
+        if (samples.Where(sample => sample.Label == "positive").GroupBy(sample => sample.PersonId).Any(group => group.Count() < 10)) warnings.Add("部分人物少于 10 个正样本");
+        if (samples.Count(sample => sample.Label == "negative") < 10) warnings.Add("排他负样本少于 10 个");
+        if (!samples.Any(sample => sample.Partition == "test")) warnings.Add("独立测试分区为空，制品只能生成报告而不能自动应用");
+        var uncovered = samples.Where(sample => sample.Label == "positive").GroupBy(sample => sample.PersonId)
+            .Count(group => !group.Any(sample => sample.Partition == "train") ||
+                            !group.Any(sample => sample.Partition is "validation" or "test"));
+        if (uncovered > 0) warnings.Add($"{uncovered} 位人物缺少独立训练或评估来源组，需补充不同时间/视频的确认样本");
+        return new(snapshotId, modelVersion, samples.Length, people.Length,
+            samples.Count(sample => sample.Label == "positive"), samples.Count(sample => sample.Label == "negative"),
+            samples.Select(sample => sample.LeakageGroup).Distinct().Count(), samples.Count(sample => sample.Partition == "train"),
+            samples.Count(sample => sample.Partition == "validation"), samples.Count(sample => sample.Partition == "test"),
+            samples.Count(sample => sample.FaceId < 0), warnings);
     }
 
     public async Task<FaceTrainingResult> SubmitAndApplyAsync(Uri endpoint,
@@ -48,21 +47,10 @@ public sealed class FaceTrainingService(
         string? expectedSnapshotId = null)
     {
         progress?.Report(new("snapshot", 2, "正在冻结人工确认与排他负样本"));
-        var confirmed = repository.GetEmbeddingsForMatching()
-            .Where(face => face.AssignmentState == "confirmed" && face.PersonId is not null).ToArray();
-        var modelVersion = confirmed.GroupBy(face => face.ModelVersion).OrderByDescending(group => group.Count())
-            .Select(group => group.Key).FirstOrDefault() ?? throw new InvalidOperationException("没有可训练的已确认人脸向量。");
-        confirmed = confirmed.Where(face => face.ModelVersion == modelVersion).ToArray();
-        var rejected = repository.GetRejectedFaceEmbeddings().Where(face => face.ModelVersion == modelVersion).ToArray();
-        var people = confirmed.Select(face => face.PersonId!.Value).Distinct().ToArray();
+        var samples = BuildSamples(out var modelVersion);
+        var people = samples.Where(sample => sample.Label == "positive").Select(sample => sample.PersonId).Distinct().ToArray();
         if (people.Length < 2) throw new InvalidOperationException("至少需要两位已有人工确认样本的人物。");
-        var samples = confirmed.Select(face => new Sample(face.FaceId, face.PersonId!.Value, "positive",
-                $"image:{face.ImageId}", face.Embedding))
-            .Concat(rejected.Select(face => new Sample(face.FaceId, face.PersonId, "negative",
-                $"image:{face.ImageId}", face.Embedding))).ToArray();
-        var fingerprintText = string.Join('|', samples.OrderBy(value => value.FaceId)
-            .Select(value => $"{value.FaceId}:{value.PersonId}:{value.Label}:{value.LeakageGroup}"));
-        var snapshotId = "picer-" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(fingerprintText)))[..20].ToLowerInvariant();
+        var snapshotId = Fingerprint(samples);
         if (expectedSnapshotId is not null && !snapshotId.Equals(expectedSnapshotId, StringComparison.Ordinal))
             throw new InvalidOperationException("确认后人工标注发生了变化；为避免提交错位数据，请重新确认训练快照。");
         var root = new Uri(endpoint.ToString().TrimEnd('/') + "/");
@@ -135,8 +123,44 @@ public sealed class FaceTrainingService(
         throw new InvalidOperationException($"{operation}失败（{(int)response.StatusCode}）：{detail}");
     }
 
+    private Sample[] BuildSamples(out string modelVersion)
+    {
+        var confirmed = repository.GetEmbeddingsForMatching()
+            .Where(face => face.AssignmentState == "confirmed" && face.PersonId is not null).ToArray();
+        var selectedModelVersion = confirmed.GroupBy(face => face.ModelVersion).OrderByDescending(group => group.Count())
+            .Select(group => group.Key).FirstOrDefault() ?? throw new InvalidOperationException("没有可训练的已确认人脸向量。");
+        confirmed = confirmed.Where(face => face.ModelVersion == selectedModelVersion).ToArray();
+        var rejected = repository.GetRejectedFaceEmbeddings().Where(face => face.ModelVersion == selectedModelVersion).ToArray();
+        modelVersion = selectedModelVersion;
+        var imageGroups = repository.GetTrainingLeakageGroups(confirmed.Select(face => face.ImageId)
+            .Concat(rejected.Select(face => face.ImageId)));
+        var photos = confirmed.Select(face => CreateSample(face.FaceId, face.PersonId!.Value, "positive",
+                imageGroups.GetValueOrDefault(face.ImageId, $"image:{face.ImageId}"), face.Embedding))
+            .Concat(rejected.Select(face => CreateSample(face.FaceId, face.PersonId, "negative",
+                imageGroups.GetValueOrDefault(face.ImageId, $"image:{face.ImageId}"), face.Embedding)));
+        var videos = repository.GetVideoTrainingFaces().Select(face => CreateSample(-face.VideoFaceId, face.PersonId,
+            face.Label, $"video:{face.VideoId}", face.Embedding));
+        return photos.Concat(videos).OrderBy(sample => sample.FaceId).ThenBy(sample => sample.PersonId)
+            .ThenBy(sample => sample.Label, StringComparer.Ordinal).ToArray();
+    }
+
+    private static Sample CreateSample(long faceId, long personId, string label, string leakageGroup, float[] embedding)
+    {
+        var bucket = SHA256.HashData(Encoding.UTF8.GetBytes(leakageGroup))[0] % 20;
+        var partition = bucket < 14 ? "train" : bucket < 17 ? "validation" : "test";
+        return new(faceId, personId, label, leakageGroup, partition, embedding);
+    }
+
+    private static string Fingerprint(IEnumerable<Sample> samples)
+    {
+        var fingerprintText = string.Join('|', samples.OrderBy(value => value.FaceId).ThenBy(value => value.PersonId)
+            .ThenBy(value => value.Label, StringComparer.Ordinal)
+            .Select(value => $"{value.FaceId}:{value.PersonId}:{value.Label}:{value.LeakageGroup}:{value.Partition}"));
+        return "picer-" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(fingerprintText)))[..20].ToLowerInvariant();
+    }
+
     public void Dispose() { if (_ownsClient) _client.Dispose(); }
-    private sealed record Sample(long FaceId, long PersonId, string Label, string LeakageGroup, float[] Embedding);
+    private sealed record Sample(long FaceId, long PersonId, string Label, string LeakageGroup, string Partition, float[] Embedding);
     private sealed record DatasetResponse(string Id);
     private sealed record JobResponse(string Id, string Status, string Stage, int Progress, string? ArtifactId, string? Error);
     private sealed record MetricsResponse(double FalseAcceptRate, double FalseRejectRate,
