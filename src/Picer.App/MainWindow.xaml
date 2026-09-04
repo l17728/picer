@@ -41,43 +41,17 @@
                 <TextBox x:Name="SearchBox" Width="240" Margin="4,0" Text="{Binding SearchQuery, UpdateSourceTrigger=PropertyChanged}"
                          TextChanged="SearchBox_TextChanged"
                          AutomationProperties.Name="搜索图片"
-                         ToolTip="搜索文件名或地域；未知地域输入后按 Enter 识别"/>
+                         ToolTip="普通搜索：输入后立即在本地索引中筛选，不调用大模型"/>
                 <TextBlock Text="媒体：" VerticalAlignment="Center" Margin="6,0,2,0"/>
                 <ComboBox x:Name="MediaTypeBox" Width="72" SelectedIndex="0" SelectionChanged="MediaTypeBox_SelectionChanged"
                           AutomationProperties.Name="媒体类型过滤">
                     <ComboBoxItem Content="图片" Tag="image"/>
                     <ComboBoxItem Content="视频" Tag="video"/>
                 </ComboBox>
-                <CheckBox IsChecked="{Binding IsQuestionMode}" VerticalAlignment="Center" Margin="8,0,6,0"
-                          Click="QuestionMode_Click" Cursor="Hand" AutomationProperties.Name="AI 问答开关"
-                          ToolTip="当前使用本地规则回答基础问题；后续将在此入口连接已配置的大模型">
-                    <CheckBox.Template>
-                        <ControlTemplate TargetType="CheckBox">
-                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                <TextBlock Text="AI 问答" VerticalAlignment="Center" Margin="0,0,5,0"/>
-                                <Border x:Name="SwitchTrack" Width="38" Height="20" CornerRadius="10"
-                                        Background="#8A8A8A" BorderBrush="#666" BorderThickness="1">
-                                    <Ellipse x:Name="SwitchThumb" Width="16" Height="16" Margin="1"
-                                             Fill="White" HorizontalAlignment="Left"/>
-                                </Border>
-                                <TextBlock x:Name="SwitchState" Text="关" Width="18" Margin="4,0,0,0"
-                                           VerticalAlignment="Center" Foreground="#555" FontWeight="SemiBold"/>
-                            </StackPanel>
-                            <ControlTemplate.Triggers>
-                                <Trigger Property="IsChecked" Value="True">
-                                    <Setter TargetName="SwitchTrack" Property="Background" Value="#1677D2"/>
-                                    <Setter TargetName="SwitchTrack" Property="BorderBrush" Value="#0D5EA8"/>
-                                    <Setter TargetName="SwitchThumb" Property="HorizontalAlignment" Value="Right"/>
-                                    <Setter TargetName="SwitchState" Property="Text" Value="开"/>
-                                    <Setter TargetName="SwitchState" Property="Foreground" Value="#0D5EA8"/>
-                                </Trigger>
-                                <Trigger Property="IsEnabled" Value="False">
-                                    <Setter Property="Opacity" Value="0.55"/>
-                                </Trigger>
-                            </ControlTemplate.Triggers>
-                        </ControlTemplate>
-                    </CheckBox.Template>
-                </CheckBox>
+                <ToggleButton Content="✨ AI 问答" IsChecked="{Binding IsQuestionMode}" Click="QuestionMode_Click"
+                              VerticalAlignment="Center" Margin="8,0,6,0" Padding="10,3" Cursor="Hand"
+                              AutomationProperties.Name="AI 问答按钮"
+                              ToolTip="展开独立问答面板；输入后按 Enter 或点击提交才会调用模型"/>
                 <CheckBox IsChecked="{Binding IsChronologicalAscending}" VerticalAlignment="Center" Margin="6,0"
                           Cursor="Hand" Content="{Binding ChronologicalOrderLabel}"
                           AutomationProperties.Name="全局照片时间顺序开关"
@@ -328,13 +302,28 @@
                     <StackPanel DockPanel.Dock="Top" Margin="8,2,8,4">
                         <TextBlock Text="{Binding ActiveFiltersText}" TextWrapping="Wrap" Foreground="#444"/>
                         <TextBlock Text="{Binding MatchExplanation}" FontSize="11" Foreground="#666"/>
+                        <Border Margin="0,8,0,4" Padding="10" Background="#EEF5FC" BorderBrush="#8EB6DB" BorderThickness="1">
+                            <Border.Style><Style TargetType="Border"><Setter Property="Visibility" Value="Collapsed"/><Style.Triggers><DataTrigger Binding="{Binding IsQuestionMode}" Value="True"><Setter Property="Visibility" Value="Visible"/></DataTrigger></Style.Triggers></Style></Border.Style>
+                            <StackPanel>
+                                <TextBlock Text="AI 问答" FontSize="16" FontWeight="SemiBold"/>
+                                <TextBox x:Name="AiQuestionBox" Text="{Binding AiQuestionInput, UpdateSourceTrigger=PropertyChanged}"
+                                         AcceptsReturn="True" TextWrapping="Wrap" MinHeight="58" Margin="0,7,0,6"
+                                         PreviewKeyDown="AiQuestionBox_PreviewKeyDown" AutomationProperties.Name="AI 问题输入框"
+                                         ToolTip="Enter 提交；Shift+Enter 换行。输入过程中不会调用模型。"/>
+                                <DockPanel>
+                                    <TextBlock Text="Enter 提交 · Shift+Enter 换行" Foreground="#596979" VerticalAlignment="Center"/>
+                                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                                        <CheckBox Content="包含视频" IsChecked="{Binding IncludeVideosInAiQuestion}" Margin="0,0,12,0" VerticalAlignment="Center"
+                                                  ToolTip="同时检索视频人物、拍摄信息、语音转写和视频摘要"/>
+                                        <Button Content="停止" Command="{Binding CancelAiQuestionCommand}" IsEnabled="{Binding IsAiQuestionRunning}" Padding="12,4" Margin="0,0,5,0"/>
+                                        <Button Content="提交问题" Command="{Binding SubmitAiQuestionCommand}" Padding="14,4"/>
+                                    </StackPanel>
+                                </DockPanel>
+                            </StackPanel>
+                        </Border>
                         <controls:MarkdownView Markdown="{Binding QuestionAnswerText}" MaxHeight="180" Margin="0,2,0,0">
                             <controls:MarkdownView.Style><Style TargetType="controls:MarkdownView"><Setter Property="Visibility" Value="Collapsed"/><Style.Triggers><DataTrigger Binding="{Binding IsQuestionMode}" Value="True"><Setter Property="Visibility" Value="Visible"/></DataTrigger></Style.Triggers></Style></controls:MarkdownView.Style>
                         </controls:MarkdownView>
-                        <CheckBox Content="包含视频" IsChecked="{Binding IncludeVideosInAiQuestion}" Margin="0,7,0,0"
-                                  ToolTip="同时检索视频人物、拍摄信息、语音转写和视频摘要">
-                            <CheckBox.Style><Style TargetType="CheckBox"><Setter Property="Visibility" Value="Collapsed"/><Style.Triggers><DataTrigger Binding="{Binding IsQuestionMode}" Value="True"><Setter Property="Visibility" Value="Visible"/></DataTrigger></Style.Triggers></Style></CheckBox.Style>
-                        </CheckBox>
                     </StackPanel>
                     <TextBlock DockPanel.Dock="Top" Text="视频结果" FontWeight="SemiBold" Margin="8,2,8,0">
                         <TextBlock.Style><Style TargetType="TextBlock"><Setter Property="Visibility" Value="Collapsed"/><Style.Triggers><DataTrigger Binding="{Binding IsQuestionMode}" Value="True"><Setter Property="Visibility" Value="Visible"/></DataTrigger></Style.Triggers></Style></TextBlock.Style>

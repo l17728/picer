@@ -69,8 +69,18 @@ public partial class MainWindow : Window
     private void QuestionMode_Click(object sender, RoutedEventArgs e)
     {
         MainTabs.SelectedIndex = 1;
-        SearchBox.Focus();
-        SearchBox.CaretIndex = SearchBox.Text.Length;
+        if (_mainVm.IsQuestionMode)
+        {
+            AiQuestionBox.Focus();
+            AiQuestionBox.CaretIndex = AiQuestionBox.Text.Length;
+        }
+    }
+
+    private async void AiQuestionBox_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Enter || Keyboard.Modifiers.HasFlag(ModifierKeys.Shift)) return;
+        e.Handled = true;
+        await _mainVm.SubmitAiQuestionAsync();
     }
 
     private void MediaTypeBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -117,8 +127,8 @@ public partial class MainWindow : Window
                 break;
             case VoiceActionKind.SearchMedia:
                 _mainVm.IsQuestionMode = true; _mainVm.IncludeVideosInAiQuestion = action.IncludeVideos;
-                _mainVm.SearchQuery = action.Query ?? ""; MainTabs.SelectedIndex = 1;
-                await _mainVm.ApplySearchAndFilterAsync();
+                _mainVm.AiQuestionInput = action.Query ?? ""; MainTabs.SelectedIndex = 1;
+                await _mainVm.SubmitAiQuestionAsync();
                 break;
         }
     }

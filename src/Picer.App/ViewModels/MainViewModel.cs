@@ -90,7 +90,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private bool _includeVideosInAiQuestion;
 
     [ObservableProperty]
-    private string _questionAnswerText = "问答仅在本地索引上运行，不外发图片或元数据。";
+    private string _aiQuestionInput = "";
+
+    [ObservableProperty]
+    private bool _isAiQuestionRunning;
+
+    [ObservableProperty]
+    private string _questionAnswerText = "## AI 问答\n\n输入完整问题后按 Enter 或点击“提交问题”。输入过程中不会调用模型。";
 
     [ObservableProperty]
     private bool _showSceneContext;
@@ -316,15 +322,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
     }
     partial void OnIsQuestionModeChanged(bool value)
     {
-        QuestionAnswerText = value
-            ? "## AI 问答已开启\n\n可按人物、地点、时间、标签、照片描述与场景提问；勾选“包含视频”后还会检索视频人物、转写和摘要。"
-            : "AI 问答已关闭。";
-        StatusText = value ? "AI 问答已开启（索引检索 + VL 复核）" : "AI 问答已关闭";
-        _ = ApplySearchAndFilterAsync();
-    }
-    partial void OnIncludeVideosInAiQuestionChanged(bool value)
-    {
-        if (IsQuestionMode && !string.IsNullOrWhiteSpace(SearchQuery)) _ = ApplySearchAndFilterAsync();
+        if (value && string.IsNullOrWhiteSpace(QuestionAnswerText))
+            QuestionAnswerText = "## AI 问答\n\n输入完整问题后按 Enter 或点击“提交问题”。输入过程中不会调用模型。";
+        StatusText = value ? "AI 问答面板已打开；等待提交问题" : "AI 问答面板已收起";
     }
     partial void OnSortByChanged(SortField value) => _ = ApplySearchAndFilterAsync();
     partial void OnSortDirChanged(SortDirection value) => _ = ApplySearchAndFilterAsync();
@@ -475,17 +475,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
         var version = Interlocked.Increment(ref _searchVersion);
         var sourceId = SelectedSource is null || SelectedSource.IsAll ? (long?)null : SelectedSource.SourceId;
         var filters = BuildSearchFilters(sourceId);
-        if (IsQuestionMode && !string.IsNullOrWhiteSpace(SearchQuery))
-        {
-            await ApplyAiQuestionAsync(version, cts);
-            return;
-        }
-        LocalQuestionResult? question = null;
-        if (IsQuestionMode)
-        {
-            question = LocalQuestionInterpreter.Interpret(SearchQuery);
-            filters.Query = "";
-        }
         SearchPage page;
         try
         {
@@ -533,25 +522,34 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
         OnPropertyChanged(nameof(TotalCount));
         OnPropertyChanged(nameof(ResultsSummary));
-        if (question is not null)
-        {
-            QuestionAnswerText = question.Intent switch
-            {
-                LocalQuestionIntent.Count => $"回答：当前条件下共 {MatchedCount} 张图片。依据：{question.Explanation}。",
-                LocalQuestionIntent.CameraSummary => $"回答：当前索引包含的相机品牌有 {string.Join("、", CameraBrands.DefaultIfEmpty("无相机信息"))}。依据：{question.Explanation}。",
-                _ => $"暂不支持这个问题。{question.Explanation}。未将内容发送到外部服务。"
-            };
-        }
-        StatusText = IsQuestionMode && string.IsNullOrWhiteSpace(SearchQuery)
-            ? "AI 问答已开启；当前支持照片数量或相机相关问题"
-            : SearchQuery.Length > 0
+        StatusText = SearchQuery.Length > 0
             ? (MatchedCount > TotalCount
                 ? $"搜索「{SearchQuery}」：显示 {TotalCount} / 共 {MatchedCount} 条"
                 : $"搜索「{SearchQuery}」：找到 {MatchedCount} 条")
             : (MatchedCount > TotalCount ? $"显示 {TotalCount} / 共 {MatchedCount} 张图片" : $"共 {MatchedCount} 张图片");
     }
 
-    private async Task ApplyAiQuestionAsync(long version, CancellationTokenSource searchCancellation)
+    [RelayCommand]
+    public async Task SubmitAiQuestionAsync()
+    {
+        var question = AiQuestionInput.Trim();
+        if (question.Length == 0) { StatusText = "请输入问题后再提交"; return; }
+        _searchCts?.Cancel();
+        var cts = _searchCts = new CancellationTokenSource();
+        var version = Interlocked.Increment(ref _searchVersion);
+        IsAiQuestionRunning = true;
+        try { await ApplyAiQuestionAsync(version, cts, question); }
+        finally { IsAiQuestionRunning = false; }
+    }
+
+    [RelayCommand]
+    private void CancelAiQuestion()
+    {
+        _aiQuestionCts?.Cancel();
+        StatusText = "正在停止 AI 问答…";
+    }
+
+    private async Task ApplyAiQuestionAsync(long version, CancellationTokenSource searchCancellation, string question)
     {
         _aiQuestionCts?.Cancel(); _aiQuestionCts?.Dispose();
         _aiQuestionCts = CancellationTokenSource.CreateLinkedTokenSource(searchCancellation.Token);
@@ -563,7 +561,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
             StatusText = "AI 问答模型尚未配置";
             return;
         }
-        var question = SearchQuery.Trim();
         var includeVideos = IncludeVideosInAiQuestion;
         try
         {
@@ -600,15 +597,15 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private SearchFilters BuildSearchFilters(long? sourceId = null)
     {
-        var mention = IsQuestionMode ? null : People.FindMention(SearchQuery);
+        var mention = People.FindMention(SearchQuery);
         var person = mention?.Person;
         var visual = VisualConceptCatalog.Parse(mention?.RemainingQuery ?? SearchQuery);
-        var geoBounds = IsQuestionMode ? null : mention is null && visual.ConceptIds.Count == 0
+        var geoBounds = mention is null && visual.ConceptIds.Count == 0
             ? ResolveGeoBounds()
             : ResolveMentionGeoBounds(visual.RemainingQuery);
         return new()
     {
-        Query = IsQuestionMode || geoBounds is not null || mention is not null || visual.ConceptIds.Count > 0 ? "" : SearchQuery,
+        Query = geoBounds is not null || mention is not null || visual.ConceptIds.Count > 0 ? "" : SearchQuery,
         GeoBounds = geoBounds,
         PersonId = person?.Id,
         VisualConceptIds = visual.ConceptIds,

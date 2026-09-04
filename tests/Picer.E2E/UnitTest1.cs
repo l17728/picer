@@ -380,6 +380,38 @@ public sealed class DesktopSmokeTests
         }
     }
 
+    [Fact]
+    public void AiQuestion_UsesDedicatedExplicitSubmitPanel()
+    {
+        var isolatedData = Path.Combine(Path.GetTempPath(), "picer-ai-question-ui-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(isolatedData);
+        var appDirectory = Path.GetDirectoryName(typeof(Picer.App.App).Assembly.Location)!;
+        using var process = Process.Start(new ProcessStartInfo(Path.Combine(appDirectory, "Picer.App.exe"))
+        {
+            UseShellExecute = false,
+            Environment = { ["PICER_DATA_ROOT"] = isolatedData }
+        })!;
+        try
+        {
+            var window = WaitForWindow(process.Id, TimeSpan.FromSeconds(15)); Assert.NotNull(window);
+            var button = WaitForElement(window!, "AI 问答按钮", TimeSpan.FromSeconds(5)); Assert.NotNull(button);
+            Assert.True(button!.TryGetCurrentPattern(TogglePattern.Pattern, out var toggle));
+            ((TogglePattern)toggle).Toggle();
+            var input = WaitForElement(window!, "AI 问题输入框", TimeSpan.FromSeconds(5)); Assert.NotNull(input);
+            Assert.Equal(ControlType.Edit, input!.Current.ControlType);
+            var submit = window!.FindAll(TreeScope.Descendants,
+                    new AndCondition(new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Button),
+                        new PropertyCondition(AutomationElement.NameProperty, "提交问题")))
+                .Cast<AutomationElement>().FirstOrDefault();
+            Assert.NotNull(submit);
+        }
+        finally
+        {
+            if (!process.HasExited) process.Kill(true);
+            try { Directory.Delete(isolatedData, true); } catch { }
+        }
+    }
+
     private static AutomationElement? WaitForWindow(int processId, TimeSpan timeout)
     {
         var deadline = DateTime.UtcNow + timeout;
