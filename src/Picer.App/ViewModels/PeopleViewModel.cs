@@ -994,7 +994,7 @@ public sealed partial class SuggestedPersonGroupViewModel(SuggestedPersonGroupRe
     private readonly List<UnassignedFaceRecord> _faces = record.Faces.ToList();
     public IReadOnlyList<UnassignedFaceRecord> Faces => _faces;
     public int FaceCount => _faces.Count;
-    public string Summary => $"{Record.PersonName} · {FaceCount} 张待确认";
+    public string Summary => $"{Record.PersonName} · {FaceCount} 张高相似待确认";
 
     public void RemoveFaces(IReadOnlySet<long> faceIds)
     {

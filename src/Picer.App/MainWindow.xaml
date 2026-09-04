@@ -390,8 +390,8 @@
                                         Padding="10,5" Margin="0,6,0,0"/>
                             </StackPanel>
                             <StackPanel DockPanel.Dock="Bottom" Margin="0,8,0,0">
-                                <TextBlock Text="待确认推荐组" FontWeight="SemiBold" Margin="2,3"
-                                           ToolTip="按系统推荐的已命名人物分组，可整组确认；少量错误脸可在右侧多选后重新分类"/>
+                                <TextBlock Text="高相似疑难人脸 · 待确认" FontWeight="SemiBold" Margin="2,3"
+                                           ToolTip="系统按人脸向量相似度推荐到已命名人物；点击“是”形成正样本，点击“不是”形成针对该人物的困难负样本"/>
                                 <ListBox Height="125" ItemsSource="{Binding SuggestedPersonGroups}"
                                          SelectedItem="{Binding SelectedSuggestedPersonGroup}" DisplayMemberPath="Summary"
                                          AutomationProperties.Name="待确认推荐组"/>
@@ -467,6 +467,8 @@
                                             </StackPanel>
                                         </Grid>
                                         <TextBlock Text="{Binding SuggestedText}" Foreground="#8A4B08" FontWeight="SemiBold" Margin="0,4,0,0"/>
+                                        <TextBlock Text="确认结果将用于人物识别优化" Foreground="#52606D" FontSize="10"
+                                                   Visibility="{Binding IsAutomaticSuggestion, Converter={StaticResource BoolToVis}}"/>
                                         <TextBlock Text="{Binding ImagePath}" TextTrimming="CharacterEllipsis" ToolTip="{Binding ImagePath}" Foreground="#666" FontSize="11"/>
                                     </StackPanel>
                                 </Border></DataTemplate></ListBox.ItemTemplate>
