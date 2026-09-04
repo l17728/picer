@@ -38,6 +38,22 @@ public sealed class VisionAnalysisTests : IDisposable
     }
 
     [Fact]
+    public void FaceFeatureOrderer_KeepsEmbeddingClustersTogetherAndMissingVectorsLast()
+    {
+        static UnassignedFaceRecord Face(long id) => new(id, id, $"{id}.jpg", null, 0,
+            new NormalizedFaceBox(0, 0, 1, 1), 1);
+        var faces = Enumerable.Range(1, 13).Select(index => Face(index)).ToArray();
+        var embeddings = Enumerable.Range(1, 12).ToDictionary(index => (long)index,
+            index => index <= 6 ? new[] { 1f, 0f } : new[] { 0f, 1f });
+
+        var ordered = FaceFeatureOrderer.Order(faces, embeddings);
+
+        Assert.Equal(13, ordered[^1].FaceId);
+        Assert.True(ordered.Take(6).All(face => face.FaceId <= 6));
+        Assert.True(ordered.Skip(6).Take(6).All(face => face.FaceId is >= 7 and <= 12));
+    }
+
+    [Fact]
     public void Database_MigratesVisionSchemaToVersion4()
     {
         using var connection = new SqliteConnection($"Data Source={_databasePath}");
@@ -172,14 +188,16 @@ public sealed class VisionAnalysisTests : IDisposable
         var second = people.Create("training-second");
         var repository = new VisionAnalysisRepository(_database);
         const string firstJson = "{\"id\":\"artifact-1\",\"baseModelVersion\":\"sface-v1\",\"people\":[{\"personId\":1,\"prototype\":[1,0],\"threshold\":0.61}],\"metrics\":{\"falseAcceptRate\":0,\"falseRejectRate\":0,\"positiveEvaluated\":20,\"negativeEvaluated\":10}}";
-        const string secondJson = "{\"id\":\"artifact-2\",\"baseModelVersion\":\"sface-v1\",\"people\":[{\"personId\":2,\"prototype\":[0,1],\"threshold\":0.66}],\"metrics\":{\"falseAcceptRate\":0,\"falseRejectRate\":0,\"positiveEvaluated\":20,\"negativeEvaluated\":10}}";
+        const string secondJson = "{\"id\":\"artifact-2\",\"baseModelVersion\":\"sface-v1\",\"adapter\":{\"type\":\"diagonal-cosine-v1\",\"weights\":[1.5,0.5]},\"people\":[{\"personId\":2,\"prototype\":[0,1],\"threshold\":0.66}],\"metrics\":{\"falseAcceptRate\":0,\"falseRejectRate\":0,\"positiveEvaluated\":20,\"negativeEvaluated\":10}}";
         repository.ApplyLearnedFaceArtifact("artifact-1", "dataset-1", "http://localhost", "sface-v1",
             firstJson, 0, 0, [new(first.Id, "artifact-1", "sface-v1", [1, 0], .61)]);
         repository.ApplyLearnedFaceArtifact("artifact-2", "dataset-2", "http://localhost", "sface-v1",
             secondJson, 0, 0, [new(second.Id, "artifact-2", "sface-v1", [0, 1], .66)]);
+        Assert.Equal([1.5f, .5f], repository.GetActiveFaceAdapter("sface-v1"));
 
         using var training = new FaceTrainingService(repository);
         Assert.Equal("artifact-1", training.Rollback());
+        Assert.Null(repository.GetActiveFaceAdapter("sface-v1"));
 
         var policies = repository.GetLearnedFacePolicies("sface-v1");
         Assert.Single(policies);
@@ -216,8 +234,10 @@ public sealed class VisionAnalysisTests : IDisposable
         var again = training.Prepare();
 
         Assert.Equal(1, first.LeakageGroups);
+        Assert.Equal(2, first.PositiveSamples);
+        Assert.Equal(2, first.NegativeSamples);
         Assert.Equal(first.SnapshotId, again.SnapshotId);
-        Assert.True(first.TrainSamples == 2 || first.ValidationSamples == 2 || first.TestSamples == 2);
+        Assert.True(first.TrainSamples == 4 || first.ValidationSamples == 4 || first.TestSamples == 4);
     }
 
     [Fact]

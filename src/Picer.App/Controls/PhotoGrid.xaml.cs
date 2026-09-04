@@ -65,6 +65,16 @@ public partial class PhotoGrid : UserControl
     private void Details_Click(object sender, RoutedEventArgs e) => Execute(ShowDetailsCommand);
     private void EditLocation_Click(object sender, RoutedEventArgs e) => Execute(EditLocationCommand);
     private void EditTags_Click(object sender, RoutedEventArgs e) => Execute(EditTagsCommand);
+    private void ContextMenu_Opened(object sender, RoutedEventArgs e)
+    {
+        var video = SelectedItem is ImageItemViewModel { IsVideo: true };
+        DetailsMenuItem.Header = video ? "查看视频信息" : "查看图片信息";
+        OpenMenuItem.Header = video ? "播放视频" : "打开图片";
+        EditLocationMenuItem.IsEnabled = !video;
+        EditTagsMenuItem.IsEnabled = !video;
+        EditLocationMenuItem.ToolTip = video ? "视频地点编辑将在视频元数据索引中提供" : null;
+        EditTagsMenuItem.ToolTip = video ? "视频标签将在视频元数据索引中提供" : null;
+    }
     private void BurstMember_Click(object sender, RoutedEventArgs e)
     {
         if ((sender as FrameworkElement)?.DataContext is not ImageItemViewModel image) return;

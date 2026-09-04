@@ -25,6 +25,8 @@ using Picer.App.Views;
 
 namespace Picer.App.ViewModels;
 
+public enum DirectoryMediaFilter { Images, Videos, All }
+
 public partial class MainViewModel : ObservableObject, IDisposable
 {
     private readonly PicerDatabase _db;
@@ -50,6 +52,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private readonly DirectoryClassificationPreferences _directoryClassification = new(AppPaths.DirectoryClassificationSettingsPath);
     private GeoBounds? _resolvedGeoBounds;
     private readonly List<ImageRecord> _searchLoadedRecords = [];
+    private readonly SemaphoreSlim _videoPosterGate = new(2, 2);
 
     public ObservableCollection<SourceNodeViewModel> Sources { get; } = new();
     public ObservableCollection<ImageItemViewModel> Images { get; } = new();
@@ -174,6 +177,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private DirectoryNodeViewModel? _selectedDirectory;
 
     [ObservableProperty]
+    private DirectoryMediaFilter _directoryMediaFilter = DirectoryMediaFilter.Images;
+
+    [ObservableProperty]
     private string _selectedPhotoContext = "未选择照片";
 
     [ObservableProperty]
@@ -245,7 +251,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             _ = ApplySearchAndFilterAsync();
             _ = LoadDirectoryTreeAsync();
         });
-        SelectedImages.CollectionChanged += (_, _) => Semantic.SetSelection(SelectedImages.Select(image => image.Record.Id));
+        SelectedImages.CollectionChanged += (_, _) => Semantic.SetSelection(SelectedImages.Where(image => !image.IsVideo).Select(image => image.Record.Id));
         DirectoryImagesView = (ListCollectionView)CollectionViewSource.GetDefaultView(DirectoryImages);
 
         _searchDebounce = new DispatcherTimer
@@ -302,6 +308,22 @@ public partial class MainViewModel : ObservableObject, IDisposable
     }
 
     partial void OnSelectedSourceChanged(SourceNodeViewModel? value) => LoadImages();
+
+    public void SetDirectoryMediaFilter(int selectedIndex)
+    {
+        DirectoryMediaFilter = selectedIndex switch
+        {
+            1 => DirectoryMediaFilter.Videos,
+            2 => DirectoryMediaFilter.All,
+            _ => DirectoryMediaFilter.Images
+        };
+        ReloadDirectoryMedia();
+    }
+
+    public void ReloadDirectoryMedia()
+    {
+        if (SelectedDirectory is not null) LoadImagesForSelectedDirectory();
+    }
     partial void OnSearchQueryChanged(string value)
     {
         if (!string.Equals(value.Trim(), _resolvedGeoQuery, StringComparison.OrdinalIgnoreCase))
@@ -960,6 +982,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         var images = (SelectedImages.Count > 0
                 ? SelectedImages.ToArray()
                 : SelectedImage is null ? [] : [SelectedImage])
+            .Where(image => !image.IsVideo)
             .DistinctBy(image => image.Record.Id).ToArray();
         if (images.Length == 0) return;
         var choices = await UiWork.RunDatabaseAsync(() => _db.GetLocationHierarchyChoices().ToArray());
@@ -986,6 +1009,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         var images = (SelectedImages.Count > 0
                 ? SelectedImages.ToArray()
                 : SelectedImage is null ? [] : [SelectedImage])
+            .Where(image => !image.IsVideo)
             .DistinctBy(image => image.Record.Id).ToArray();
         if (images.Length == 0) return;
         var imageIds = images.Select(image => image.Record.Id).ToArray();
@@ -1102,6 +1126,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         if (SelectedImage is null) return;
         var image = SelectedImage;
+        if (image.VideoRecord is { } video)
+        {
+            var duration = video.DurationSeconds is double seconds ? TimeSpan.FromSeconds(seconds).ToString(@"hh\:mm\:ss") : "未知";
+            MessageBox.Show($"文件：{Path.GetFileName(video.Path)}\n路径：{video.Path}\n类型：视频\n时长：{duration}\n分辨率：{video.Width}×{video.Height}\n大小：{video.FileSize / 1024d / 1024d:F1} MB",
+                "视频信息", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
         var record = image.Record;
         var timeText = record.TakenUtc?.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")
             ?? (record.ModifiedUtc == DateTime.MinValue ? "未知" : record.ModifiedUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss") + "（文件修改时间）");
@@ -1236,7 +1267,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private async Task DeleteSelectedFilesAsync()
     {
         var selected=(SelectedImages.Count>0?SelectedImages:SelectedImage is null?[]:[SelectedImage])
-            .Select(item=>item.Record).DistinctBy(item=>item.Id).Where(item=>item.Status==ImageStatus.Active).ToList();
+            .Where(item=>!item.IsVideo).Select(item=>item.Record).DistinctBy(item=>item.Id).Where(item=>item.Status==ImageStatus.Active).ToList();
         if(selected.Count==0){MessageBox.Show("请先在图片网格中选择一张或多张图片。","删除所选",MessageBoxButton.OK,MessageBoxImage.Information);return;}
         IsBusy=true; StatusText="正在生成安全删除快照…";
         try
@@ -1727,8 +1758,26 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     : records.OrderByDescending(SceneTimeClusterService.EffectiveTime).ThenByDescending(image => image.Id))
                 .ToList();
             var indexedPaths = records.Select(record => record.Path).ToHashSet(StringComparer.OrdinalIgnoreCase);
-            var displayItems = await BuildBurstAwareItemsAsync(
-                records.Where(image => image.Status == ImageStatus.Active).ToArray(), cts.Token);
+            var photoItems = DirectoryMediaFilter == DirectoryMediaFilter.Videos
+                ? []
+                : await BuildBurstAwareItemsAsync(records.Where(image => image.Status == ImageStatus.Active).ToArray(), cts.Token);
+            var videoItems = DirectoryMediaFilter == DirectoryMediaFilter.Images ||
+                             selectedDirectory.IsSceneAnchor || selectedDirectory.IsGeoNode ||
+                             selectedDirectory.IsAlbumRoot || selectedDirectory.AlbumId is not null
+                ? []
+                : await UiWork.RunDatabaseAsync("DirectoryVideos.Load", () =>
+                {
+                    var posters = AppServices.Videos.GetFirstKeyframePaths();
+                    return AppServices.Videos.GetAll()
+                        .Where(video => video.Status == "active" && IsPathUnderDirectory(video.Path, selectedDirectory.FullPath))
+                        .Where(video => string.IsNullOrWhiteSpace(SearchQuery) ||
+                                        Path.GetFileName(video.Path).Contains(SearchQuery.Trim(), StringComparison.CurrentCultureIgnoreCase))
+                        .Select(video => new ImageItemViewModel(video, posters.GetValueOrDefault(video.Id),
+                            LoadVideoPosterPathAsync, cts.Token)).ToArray();
+                }, cts.Token);
+            var displayItems = photoItems.Concat(videoItems)
+                .OrderBy(item => IsChronologicalAscending ? item.EffectiveTime.Ticks : -item.EffectiveTime.Ticks)
+                .ThenBy(item => item.Id).ToArray();
             await UiWork.AddInBatchesAsync(displayItems,
                 item =>
                 {
@@ -1740,9 +1789,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
             if (!IsCurrentLoad()) return;
             RefreshDirectoryTimelineView(resetPosition: true);
             OnPropertyChanged(nameof(DirectoryImageCount));
-            StatusText = $"[{selectedDirectory.Name}] 已显示 {DirectoryImages.Count} 张索引照片";
+            StatusText = $"[{selectedDirectory.Name}] 已显示 {DirectoryImages.Count} 个媒体项";
 
-            var unindexedFiles = selectedDirectory.IsSceneAnchor || selectedDirectory.IsGeoNode || selectedDirectory.IsAlbumRoot || selectedDirectory.AlbumId is not null ? [] : await Task.Run(() =>
+            var unindexedFiles = DirectoryMediaFilter == DirectoryMediaFilter.Videos || selectedDirectory.IsSceneAnchor || selectedDirectory.IsGeoNode || selectedDirectory.IsAlbumRoot || selectedDirectory.AlbumId is not null ? [] : await Task.Run(() =>
             {
                 var options = new EnumerationOptions
                 {
@@ -1782,6 +1831,27 @@ public partial class MainViewModel : ObservableObject, IDisposable
         catch (OperationCanceledException) { }
         catch (UnauthorizedAccessException) { }
         catch (Exception exception) { StatusText = $"目录照片加载失败：{exception.Message}"; }
+    }
+
+    private static bool IsPathUnderDirectory(string path, string directory)
+    {
+        if (string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory)) return false;
+        var root = Path.GetFullPath(directory).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                   + Path.DirectorySeparatorChar;
+        return Path.GetFullPath(path).StartsWith(root, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private async Task<string?> LoadVideoPosterPathAsync(VideoRecord video, CancellationToken cancellationToken)
+    {
+        if (AppServices.VideoKeyframes is not { } keyframes) return null;
+        await _videoPosterGate.WaitAsync(cancellationToken);
+        try
+        {
+            return await keyframes.GetOrCreatePosterAsync(video, cancellationToken);
+        }
+        catch (OperationCanceledException) { return null; }
+        catch (Exception exception) { AppLogger.Warn($"视频首帧生成失败：{video.Path}；{exception.Message}"); return null; }
+        finally { _videoPosterGate.Release(); }
     }
 
     private void PrepareDirectoryTimelineForLoading()

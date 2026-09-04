@@ -18,10 +18,12 @@ public sealed class FaceSuggestionEngine(VisionAnalysisRepository repository, Pe
             .GroupBy(face => face.ModelVersion).OrderByDescending(group => group.Count())
             .Select(group => group.Key).FirstOrDefault();
         var appliedThreshold = cosineThreshold ?? (selectedVersion is null ? null : repository.GetFaceMatchThreshold(selectedVersion)) ?? 0.55;
+        var adapter = selectedVersion is null ? null : repository.GetActiveFaceAdapter(selectedVersion);
         var confirmed = embeddings
             .Where(face => face.AssignmentState == "confirmed" && face.PersonId is not null)
-            .Select(face => (PersonId: face.PersonId!.Value, face.Embedding))
-            .Concat(people.GetConfirmedVideoFaceEmbeddings().Select(face => (face.PersonId, face.Embedding)));
+            .Select(face => (PersonId: face.PersonId!.Value, Embedding: ApplyAdapter(face.Embedding, adapter)))
+            .Concat(people.GetConfirmedVideoFaceEmbeddings().Select(face =>
+                (PersonId: face.PersonId, Embedding: ApplyAdapter(face.Embedding, adapter))));
         var prototypes = confirmed
             .GroupBy(face => face.PersonId)
             .ToDictionary(group => group.Key, group => BuildPrototypes(group.Select(face => face.Embedding)));
@@ -35,7 +37,7 @@ public sealed class FaceSuggestionEngine(VisionAnalysisRepository repository, Pe
         }
         var negativePrototypes = repository.GetRejectedFaceEmbeddings()
             .GroupBy(face => face.PersonId)
-            .ToDictionary(group => group.Key, group => BuildPrototypes(group.Select(face => face.Embedding), 12));
+            .ToDictionary(group => group.Key, group => BuildPrototypes(group.Select(face => ApplyAdapter(face.Embedding, adapter)), 12));
         var adaptiveThresholds = BuildAdaptiveThresholds(appliedThreshold, prototypes, negativePrototypes);
         foreach (var policy in learnedPolicies.Values)
             adaptiveThresholds[policy.PersonId] = Math.Max(appliedThreshold, policy.MatchThreshold);
@@ -50,15 +52,16 @@ public sealed class FaceSuggestionEngine(VisionAnalysisRepository repository, Pe
         for (var index = 0; index < candidates.Length; index++)
         {
             var face = candidates[index];
+            var candidateEmbedding = ApplyAdapter(face.Embedding, adapter);
             var matches = prototypes
-                .Select(pair => (PersonId: pair.Key, Score: pair.Value.Max(prototype => Cosine(face.Embedding, prototype))))
+                .Select(pair => (PersonId: pair.Key, Score: pair.Value.Max(prototype => Cosine(candidateEmbedding, prototype))))
                 .OrderByDescending(value => value.Score)
                 .Take(2).ToArray();
             var match = matches.FirstOrDefault();
             var secondBestScore = matches.Length > 1 ? matches[1].Score : -1;
             var requiredThreshold = QualityAdjustedThreshold(appliedThreshold, face);
             var rejectedSimilarity = negativePrototypes.TryGetValue(match.PersonId, out var negatives)
-                ? negatives.Max(prototype => Cosine(face.Embedding, prototype)) : -1;
+                ? negatives.Max(prototype => Cosine(candidateEmbedding, prototype)) : -1;
             var adaptiveThreshold = adaptiveThresholds.GetValueOrDefault(match.PersonId, appliedThreshold);
             var deferred = false;
             if (match.Score < appliedThreshold)
@@ -159,5 +162,21 @@ public sealed class FaceSuggestionEngine(VisionAnalysisRepository repository, Pe
             rightNorm += right[index] * right[index];
         }
         return leftNorm <= 0 || rightNorm <= 0 ? -1 : dot / Math.Sqrt(leftNorm * rightNorm);
+    }
+
+    private static float[] ApplyAdapter(float[] vector, float[]? weights)
+    {
+        if (weights is null || weights.Length != vector.Length) return vector;
+        var result = new float[vector.Length];
+        double norm = 0;
+        for (var index = 0; index < vector.Length; index++)
+        {
+            result[index] = vector[index] * weights[index];
+            norm += result[index] * result[index];
+        }
+        if (norm <= 0) return vector;
+        var scale = 1 / Math.Sqrt(norm);
+        for (var index = 0; index < result.Length; index++) result[index] = (float)(result[index] * scale);
+        return result;
     }
 }

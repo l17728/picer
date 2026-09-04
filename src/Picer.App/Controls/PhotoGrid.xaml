@@ -78,6 +78,14 @@
                                 <Border Background="#F0F0F0"/>
                                 <Image Source="{Binding Thumbnail}" Stretch="Uniform" Loaded="Thumbnail_Loaded" Unloaded="Thumbnail_Unloaded"
                                        AutomationProperties.Name="{Binding FileName}"/>
+                                <Border x:Name="VideoPlayOverlay" Visibility="Collapsed" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                        Background="#B3000000" CornerRadius="24" Width="48" Height="48">
+                                    <TextBlock Text="▶" Foreground="White" FontSize="24" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="4,0,0,0"/>
+                                </Border>
+                                <Border x:Name="MediaBadge" Visibility="Collapsed" HorizontalAlignment="Left" VerticalAlignment="Bottom"
+                                        Background="#D9323C48" CornerRadius="3" Padding="6,2" Margin="5">
+                                    <TextBlock Text="{Binding MediaBadge}" Foreground="White" FontWeight="SemiBold" FontSize="10"/>
+                                </Border>
                             </Grid>
                             <TextBlock Text="{Binding FileName}" TextTrimming="CharacterEllipsis" TextAlignment="Center"
                                        ToolTip="{Binding Path}"/>
@@ -138,16 +146,22 @@
                             <Setter TargetName="BurstBadge" Property="Visibility" Value="Visible"/>
                             <Setter TargetName="BurstToggle" Property="Visibility" Value="Visible"/>
                         </DataTrigger>
+                        <DataTrigger Binding="{Binding IsVideo}" Value="True">
+                            <Setter TargetName="VideoPlayOverlay" Property="Visibility" Value="Visible"/>
+                            <Setter TargetName="MediaBadge" Property="Visibility" Value="Visible"/>
+                            <Setter TargetName="PhotoCard" Property="BorderBrush" Value="#3D78A8"/>
+                            <Setter TargetName="PhotoCard" Property="BorderThickness" Value="2"/>
+                        </DataTrigger>
                     </DataTemplate.Triggers>
                 </DataTemplate>
             </ListBox.ItemTemplate>
             <ListBox.ContextMenu>
-                <ContextMenu>
-                    <MenuItem Header="查看图片信息" Click="Details_Click"/>
-                    <MenuItem Header="编辑地点…" Click="EditLocation_Click"/>
-                    <MenuItem Header="编辑标签…" Click="EditTags_Click"/>
+                <ContextMenu Opened="ContextMenu_Opened">
+                    <MenuItem x:Name="DetailsMenuItem" Header="查看图片信息" Click="Details_Click"/>
+                    <MenuItem x:Name="EditLocationMenuItem" Header="编辑地点…" Click="EditLocation_Click"/>
+                    <MenuItem x:Name="EditTagsMenuItem" Header="编辑标签…" Click="EditTags_Click"/>
                     <Separator/>
-                    <MenuItem Header="打开" Click="Open_Click"/>
+                    <MenuItem x:Name="OpenMenuItem" Header="打开" Click="Open_Click"/>
                     <MenuItem Header="在资源管理器中显示" Click="Explorer_Click"/>
                 </ContextMenu>
             </ListBox.ContextMenu>

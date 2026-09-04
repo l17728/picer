@@ -7,6 +7,7 @@ using Picer.Core.Data;
 using Picer.Core.People;
 using Picer.Core.Logging;
 using Picer.Core.Vision;
+using Picer.Core.Indexing;
 using Picer.App.Views;
 using System.Windows;
 using Picer.App.Infrastructure;
@@ -265,7 +266,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
     public async Task CreatePersonWithFacesAsync(string name, IReadOnlyCollection<UnassignedFaceViewModel> faces)
     {
         if (string.IsNullOrWhiteSpace(name)) { StatusText = "请输入人物名称"; return; }
-        var faceIds = faces.Select(face => face.FaceId).Distinct().ToArray();
+        var faceIds = ExpandOperationFaces(faces).Select(face => face.FaceId).Distinct().ToArray();
         RemoveFacesFromCurrentView(faceIds);
         StatusText = faceIds.Length == 0 ? "正在创建人物…" : $"正在创建人物并归入 {faceIds.Length} 张人脸…";
         try
@@ -486,7 +487,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
     {
         var operationId = Interlocked.Increment(ref _faceMoveOperationId);
         var stopwatch = Stopwatch.StartNew();
-        var faceIds = faces.Select(face => face.FaceId).Distinct().ToArray();
+        var faceIds = ExpandOperationFaces(faces).Select(face => face.FaceId).Distinct().ToArray();
         if (faceIds.Length == 0) return;
         RemoveFacesFromCurrentView(faceIds);
         AppLogger.Info($"FaceMove #{operationId}: UI removed {faceIds.Length} faces in {stopwatch.ElapsedMilliseconds} ms; target={person.Id}");
@@ -524,7 +525,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
 
     public async Task MoveFacesToUnassignedAsync(IReadOnlyCollection<UnassignedFaceViewModel> faces)
     {
-        var faceIds = faces.Select(face => face.FaceId).Distinct().ToArray();
+        var faceIds = ExpandOperationFaces(faces).Select(face => face.FaceId).Distinct().ToArray();
         if (faceIds.Length == 0) return;
         RemoveFacesFromCurrentView(faceIds);
         StatusText = $"正在后台将 {faceIds.Length} 张人脸移到待分类…";
@@ -540,7 +541,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
 
     public async Task IgnoreFacesAsync(IReadOnlyCollection<UnassignedFaceViewModel> faces)
     {
-        var faceIds = faces.Select(face => face.FaceId).Distinct().ToArray();
+        var faceIds = ExpandOperationFaces(faces).Select(face => face.FaceId).Distinct().ToArray();
         if (faceIds.Length == 0) return;
         RemoveFacesFromCurrentView(faceIds);
         StatusText = $"正在将 {faceIds.Length} 张人脸移到不分类…";
@@ -610,16 +611,16 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         try
         {
             var snapshot = await UiWork.RunDatabaseAsync(() => (
-                Records: _repository.GetUnassignedFaces(5000).ToArray(),
+                Records: _repository.OrderByFeature(_repository.GetUnassignedFaces(5000)).ToArray(),
                 Counts: _repository.GetFaceWorkQueueCounts()), cancellation.Token);
             var records = snapshot.Records;
+            var items = await BuildBurstAwareFaceItemsAsync(records, cancellation.Token);
             UnassignedFaces.Clear();
-            await UiWork.AddInBatchesAsync(records, record =>
+            await UiWork.AddInBatchesAsync(items, item =>
             {
-                var item = CreateFaceItem(record);
                 UnassignedFaces.Add(item); DisplayedFaces.Add(item);
                 LoadDisplayedFaceThumbnailAsync(item, cancellation.Token).Forget();
-                DisplayedFacesTitle = $"待分类人脸 · {DisplayedFaces.Count}/{records.Length}";
+                DisplayedFacesTitle = $"待分类人脸 · {DisplayedFaces.Count}/{items.Count}";
             }, cancellation.Token, batchSize: 30);
             UnassignedSummary = $"待处理人脸 · {snapshot.Counts.Total}（待确认 {snapshot.Counts.Suggested} / 未匹配 {snapshot.Counts.Unassigned}）";
             DisplayedFacesTitle = records.Length < snapshot.Counts.Total
@@ -643,13 +644,14 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         var cancellation = _collectionLoadCancellation = new CancellationTokenSource();
         try
         {
-            var records = await UiWork.RunDatabaseAsync(() => _repository.GetIgnoredFaces(5000).ToArray(), cancellation.Token);
-            await UiWork.AddInBatchesAsync(records, record =>
+            var records = await UiWork.RunDatabaseAsync(() =>
+                _repository.OrderByFeature(_repository.GetIgnoredFaces(5000)).ToArray(), cancellation.Token);
+            var items = await BuildBurstAwareFaceItemsAsync(records, cancellation.Token);
+            await UiWork.AddInBatchesAsync(items, item =>
             {
-                var item = CreateFaceItem(record);
                 DisplayedFaces.Add(item);
                 LoadDisplayedFaceThumbnailAsync(item, cancellation.Token).Forget();
-                DisplayedFacesTitle = $"不分类 · {DisplayedFaces.Count}/{records.Length} 张人脸";
+                DisplayedFacesTitle = $"不分类 · {DisplayedFaces.Count}/{items.Count} 项";
             }, cancellation.Token, batchSize: 30);
             DisplayedFacesTitle = $"不分类（{records.Length}）";
             StatusText = records.Length == 0 ? "当前没有标记为不分类的人脸" : $"已显示 {records.Length} 张不分类人脸";
@@ -747,13 +749,14 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
     {
         try
         {
-            var faces = group.Faces.ToArray();
-            await UiWork.AddInBatchesAsync(faces, record =>
+            var faces = await UiWork.RunDatabaseAsync(() =>
+                _repository.OrderByFeature(group.Faces).ToArray(), cancellationToken);
+            var items = await BuildBurstAwareFaceItemsAsync(faces, cancellationToken);
+            await UiWork.AddInBatchesAsync(items, item =>
             {
-                var item = CreateFaceItem(record);
                 DisplayedFaces.Add(item);
                 LoadDisplayedFaceThumbnailAsync(item, cancellationToken).Forget();
-                DisplayedFacesTitle = $"推荐为 {group.Record.PersonName} · {DisplayedFaces.Count}/{faces.Length}";
+                DisplayedFacesTitle = $"推荐为 {group.Record.PersonName} · {DisplayedFaces.Count}/{items.Count}";
             }, cancellationToken, batchSize: 30);
             DisplayedFacesTitle = $"推荐为 {group.Record.PersonName}（{DisplayedFaces.Count}）";
         }
@@ -778,14 +781,15 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
     {
         try
         {
-            var faces = cluster.Faces.ToArray();
-            await UiWork.AddInBatchesAsync(faces, face =>
+            var faces = await UiWork.RunDatabaseAsync(() =>
+                _repository.OrderByFeature(cluster.Faces).ToArray(), cancellationToken);
+            var items = await BuildBurstAwareFaceItemsAsync(faces, cancellationToken);
+            await UiWork.AddInBatchesAsync(items, item =>
             {
-                var item = CreateFaceItem(face);
                 SelectedClusterFaces.Add(item);
                 DisplayedFaces.Add(item);
                 LoadDisplayedFaceThumbnailAsync(item, cancellationToken).Forget();
-                DisplayedFacesTitle = $"候选人物 · {DisplayedFaces.Count} / {faces.Length} 张脸";
+                DisplayedFacesTitle = $"候选人物 · {DisplayedFaces.Count} / {items.Count} 项";
             }, cancellationToken);
             DisplayedFacesTitle = $"{cluster.Summary}（可输入名称后确认整组）";
         }
@@ -875,17 +879,17 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         try
         {
             var snapshot = await UiWork.RunDatabaseAsync(() => (
-                Photos: _repository.GetPersonFaces(person.Id).ToArray(),
+                Photos: _repository.OrderByFeature(_repository.GetPersonFaces(person.Id)).ToArray(),
                 Videos: AppServices.VideoFaceTimeline?.GetPersonFaces(person.Id).ToArray() ?? []), cancellationToken);
             var faces = snapshot.Photos;
             if (cancellationToken.IsCancellationRequested || SelectedPerson?.Id != person.Id) return;
-            await UiWork.AddInBatchesAsync(faces, face =>
+            var items = await BuildBurstAwareFaceItemsAsync(faces, cancellationToken);
+            await UiWork.AddInBatchesAsync(items, item =>
                 {
-                    var item = CreateFaceItem(face);
                     AssignedFaces.Add(item);
                     DisplayedFaces.Add(item);
                     LoadDisplayedFaceThumbnailAsync(item, cancellationToken).Forget();
-                DisplayedFacesTitle = $"{person.DisplayName} · {AssignedFaces.Count} / {faces.Length} 张人脸";
+                DisplayedFacesTitle = $"{person.DisplayName} · {AssignedFaces.Count} / {items.Count} 项";
                 }, cancellationToken);
             DisplayedFacesTitle = $"{person.DisplayName} · {AssignedFaces.Count} 张人脸";
             foreach (var record in snapshot.Videos)
@@ -917,6 +921,58 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
 
     private UnassignedFaceViewModel CreateFaceItem(UnassignedFaceRecord record) =>
         new(record, _faceThumbnails.GetCachedPath(record.FaceId) ?? GetSafePreviewPath(record));
+
+    private async Task<IReadOnlyList<UnassignedFaceViewModel>> BuildBurstAwareFaceItemsAsync(
+        IReadOnlyList<UnassignedFaceRecord> records, CancellationToken cancellationToken)
+    {
+        if (records.Count == 0) return [];
+        var groups = await UiWork.RunDatabaseAsync("People.BurstGroups.Load", () =>
+            new BurstGroupService(_database).GetGroupsForImages(records.Select(face => face.ImageId)), cancellationToken);
+        var groupByImage = groups.Values.SelectMany(group => group.ImageIds.Select(imageId => (imageId, group)))
+            .ToDictionary(value => value.imageId, value => value.group);
+        var handled = new HashSet<long>();
+        var result = new List<UnassignedFaceViewModel>(records.Count);
+        foreach (var record in records)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!groupByImage.TryGetValue(record.ImageId, out var group))
+            {
+                result.Add(CreateFaceItem(record));
+                continue;
+            }
+            if (!handled.Add(group.Id)) continue;
+            var members = records.Where(face => group.ImageIds.Contains(face.ImageId)).Select(CreateFaceItem).ToArray();
+            if (members.Select(face => face.Record.ImageId).Distinct().Count() < 2)
+            {
+                result.AddRange(members);
+                continue;
+            }
+            members[0].ConfigureBurst(members, ToggleFaceBurst);
+            result.Add(members[0]);
+        }
+        return result;
+    }
+
+    private void ToggleFaceBurst(UnassignedFaceViewModel representative)
+    {
+        var index = DisplayedFaces.IndexOf(representative);
+        if (index < 0) return;
+        if (representative.IsBurstExpanded)
+        {
+            foreach (var member in representative.BurstOperationFaces.Skip(1)) DisplayedFaces.Remove(member);
+            representative.IsBurstExpanded = false;
+            return;
+        }
+        representative.IsBurstExpanded = true;
+        foreach (var member in representative.BurstOperationFaces.Skip(1).Reverse())
+        {
+            DisplayedFaces.Insert(index + 1, member);
+            LoadDisplayedFaceThumbnailAsync(member).Forget();
+        }
+    }
+
+    private static UnassignedFaceViewModel[] ExpandOperationFaces(IEnumerable<UnassignedFaceViewModel> faces) =>
+        faces.SelectMany(face => face.BurstOperationFaces).DistinctBy(face => face.FaceId).ToArray();
 
     private static string? GetSafePreviewPath(UnassignedFaceRecord record) =>
         !string.IsNullOrWhiteSpace(record.ThumbnailPath) && File.Exists(record.ThumbnailPath)
@@ -1035,12 +1091,36 @@ public sealed partial class SuggestedPersonGroupViewModel(SuggestedPersonGroupRe
 
 public partial class UnassignedFaceViewModel(UnassignedFaceRecord record, string? initialThumbnailPath = null) : ObservableObject
 {
+    private IReadOnlyList<UnassignedFaceViewModel>? _burstOperationFaces;
+    private Action<UnassignedFaceViewModel>? _toggleBurst;
     public UnassignedFaceRecord Record { get; } = record;
     public long FaceId => Record.FaceId;
     public string ImagePath => Record.ImagePath;
     public int Ordinal => Record.Ordinal + 1;
     public float Confidence => Record.Confidence;
     public string SuggestedText => Record.SuggestedPersonName is null ? "未归类" : $"可能是：{Record.SuggestedPersonName}";
+    public IReadOnlyList<UnassignedFaceViewModel> BurstOperationFaces => _burstOperationFaces ?? [this];
+    public bool IsBurstStack => BurstOperationFaces.Count > 1;
+    public int BurstCount => BurstOperationFaces.Select(face => face.Record.ImageId).Distinct().Count();
+    public string BurstBadge => IsBurstStack ? $"连拍 · {BurstCount} 张" : "";
+    public string BurstToggleText => IsBurstExpanded ? "−" : "+";
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(BurstToggleText))]
+    private bool _isBurstExpanded;
+
+    public void ConfigureBurst(IReadOnlyList<UnassignedFaceViewModel> members, Action<UnassignedFaceViewModel> toggle)
+    {
+        _burstOperationFaces = members;
+        _toggleBurst = toggle;
+        OnPropertyChanged(nameof(BurstOperationFaces));
+        OnPropertyChanged(nameof(IsBurstStack));
+        OnPropertyChanged(nameof(BurstCount));
+        OnPropertyChanged(nameof(BurstBadge));
+    }
+
+    [RelayCommand]
+    private void ToggleBurst() => _toggleBurst?.Invoke(this);
 
     [ObservableProperty]
     private string? _faceThumbnailPath = initialThumbnailPath;

@@ -80,6 +80,20 @@ public sealed class FfmpegKeyframeService(string ffmpegPath, string cacheRoot)
         return Deduplicate(files.Select((path, index) => new VideoKeyframe(index < timestamps.Length ? timestamps[index] : index, path)));
     }
 
+    public async Task<string> GetOrCreatePosterAsync(VideoRecord video, CancellationToken cancellationToken = default)
+    {
+        var directory = Path.Combine(cacheRoot, video.Id.ToString(CultureInfo.InvariantCulture));
+        Directory.CreateDirectory(directory);
+        var poster = Path.Combine(directory, "poster.jpg");
+        if (File.Exists(poster) && File.GetLastWriteTimeUtc(poster) >= video.ModifiedUtc) return poster;
+        var temporary = poster + ".tmp.jpg";
+        if (File.Exists(temporary)) File.Delete(temporary);
+        await RunAsync(ffmpegPath, ["-hide_banner", "-loglevel", "error", "-ss", "0.2", "-i", video.Path,
+            "-frames:v", "1", "-vf", "scale=640:-2,format=yuvj420p", "-c:v", "mjpeg", "-q:v", "4", "-y", temporary], cancellationToken);
+        File.Move(temporary, poster, true);
+        return poster;
+    }
+
     private static string CompactDiagnostic(string value)
     {
         var lines = value.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);

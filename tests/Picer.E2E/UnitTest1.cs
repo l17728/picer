@@ -304,6 +304,21 @@ public sealed class DesktopSmokeTests
                 Assert.False(search!.Current.BoundingRectangle.IsEmpty);
                 Assert.True(window.Current.BoundingRectangle.Contains(search.Current.BoundingRectangle.TopLeft));
             }
+            var mediaType = WaitForElement(window, "媒体类型过滤", TimeSpan.FromSeconds(3));
+            Assert.NotNull(mediaType);
+            Assert.True(mediaType!.TryGetCurrentPattern(ExpandCollapsePattern.Pattern, out var mediaExpand));
+            ((ExpandCollapsePattern)mediaExpand).Expand();
+            var videoChoice = mediaType.FindAll(TreeScope.Descendants,
+                    new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.ListItem))
+                .Cast<AutomationElement>().First(item => item.Current.Name == "视频");
+            ((SelectionItemPattern)videoChoice.GetCurrentPattern(SelectionItemPattern.Pattern)).Select();
+            ((ExpandCollapsePattern)mediaExpand).Collapse();
+            var directoryTab = tabs.Cast<AutomationElement>().First(item => item.Current.Name.Contains("目录浏览"));
+            var videoTab = tabs.Cast<AutomationElement>().First(item => item.Current.Name.Contains("视频"));
+            Assert.True(((SelectionItemPattern)directoryTab.GetCurrentPattern(SelectionItemPattern.Pattern)).Current.IsSelected,
+                "媒体筛选选择视频后应停留在目录浏览");
+            Assert.False(((SelectionItemPattern)videoTab.GetCurrentPattern(SelectionItemPattern.Pattern)).Current.IsSelected,
+                "媒体筛选不应导航到视频工作台");
         }
         finally
         {

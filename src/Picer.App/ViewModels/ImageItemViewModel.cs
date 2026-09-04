@@ -6,6 +6,7 @@ using System.Windows.Media.Imaging;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Picer.Core.Models;
+using Picer.Core.Video;
 
 namespace Picer.App.ViewModels;
 
@@ -13,6 +14,8 @@ public partial class ImageItemViewModel : ObservableObject
 {
     private static readonly SemaphoreSlim ThumbnailLoadGate = new(8, 8);
     private readonly ImageRecord _record;
+    private string? _previewPath;
+    private readonly Func<VideoRecord, CancellationToken, Task<string?>>? _videoPreviewLoader;
     private BitmapImage? _thumbnail;
     private bool _isLoadingThumbnail;
     private CancellationTokenSource? _thumbnailCts;
@@ -24,8 +27,27 @@ public partial class ImageItemViewModel : ObservableObject
         _pageCancellation = pageCancellation;
     }
 
+    public ImageItemViewModel(VideoRecord video, string? previewPath,
+        Func<VideoRecord, CancellationToken, Task<string?>>? videoPreviewLoader = null,
+        CancellationToken pageCancellation = default)
+    {
+        VideoRecord = video;
+        _previewPath = previewPath;
+        _videoPreviewLoader = videoPreviewLoader;
+        _pageCancellation = pageCancellation;
+        _record = new ImageRecord
+        {
+            Id = -video.Id, SourceId = video.SourceId, Path = video.Path, FileSize = video.FileSize,
+            ModifiedUtc = video.ModifiedUtc, TakenUtc = video.TakenUtc, Width = video.Width, Height = video.Height,
+            Gps = video.Gps, Status = video.Status == "active" ? ImageStatus.Active : ImageStatus.Missing
+        };
+    }
+
     public long Id => _record.Id;
     public ImageRecord Record => _record;
+    public VideoRecord? VideoRecord { get; }
+    public bool IsVideo => VideoRecord is not null;
+    public string MediaBadge => IsVideo ? "▶ 视频" : "图片";
     public string Path => _record.Path;
     public string FileName => System.IO.Path.GetFileName(_record.Path);
     public bool IsMissing => _record.Status == ImageStatus.Missing;
@@ -82,6 +104,8 @@ public partial class ImageItemViewModel : ObservableObject
                 parts.Add(FormatSize(_record.FileSize));
             if (_record.TakenUtc is not null)
                 parts.Add(_record.TakenUtc.Value.ToLocalTime().ToString("yyyy-MM-dd"));
+            if (VideoRecord?.DurationSeconds is double duration)
+                parts.Add(TimeSpan.FromSeconds(duration).ToString(duration >= 3600 ? @"h\:mm\:ss" : @"m\:ss"));
             return string.Join("  ", parts);
         }
     }
@@ -103,6 +127,15 @@ public partial class ImageItemViewModel : ObservableObject
         if (_thumbnail is null && !_isLoadingThumbnail) LoadThumbnailAsync();
     }
 
+    public void SetVideoPreviewPath(string path)
+    {
+        if (!IsVideo || string.IsNullOrWhiteSpace(path)) return;
+        _previewPath = path;
+        _thumbnail = null;
+        _isLoadingThumbnail = false;
+        OnPropertyChanged(nameof(Thumbnail));
+    }
+
     private async void LoadThumbnailAsync()
     {
         if (_isLoadingThumbnail) return;
@@ -114,6 +147,11 @@ public partial class ImageItemViewModel : ObservableObject
         try
         {
             var imagePaths = GetImagePaths();
+            if (imagePaths.Count == 0 && VideoRecord is { } video && _videoPreviewLoader is not null)
+            {
+                _previewPath = await _videoPreviewLoader(video, cts.Token);
+                imagePaths = GetImagePaths();
+            }
             if (imagePaths.Count == 0)
                 return;
             await ThumbnailLoadGate.WaitAsync(cts.Token);
@@ -165,6 +203,7 @@ public partial class ImageItemViewModel : ObservableObject
     private IReadOnlyList<string> GetImagePaths()
     {
         var paths = new List<string>(2);
+        if (IsVideo && !string.IsNullOrWhiteSpace(_previewPath) && File.Exists(_previewPath)) paths.Add(_previewPath);
         if (!string.IsNullOrWhiteSpace(_record.ThumbPath) && File.Exists(_record.ThumbPath))
             paths.Add(_record.ThumbPath);
         if (File.Exists(_record.Path) && !paths.Contains(_record.Path, StringComparer.OrdinalIgnoreCase))

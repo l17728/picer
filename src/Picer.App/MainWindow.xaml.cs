@@ -46,10 +46,10 @@ public partial class MainWindow : Window
         // explicitly so Chinese person names do not require Enter or a focus change.
         if (!string.Equals(_mainVm.SearchQuery, box.Text, StringComparison.Ordinal))
             _mainVm.SearchQuery = box.Text;
-        if (MediaTypeBox?.SelectedIndex == 1)
+        if (MediaTypeBox?.SelectedIndex is 1 or 2)
         {
-            _ = _mainVm.Video.ApplySearchAsync(box.Text);
-            MainTabs.SelectedIndex = 4;
+            _mainVm.ReloadDirectoryMedia();
+            MainTabs.SelectedIndex = 0;
         }
         else if (box.Text.Length > 0) MainTabs.SelectedIndex = 1;
     }
@@ -86,15 +86,8 @@ public partial class MainWindow : Window
     private void MediaTypeBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (MainTabs is null || MediaTypeBox is null) return;
-        if (MediaTypeBox.SelectedIndex == 1)
-        {
-            MainTabs.SelectedIndex = 4;
-            _ = _mainVm.Video.LoadAsync();
-        }
-        else if (MainTabs.SelectedIndex == 4)
-        {
-            MainTabs.SelectedIndex = 0;
-        }
+        _mainVm.SetDirectoryMediaFilter(MediaTypeBox.SelectedIndex);
+        MainTabs.SelectedIndex = 0;
     }
 
     private void CloudVisionSettings_Click(object sender, RoutedEventArgs e)

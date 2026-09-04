@@ -402,6 +402,24 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
         return values;
     }
 
+    public IReadOnlyDictionary<long, float[]> GetFaceEmbeddings(IEnumerable<long> faceIds)
+    {
+        var ids = faceIds.Distinct().ToArray();
+        var result = new Dictionary<long, float[]>();
+        foreach (var batch in ids.Chunk(400))
+        {
+            var names = batch.Select((_, index) => $"$face{index}").ToArray();
+            using var command = database.Command($"SELECT id,embedding FROM detected_faces WHERE embedding IS NOT NULL AND id IN ({string.Join(',', names)})");
+            for (var index = 0; index < batch.Length; index++) command.Parameters.AddWithValue(names[index], batch[index]);
+            using var reader = command.ExecuteReader();
+            while (reader.Read()) result[reader.GetInt64(0)] = FromBytes((byte[])reader[1]);
+        }
+        return result;
+    }
+
+    public IReadOnlyList<UnassignedFaceRecord> OrderByFeature(IReadOnlyList<UnassignedFaceRecord> faces) =>
+        FaceFeatureOrderer.Order(faces, GetFaceEmbeddings(faces.Select(face => face.FaceId)));
+
     public IReadOnlyList<RejectedFaceEmbeddingRecord> GetRejectedFaceEmbeddings()
     {
         using var command = database.Command("""
@@ -489,6 +507,25 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
             values[value.PersonId] = value;
         }
         return values;
+    }
+
+    public float[]? GetActiveFaceAdapter(string modelVersion)
+    {
+        using var command = database.Command("""
+            SELECT artifact_json FROM face_training_artifacts
+            WHERE state='active' AND model_version=$model ORDER BY applied_utc DESC LIMIT 1
+            """);
+        command.Parameters.AddWithValue("$model", modelVersion);
+        if (command.ExecuteScalar() is not string json) return null;
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+            if (!document.RootElement.TryGetProperty("adapter", out var adapter) ||
+                !adapter.TryGetProperty("weights", out var weights) || weights.ValueKind != JsonValueKind.Array) return null;
+            var values = weights.EnumerateArray().Select(value => value.GetSingle()).ToArray();
+            return values.Length > 0 && values.All(float.IsFinite) ? values : null;
+        }
+        catch (JsonException) { return null; }
     }
 
     public void ApplyLearnedFaceArtifact(string artifactId, string datasetId, string endpoint, string modelVersion,

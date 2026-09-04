@@ -65,7 +65,7 @@ public sealed class FaceTrainingService(
 
         progress?.Report(new("queued", 18, "训练快照已接收，正在创建任务"));
         using var jobResponse = await _client.PostAsJsonAsync(new Uri(root, "jobs"),
-            new { datasetId = dataset.Id, type = "prototype-calibration" }, Json, cancellationToken).ConfigureAwait(false);
+            new { datasetId = dataset.Id, type = "embedding-adapter-training" }, Json, cancellationToken).ConfigureAwait(false);
         await EnsureSuccess(jobResponse, "创建训练任务", cancellationToken).ConfigureAwait(false);
         var job = await jobResponse.Content.ReadFromJsonAsync<JobResponse>(Json, cancellationToken).ConfigureAwait(false)
                   ?? throw new InvalidDataException("训练平台未返回任务编号。");
@@ -145,11 +145,56 @@ public sealed class FaceTrainingService(
                 face.DetectionConfidence, face.RelativeArea))
             .Concat(rejected.Select(face => CreateSample(face.FaceId, face.PersonId, "negative",
                 imageGroups.GetValueOrDefault(face.ImageId, $"image:{face.ImageId}"), face.Embedding,
-                face.DetectionConfidence, face.RelativeArea)));
+                face.DetectionConfidence, face.RelativeArea)))
+            .Concat(BuildConfirmedHardNegatives(confirmed, imageGroups));
         var videos = repository.GetVideoTrainingFaces().Select(face => CreateSample(-face.VideoFaceId, face.PersonId,
             face.Label, $"video:{face.VideoId}", face.Embedding, face.DetectionConfidence, face.RelativeArea));
         return photos.Concat(videos).OrderBy(sample => sample.FaceId).ThenBy(sample => sample.PersonId)
             .ThenBy(sample => sample.Label, StringComparer.Ordinal).ToArray();
+    }
+
+    private static IEnumerable<Sample> BuildConfirmedHardNegatives(IReadOnlyList<FaceEmbeddingRecord> confirmed,
+        IReadOnlyDictionary<long, string> imageGroups)
+    {
+        foreach (var person in confirmed.GroupBy(face => face.PersonId!.Value))
+        {
+            var positives = person.ToArray();
+            var prototype = Mean(positives.Select(face => face.Embedding));
+            var limit = Math.Clamp(positives.Length / 2, 10, 80);
+            var usedGroups = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var candidate in confirmed.Where(face => face.PersonId != person.Key)
+                         .Select(face => (Face: face, Score: Cosine(prototype, face.Embedding)))
+                         .OrderByDescending(value => value.Score))
+            {
+                var leakageGroup = imageGroups.GetValueOrDefault(candidate.Face.ImageId, $"image:{candidate.Face.ImageId}");
+                if (!usedGroups.Add(leakageGroup)) continue;
+                yield return CreateSample(candidate.Face.FaceId, person.Key, "negative", leakageGroup,
+                    candidate.Face.Embedding, candidate.Face.DetectionConfidence, candidate.Face.RelativeArea);
+                if (usedGroups.Count >= limit) break;
+            }
+        }
+    }
+
+    private static float[] Mean(IEnumerable<float[]> source)
+    {
+        var vectors = source.ToArray();
+        var mean = new float[vectors[0].Length];
+        foreach (var vector in vectors)
+            for (var index = 0; index < mean.Length; index++) mean[index] += vector[index];
+        var norm = Math.Sqrt(mean.Sum(value => value * value));
+        if (norm > 0) for (var index = 0; index < mean.Length; index++) mean[index] /= (float)norm;
+        return mean;
+    }
+
+    private static double Cosine(IReadOnlyList<float> left, IReadOnlyList<float> right)
+    {
+        if (left.Count != right.Count) return -1;
+        double dot = 0, a = 0, b = 0;
+        for (var index = 0; index < left.Count; index++)
+        {
+            dot += left[index] * right[index]; a += left[index] * left[index]; b += right[index] * right[index];
+        }
+        return a == 0 || b == 0 ? -1 : dot / Math.Sqrt(a * b);
     }
 
     private static Sample CreateSample(long faceId, long personId, string label, string leakageGroup, float[] embedding,

@@ -105,6 +105,23 @@ public sealed class VideoRepository(PicerDatabase database)
         return result;
     }
 
+    public IReadOnlyDictionary<long, string> GetFirstKeyframePaths()
+    {
+        using var command = database.Command("""
+            SELECT k.video_id,k.path FROM video_keyframes k
+            WHERE k.id=(SELECT first.id FROM video_keyframes first
+                        WHERE first.video_id=k.video_id ORDER BY first.timestamp_seconds,first.id LIMIT 1)
+            """);
+        var result = new Dictionary<long, string>();
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            var path = reader.GetString(1);
+            if (File.Exists(path)) result[reader.GetInt64(0)] = path;
+        }
+        return result;
+    }
+
     public IReadOnlyDictionary<long, VideoFaceReviewSummary> GetFaceReviewSummaries()
     {
         using var command = database.Command("""
