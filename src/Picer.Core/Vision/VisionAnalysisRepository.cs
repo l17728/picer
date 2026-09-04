@@ -405,7 +405,7 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
     public IReadOnlyList<RejectedFaceEmbeddingRecord> GetRejectedFaceEmbeddings()
     {
         using var command = database.Command("""
-            SELECT f.id, f.image_id, f.model_version, r.person_id, f.embedding
+            SELECT f.id, f.image_id, f.model_version, r.person_id, f.embedding,f.confidence,f.box_width*f.box_height
             FROM face_person_rejections r
             JOIN detected_faces f ON f.id=r.face_id
             JOIN images i ON i.id=f.image_id AND i.status='active'
@@ -415,7 +415,7 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
         var values = new List<RejectedFaceEmbeddingRecord>();
         using var reader = command.ExecuteReader();
         while (reader.Read()) values.Add(new RejectedFaceEmbeddingRecord(reader.GetInt64(0), reader.GetInt64(1),
-            reader.GetString(2), reader.GetInt64(3), FromBytes((byte[])reader[4])));
+            reader.GetString(2), reader.GetInt64(3), FromBytes((byte[])reader[4]), reader.GetFloat(5), reader.GetFloat(6)));
         return values;
     }
 
@@ -448,11 +448,11 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
     public IReadOnlyList<VideoTrainingFaceRecord> GetVideoTrainingFaces()
     {
         using var command = database.Command("""
-            SELECT vf.id,vf.video_id,vf.assigned_person_id,'positive',vf.embedding
+            SELECT vf.id,vf.video_id,vf.assigned_person_id,'positive',vf.embedding,vf.confidence,vf.box_width*vf.box_height
             FROM video_detected_faces vf JOIN videos v ON v.id=vf.video_id AND v.status='active'
             WHERE vf.assignment_state='confirmed' AND vf.assigned_person_id IS NOT NULL AND vf.embedding IS NOT NULL
             UNION ALL
-            SELECT vf.id,vf.video_id,r.person_id,'negative',vf.embedding
+            SELECT vf.id,vf.video_id,r.person_id,'negative',vf.embedding,vf.confidence,vf.box_width*vf.box_height
             FROM video_face_person_rejections r
             JOIN video_detected_faces vf ON vf.id=r.video_face_id
             JOIN videos v ON v.id=vf.video_id AND v.status='active'
@@ -462,7 +462,7 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
         var result = new List<VideoTrainingFaceRecord>();
         using var reader = command.ExecuteReader();
         while (reader.Read()) result.Add(new(reader.GetInt64(0), reader.GetInt64(1), reader.GetInt64(2),
-            reader.GetString(3), FromBytes((byte[])reader[4])));
+            reader.GetString(3), FromBytes((byte[])reader[4]), reader.GetFloat(5), reader.GetFloat(6)));
         return result;
     }
 

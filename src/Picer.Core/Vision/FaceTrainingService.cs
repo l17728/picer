@@ -8,7 +8,8 @@ namespace Picer.Core.Vision;
 
 public sealed record FaceTrainingProgress(string Stage, int Percent, string Detail);
 public sealed record FaceTrainingResult(string DatasetId, string JobId, string ArtifactId, int Samples,
-    int People, double FalseAcceptRate, double FalseRejectRate, bool Applied, string Message);
+    int People, double FalseAcceptRate, double FalseRejectRate, bool Applied, string Message,
+    int SelectedTrainingSamples = 0, int ExcludedSameSource = 0, int ExcludedPersonCap = 0);
 public sealed record FaceTrainingPlan(string SnapshotId, string ModelVersion, int Samples, int People,
     int PositiveSamples, int NegativeSamples, int LeakageGroups, int TrainSamples, int ValidationSamples,
     int TestSamples, int VideoSamples, IReadOnlyList<string> Warnings);
@@ -100,7 +101,9 @@ public sealed class FaceTrainingService(
             applied ? "评估门禁通过，增强策略已应用" : "误识率未通过门禁，制品未应用"));
         return new(dataset.Id, job.Id, artifact.Id, samples.Length, artifact.People.Count,
             artifact.Metrics.FalseAcceptRate, artifact.Metrics.FalseRejectRate, applied,
-            applied ? "训练完成并已应用；人工分类未改变。" : "训练完成，但评估未通过自动应用门禁。");
+            applied ? "训练完成并已应用；人工分类未改变。" : ExplainGateFailure(artifact),
+            artifact.RecipeReport?.SelectedTrainingPositives ?? 0,
+            artifact.RecipeReport?.ExcludedSameSource ?? 0, artifact.RecipeReport?.ExcludedPersonCap ?? 0);
     }
 
     public string Rollback()
@@ -135,36 +138,55 @@ public sealed class FaceTrainingService(
         var imageGroups = repository.GetTrainingLeakageGroups(confirmed.Select(face => face.ImageId)
             .Concat(rejected.Select(face => face.ImageId)));
         var photos = confirmed.Select(face => CreateSample(face.FaceId, face.PersonId!.Value, "positive",
-                imageGroups.GetValueOrDefault(face.ImageId, $"image:{face.ImageId}"), face.Embedding))
+                imageGroups.GetValueOrDefault(face.ImageId, $"image:{face.ImageId}"), face.Embedding,
+                face.DetectionConfidence, face.RelativeArea))
             .Concat(rejected.Select(face => CreateSample(face.FaceId, face.PersonId, "negative",
-                imageGroups.GetValueOrDefault(face.ImageId, $"image:{face.ImageId}"), face.Embedding)));
+                imageGroups.GetValueOrDefault(face.ImageId, $"image:{face.ImageId}"), face.Embedding,
+                face.DetectionConfidence, face.RelativeArea)));
         var videos = repository.GetVideoTrainingFaces().Select(face => CreateSample(-face.VideoFaceId, face.PersonId,
-            face.Label, $"video:{face.VideoId}", face.Embedding));
+            face.Label, $"video:{face.VideoId}", face.Embedding, face.DetectionConfidence, face.RelativeArea));
         return photos.Concat(videos).OrderBy(sample => sample.FaceId).ThenBy(sample => sample.PersonId)
             .ThenBy(sample => sample.Label, StringComparer.Ordinal).ToArray();
     }
 
-    private static Sample CreateSample(long faceId, long personId, string label, string leakageGroup, float[] embedding)
+    private static Sample CreateSample(long faceId, long personId, string label, string leakageGroup, float[] embedding,
+        float detectionConfidence, float relativeArea)
     {
         var bucket = SHA256.HashData(Encoding.UTF8.GetBytes(leakageGroup))[0] % 20;
         var partition = bucket < 14 ? "train" : bucket < 17 ? "validation" : "test";
-        return new(faceId, personId, label, leakageGroup, partition, embedding);
+        var qualityScore = Math.Clamp(detectionConfidence * .65 + Math.Min(1, relativeArea / .08f) * .35, .05, 1);
+        var qualityTier = qualityScore >= .8 ? "high" : qualityScore >= .55 ? "medium" : "low";
+        return new(faceId, personId, label, leakageGroup, partition, qualityScore, qualityTier, embedding);
     }
 
     private static string Fingerprint(IEnumerable<Sample> samples)
     {
         var fingerprintText = string.Join('|', samples.OrderBy(value => value.FaceId).ThenBy(value => value.PersonId)
             .ThenBy(value => value.Label, StringComparer.Ordinal)
-            .Select(value => $"{value.FaceId}:{value.PersonId}:{value.Label}:{value.LeakageGroup}:{value.Partition}"));
+            .Select(value => $"{value.FaceId}:{value.PersonId}:{value.Label}:{value.LeakageGroup}:{value.Partition}:{value.QualityScore:F6}"));
         return "picer-" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(fingerprintText)))[..20].ToLowerInvariant();
     }
 
+    private static string ExplainGateFailure(ArtifactResponse artifact)
+    {
+        var reasons = new List<string>();
+        if (artifact.Metrics.FalseAcceptRate > .01) reasons.Add($"误识率 {artifact.Metrics.FalseAcceptRate:P2} 高于 1% 门限");
+        if (artifact.Metrics.PositiveEvaluated < 20) reasons.Add($"独立正样本仅 {artifact.Metrics.PositiveEvaluated} 个（至少 20）");
+        if (artifact.Metrics.NegativeEvaluated < 10) reasons.Add($"独立负样本仅 {artifact.Metrics.NegativeEvaluated} 个（至少 10）");
+        if (artifact.People.Count < 2) reasons.Add("有效人物不足两位");
+        return "训练完成但未应用：" + string.Join("；", reasons.DefaultIfEmpty("评估门禁未通过")) + "。当前版本保持不变。";
+    }
+
     public void Dispose() { if (_ownsClient) _client.Dispose(); }
-    private sealed record Sample(long FaceId, long PersonId, string Label, string LeakageGroup, string Partition, float[] Embedding);
+    private sealed record Sample(long FaceId, long PersonId, string Label, string LeakageGroup, string Partition,
+        double QualityScore, string QualityTier, float[] Embedding);
     private sealed record DatasetResponse(string Id);
     private sealed record JobResponse(string Id, string Status, string Stage, int Progress, string? ArtifactId, string? Error);
     private sealed record MetricsResponse(double FalseAcceptRate, double FalseRejectRate,
         int PositiveEvaluated, int NegativeEvaluated);
     private sealed record PersonPolicyResponse(long PersonId, float[] Prototype, double Threshold);
-    private sealed record ArtifactResponse(string Id, string BaseModelVersion, List<PersonPolicyResponse> People, MetricsResponse Metrics);
+    private sealed record RecipeReportResponse(int RawTrainingPositives, int SelectedTrainingPositives,
+        int ExcludedSameSource, int ExcludedPersonCap, int PerPersonCap);
+    private sealed record ArtifactResponse(string Id, string BaseModelVersion, List<PersonPolicyResponse> People,
+        MetricsResponse Metrics, RecipeReportResponse? RecipeReport = null);
 }
