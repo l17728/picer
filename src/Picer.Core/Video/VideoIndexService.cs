@@ -182,26 +182,35 @@ public sealed class VideoRepository(PicerDatabase database)
 
 public sealed class VideoIndexService(PicerDatabase database, VideoRepository repository)
 {
+    public IReadOnlyList<VideoRecord> ScanDirectory(long sourceId, string directoryPath, bool includeDescendants = true,
+        CancellationToken cancellationToken = default)
+    {
+        if (!Directory.Exists(directoryPath)) return [];
+        var options = new EnumerationOptions
+        {
+            RecurseSubdirectories = includeDescendants,
+            IgnoreInaccessible = true,
+            AttributesToSkip = FileAttributes.Hidden | FileAttributes.System
+        };
+        var result = new List<VideoRecord>();
+        foreach (var path in Directory.EnumerateFiles(directoryPath, "*", options))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!VideoFormats.IsSupported(path)) continue;
+            try { result.Add(repository.Upsert(sourceId, path)); }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+        }
+        return result;
+    }
+
     public int ScanLocalSources(CancellationToken cancellationToken = default)
     {
         var count = 0;
         foreach (var source in database.GetSources())
         {
             if (!Directory.Exists(source.Path)) continue;
-            var options = new EnumerationOptions
-            {
-                RecurseSubdirectories = true,
-                IgnoreInaccessible = true,
-                AttributesToSkip = FileAttributes.Hidden | FileAttributes.System
-            };
-            foreach (var path in Directory.EnumerateFiles(source.Path, "*", options))
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                if (!VideoFormats.IsSupported(path)) continue;
-                try { repository.Upsert(source.Id, path); count++; }
-                catch (IOException) { }
-                catch (UnauthorizedAccessException) { }
-            }
+            count += ScanDirectory(source.Id, source.Path, true, cancellationToken).Count;
         }
         return count;
     }

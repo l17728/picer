@@ -1465,7 +1465,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                         if (dirInfo.Attributes.HasFlag(FileAttributes.Hidden)) continue;
 
                         var imageCount = Directory.EnumerateFiles(dir, "*.*", SearchOption.AllDirectories)
-                            .Count(f => SupportedFormats.IsSupported(f));
+                            .Count(f => SupportedFormats.IsSupported(f) || VideoFormats.IsSupported(f));
 
                         if (imageCount > 0)
                             result.Add((dir, dirInfo.Name, imageCount));
@@ -1767,6 +1767,15 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 ? []
                 : await UiWork.RunDatabaseAsync("DirectoryVideos.Load", () =>
                 {
+                    // Keep the directory view self-healing: videos may have been imported
+                    // before the explicit video scan was introduced. Index files under the
+                    // selected source/child directory before reading the view.
+                    var source = _db.GetSources().FirstOrDefault(candidate =>
+                        string.Equals(Path.GetFullPath(candidate.Path).TrimEnd('\\', '/'),
+                            Path.GetFullPath(selectedDirectory.FullPath).TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase) ||
+                        IsPathUnderDirectory(selectedDirectory.FullPath, candidate.Path));
+                    if (source is not null)
+                        AppServices.VideoIndex.ScanDirectory(source.Id, selectedDirectory.FullPath, true, cts.Token);
                     var posters = AppServices.Videos.GetFirstKeyframePaths();
                     return AppServices.Videos.GetAll()
                         .Where(video => video.Status == "active" && IsPathUnderDirectory(video.Path, selectedDirectory.FullPath))
