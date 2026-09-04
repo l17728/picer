@@ -59,15 +59,19 @@ public sealed class MediaSearchTool(PicerDatabase database, VideoRepository? vid
             SortBy = SortField.TakenDate,
             SortDir = request.SortDirection
         };
+        if (request.VisualConceptIds is { Count: > 0 })
+            warnings.Add("视觉概念过滤尚未写入结构化索引，当前仅返回文本/元数据候选。");
         var people = request.PersonIds?.Where(id => id > 0).Distinct().ToArray() ?? [];
         // SearchFilters currently accepts one person ID; intersect additional
         // people in memory without weakening the query boundary.
         var photos = ExecutePhotoPass(filters, terms, request.RequireAllTerms);
+        var relaxedLocation = false;
         if (!photos.Any() && request.AutoRelax && request.Location is not null)
         {
             // GPS is a soft recall constraint for legacy records: retain person/date/time,
             // remove only geographic bounds, and disclose the relaxation to the caller.
             photos = ExecutePhotoPass(CloneFilters(filters, null, null), terms, request.RequireAllTerms);
+            relaxedLocation = photos.Any();
             if (photos.Any()) warnings.Add("未找到同时满足 GPS 范围的记录，已回退到地点文字索引。");
         }
         if (people.Length > 0)
@@ -75,9 +79,16 @@ public sealed class MediaSearchTool(PicerDatabase database, VideoRepository? vid
             var allowed = new HashSet<long>();
             foreach (var personId in people)
             {
-                foreach (var image in IndexSearchEngine.Search(database, CloneFilters(filters, "", personId))) allowed.Add(image.Id);
+                var personFilters = CloneFilters(filters, "", personId);
+                if (relaxedLocation) personFilters.GeoBounds = null;
+                foreach (var image in IndexSearchEngine.Search(database, personFilters)) allowed.Add(image.Id);
             }
             photos = photos.Where(image => allowed.Contains(image.Id));
+        }
+        if (request.TagIds is { Count: > 0 })
+        {
+            var tagged = GetImagesWithTags(request.TagIds);
+            photos = photos.Where(image => tagged.Contains(image.Id));
         }
         var totalCandidates = photos.Count();
         var photoHits = request.MediaType == MediaTypeFilter.Video ? [] : photos.Take(request.Limit).Select(image => new MediaSearchHit(image.Id, image.Path,
@@ -85,7 +96,10 @@ public sealed class MediaSearchTool(PicerDatabase database, VideoRepository? vid
         var videoHits = Array.Empty<MediaSearchHit>();
         if (request.MediaType is MediaTypeFilter.Video or MediaTypeFilter.All && videoRepository is not null)
         {
-            IEnumerable<VideoRecord> videos = terms.Length == 0 ? videoRepository.GetAll() : terms.SelectMany(videoRepository.Search).DistinctBy(v => v.Id);
+            IEnumerable<VideoRecord> videos = terms.Length == 0 ? videoRepository.GetAll() :
+                request.RequireAllTerms
+                    ? videoRepository.GetAll().Where(v => terms.All(term => videoRepository.Search(term).Any(hit => hit.Id == v.Id)))
+                    : terms.SelectMany(videoRepository.Search).DistinctBy(v => v.Id);
             videos = videos.Where(v => request.IncludeMissing || v.Status == "active");
             if (request.StartDate is not null) videos = videos.Where(v => v.TakenUtc is null || v.TakenUtc >= request.StartDate);
             if (request.EndDate is not null) videos = videos.Where(v => v.TakenUtc is null || v.TakenUtc <= request.EndDate);
@@ -132,5 +146,16 @@ public sealed class MediaSearchTool(PicerDatabase database, VideoRepository? vid
             TagId = source.TagId, GeoBounds = source.GeoBounds, PersonId = personId ?? source.PersonId,
             VisualConceptIds = source.VisualConceptIds, SortBy = source.SortBy, SortDir = source.SortDir
         };
+    }
+
+    private HashSet<long> GetImagesWithTags(IReadOnlyList<long> tagIds)
+    {
+        using var command = database.Command($"SELECT image_id FROM image_tags WHERE tag_id IN ({string.Join(',', tagIds.Select((_, i) => "$tag" + i))}) GROUP BY image_id HAVING COUNT(DISTINCT tag_id) = $tagCount");
+        for (var i = 0; i < tagIds.Count; i++) command.Parameters.AddWithValue("$tag" + i, tagIds[i]);
+        command.Parameters.AddWithValue("$tagCount", tagIds.Count);
+        using var reader = command.ExecuteReader();
+        var result = new HashSet<long>();
+        while (reader.Read()) result.Add(reader.GetInt64(0));
+        return result;
     }
 }
