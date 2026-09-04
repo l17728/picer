@@ -270,6 +270,16 @@ public partial class MainWindow : Window
             await _mainVm.People.OpenFacePhotoAsync(face);
     }
 
+    private async void PeopleFacesList_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Delete || _mainVm.People.DisplayedCollectionKind == DisplayedFaceCollectionKind.Ignored) return;
+        var faces = PeopleFacesList.SelectedItems.Cast<UnassignedFaceViewModel>().ToArray();
+        if (faces.Length == 0 && _mainVm.People.SelectedDisplayedFace is { } selected) faces = [selected];
+        if (faces.Length == 0) return;
+        e.Handled = true;
+        await _mainVm.People.IgnoreFacesAsync(faces);
+    }
+
     private async void ConfirmSuggestedFace_Click(object sender, RoutedEventArgs e)
     {
         if ((sender as FrameworkElement)?.DataContext is UnassignedFaceViewModel face)

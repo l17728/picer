@@ -380,7 +380,8 @@
                             <StackPanel DockPanel.Dock="Top">
                                 <Button Content="{Binding UnassignedSummary}" AutomationProperties.Name="待处理人脸" Command="{Binding ShowUnassignedFacesCommand}" HorizontalContentAlignment="Left" Padding="10,7" Margin="0,0,0,3"
                                         ToolTip="尚未人工确认归属的单张人脸，包括未匹配人脸和等待确认的自动建议"/>
-                                <Button Content="不分类" AutomationProperties.Name="不分类" Command="{Binding ShowIgnoredFacesCommand}" HorizontalContentAlignment="Left" Padding="10,7" Margin="0,0,0,8"/>
+                                <Button Content="不分类" AutomationProperties.Name="不分类" Command="{Binding ShowIgnoredFacesCommand}" HorizontalContentAlignment="Left" Padding="10,7" Margin="0,0,0,8"
+                                        ToolTip="选择右侧一张或多张人脸后按 Delete，可快速标记为不分类"/>
                                 <TextBlock Text="已命名人物" FontWeight="SemiBold" Margin="2,3"/>
                                 <ComboBox ItemsSource="{Binding People}" SelectedItem="{Binding SelectedPerson}"
                                           DisplayMemberPath="DisplayName" MinHeight="32" Padding="6,3"
@@ -432,7 +433,7 @@
 
                     <GroupBox Grid.Row="2" Grid.Column="1" Header="{Binding DisplayedFacesTitle}" Margin="4" Padding="8">
                         <DockPanel>
-                            <TextBlock DockPanel.Dock="Top" Text="双击人脸查看关联原图；右击可移动到人物、待分类或不分类。" Foreground="#555" Margin="4,0,4,8"/>
+                            <TextBlock DockPanel.Dock="Top" Text="双击查看原图；右击可移动分类；选中后按 Delete 可快速标记为不分类。" Foreground="#555" Margin="4,0,4,8"/>
                             <Expander DockPanel.Dock="Bottom" Header="该人物的视频人脸证据" IsExpanded="True" Margin="0,6,0,0">
                                 <ListBox ItemsSource="{Binding PersonVideoFaces}" Height="150" ScrollViewer.HorizontalScrollBarVisibility="Auto" ScrollViewer.VerticalScrollBarVisibility="Disabled">
                                     <ListBox.ItemsPanel><ItemsPanelTemplate><StackPanel Orientation="Horizontal"/></ItemsPanelTemplate></ListBox.ItemsPanel>
@@ -444,7 +445,8 @@
                             </Expander>
                             <ListBox x:Name="PeopleFacesList" ItemsSource="{Binding DisplayedFaces}" SelectedItem="{Binding SelectedDisplayedFace}"
                                      SelectionMode="Extended"
-                                     AutomationProperties.Name="人物人脸列表" AutomationProperties.HelpText="双击打开关联照片；右击可移动到已有分类、待分类或不分类"
+                                     AutomationProperties.Name="人物人脸列表" AutomationProperties.HelpText="双击打开关联照片；右击可移动分类；Delete 键将选中人脸标记为不分类"
+                                     PreviewKeyDown="PeopleFacesList_PreviewKeyDown"
                                      MouseDoubleClick="PeopleFace_DoubleClick" PreviewMouseRightButtonDown="PeopleFace_PreviewMouseRightButtonDown"
                                      PreviewMouseLeftButtonDown="PeopleFace_PreviewMouseLeftButtonDown"
                                      PreviewMouseMove="PeopleFace_PreviewMouseMove" PreviewMouseLeftButtonUp="PeopleFace_PreviewMouseLeftButtonUp"

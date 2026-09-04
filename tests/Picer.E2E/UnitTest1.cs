@@ -357,6 +357,7 @@ public sealed class DesktopSmokeTests
             Assert.NotNull(faces);
             Assert.Contains("双击打开关联照片", faces!.Current.HelpText);
             Assert.Contains("右击", faces.Current.HelpText);
+            Assert.Contains("Delete", faces.Current.HelpText);
             Assert.NotEmpty(WaitForItems(faces, TimeSpan.FromSeconds(5)).Cast<AutomationElement>());
 
             var newPersonName = WaitForElement(window, "新人物名称", TimeSpan.FromSeconds(3));
