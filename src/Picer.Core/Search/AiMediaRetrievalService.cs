@@ -54,8 +54,7 @@ public sealed class AiMediaRetrievalService(PicerDatabase database, PeopleServic
         // otherwise matching photos because descriptions usually contain a clock
         // time (or no time phrase at all).
         baseFilter.TimeOfDay = dayPart switch { DayPart.Day => TimeOfDayFilter.Day, DayPart.Night => TimeOfDayFilter.Night, _ => TimeOfDayFilter.Any };
-        var searchTerms = plan.Keywords
-            .Where(term => !IsDayPartToken(term))
+        var searchTerms = QueryRewrite.Expand(plan.Keywords.Where(term => !IsDayPartToken(term)))
             // Keep the literal location as a text fallback even when geocoding
             // returned bounds; older analyses may have place names but no GPS.
             .Concat(!string.IsNullOrWhiteSpace(plan.Location) ? [plan.Location!] : [])

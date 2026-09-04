@@ -143,6 +143,27 @@ public sealed class SearchTests : IDisposable
     }
 
     [Fact]
+    public void QueryRewrite_ExpandsBoundedChineseSynonyms()
+    {
+        var terms = QueryRewrite.Expand(["上海", "爬山"]);
+        Assert.Contains("上海", terms);
+        Assert.Contains("申城", terms);
+        Assert.Contains("登山", terms);
+        Assert.DoesNotContain("白天", QueryRewrite.Expand(["白天"]));
+    }
+
+    [Fact]
+    public void SemanticRetrievalEvaluator_EnforcesRecallAndPrecisionGate()
+    {
+        var report = SemanticRetrievalEvaluator.Evaluate(
+            [new RetrievalEvaluationCase("上海白天", [1, 2])],
+            _ => ([1, 2, 3], [1, 2]));
+        Assert.Equal(1d, report.Metrics.CandidateRecall);
+        Assert.Equal(1d, report.Metrics.FinalPrecision);
+        SemanticRetrievalEvaluator.AssertReleaseGate(report.Metrics);
+    }
+
+    [Fact]
     public async Task Search_ExcludesMissingWhenFlagSet()
     {
         AddFile("photos/a.jpg", 0x41, 100);

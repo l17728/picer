@@ -17,6 +17,7 @@ public sealed record MediaSearchRequest(
     IReadOnlyList<string>? VisualConceptIds = null,
     IReadOnlyList<string>? Terms = null,
     bool RequireAllTerms = false,
+    bool AutoRelax = true,
     bool IncludeMissing = false,
     int Limit = 200,
     SortDirection SortDirection = SortDirection.Descending);
@@ -52,15 +53,14 @@ public sealed class MediaSearchTool(PicerDatabase database, VideoRepository? vid
         var people = request.PersonIds?.Where(id => id > 0).Distinct().ToArray() ?? [];
         // SearchFilters currently accepts one person ID; intersect additional
         // people in memory without weakening the query boundary.
-        var candidateSets = new List<IReadOnlyList<ImageRecord>>();
-        if (terms.Length == 0)
-            candidateSets.Add(IndexSearchEngine.Search(database, filters));
-        else
-            foreach (var term in terms)
-            {
-                candidateSets.Add(IndexSearchEngine.Search(database, CloneFilters(filters, term, null)));
-            }
-        var photos = candidateSets.SelectMany(value => value).DistinctBy(image => image.Id);
+        var photos = ExecutePhotoPass(filters, terms, request.RequireAllTerms);
+        if (!photos.Any() && request.AutoRelax && request.Location is not null)
+        {
+            // GPS is a soft recall constraint for legacy records: retain person/date/time,
+            // remove only geographic bounds, and disclose the relaxation to the caller.
+            photos = ExecutePhotoPass(CloneFilters(filters, null, null), terms, request.RequireAllTerms);
+            if (photos.Any()) warnings.Add("未找到同时满足 GPS 范围的记录，已回退到地点文字索引。");
+        }
         if (people.Length > 0)
         {
             var allowed = new HashSet<long>();
@@ -70,6 +70,7 @@ public sealed class MediaSearchTool(PicerDatabase database, VideoRepository? vid
             }
             photos = photos.Where(image => allowed.Contains(image.Id));
         }
+        var totalCandidates = photos.Count();
         var photoHits = request.MediaType == MediaTypeFilter.Video ? [] : photos.Take(request.Limit).Select(image => new MediaSearchHit(image.Id, image.Path,
             MediaTypeFilter.Photo, image.TakenUtc, null, terms.Length == 0 ? [] : ["text"])).ToArray();
         var videoHits = Array.Empty<MediaSearchHit>();
@@ -84,7 +85,7 @@ public sealed class MediaSearchTool(PicerDatabase database, VideoRepository? vid
             videoHits = videos.Take(request.Limit).Select(v => new MediaSearchHit(v.Id, v.Path, MediaTypeFilter.Video, v.TakenUtc, null, terms.Length == 0 ? [] : ["text"])).ToArray();
         }
         var hits = request.MediaType == MediaTypeFilter.Video ? videoHits : request.MediaType == MediaTypeFilter.All ? photoHits.Concat(videoHits).Take(request.Limit).ToArray() : photoHits;
-        return new(hits, hits.Length, request with { Terms = terms }, warnings);
+        return new(hits, totalCandidates + videoHits.Length, request with { Terms = terms }, warnings);
     }
 
     private static void Validate(MediaSearchRequest request)
@@ -98,15 +99,28 @@ public sealed class MediaSearchTool(PicerDatabase database, VideoRepository? vid
         if (request.TagIds?.Any(id => id <= 0) == true) throw new ArgumentException("标签 ID 必须为正数。", nameof(request));
     }
 
-    private static SearchFilters CloneFilters(SearchFilters source, string query, long? personId)
+    private IEnumerable<ImageRecord> ExecutePhotoPass(SearchFilters filters, IReadOnlyList<string> terms, bool requireAll)
+    {
+        if (terms.Count == 0) return IndexSearchEngine.Search(database, filters);
+        var sets = terms.Select(term => (IReadOnlyCollection<ImageRecord>)IndexSearchEngine.Search(database, CloneFilters(filters, term, filters.PersonId))).ToArray();
+        if (requireAll)
+        {
+            var common = sets[0].Select(image => image.Id).ToHashSet();
+            foreach (var set in sets.Skip(1)) common.IntersectWith(set.Select(image => image.Id));
+            return sets[0].Where(image => common.Contains(image.Id));
+        }
+        return sets.SelectMany(value => value).DistinctBy(image => image.Id);
+    }
+
+    private static SearchFilters CloneFilters(SearchFilters source, string? query, long? personId)
     {
         return new SearchFilters
         {
-            Query = query, SourceId = source.SourceId, IncludeMissing = source.IncludeMissing,
+            Query = query ?? "", SourceId = source.SourceId, IncludeMissing = source.IncludeMissing,
             TakenAfter = source.TakenAfter, TakenBefore = source.TakenBefore, TimeOfDay = source.TimeOfDay,
             MinWidth = source.MinWidth, MaxWidth = source.MaxWidth, MinHeight = source.MinHeight, MaxHeight = source.MaxHeight,
             MinFileSize = source.MinFileSize, MaxFileSize = source.MaxFileSize, CameraBrand = source.CameraBrand,
-            TagId = source.TagId, GeoBounds = source.GeoBounds, PersonId = personId,
+            TagId = source.TagId, GeoBounds = source.GeoBounds, PersonId = personId ?? source.PersonId,
             VisualConceptIds = source.VisualConceptIds, SortBy = source.SortBy, SortDir = source.SortDir
         };
     }
