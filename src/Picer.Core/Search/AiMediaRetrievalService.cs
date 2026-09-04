@@ -35,14 +35,28 @@ public sealed class AiMediaRetrievalService(PicerDatabase database, PeopleServic
         plan = plan with { Keywords = plan.Keywords?.Where(value => !string.IsNullOrWhiteSpace(value)).Select(value => value.Trim()).Distinct().ToArray() ?? [] };
 
         progress?.Report(("检索照片索引", 25));
-        var mention = !string.IsNullOrWhiteSpace(plan.PersonName) ? people.FindByName(plan.PersonName) : people.FindMention(question)?.Person;
+        var mention = !string.IsNullOrWhiteSpace(plan.PersonName)
+            ? people.FindByName(plan.PersonName.Trim()) ??
+              (people.GetAll().FirstOrDefault(person =>
+                  string.Equals(person.DisplayName.Trim(), plan.PersonName.Trim(), StringComparison.OrdinalIgnoreCase)) is { } summary
+                  ? people.Get(summary.Id)
+                  : null)
+            : people.FindMention(question)?.Person;
         var bounds = string.IsNullOrWhiteSpace(plan.Location) ? null : GeoPlaceResolver.Resolve(plan.Location);
         DateTime? start = DateTime.TryParse(plan.StartDate, out var startValue) ? startValue.Date.ToUniversalTime() : null;
         DateTime? end = DateTime.TryParse(plan.EndDate, out var endValue) ? endValue.Date.AddDays(1).AddTicks(-1).ToUniversalTime() : null;
         var baseFilter = new SearchFilters { PersonId = mention?.Id, GeoBounds = bounds, TakenAfter = start,
             TakenBefore = end, IncludeMissing = false, SortBy = SortField.TakenDate, SortDir = SortDirection.Descending };
         var photoCandidates = new Dictionary<long, ImageRecord>();
-        var searchTerms = plan.Keywords.Concat(bounds is null && !string.IsNullOrWhiteSpace(plan.Location) ? [plan.Location!] : []).ToArray();
+        // Time-of-day words are structured constraints, not text that must occur
+        // in a description. Searching for "白天" literally used to discard all
+        // otherwise matching photos because descriptions usually contain a clock
+        // time (or no time phrase at all).
+        var dayPart = ResolveDayPart(question, plan.Keywords);
+        var searchTerms = plan.Keywords
+            .Where(term => !IsDayPartToken(term))
+            .Concat(bounds is null && !string.IsNullOrWhiteSpace(plan.Location) ? [plan.Location!] : [])
+            .ToArray();
         if (searchTerms.Length == 0)
             foreach (var image in IndexSearchEngine.Search(database, baseFilter).Take(100)) photoCandidates[image.Id] = image;
         else
@@ -54,7 +68,9 @@ public sealed class AiMediaRetrievalService(PicerDatabase database, PeopleServic
 
         progress?.Report(("检索视频索引", 45));
         var videoCandidates = includeVideos ? RetrieveVideos(plan, mention?.Id, start, end).Take(50).ToArray() : [];
-        var photos = photoCandidates.Values.Take(50).ToArray();
+        var photos = photoCandidates.Values
+            .Where(image => MatchesDayPart(image, dayPart))
+            .Take(50).ToArray();
         progress?.Report(("AI复核候选", 65));
         var evidence = new
         {
@@ -104,5 +120,29 @@ public sealed class AiMediaRetrievalService(PicerDatabase database, PeopleServic
         TakenAfter = value.TakenAfter, TakenBefore = value.TakenBefore, IncludeMissing = value.IncludeMissing,
         SortBy = value.SortBy, SortDir = value.SortDir };
     private static string? Truncate(string? value, int length) => string.IsNullOrWhiteSpace(value) ? null : value[..Math.Min(length, value.Length)];
+    private enum DayPart { None, Day, Night }
+
+    private static DayPart ResolveDayPart(string question, IReadOnlyList<string> keywords)
+    {
+        var text = question + " " + string.Join(' ', keywords);
+        if (text.Contains("白天", StringComparison.OrdinalIgnoreCase) || text.Contains("白日", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("白昼", StringComparison.OrdinalIgnoreCase) || text.Contains("白天时段", StringComparison.OrdinalIgnoreCase)) return DayPart.Day;
+        if (text.Contains("晚上", StringComparison.OrdinalIgnoreCase) || text.Contains("夜间", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("夜晚", StringComparison.OrdinalIgnoreCase) || text.Contains("深夜", StringComparison.OrdinalIgnoreCase)) return DayPart.Night;
+        return DayPart.None;
+    }
+
+    private static bool IsDayPartToken(string value) => value.Contains("白天", StringComparison.OrdinalIgnoreCase) ||
+        value.Contains("白昼", StringComparison.OrdinalIgnoreCase) || value.Contains("晚上", StringComparison.OrdinalIgnoreCase) ||
+        value.Contains("夜间", StringComparison.OrdinalIgnoreCase) || value.Contains("夜晚", StringComparison.OrdinalIgnoreCase) ||
+        value.Contains("深夜", StringComparison.OrdinalIgnoreCase);
+
+    private static bool MatchesDayPart(ImageRecord image, DayPart dayPart)
+    {
+        if (dayPart == DayPart.None) return true;
+        var timestamp = image.TakenUtc ?? image.CreatedUtc ?? image.ModifiedUtc;
+        var hour = timestamp.ToLocalTime().Hour;
+        return dayPart == DayPart.Day ? hour >= 6 && hour < 18 : hour < 6 || hour >= 18;
+    }
     private sealed record Review(string? Markdown, IReadOnlyList<long>? PhotoIds, IReadOnlyList<long>? VideoIds);
 }
