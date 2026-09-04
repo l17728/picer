@@ -145,7 +145,7 @@ public sealed class VisionAnalysisTests : IDisposable
 
         var person = people.CreateAndAssignFaces("新人物", faceIds);
 
-        Assert.Equal(faceIds.Order(), repository.GetConfirmedFaces(person.Id).Select(face => face.FaceId).Order());
+        Assert.Single(repository.GetConfirmedFaces(person.Id));
         Assert.Equal(faceIds.Count, people.GetAll().Single(value => value.Id == person.Id).ConfirmedFaceCount);
     }
 
@@ -338,6 +338,59 @@ public sealed class VisionAnalysisTests : IDisposable
         foreach (var faceId in repository.GetFaceIds(_image.Id).Concat(repository.GetFaceIds(copy.Id)))
             people.IgnoreFace(faceId);
         Assert.Single(repository.GetIgnoredFaces());
+    }
+
+    [Fact]
+    public async Task NamedPersonViews_CollapseSameFileNameOrShaEvenWhenFaceDetectionsDiffer()
+    {
+        using (var update = _database.Command("UPDATE images SET sha256='shared-content' WHERE id=$id"))
+        {
+            update.Parameters.AddWithValue("$id", _image.Id);
+            update.ExecuteNonQuery();
+        }
+        var source = _database.GetSources().Single();
+        var nested = Path.Combine(_root, "nested");
+        Directory.CreateDirectory(nested);
+
+        ImageRecord AddImage(string path, string sha)
+        {
+            File.WriteAllBytes(path, [8, 7, 6, 5]);
+            return _database.UpsertImage(new ImageRecord
+            {
+                SourceId = source.Id, Path = path, FileSize = 4, Sha256 = sha,
+                ModifiedUtc = File.GetLastWriteTimeUtc(path), Status = ImageStatus.Active,
+                IndexedUtc = DateTime.UtcNow
+            });
+        }
+
+        var sameName = AddImage(Path.Combine(nested, "original.jpg"), "different-content");
+        var sameHash = AddImage(Path.Combine(_root, "hash-copy.jpg"), "second-shared-content");
+        var hashTwin = AddImage(Path.Combine(_root, "hash-twin.jpg"), "second-shared-content");
+        var repository = new VisionAnalysisRepository(_database);
+        using var analysis = new VisionAnalysisService(repository, new FakeFaceAnalyzer("source-dedup-test"));
+        await analysis.AnalyzeAsync([_image, sameName, sameHash, hashTwin]);
+        using (var changeDetections = _database.Command("""
+            UPDATE detected_faces SET ordinal=ordinal+image_id,box_x=0.65,box_y=0.65
+            WHERE image_id IN ($sameName,$sameHash,$hashTwin)
+            """))
+        {
+            changeDetections.Parameters.AddWithValue("$sameName", sameName.Id);
+            changeDetections.Parameters.AddWithValue("$sameHash", sameHash.Id);
+            changeDetections.Parameters.AddWithValue("$hashTwin", hashTwin.Id);
+            changeDetections.ExecuteNonQuery();
+        }
+        var people = new PeopleService(_database);
+        var sameNamePerson = people.Create("same-name-person");
+        foreach (var faceId in repository.GetFaceIds(_image.Id).Concat(repository.GetFaceIds(sameName.Id)))
+            people.ConfirmFace(faceId, sameNamePerson.Id);
+        var sameHashPerson = people.Create("same-hash-person");
+        foreach (var faceId in repository.GetFaceIds(sameHash.Id).Concat(repository.GetFaceIds(hashTwin.Id)))
+            people.ConfirmFace(faceId, sameHashPerson.Id);
+
+        Assert.Single(repository.GetPersonFaces(sameNamePerson.Id));
+        Assert.Single(repository.GetConfirmedFaces(sameNamePerson.Id));
+        Assert.Single(repository.GetPersonFaces(sameHashPerson.Id));
+        Assert.Single(repository.GetConfirmedFaces(sameHashPerson.Id));
     }
 
     [Fact]

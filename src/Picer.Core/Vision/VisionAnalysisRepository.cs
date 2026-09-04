@@ -242,11 +242,11 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
         var requestedLimit = Math.Clamp(limit, 1, 5000);
         command.Parameters.AddWithValue("$limit", Math.Min(20000, requestedLimit * 4));
         var values = new List<UnassignedFaceRecord>();
-        var deduplicator = new FaceSourceDeduplicator();
+        var deduplicator = new FaceSourceDeduplicator(collapseSameSourceIdentity: true);
         using var reader = command.ExecuteReader();
         while (reader.Read() && values.Count < requestedLimit)
         {
-            if (deduplicator.IsDuplicateAndAdd(ReadSelectedFaceSignature(reader, 10))) continue;
+            if (deduplicator.IsDuplicateAndAdd(ReadSelectedFaceSignature(reader, 10), reader.GetInt64(1), reader.GetString(2))) continue;
             values.Add(new UnassignedFaceRecord(
                 reader.GetInt64(0), reader.GetInt64(1), reader.GetString(2),
                 reader.IsDBNull(3) ? null : reader.GetString(3), reader.GetInt32(4),
@@ -277,7 +277,7 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
             var personId = reader.GetInt64(0);
             if (!groups.TryGetValue(personId, out var group))
             {
-                group = (reader.GetString(1), [], new FaceSourceDeduplicator());
+                group = (reader.GetString(1), [], new FaceSourceDeduplicator(collapseSameSourceIdentity: true));
                 groups.Add(personId, group);
             }
             var signature = new FaceSourceSignature(
@@ -285,7 +285,7 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
                 reader.GetInt32(14), reader.GetInt32(15),
                 new NormalizedFaceBox(reader.GetFloat(7), reader.GetFloat(8), reader.GetFloat(9), reader.GetFloat(10)),
                 reader.IsDBNull(16) ? null : FromBytes((byte[])reader[16]));
-            if (group.Deduplicator.IsDuplicateAndAdd(signature)) continue;
+            if (group.Deduplicator.IsDuplicateAndAdd(signature, reader.GetInt64(3), reader.GetString(4))) continue;
             group.Faces.Add(new UnassignedFaceRecord(
                 reader.GetInt64(2), reader.GetInt64(3), reader.GetString(4),
                 reader.IsDBNull(5) ? null : reader.GetString(5), reader.GetInt32(6),
@@ -321,11 +321,11 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
         var requestedLimit = Math.Clamp(limit, 1, 5000);
         command.Parameters.AddWithValue("$limit", Math.Min(20000, requestedLimit * 4));
         var values = new List<UnassignedFaceRecord>();
-        var deduplicator = new FaceSourceDeduplicator();
+        var deduplicator = new FaceSourceDeduplicator(collapseSameSourceIdentity: true);
         using var reader = command.ExecuteReader();
         while (reader.Read() && values.Count < requestedLimit)
         {
-            if (deduplicator.IsDuplicateAndAdd(ReadSelectedFaceSignature(reader, 12))) continue;
+            if (deduplicator.IsDuplicateAndAdd(ReadSelectedFaceSignature(reader, 12), reader.GetInt64(1), reader.GetString(2))) continue;
             values.Add(new UnassignedFaceRecord(
                 reader.GetInt64(0), reader.GetInt64(1), reader.GetString(2),
                 reader.IsDBNull(3) ? null : reader.GetString(3), reader.GetInt32(4),
@@ -619,13 +619,13 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
             {
                 group = (reader.GetString(1), []);
                 groups.Add(clusterId, group);
-                deduplicators.Add(clusterId, new FaceSourceDeduplicator());
+                deduplicators.Add(clusterId, new FaceSourceDeduplicator(collapseSameSourceIdentity: true));
             }
             var signature = new FaceSourceSignature(
                 reader.IsDBNull(12) ? null : reader.GetString(12), reader.GetInt64(13),
                 reader.GetInt32(14), reader.GetInt32(15),
                 new NormalizedFaceBox(reader.GetFloat(7), reader.GetFloat(8), reader.GetFloat(9), reader.GetFloat(10)));
-            if (deduplicators[clusterId].IsDuplicateAndAdd(signature)) continue;
+            if (deduplicators[clusterId].IsDuplicateAndAdd(signature, reader.GetInt64(3), reader.GetString(4))) continue;
             group.Faces.Add(new UnassignedFaceRecord(
                 reader.GetInt64(2), reader.GetInt64(3), reader.GetString(4),
                 reader.IsDBNull(5) ? null : reader.GetString(5), reader.GetInt32(6),
@@ -671,12 +671,25 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
 
     private sealed class FaceSourceDeduplicator
     {
+        private readonly bool _collapseSameSourceIdentity;
+        private readonly HashSet<long> _imageIds = [];
+        private readonly HashSet<string> _sourceHashes = new(StringComparer.OrdinalIgnoreCase);
+        private readonly HashSet<string> _sourceNames = new(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<string, List<FaceSourceSignature>> _bySha256 = new(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<(long Hash, int Width, int Height), List<FaceSourceSignature>> _byVisual = [];
         private readonly List<FaceSourceSignature> _withEmbedding = [];
 
-        public bool IsDuplicateAndAdd(FaceSourceSignature signature)
+        public FaceSourceDeduplicator(bool collapseSameSourceIdentity = false) =>
+            _collapseSameSourceIdentity = collapseSameSourceIdentity;
+
+        public bool IsDuplicateAndAdd(FaceSourceSignature signature, long? imageId = null, string? path = null)
         {
+            var sourceName = string.IsNullOrWhiteSpace(path) ? null : Path.GetFileName(path);
+            if (_collapseSameSourceIdentity &&
+                ((imageId is long id && _imageIds.Contains(id)) ||
+                 (!string.IsNullOrWhiteSpace(signature.Sha256) && _sourceHashes.Contains(signature.Sha256)) ||
+                 (!string.IsNullOrWhiteSpace(sourceName) && _sourceNames.Contains(sourceName)))) return true;
+
             if (!string.IsNullOrWhiteSpace(signature.Sha256) &&
                 ContainsDuplicate(_bySha256.GetValueOrDefault(signature.Sha256), signature)) return true;
             var visualKey = (signature.AverageHash, signature.Width, signature.Height);
@@ -690,6 +703,12 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
             if (signature.AverageHash != 0)
                 Add(_byVisual, visualKey, signature);
             if (signature.Embedding is { Length: > 0 }) _withEmbedding.Add(signature);
+            if (_collapseSameSourceIdentity)
+            {
+                if (imageId is long sourceImageId) _imageIds.Add(sourceImageId);
+                if (!string.IsNullOrWhiteSpace(signature.Sha256)) _sourceHashes.Add(signature.Sha256);
+                if (!string.IsNullOrWhiteSpace(sourceName)) _sourceNames.Add(sourceName);
+            }
             return false;
         }
 
