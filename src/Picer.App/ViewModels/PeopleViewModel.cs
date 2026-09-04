@@ -34,6 +34,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
     private CancellationTokenSource? _collectionLoadCancellation;
     private bool _isLoaded;
     private bool _suppressPersonSelectionLoad;
+    private bool _suppressCollectionSelectionCallbacks;
 
     public PeopleViewModel(PicerDatabase database, PeopleService peopleService,
         VisionAnalysisRepository repository, VisionAnalysisService? analysisService,
@@ -715,12 +716,13 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
 
     partial void OnSelectedCandidateClusterChanged(CandidateClusterViewModel? value)
     {
+        if (_suppressCollectionSelectionCallbacks || value is null) return;
         _collectionLoadCancellation?.Cancel();
+        _personLoadCancellation?.Cancel();
         _clusterLoadCancellation?.Cancel();
         SelectedClusterFaces.Clear();
-        if (value is null) return;
         var cancellation = _clusterLoadCancellation = new CancellationTokenSource();
-        SelectedPerson = null;
+        SetOtherCollectionSelectionsToNull(clearPerson: true, clearCandidate: false, clearSuggested: true);
         DisplayedCollectionKind = DisplayedFaceCollectionKind.CandidateCluster;
         DisplayedFaces.Clear();
         DisplayedFacesTitle = $"{value.Summary} · 正在加载…";
@@ -729,12 +731,12 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
 
     partial void OnSelectedSuggestedPersonGroupChanged(SuggestedPersonGroupViewModel? value)
     {
+        if (_suppressCollectionSelectionCallbacks || value is null) return;
         _collectionLoadCancellation?.Cancel();
         _personLoadCancellation?.Cancel();
+        _clusterLoadCancellation?.Cancel();
         DisplayedFaces.Clear();
-        if (value is null) return;
-        SelectedPerson = null;
-        SelectedCandidateCluster = null;
+        SetOtherCollectionSelectionsToNull(clearPerson: true, clearCandidate: true, clearSuggested: false);
         DisplayedCollectionKind = DisplayedFaceCollectionKind.SuggestedGroup;
         DisplayedFacesTitle = $"推荐为 {value.Record.PersonName} · 正在加载…";
         var cancellation = _collectionLoadCancellation = new CancellationTokenSource();
@@ -837,19 +839,35 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
 
     partial void OnSelectedPersonChanged(PersonSummary? value)
     {
-        if (_suppressPersonSelectionLoad) return;
+        if (_suppressPersonSelectionLoad || _suppressCollectionSelectionCallbacks || value is null) return;
         _collectionLoadCancellation?.Cancel();
+        _clusterLoadCancellation?.Cancel();
         _personLoadCancellation?.Cancel();
         _personLoadCancellation?.Dispose();
         AssignedFaces.Clear();
         PersonVideoFaces.Clear();
-        if (value is null) return;
         var cancellation = _personLoadCancellation = new CancellationTokenSource();
-        SelectedCandidateCluster = null;
+        SetOtherCollectionSelectionsToNull(clearPerson: false, clearCandidate: true, clearSuggested: true);
         DisplayedCollectionKind = DisplayedFaceCollectionKind.NamedPerson;
         DisplayedFacesTitle = $"{value.DisplayName} · 正在加载…";
         DisplayedFaces.Clear();
+        AppLogger.Info($"People named-person selection: person={value.Id}; name={value.DisplayName}");
         _ = LoadPersonFacesAsync(value, cancellation.Token);
+    }
+
+    private void SetOtherCollectionSelectionsToNull(bool clearPerson, bool clearCandidate, bool clearSuggested)
+    {
+        _suppressCollectionSelectionCallbacks = true;
+        try
+        {
+            if (clearPerson) SelectedPerson = null;
+            if (clearCandidate) SelectedCandidateCluster = null;
+            if (clearSuggested) SelectedSuggestedPersonGroup = null;
+        }
+        finally
+        {
+            _suppressCollectionSelectionCallbacks = false;
+        }
     }
 
     private async Task LoadPersonFacesAsync(PersonSummary person, CancellationToken cancellationToken)
@@ -877,8 +895,18 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
                 _ = item.LoadThumbnailAsync();
             }
             if (PersonVideoFaces.Count > 0) DisplayedFacesTitle += $" + {PersonVideoFaces.Count} 张视频人脸";
+            AppLogger.Info($"People named-person loaded: person={person.Id}; photos={AssignedFaces.Count}; videos={PersonVideoFaces.Count}");
         }
         catch (OperationCanceledException) { }
+        catch (Exception exception)
+        {
+            AppLogger.Error($"People named-person load failed: person={person.Id}; name={person.DisplayName}", exception);
+            if (SelectedPerson?.Id == person.Id)
+            {
+                DisplayedFacesTitle = $"{person.DisplayName} · 加载失败";
+                StatusText = $"加载人物“{person.DisplayName}”失败，详细信息已写入日志";
+            }
+        }
     }
 
     private async Task LoadAssignedFaceThumbnailAsync(UnassignedFaceViewModel item)

@@ -324,6 +324,7 @@ public sealed class DesktopSmokeTests
         var databasePath = Path.Combine(isolatedData, "picer.db");
         SeedLibrary(databasePath, 2);
         SeedPerson(databasePath);
+        SeedSecondPerson(databasePath);
         var appDirectory = Path.GetDirectoryName(typeof(Picer.App.App).Assembly.Location)!;
         using var process = Process.Start(new ProcessStartInfo(Path.Combine(appDirectory, "Picer.App.exe"))
         {
@@ -358,6 +359,14 @@ public sealed class DesktopSmokeTests
             Assert.Contains("双击打开关联照片", faces!.Current.HelpText);
             Assert.Contains("右击", faces.Current.HelpText);
             Assert.Contains("Delete", faces.Current.HelpText);
+            Assert.NotEmpty(WaitForItems(faces, TimeSpan.FromSeconds(5)).Cast<AutomationElement>());
+
+            ((ExpandCollapsePattern)peopleExpand).Expand();
+            var secondPersonItem = WaitForSelectableItem("切换测试人物", TimeSpan.FromSeconds(5));
+            Assert.NotNull(secondPersonItem);
+            Assert.True(ActivateAutomationItem(secondPersonItem!), "第二个已命名人物无法通过 UI 自动化选择");
+            ((ExpandCollapsePattern)peopleExpand).Collapse();
+            Assert.NotNull(WaitForElementContaining(window, ControlType.Group, "切换测试人物", TimeSpan.FromSeconds(5)));
             Assert.NotEmpty(WaitForItems(faces, TimeSpan.FromSeconds(5)).Cast<AutomationElement>());
 
             var newPersonName = WaitForElement(window, "新人物名称", TimeSpan.FromSeconds(3));
@@ -433,6 +442,22 @@ public sealed class DesktopSmokeTests
         do
         {
             var element = root.FindFirst(TreeScope.Descendants, condition);
+            if (element is not null) return element;
+            Thread.Sleep(50);
+        } while (DateTime.UtcNow < deadline);
+        return null;
+    }
+
+    private static AutomationElement? WaitForElementContaining(
+        AutomationElement root, ControlType controlType, string text, TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        var condition = new PropertyCondition(AutomationElement.ControlTypeProperty, controlType);
+        do
+        {
+            var element = root.FindAll(TreeScope.Descendants, condition)
+                .Cast<AutomationElement>()
+                .FirstOrDefault(value => value.Current.Name.Contains(text, StringComparison.Ordinal));
             if (element is not null) return element;
             Thread.Sleep(50);
         } while (DateTime.UtcNow < deadline);
@@ -588,6 +613,23 @@ public sealed class DesktopSmokeTests
         var faceId = (long)insert.ExecuteScalar()!;
         var people = new Picer.Core.People.PeopleService(db);
         people.ConfirmFace(faceId, people.Create("测试人物").Id);
+    }
+
+    private static void SeedSecondPerson(string path)
+    {
+        using var db = new PicerDatabase(path);
+        using var image = db.Command("SELECT id FROM images ORDER BY id LIMIT 1 OFFSET 1");
+        var imageId = (long)image.ExecuteScalar()!;
+        using var insert = db.Command("""
+            INSERT INTO detected_faces(image_id,model_version,ordinal,box_x,box_y,box_width,box_height,confidence,created_utc)
+            VALUES($image,'ui-switch-test',0,0.15,0.15,0.4,0.4,0.98,$now);
+            SELECT last_insert_rowid();
+            """);
+        insert.Parameters.AddWithValue("$image", imageId);
+        insert.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("O"));
+        var faceId = (long)insert.ExecuteScalar()!;
+        var people = new Picer.Core.People.PeopleService(db);
+        people.ConfirmFace(faceId, people.Create("切换测试人物").Id);
     }
 
     private static void SeedDirectoryBrowser(string path, string root)

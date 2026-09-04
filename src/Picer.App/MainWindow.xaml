@@ -383,7 +383,7 @@
                                 <Button Content="不分类" AutomationProperties.Name="不分类" Command="{Binding ShowIgnoredFacesCommand}" HorizontalContentAlignment="Left" Padding="10,7" Margin="0,0,0,8"
                                         ToolTip="选择右侧一张或多张人脸后按 Delete，可快速标记为不分类"/>
                                 <TextBlock Text="已命名人物" FontWeight="SemiBold" Margin="2,3"/>
-                                <ComboBox ItemsSource="{Binding People}" SelectedItem="{Binding SelectedPerson}"
+                                <ComboBox ItemsSource="{Binding People}" SelectedItem="{Binding SelectedPerson, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                                           DisplayMemberPath="DisplayName" MinHeight="32" Padding="6,3"
                                           AutomationProperties.Name="已命名人物下拉列表"
                                           ToolTip="选择人物后在右侧渐进显示其人脸"/>
