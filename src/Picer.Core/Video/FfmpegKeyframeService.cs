@@ -50,25 +50,26 @@ public sealed class FfmpegKeyframeService(string ffmpegPath, string cacheRoot)
     {
         var directory = Path.Combine(cacheRoot, video.Id.ToString(CultureInfo.InvariantCulture));
         Directory.CreateDirectory(directory);
-        foreach (var stale in Directory.EnumerateFiles(directory, "scene-*.jpg").Concat(Directory.EnumerateFiles(directory, "interval-*.jpg")))
-            File.Delete(stale);
-        var pattern = Path.Combine(directory, "scene-%05d.jpg");
+        var staging = Path.Combine(cacheRoot, $".{video.Id}-keyframes-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(staging);
+        var pattern = Path.Combine(staging, "scene-%05d.jpg");
         var run = await RunAsync(ffmpegPath, ["-hide_banner", "-loglevel", "info", "-i", video.Path,
             "-vf", "select=gt(scene\\,0.35),showinfo,scale=1280:-2,format=yuvj420p", "-fps_mode", "vfr",
             "-c:v", "mjpeg", "-strict", "unofficial", "-q:v", "3", pattern], cancellationToken, throwOnError: false);
-        var files = Directory.EnumerateFiles(directory, "scene-*.jpg").Order().Take(200).ToArray();
+        var files = Directory.EnumerateFiles(staging, "scene-*.jpg").Order().Take(200).ToArray();
         if (files.Length == 0)
         {
-            pattern = Path.Combine(directory, "interval-%05d.jpg");
+            pattern = Path.Combine(staging, "interval-%05d.jpg");
             var fallback = await RunAsync(ffmpegPath, ["-hide_banner", "-loglevel", "error", "-i", video.Path,
                 "-vf", "select=isnan(prev_selected_t)+gte(t-prev_selected_t\\,10),scale=1280:-2,format=yuvj420p",
                 "-fps_mode", "vfr", "-frames:v", "200", "-c:v", "mjpeg", "-strict", "unofficial", "-q:v", "3", pattern],
                 cancellationToken, throwOnError: false);
-            files = Directory.EnumerateFiles(directory, "interval-*.jpg").Order().ToArray();
+            files = Directory.EnumerateFiles(staging, "interval-*.jpg").Order().ToArray();
             if (files.Length == 0)
                 throw new InvalidOperationException("FFmpeg 未生成关键帧。场景检测：" + CompactDiagnostic(run.StdErr) +
                                                     "；定时抽帧：" + CompactDiagnostic(fallback.StdErr));
-            return Deduplicate(files.Select((path, index) => new VideoKeyframe(index * 10d, path)));
+            var frames = Deduplicate(files.Select((path, index) => new VideoKeyframe(index * 10d, path)));
+            return PromoteKeyframes(directory, frames, staging);
         }
         var timestamps = run.StdErr.Split('\n').Select(line =>
         {
@@ -77,7 +78,23 @@ public sealed class FfmpegKeyframeService(string ffmpegPath, string cacheRoot)
             var value = line[(marker + 9)..].Split(' ', '\r')[0];
             return double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var time) ? time : null;
         }).Where(value => value.HasValue).Select(value => value!.Value).ToArray();
-        return Deduplicate(files.Select((path, index) => new VideoKeyframe(index < timestamps.Length ? timestamps[index] : index, path)));
+        return PromoteKeyframes(directory,
+            Deduplicate(files.Select((path, index) => new VideoKeyframe(index < timestamps.Length ? timestamps[index] : index, path))), staging);
+    }
+
+    private static IReadOnlyList<VideoKeyframe> PromoteKeyframes(string directory, IReadOnlyList<VideoKeyframe> frames, string staging)
+    {
+        foreach (var stale in Directory.EnumerateFiles(directory, "scene-*.jpg").Concat(Directory.EnumerateFiles(directory, "interval-*.jpg")))
+            File.Delete(stale);
+        var promoted = new List<VideoKeyframe>(frames.Count);
+        foreach (var frame in frames)
+        {
+            var target = Path.Combine(directory, Path.GetFileName(frame.Path));
+            File.Move(frame.Path, target, true);
+            promoted.Add(frame with { Path = target });
+        }
+        try { if (Directory.Exists(staging)) Directory.Delete(staging, true); } catch { }
+        return promoted;
     }
 
     public async Task<string> GetOrCreatePosterAsync(VideoRecord video, CancellationToken cancellationToken = default)

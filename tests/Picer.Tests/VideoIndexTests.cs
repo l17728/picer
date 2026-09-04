@@ -68,6 +68,24 @@ public sealed class VideoIndexTests : IDisposable
     }
 
     [Fact]
+    public async Task KeyframeExtractionFailure_PreservesLastKnownGoodFrames()
+    {
+        var cache = Path.Combine(_root, "keyframes");
+        var directory = Path.Combine(cache, "7");
+        Directory.CreateDirectory(directory);
+        var existing = Path.Combine(directory, "scene-00001.jpg");
+        await File.WriteAllBytesAsync(existing, [1, 2, 3]);
+        var video = new VideoRecord(7, 1, Path.Combine(_root, "missing.mp4"), 0, DateTime.UtcNow,
+            null, 0, 0, null, null, "active");
+        var service = new FfmpegKeyframeService(Path.Combine(_root, "missing-ffmpeg.exe"), cache);
+
+        await Assert.ThrowsAnyAsync<Exception>(() => service.ExtractAsync(video));
+
+        Assert.True(File.Exists(existing));
+        Assert.Equal(new byte[] { 1, 2, 3 }, await File.ReadAllBytesAsync(existing));
+    }
+
+    [Fact]
     public async Task VideoFaceIdentity_SurvivesReanalysisAndContributesToSharedPersonSummary()
     {
         var source = _database.AddSource(_root);
