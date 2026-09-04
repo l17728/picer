@@ -53,7 +53,8 @@ public static class SemanticRetrievalEvaluator
 
     public static IReadOnlyList<RetrievalEvaluationCase> LoadCasesJson(string path)
     {
-        var cases = JsonSerializer.Deserialize<List<RetrievalEvaluationCase>>(File.ReadAllText(path));
+        var cases = JsonSerializer.Deserialize<List<RetrievalEvaluationCase>>(File.ReadAllText(path),
+            new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
         return cases is { Count: > 0 } ? cases : throw new InvalidDataException("检索验收集为空。");
     }
 
