@@ -85,6 +85,15 @@ public sealed class FaceTrainingService(
             await Task.Delay(500, cancellationToken).ConfigureAwait(false);
             job = await _client.GetFromJsonAsync<JobResponse>(new Uri(root, $"jobs/{job.Id}"), Json, cancellationToken)
                 .ConfigureAwait(false) ?? throw new InvalidDataException("训练平台返回了空任务状态。");
+            if (!string.IsNullOrWhiteSpace(job.LogsUrl))
+            {
+                try
+                {
+                    var log = await _client.GetStringAsync(new Uri(root, job.LogsUrl.TrimStart('/')), cancellationToken).ConfigureAwait(false);
+                    if (!string.IsNullOrWhiteSpace(log)) progress?.Report(new(job.Stage, Math.Clamp(18 + job.Progress * 7 / 10, 18, 88), $"平台日志：{log.Trim().Split('\n').LastOrDefault()?.Trim()}"));
+                }
+                catch (HttpRequestException) { /* status polling remains authoritative */ }
+            }
             progress?.Report(new(job.Stage, Math.Clamp(18 + job.Progress * 7 / 10, 18, 88),
                 $"统一平台：{job.Stage} {job.Progress}%"));
         }
@@ -101,6 +110,8 @@ public sealed class FaceTrainingService(
             var actualHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(artifactJson))).ToLowerInvariant();
             if (!string.Equals(actualHash, artifact.Sha256, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("训练制品 SHA-256 校验失败。");
         }
+        if (!string.IsNullOrWhiteSpace(artifact.Signature) && !string.Equals(artifact.SignatureAlgorithm, "sha256", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException($"训练制品签名算法不受支持：{artifact.SignatureAlgorithm}");
         if (artifact.People.Any(value => !people.Contains(value.PersonId))) throw new InvalidDataException("训练制品包含快照以外的人物编号。");
         var applied = artifact.Metrics.FalseAcceptRate <= 0.01 && artifact.Metrics.PositiveEvaluated >= 20 &&
                       artifact.Metrics.NegativeEvaluated >= 10 && artifact.People.Count >= 2 &&
@@ -244,7 +255,7 @@ public sealed class FaceTrainingService(
     private sealed record Sample(long FaceId, long PersonId, string Label, string LeakageGroup, string Partition,
         double QualityScore, string QualityTier, float[] Embedding);
     private sealed record DatasetResponse(string Id);
-    private sealed record JobResponse(string Id, string Status, string Stage, int Progress, string? ArtifactId, string? Error);
+    private sealed record JobResponse(string Id, string Status, string Stage, int Progress, string? ArtifactId, string? Error, string? LogsUrl = null);
     private sealed record MetricsResponse(double FalseAcceptRate, double FalseRejectRate,
         int PositiveEvaluated, int NegativeEvaluated);
     private sealed record PersonPolicyResponse(long PersonId, float[] Prototype, double Threshold);
@@ -255,5 +266,5 @@ public sealed class FaceTrainingService(
         bool NoFalseAcceptRegression, bool AcceptableFalseRejectRegression);
     private sealed record ArtifactResponse(string Id, string BaseModelVersion, List<PersonPolicyResponse> People,
         MetricsResponse Metrics, RecipeReportResponse? RecipeReport = null,
-        BaselineMetricsResponse? BaselineMetrics = null, ComparisonResponse? Comparison = null, string? Sha256 = null);
+        BaselineMetricsResponse? BaselineMetrics = null, ComparisonResponse? Comparison = null, string? Sha256 = null, string? Signature = null, string? SignatureAlgorithm = null);
 }
