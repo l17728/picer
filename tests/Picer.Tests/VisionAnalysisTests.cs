@@ -98,6 +98,16 @@ public sealed class VisionAnalysisTests : IDisposable
         Assert.DoesNotContain(ranked, value => value.Candidate.VectorAccepted && value.Candidate.VectorScore < value.Candidate.RequiredThreshold);
     }
 
+    [Fact]
+    public void FaceDetectionFallbackPolicy_TriggersOnlyForRiskConditions()
+    {
+        var policy = new FaceDetectionFallbackPolicy();
+        var image = new ImageRecord { Width = 4000, Height = 3000 };
+        Assert.True(policy.ShouldRun(image, new FaceAnalysisResult([])));
+        Assert.True(policy.ShouldRun(new ImageRecord { Width = 800, Height = 600 },
+            new FaceAnalysisResult([new FaceDetection(new NormalizedFaceBox(0, 0, .01f, .01f), .9f, null, null)])));
+    }
+
     private sealed class StubHandler : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
