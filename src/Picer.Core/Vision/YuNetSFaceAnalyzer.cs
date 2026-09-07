@@ -9,18 +9,19 @@ namespace Picer.Core.Vision;
 /// <summary>Local CPU face detector and embedder. It reads source images without modifying them.</summary>
 public sealed class YuNetSFaceAnalyzer : IImageFaceAnalyzer, IDisposable
 {
-    private static readonly Size DetectionSize = new(320, 320);
+    private readonly Size _detectionSize;
     private readonly string _detectorPath;
     private readonly string _recognizerPath;
     private readonly BlockingCollection<WorkItem> _queue = new();
     private readonly Thread _worker;
     private bool _disposed;
 
-    public YuNetSFaceAnalyzer(string detectorPath, string recognizerPath)
+    public YuNetSFaceAnalyzer(string detectorPath, string recognizerPath, int detectionEdge = 320)
     {
         _detectorPath = RequireModel(detectorPath, "YuNet");
         _recognizerPath = RequireModel(recognizerPath, "SFace");
         ModelVersion = $"yunet-{ShortHash(_detectorPath)}+sface-{ShortHash(_recognizerPath)}";
+        _detectionSize = new Size(Math.Clamp(detectionEdge, 160, 1280), Math.Clamp(detectionEdge, 160, 1280));
         _worker = new Thread(WorkerLoop) { IsBackground = true, Name = "Picer.FaceInference" };
         _worker.Start();
     }
@@ -44,7 +45,7 @@ public sealed class YuNetSFaceAnalyzer : IImageFaceAnalyzer, IDisposable
         Net? recognizer = null;
         try
         {
-            detector = FaceDetectorYN.Create(_detectorPath, "", DetectionSize, 0.75f, 0.3f, 5000);
+            detector = FaceDetectorYN.Create(_detectorPath, "", _detectionSize, 0.75f, 0.3f, 5000);
             recognizer = CvDnn.ReadNetFromOnnx(_recognizerPath)
                 ?? throw new InvalidOperationException("Unable to load the SFace model.");
             foreach (var work in _queue.GetConsumingEnumerable())
@@ -54,7 +55,7 @@ public sealed class YuNetSFaceAnalyzer : IImageFaceAnalyzer, IDisposable
                     work.Completion.TrySetCanceled(work.CancellationToken);
                     continue;
                 }
-                try { work.Completion.TrySetResult(Analyze(work.Image, work.CancellationToken, detector, recognizer)); }
+                try { work.Completion.TrySetResult(Analyze(work.Image, work.CancellationToken, detector, recognizer, _detectionSize)); }
                 catch (OperationCanceledException) { work.Completion.TrySetCanceled(work.CancellationToken); }
                 catch (Exception exception) { work.Completion.TrySetException(exception); }
             }
@@ -71,7 +72,7 @@ public sealed class YuNetSFaceAnalyzer : IImageFaceAnalyzer, IDisposable
     }
 
     private static FaceAnalysisResult Analyze(ImageRecord image, CancellationToken cancellationToken,
-        FaceDetectorYN detector, Net recognizer)
+        FaceDetectorYN detector, Net recognizer, Size detectionSize)
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (!File.Exists(image.Path)) throw new FileNotFoundException("The indexed image is not available.");
@@ -79,7 +80,7 @@ public sealed class YuNetSFaceAnalyzer : IImageFaceAnalyzer, IDisposable
         using var source = Cv2.ImRead(image.Path, ImreadModes.Color);
         if (source.Empty()) throw new InvalidDataException("The image cannot be decoded.");
         using var input = new Mat();
-        Cv2.Resize(source, input, DetectionSize);
+        Cv2.Resize(source, input, detectionSize);
         using var detected = new Mat();
         detector.Detect(input, detected);
 
@@ -88,16 +89,16 @@ public sealed class YuNetSFaceAnalyzer : IImageFaceAnalyzer, IDisposable
         for (var row = 0; row < detectedRows; row++)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var x = Math.Clamp(detected.At<float>(row, 0), 0, DetectionSize.Width - 1);
-            var y = Math.Clamp(detected.At<float>(row, 1), 0, DetectionSize.Height - 1);
-            var width = Math.Clamp(detected.At<float>(row, 2), 1, DetectionSize.Width - x);
-            var height = Math.Clamp(detected.At<float>(row, 3), 1, DetectionSize.Height - y);
+            var x = Math.Clamp(detected.At<float>(row, 0), 0, detectionSize.Width - 1);
+            var y = Math.Clamp(detected.At<float>(row, 1), 0, detectionSize.Height - 1);
+            var width = Math.Clamp(detected.At<float>(row, 2), 1, detectionSize.Width - x);
+            var height = Math.Clamp(detected.At<float>(row, 3), 1, detectionSize.Height - y);
             var confidence = detected.At<float>(row, 14);
             var landmarks = new float[10];
             for (var index = 0; index < landmarks.Length; index += 2)
             {
-                landmarks[index] = detected.At<float>(row, 4 + index) / DetectionSize.Width;
-                landmarks[index + 1] = detected.At<float>(row, 5 + index) / DetectionSize.Height;
+                landmarks[index] = detected.At<float>(row, 4 + index) / detectionSize.Width;
+                landmarks[index + 1] = detected.At<float>(row, 5 + index) / detectionSize.Height;
             }
 
             using var aligned = new Mat();
@@ -116,10 +117,10 @@ public sealed class YuNetSFaceAnalyzer : IImageFaceAnalyzer, IDisposable
 
             faces.Add(new FaceDetection(
                 new NormalizedFaceBox(
-                    x / DetectionSize.Width,
-                    y / DetectionSize.Height,
-                    width / DetectionSize.Width,
-                    height / DetectionSize.Height),
+                    x / detectionSize.Width,
+                    y / detectionSize.Height,
+                    width / detectionSize.Width,
+                    height / detectionSize.Height),
                 confidence,
                 landmarks,
                 embedding));

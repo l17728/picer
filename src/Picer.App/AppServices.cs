@@ -50,7 +50,7 @@ public static class AppServices
     public static ClipSemanticService? ClipSemantic { get; private set; }
     public static string? ClipUnavailableReason { get; private set; }
     private static ChineseClipEncoder? ClipEncoder { get; set; }
-    private static YuNetSFaceAnalyzer? FaceAnalyzer { get; set; }
+    private static IImageFaceAnalyzer? FaceAnalyzer { get; set; }
 
     private static string ConfigPath => Path.Combine(AppPaths.DataRoot, "storage.json");
 
@@ -111,7 +111,9 @@ public static class AppServices
             ? new WhisperTranscriptionService(ffmpeg, whisper, whisperModel, Path.Combine(AppPaths.DataRoot, "video-audio")) : null;
         try
         {
-            FaceAnalyzer = new YuNetSFaceAnalyzer(AppPaths.YuNetModelPath, AppPaths.SFaceModelPath);
+            var fast = new YuNetSFaceAnalyzer(AppPaths.YuNetModelPath, AppPaths.SFaceModelPath, 320);
+            var fallback = new YuNetSFaceAnalyzer(AppPaths.YuNetModelPath, AppPaths.SFaceModelPath, 640);
+            FaceAnalyzer = new AdaptiveFaceAnalyzer(fast, fallback);
             VisionAnalysis = new VisionAnalysisService(VisionRepository, FaceAnalyzer);
             VideoFaceTimeline = new VideoFaceTimelineService(Db, FaceAnalyzer, VisionRepository, People);
             VisionUnavailableReason = null;
@@ -256,7 +258,7 @@ public static class AppServices
         AppLogger.Info("AppServices 关闭");
         VisionAnalysis?.Dispose();
         FaceTraining?.Dispose();
-        FaceAnalyzer?.Dispose();
+        (FaceAnalyzer as IDisposable)?.Dispose();
         ClipEncoder?.Dispose();
         Db?.Dispose();
         (Geocoder as IDisposable)?.Dispose();

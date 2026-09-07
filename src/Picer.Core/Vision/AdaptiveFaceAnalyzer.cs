@@ -53,4 +53,10 @@ public sealed class AdaptiveFaceAnalyzer(IImageFaceAnalyzer primary, IImageFaceA
         for (var i = 0; i < a.Count; i++) { dot += a[i] * b[i]; na += a[i] * a[i]; nb += b[i] * b[i]; }
         return na > 0 && nb > 0 && dot / Math.Sqrt(na * nb) >= .95;
     }
+
+    public void Dispose()
+    {
+        (primary as IDisposable)?.Dispose();
+        (fallback as IDisposable)?.Dispose();
+    }
 }
