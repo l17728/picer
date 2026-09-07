@@ -74,6 +74,7 @@ public partial class CloudVisionSettingsWindow : Window
     {
         SaveCurrentSelection();if(!int.TryParse(MaximumBox.Text,out var maximum)||maximum is<1 or>1000){Warn("单批上限必须是 1 到 1000 之间的整数。");return;}
         if(!Uri.TryCreate(FaceTrainingEndpointBox.Text.Trim(),UriKind.Absolute,out var trainingEndpoint)||trainingEndpoint.Scheme is not ("http" or "https")){Warn("人脸训练提交地址必须是有效的 HTTP/HTTPS 地址。");return;}
+        if(trainingEndpoint.Scheme == "http" && !trainingEndpoint.IsLoopback){Warn("远程人脸训练平台必须使用 HTTPS；仅允许 127.0.0.1/localhost 使用 HTTP。");return;}
         if(!decimal.TryParse(DailyBudgetBox.Text,out var daily)||daily<.1m||!decimal.TryParse(MonthlyBudgetBox.Text,out var monthly)||monthly<daily){Warn("每日预算至少 0.1 元；每月预算不得低于每日预算。");return;}
         if(EnabledBox.IsChecked==true)
             foreach(var feature in _features){var resolved=_settings.Resolve(feature.Id);if(resolved is null){Warn($"请为“{feature.Name}”选择模型。");return;}if(!AiProviderIds.IsLocal(resolved.Value.Provider.Id)&&ReadProviderKey(resolved.Value.Provider.Id) is not{Length:>0}){Warn($"“{feature.Name}”使用的服务商尚未保存 API Key。");return;}}
