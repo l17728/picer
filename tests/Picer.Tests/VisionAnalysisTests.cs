@@ -125,6 +125,15 @@ public sealed class VisionAnalysisTests : IDisposable
         Assert.Throws<InvalidOperationException>(() => service.Check("missing-snapshot"));
     }
 
+    [Fact]
+    public async Task ModelServiceProbe_RejectsInsecureRemoteEndpoint()
+    {
+        using var probe = new Picer.Core.Diagnostics.ModelServiceProbe();
+        var result = await probe.CheckAsync("remote", new Uri("http://example.test/health"));
+        Assert.False(result.Reachable);
+        Assert.False(result.Secure);
+    }
+
     private sealed class StubHandler : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
