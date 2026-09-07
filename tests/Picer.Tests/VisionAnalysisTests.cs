@@ -118,6 +118,13 @@ public sealed class VisionAnalysisTests : IDisposable
         Assert.Contains(result.Reasons, x => x.Contains("适配器"));
     }
 
+    [Fact]
+    public void FaceTrainingReadiness_RejectsMissingSnapshot()
+    {
+        var service = new FaceTrainingReadinessService(new VisionAnalysisRepository(_database));
+        Assert.Throws<InvalidOperationException>(() => service.Check("missing-snapshot"));
+    }
+
     private sealed class StubHandler : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>

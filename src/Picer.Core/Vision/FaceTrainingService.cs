@@ -31,6 +31,8 @@ public sealed class FaceTrainingService(
         var snapshotId = new FaceEvaluationSnapshotService(repository).CreateSnapshot(
             adapterVersion: repository.GetActiveFaceAdapterVersion(modelVersion)).SnapshotId;
         var warnings = new List<string>();
+        var readiness = new FaceTrainingReadinessService(repository).Check(snapshotId);
+        warnings.AddRange(readiness.Warnings);
         if (samples.Where(sample => sample.Label == "positive").GroupBy(sample => sample.PersonId).Any(group => group.Count() < 10)) warnings.Add("部分人物少于 10 个正样本");
         if (samples.Count(sample => sample.Label == "negative") < 10) warnings.Add("排他负样本少于 10 个");
         if (!samples.Any(sample => sample.Partition == "test")) warnings.Add("独立测试分区为空，制品只能生成报告而不能自动应用");
