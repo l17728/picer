@@ -7,7 +7,7 @@ namespace Picer.Core.Data;
 
 public sealed class PicerDatabase : IDisposable
 {
-    public const int CurrentSchemaVersion = 26;
+    public const int CurrentSchemaVersion = 27;
     private readonly SqliteConnection _conn;
     private readonly string _connectionString;
 
@@ -723,6 +723,51 @@ public sealed class PicerDatabase : IDisposable
                 PRAGMA user_version = 26;
                 """;
             textMigration.ExecuteNonQuery();
+        }
+        if (schemaVersion < 27)
+        {
+            using var evaluationMigration = _conn.CreateCommand();
+            evaluationMigration.CommandText = """
+                CREATE TABLE IF NOT EXISTS face_dataset_snapshots(
+                    snapshot_id TEXT PRIMARY KEY,
+                    created_utc TEXT NOT NULL,
+                    random_seed INTEGER NOT NULL,
+                    data_version TEXT NOT NULL,
+                    sface_version TEXT NOT NULL,
+                    adapter_version TEXT NOT NULL,
+                    sample_count INTEGER NOT NULL,
+                    train_count INTEGER NOT NULL,
+                    validation_count INTEGER NOT NULL,
+                    test_count INTEGER NOT NULL,
+                    immutable INTEGER NOT NULL DEFAULT 1 CHECK(immutable=1)
+                );
+                CREATE TABLE IF NOT EXISTS face_dataset_members(
+                    snapshot_id TEXT NOT NULL REFERENCES face_dataset_snapshots(snapshot_id) ON DELETE RESTRICT,
+                    sample_key TEXT NOT NULL,
+                    face_id INTEGER,
+                    video_face_id INTEGER,
+                    person_id INTEGER NOT NULL,
+                    label TEXT NOT NULL CHECK(label IN ('positive','negative')),
+                    partition TEXT NOT NULL CHECK(partition IN ('train','validation','test')),
+                    leakage_group TEXT NOT NULL,
+                    source_hash TEXT,
+                    embedding_hash TEXT NOT NULL,
+                    quality_score REAL NOT NULL,
+                    embedding BLOB NOT NULL,
+                    PRIMARY KEY(snapshot_id,sample_key)
+                );
+                CREATE INDEX IF NOT EXISTS idx_face_dataset_members_partition ON face_dataset_members(snapshot_id,partition);
+                CREATE TRIGGER IF NOT EXISTS face_dataset_snapshots_no_update
+                    BEFORE UPDATE ON face_dataset_snapshots BEGIN SELECT RAISE(ABORT,'face dataset snapshots are immutable'); END;
+                CREATE TRIGGER IF NOT EXISTS face_dataset_snapshots_no_delete
+                    BEFORE DELETE ON face_dataset_snapshots BEGIN SELECT RAISE(ABORT,'face dataset snapshots are immutable'); END;
+                CREATE TRIGGER IF NOT EXISTS face_dataset_members_no_update
+                    BEFORE UPDATE ON face_dataset_members BEGIN SELECT RAISE(ABORT,'face dataset members are immutable'); END;
+                CREATE TRIGGER IF NOT EXISTS face_dataset_members_no_delete
+                    BEFORE DELETE ON face_dataset_members BEGIN SELECT RAISE(ABORT,'face dataset members are immutable'); END;
+                PRAGMA user_version = 27;
+                """;
+            evaluationMigration.ExecuteNonQuery();
         }
     }
 

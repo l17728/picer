@@ -28,7 +28,7 @@ public sealed class FaceTrainingService(
         var samples = BuildSamples(out var modelVersion);
         var people = samples.Where(sample => sample.Label == "positive").Select(sample => sample.PersonId).Distinct().ToArray();
         if (people.Length < 2) throw new InvalidOperationException("至少需要两位已有人工确认样本的人物。");
-        var snapshotId = Fingerprint(samples);
+        var snapshotId = new FaceEvaluationSnapshotService(repository).CreateSnapshot(adapterVersion: "none").SnapshotId;
         var warnings = new List<string>();
         if (samples.Where(sample => sample.Label == "positive").GroupBy(sample => sample.PersonId).Any(group => group.Count() < 10)) warnings.Add("部分人物少于 10 个正样本");
         if (samples.Count(sample => sample.Label == "negative") < 10) warnings.Add("排他负样本少于 10 个");
@@ -52,7 +52,7 @@ public sealed class FaceTrainingService(
         var samples = BuildSamples(out var modelVersion);
         var people = samples.Where(sample => sample.Label == "positive").Select(sample => sample.PersonId).Distinct().ToArray();
         if (people.Length < 2) throw new InvalidOperationException("至少需要两位已有人工确认样本的人物。");
-        var snapshotId = Fingerprint(samples);
+        var snapshotId = new FaceEvaluationSnapshotService(repository).CreateSnapshot(adapterVersion: "none").SnapshotId;
         if (expectedSnapshotId is not null && !snapshotId.Equals(expectedSnapshotId, StringComparison.Ordinal))
             throw new InvalidOperationException("确认后人工标注发生了变化；为避免提交错位数据，请重新确认训练快照。");
         var root = new Uri(endpoint.ToString().TrimEnd('/') + "/");

@@ -241,6 +241,36 @@ public sealed class VisionAnalysisTests : IDisposable
     }
 
     [Fact]
+    public async Task FaceEvaluationSnapshot_IsImmutableAndLeakageSafe()
+    {
+        var repository = new VisionAnalysisRepository(_database);
+        using var analysis = new VisionAnalysisService(repository, new FakeFaceAnalyzer("snapshot-sface"));
+        await analysis.AnalyzeAsync([_image]);
+        var person = new PeopleService(_database).Create("snapshot-person");
+        new PeopleService(_database).MoveFace(repository.GetFaceIds(_image.Id).Single(), person.Id);
+
+        var snapshots = new FaceEvaluationSnapshotService(repository);
+        var first = snapshots.CreateSnapshot(randomSeed: 42, adapterVersion: "adapter-none");
+        var second = snapshots.CreateSnapshot(randomSeed: 42, adapterVersion: "adapter-none");
+        Assert.Equal(first.SnapshotId, second.SnapshotId);
+        Assert.NotEmpty(snapshots.GetMembers(first.SnapshotId));
+        Assert.Equal(PicerDatabase.CurrentSchemaVersion, GetSchemaVersion());
+        Assert.Single(snapshots.GetMembers(first.SnapshotId).GroupBy(member => member.LeakageGroup));
+        Assert.Throws<SqliteException>(() =>
+        {
+            using var update = _database.Command("UPDATE face_dataset_members SET quality_score=0 WHERE snapshot_id=$id");
+            update.Parameters.AddWithValue("$id", first.SnapshotId);
+            update.ExecuteNonQuery();
+        });
+    }
+
+    private long GetSchemaVersion()
+    {
+        using var command = _database.Command("PRAGMA user_version");
+        return (long)command.ExecuteScalar()!;
+    }
+
+    [Fact]
     public async Task People_UserCorrectionPreventsRejectedClusterSuggestion()
     {
         var repository = new VisionAnalysisRepository(_database);

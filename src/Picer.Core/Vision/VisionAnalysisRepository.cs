@@ -7,6 +7,7 @@ namespace Picer.Core.Vision;
 
 public sealed class VisionAnalysisRepository(PicerDatabase database)
 {
+    public PicerDatabase Database => database;
     public bool IsCurrent(ImageRecord image, string analyzer, string modelVersion)
     {
         using var command = database.Command("""
