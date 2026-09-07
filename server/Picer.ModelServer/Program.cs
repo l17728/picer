@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddSingleton<ConcurrentDictionary<string, TrainingJob>>();
+builder.Services.AddSingleton<ConcurrentDictionary<string, object>>();
 var app = builder.Build();
 
 app.MapGet("/health", () => Results.Ok(new { status = "ok", service = "picer-model-server", version = "v1" }));
@@ -10,6 +11,9 @@ app.MapGet("/api/models", () => Results.Ok(new[] {
     new { id = "qwen3-asr-1.7b", capability = "language", status = "configured" },
     new { id = "sherpa-onnx-vits-zh-ll", capability = "tts", status = "pending" }
 }));
+app.MapGet("/api/index/v1/records", (string? cursor, int? limit, ConcurrentDictionary<string, object> index) =>
+    Results.Ok(new { version = "index-v1", cursor, nextCursor = (string?)null, items = index.Take(Math.Clamp(limit ?? 200, 1, 1000)).Select(x => x.Value) }));
+app.MapPut("/api/index/v1/records/{id}", (string id, object record, ConcurrentDictionary<string, object> index) => { index[id] = record; return Results.NoContent(); });
 app.MapPost("/api/face-training/datasets", (DatasetRequest request) => Results.Ok(new { id = "dataset-" + Guid.NewGuid().ToString("N"), snapshotId = request.SnapshotId }));
 app.MapPost("/api/face-training/jobs", (JobRequest request, ConcurrentDictionary<string, TrainingJob> jobs) =>
 {
