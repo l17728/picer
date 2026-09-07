@@ -264,6 +264,31 @@ public sealed class VisionAnalysisTests : IDisposable
         });
     }
 
+    [Fact]
+    public void FaceEvaluationMetrics_CalculatePersonAndGateDegradation()
+    {
+        var observations = new[]
+        {
+            new FaceEvaluationObservation(1, true, true, "p1", .9),
+            new FaceEvaluationObservation(1, true, false, "p2", .5),
+            new FaceEvaluationObservation(1, false, true, "n1", .8),
+            new FaceEvaluationObservation(1, false, false, "n2", .8)
+        };
+        var metric = FaceEvaluationService.CalculateMetric("person", "1", observations);
+        Assert.Equal(.5, metric.Precision, 3);
+        Assert.Equal(.5, metric.Recall, 3);
+        Assert.Equal(.5, metric.Far, 3);
+        Assert.Equal(.5, metric.Frr, 3);
+        Assert.Equal(.5, metric.UnknownRejectionRate, 3);
+
+        var baseline = new FaceEvaluationResult("b", "s", "old", "test", metric, [metric], [metric], false, []);
+        var candidateMetric = metric with { Far = .75 };
+        var candidate = new FaceEvaluationResult("c", "s", "new", "test", candidateMetric, [candidateMetric], [candidateMetric], false, []);
+        var comparison = new FaceEvaluationService(new VisionAnalysisRepository(_database)).Compare(baseline, candidate);
+        Assert.False(comparison.Passed);
+        Assert.Contains(comparison.BlockingReasons, reason => reason.Contains("FAR", StringComparison.OrdinalIgnoreCase));
+    }
+
     private long GetSchemaVersion()
     {
         using var command = _database.Command("PRAGMA user_version");

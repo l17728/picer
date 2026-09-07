@@ -7,7 +7,7 @@ namespace Picer.Core.Data;
 
 public sealed class PicerDatabase : IDisposable
 {
-    public const int CurrentSchemaVersion = 27;
+    public const int CurrentSchemaVersion = 29;
     private readonly SqliteConnection _conn;
     private readonly string _connectionString;
 
@@ -768,6 +768,45 @@ public sealed class PicerDatabase : IDisposable
                 PRAGMA user_version = 27;
                 """;
             evaluationMigration.ExecuteNonQuery();
+        }
+        if (schemaVersion < 28)
+        {
+            using var faceEvaluationMigration = _conn.CreateCommand();
+            faceEvaluationMigration.CommandText = """
+                CREATE TABLE IF NOT EXISTS face_evaluation_runs(
+                    run_id TEXT PRIMARY KEY,
+                    snapshot_id TEXT NOT NULL REFERENCES face_dataset_snapshots(snapshot_id) ON DELETE RESTRICT,
+                    strategy_version TEXT NOT NULL,
+                    baseline_version TEXT,
+                    partition TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    passed INTEGER NOT NULL DEFAULT 0,
+                    created_utc TEXT NOT NULL,
+                    completed_utc TEXT,
+                    error TEXT
+                );
+                CREATE TABLE IF NOT EXISTS face_evaluation_metrics(
+                    run_id TEXT NOT NULL REFERENCES face_evaluation_runs(run_id) ON DELETE CASCADE,
+                    scope TEXT NOT NULL,
+                    scope_key TEXT NOT NULL,
+                    metrics_json TEXT NOT NULL,
+                    PRIMARY KEY(run_id,scope,scope_key)
+                );
+                CREATE INDEX IF NOT EXISTS idx_face_evaluation_runs_snapshot ON face_evaluation_runs(snapshot_id,created_utc DESC);
+                PRAGMA user_version = 28;
+                """;
+            faceEvaluationMigration.ExecuteNonQuery();
+        }
+        if (schemaVersion < 29)
+        {
+            using var algorithmMigration = _conn.CreateCommand();
+            algorithmMigration.CommandText = """
+                ALTER TABLE face_dataset_snapshots ADD COLUMN algorithm_id TEXT NOT NULL DEFAULT 'face-embedding';
+                ALTER TABLE face_dataset_snapshots ADD COLUMN embedding_model_version TEXT NOT NULL DEFAULT '';
+                UPDATE face_dataset_snapshots SET embedding_model_version=sface_version WHERE embedding_model_version='';
+                PRAGMA user_version = 29;
+                """;
+            algorithmMigration.ExecuteNonQuery();
         }
     }
 

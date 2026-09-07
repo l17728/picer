@@ -5,8 +5,12 @@ using Picer.Core.Data;
 namespace Picer.Core.Vision;
 
 public sealed record FaceEvaluationSnapshot(string SnapshotId, DateTime CreatedUtc, int RandomSeed,
-    string DataVersion, string SFaceVersion, string AdapterVersion, int Samples,
-    int TrainSamples, int ValidationSamples, int TestSamples);
+    string DataVersion, string AlgorithmId, string EmbeddingModelVersion, string AdapterVersion, int Samples,
+    int TrainSamples, int ValidationSamples, int TestSamples)
+{
+    [Obsolete("Use EmbeddingModelVersion; retained for compatibility with older reports.")]
+    public string SFaceVersion => EmbeddingModelVersion;
+}
 
 public sealed record FaceEvaluationSnapshotMember(string SnapshotId, string SampleKey, long? FaceId,
     long? VideoFaceId, long PersonId, string Label, string Partition, string LeakageGroup,
@@ -16,12 +20,13 @@ public sealed record FaceEvaluationSnapshotMember(string SnapshotId, string Samp
 public sealed class FaceEvaluationSnapshotService(VisionAnalysisRepository repository)
 {
     public FaceEvaluationSnapshot CreateSnapshot(int randomSeed = 20260907,
-        string dataVersion = "face-labels-v1", string? adapterVersion = null)
+        string dataVersion = "face-labels-v1", string? adapterVersion = null,
+        string algorithmId = "face-embedding", string? embeddingModelVersion = null)
     {
         var all = repository.GetEmbeddingsForMatching();
         var positives = all.Where(face => face.AssignmentState == "confirmed" && face.PersonId is not null).ToArray();
         if (positives.Length == 0) throw new InvalidOperationException("没有可用于评测快照的已确认人脸。");
-        var modelVersion = positives.GroupBy(face => face.ModelVersion).OrderByDescending(group => group.Count())
+        var modelVersion = embeddingModelVersion ?? positives.GroupBy(face => face.ModelVersion).OrderByDescending(group => group.Count())
             .Select(group => group.Key).First();
         var selected = all.Where(face => face.ModelVersion == modelVersion && face.PersonId is not null).ToArray();
         var rejected = repository.GetRejectedFaceEmbeddings().Where(face => face.ModelVersion == modelVersion).ToArray();
@@ -51,19 +56,20 @@ public sealed class FaceEvaluationSnapshotService(VisionAnalysisRepository repos
         var canonical = string.Join("\n", members.Select(member =>
             $"{member.SampleKey}|{member.PersonId}|{member.Label}|{member.Partition}|{member.LeakageGroup}|{member.EmbeddingHash}"));
         var snapshotId = "face-snapshot-" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(
-            $"{dataVersion}|{modelVersion}|{adapter}|{randomSeed}|{canonical}")))[..24].ToLowerInvariant();
+            $"{dataVersion}|{algorithmId}|{modelVersion}|{adapter}|{randomSeed}|{canonical}")))[..24].ToLowerInvariant();
         var train = members.Count(member => member.Partition == "train");
         var validation = members.Count(member => member.Partition == "validation");
         var test = members.Count(member => member.Partition == "test");
         using var tx = repository.Database.BeginTransaction();
         using (var insert = repository.Database.Command("""
-            INSERT OR IGNORE INTO face_dataset_snapshots(snapshot_id,created_utc,random_seed,data_version,sface_version,adapter_version,sample_count,train_count,validation_count,test_count)
-            VALUES($id,$created,$seed,$data,$sface,$adapter,$samples,$train,$validation,$test)
+            INSERT OR IGNORE INTO face_dataset_snapshots(snapshot_id,created_utc,random_seed,data_version,sface_version,adapter_version,sample_count,train_count,validation_count,test_count,algorithm_id,embedding_model_version)
+            VALUES($id,$created,$seed,$data,$sface,$adapter,$samples,$train,$validation,$test,$algorithm,$embedding)
             """))
         {
             insert.Transaction = tx; insert.Parameters.AddWithValue("$id", snapshotId);
             insert.Parameters.AddWithValue("$created", DateTime.UtcNow.ToString("o")); insert.Parameters.AddWithValue("$seed", randomSeed);
             insert.Parameters.AddWithValue("$data", dataVersion); insert.Parameters.AddWithValue("$sface", modelVersion);
+            insert.Parameters.AddWithValue("$algorithm", algorithmId); insert.Parameters.AddWithValue("$embedding", modelVersion);
             insert.Parameters.AddWithValue("$adapter", adapter); insert.Parameters.AddWithValue("$samples", members.Count);
             insert.Parameters.AddWithValue("$train", train); insert.Parameters.AddWithValue("$validation", validation); insert.Parameters.AddWithValue("$test", test);
             insert.ExecuteNonQuery();
@@ -84,15 +90,15 @@ public sealed class FaceEvaluationSnapshotService(VisionAnalysisRepository repos
             insert.Parameters.Add("$embedding", Microsoft.Data.Sqlite.SqliteType.Blob).Value = bytes; insert.ExecuteNonQuery();
         }
         tx.Commit();
-        return new(snapshotId, DateTime.UtcNow, randomSeed, dataVersion, modelVersion, adapter, members.Count, train, validation, test);
+        return new(snapshotId, DateTime.UtcNow, randomSeed, dataVersion, algorithmId, modelVersion, adapter, members.Count, train, validation, test);
     }
 
     public FaceEvaluationSnapshot? Get(string snapshotId)
     {
-        using var command = repository.Database.Command("SELECT snapshot_id,created_utc,random_seed,data_version,sface_version,adapter_version,sample_count,train_count,validation_count,test_count FROM face_dataset_snapshots WHERE snapshot_id=$id");
+        using var command = repository.Database.Command("SELECT snapshot_id,created_utc,random_seed,data_version,algorithm_id,embedding_model_version,adapter_version,sample_count,train_count,validation_count,test_count FROM face_dataset_snapshots WHERE snapshot_id=$id");
         command.Parameters.AddWithValue("$id", snapshotId);
         using var reader = command.ExecuteReader();
-        return reader.Read() ? new(reader.GetString(0), DateTime.Parse(reader.GetString(1), null, System.Globalization.DateTimeStyles.RoundtripKind), reader.GetInt32(2), reader.GetString(3), reader.GetString(4), reader.GetString(5), reader.GetInt32(6), reader.GetInt32(7), reader.GetInt32(8), reader.GetInt32(9)) : null;
+        return reader.Read() ? new(reader.GetString(0), DateTime.Parse(reader.GetString(1), null, System.Globalization.DateTimeStyles.RoundtripKind), reader.GetInt32(2), reader.GetString(3), reader.GetString(4), reader.GetString(5), reader.GetString(6), reader.GetInt32(7), reader.GetInt32(8), reader.GetInt32(9), reader.GetInt32(10)) : null;
     }
 
     public IReadOnlyList<FaceEvaluationSnapshotMember> GetMembers(string snapshotId)
