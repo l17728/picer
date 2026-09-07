@@ -65,6 +65,18 @@ public sealed class VisionAnalysisTests : IDisposable
     }
 
     [Fact]
+    public void FaceAlgorithmBenchmark_RecommendationPrefersPassingLowestFar()
+    {
+        static FaceAlgorithmEvaluationEntry Entry(string id, bool passed, double far, double recall) =>
+            new(id, id + "-v1", "snapshot-" + id,
+                new FaceEvaluationResult("run-" + id, "snapshot-" + id, "strategy", "test",
+                    new FaceMetric("overall", "all", 9, (int)(far * 100), 1, 90, 100, .9, recall, far, .1, .9), [], [], passed, []));
+        var recommended = FaceAlgorithmBenchmarkService.Recommend([
+            Entry("legacy", true, .01, .90), Entry("candidate", true, .002, .88), Entry("blocked", false, .0001, .99)]);
+        Assert.Equal("candidate", recommended);
+    }
+
+    [Fact]
     public void Database_MigratesVisionSchemaToVersion4()
     {
         using var connection = new SqliteConnection($"Data Source={_databasePath}");
