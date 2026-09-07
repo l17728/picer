@@ -53,6 +53,11 @@ public sealed class CloudVisionSettings
     public void EnsureDefaults()
     {
         Providers ??= []; Features ??= new(StringComparer.OrdinalIgnoreCase);
+        // Migrate the original single-port proxy defaults to the running llama.cpp services.
+        var legacyVl = Providers.FirstOrDefault(x => x.Id.Equals(AiProviderIds.LocalQwenVl, StringComparison.OrdinalIgnoreCase));
+        if (legacyVl is not null && legacyVl.BaseUrl.Equals("http://127.0.0.1:8090/api/vl/chat", StringComparison.OrdinalIgnoreCase)) legacyVl.BaseUrl = "http://127.0.0.1:8000/v1/chat/completions";
+        var legacyAsr = Providers.FirstOrDefault(x => x.Id.Equals(AiProviderIds.LocalQwenAsr, StringComparison.OrdinalIgnoreCase));
+        if (legacyAsr is not null && legacyAsr.BaseUrl.Equals("http://127.0.0.1:8090/api/asr/transcriptions", StringComparison.OrdinalIgnoreCase)) legacyAsr.BaseUrl = "http://127.0.0.1:8001/v1/audio/transcriptions";
         AddProviderIfMissing(new() { Id="bailian", Name="阿里云百炼", BaseUrl="https://dashscope.aliyuncs.com/compatible-mode/v1", Models=[new(){Id="qwen3-vl-8b-instruct",Name="Qwen3 VL 8B",Capability=AiModelCapability.Multimodal},new(){Id="qwen3-vl-plus",Name="Qwen3 VL Plus",Capability=AiModelCapability.Multimodal}] });
         AddProviderIfMissing(new() { Id="zhipu", Name="智谱", BaseUrl="https://open.bigmodel.cn/api/paas/v4", Models=[new(){Id="glm-4.6v-flash",Name="GLM-4.6V-Flash",Capability=AiModelCapability.Multimodal}] });
         AddProviderIfMissing(new() { Id="huawei", Name="华为", Models=[] });
@@ -71,7 +76,7 @@ public sealed class CloudVisionSettings
         {
             Id = AiProviderIds.LocalQwenVl,
             Name = "本地模型服务",
-            BaseUrl = "http://127.0.0.1:8090/api/vl/chat",
+            BaseUrl = "http://127.0.0.1:8000/v1/chat/completions",
             Models =
             [
                 new()
@@ -86,7 +91,7 @@ public sealed class CloudVisionSettings
         {
             Id = AiProviderIds.LocalQwenAsr,
             Name = "本地语音模型服务",
-            BaseUrl = "http://127.0.0.1:8090/api/asr/transcriptions",
+            BaseUrl = "http://127.0.0.1:8001/v1/audio/transcriptions",
             Models = [new() { Id = "qwen3-asr-1.7b", Name = "Qwen3-ASR 1.7B（本地）", Capability = AiModelCapability.Language }]
         });
         AddProviderIfMissing(new()
