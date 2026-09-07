@@ -41,8 +41,9 @@
                     <StackPanel Orientation="Horizontal">
                         <Button Content="生成只读报告" Click="GenerateReport_Click" Padding="14,7"/>
                         <Button Content="导出 JSON" Click="ExportReport_Click" Padding="14,7" Margin="8,0,0,0"/>
+                        <Button Content="刷新训练历史" Click="RefreshTrainingHistory_Click" Padding="14,7" Margin="8,0,0,0"/>
                     </StackPanel>
-                    <TextBox Grid.Row="1" x:Name="ReportText" Margin="0,12,0,0" IsReadOnly="True" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" TextWrapping="Wrap" FontFamily="Consolas"/>
+                    <DockPanel Grid.Row="1" Margin="0,12,0,0"><DataGrid x:Name="TrainingHistory" DockPanel.Dock="Bottom" Height="150" AutoGenerateColumns="True" IsReadOnly="True"/><TextBox x:Name="ReportText" Margin="0,0,0,8" IsReadOnly="True" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" TextWrapping="Wrap" FontFamily="Consolas"/></DockPanel>
                 </Grid>
             </TabItem>
             <TabItem Header="YuNet 漏检评估">

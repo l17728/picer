@@ -8,6 +8,14 @@ namespace Picer.Core.Vision;
 public sealed class VisionAnalysisRepository(PicerDatabase database)
 {
     public PicerDatabase Database => database;
+    public IReadOnlyList<FaceTrainingArtifactSummary> GetFaceTrainingHistory(int limit = 20)
+    {
+        using var command = database.Command("SELECT artifact_id,dataset_id,model_version,false_accept_rate,false_reject_rate,state,created_utc,applied_utc FROM face_training_artifacts ORDER BY created_utc DESC LIMIT $limit");
+        command.Parameters.AddWithValue("$limit", Math.Clamp(limit, 1, 100));
+        using var reader = command.ExecuteReader(); var result = new List<FaceTrainingArtifactSummary>();
+        while (reader.Read()) result.Add(new(reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetDouble(3), reader.GetDouble(4), reader.GetString(5), DateTime.Parse(reader.GetString(6)), reader.IsDBNull(7) ? null : DateTime.Parse(reader.GetString(7))));
+        return result;
+    }
     public bool IsCurrent(ImageRecord image, string analyzer, string modelVersion)
     {
         using var command = database.Command("""

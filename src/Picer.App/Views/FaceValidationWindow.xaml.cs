@@ -17,6 +17,7 @@ public partial class FaceValidationWindow : Window
     private readonly VisionAnalysisService? _analysis;
     private readonly string? _unavailableReason;
     private readonly FaceLearningReportService _report;
+    private readonly VisionAnalysisRepository _repository;
     private readonly ObservableCollection<YuNetValidationItem> _rows = [];
     private SFaceCalibrationResult? _lastCalibration;
     private int _operationRunning;
@@ -26,7 +27,7 @@ public partial class FaceValidationWindow : Window
     {
         InitializeComponent();
         _validation = validation; _training = training; _analysis = analysis; _unavailableReason = unavailableReason;
-        _report = new FaceLearningReportService(repository);
+        _repository = repository; _report = new FaceLearningReportService(repository);
         YuNetGrid.ItemsSource = _rows;
     }
 
@@ -56,6 +57,11 @@ public partial class FaceValidationWindow : Window
         if (dialog.ShowDialog(this) != true) return;
         File.WriteAllText(dialog.FileName, _lastReportJson);
         Status.Text = $"报告已导出：{dialog.FileName}";
+    }
+
+    private async void RefreshTrainingHistory_Click(object sender, RoutedEventArgs e)
+    {
+        TrainingHistory.ItemsSource = (await UiWork.RunDatabaseAsync(() => _repository.GetFaceTrainingHistory())).ToArray();
     }
 
     private async void CalibrateSFace_Click(object sender, RoutedEventArgs e)

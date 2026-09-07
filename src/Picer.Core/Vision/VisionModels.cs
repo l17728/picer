@@ -50,6 +50,7 @@ public sealed record RejectedFaceEmbeddingRecord(long FaceId, long ImageId, stri
 public sealed record VideoTrainingFaceRecord(long VideoFaceId, long VideoId, long PersonId, string Label,
     float[] Embedding, float DetectionConfidence = 1, float RelativeArea = 1);
 public sealed record FaceLearnedPolicy(long PersonId, string ArtifactId, string ModelVersion, float[] Prototype, double MatchThreshold);
+public sealed record FaceTrainingArtifactSummary(string ArtifactId, string DatasetId, string ModelVersion, double FalseAcceptRate, double FalseRejectRate, string State, DateTime CreatedUtc, DateTime? AppliedUtc);
 public sealed record FaceWorkQueueCounts(int Total, int Suggested, int Unassigned);
 public sealed record CandidateClusterDraft(IReadOnlyList<(long FaceId, double Similarity)> Members);
 public sealed record FaceCandidateClusterRecord(long Id, string ModelVersion, IReadOnlyList<UnassignedFaceRecord> Faces);
