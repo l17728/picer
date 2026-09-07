@@ -77,6 +77,20 @@ public sealed class VisionAnalysisTests : IDisposable
     }
 
     [Fact]
+    public async Task FaceEvaluationRemoteClient_RejectsNonHttpsRemoteEndpoint()
+    {
+        using var client = new FaceEvaluationRemoteClient(new HttpClient(new StubHandler()));
+        var benchmark = new FaceAlgorithmBenchmarkResult(DateTime.UtcNow, "v1", [], null);
+        await Assert.ThrowsAsync<ArgumentException>(() => client.PublishAsync(new Uri("http://example.test/"), benchmark));
+    }
+
+    private sealed class StubHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+            Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK));
+    }
+
+    [Fact]
     public void Database_MigratesVisionSchemaToVersion4()
     {
         using var connection = new SqliteConnection($"Data Source={_databasePath}");
