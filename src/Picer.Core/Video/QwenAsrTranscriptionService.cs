@@ -30,6 +30,10 @@ public sealed class QwenAsrTranscriptionService(
         form.Add(file, "file", Path.GetFileName(wave));
         form.Add(new StringContent(model), "model");
         form.Add(new StringContent("zh"), "language");
+        // Keep VAD deliberately permissive; the service must still process the complete audio track.
+        form.Add(new StringContent("loose"), "vad_mode");
+        form.Add(new StringContent("true"), "full_audio_fallback");
+        form.Add(new StringContent("true"), "timestamps");
         using var response = await _client.PostAsync(endpoint, form, cancellationToken).ConfigureAwait(false);
         var content = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)

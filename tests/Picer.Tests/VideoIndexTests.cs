@@ -162,6 +162,9 @@ public sealed class VideoIndexTests : IDisposable
         Assert.Equal("{\"text\":\"你好\"}", result);
         Assert.Contains("qwen3-asr-1.7b", handler.Body);
         Assert.Contains("audio-16k.wav", handler.Body);
+        Assert.Contains("vad_mode", handler.Body);
+        Assert.Contains("full_audio_fallback", handler.Body);
+        Assert.Contains("timestamps", handler.Body);
     }
 
     private sealed class RecordingHandler : HttpMessageHandler
