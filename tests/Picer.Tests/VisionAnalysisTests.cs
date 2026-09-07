@@ -84,6 +84,20 @@ public sealed class VisionAnalysisTests : IDisposable
         await Assert.ThrowsAsync<ArgumentException>(() => client.PublishAsync(new Uri("http://example.test/"), benchmark));
     }
 
+    [Fact]
+    public void FaceContextRanking_BoostsExplainableEvidenceWithoutCrossingVectorGate()
+    {
+        var query = new FaceContextQuery(DateTime.UtcNow, "上海", "旅行", "爬山", new HashSet<long> { 7 });
+        var ranked = FaceContextRankingService.Rank([
+            new(1, 10, .60, .62, DateTime.UtcNow, "上海", "旅行", "爬山", new HashSet<long> { 7 }),
+            new(2, 11, .61, .62, DateTime.UtcNow, "上海", "旅行", "爬山", new HashSet<long> { 7 })], query);
+
+        Assert.Equal(2, ranked.Count);
+        Assert.True(ranked[0].Candidate.VectorAccepted == false);
+        Assert.Contains("地点一致", ranked[0].Evidence);
+        Assert.DoesNotContain(ranked, value => value.Candidate.VectorAccepted && value.Candidate.VectorScore < value.Candidate.RequiredThreshold);
+    }
+
     private sealed class StubHandler : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
