@@ -11,6 +11,10 @@ public partial class DiagnosticCenterWindow : Window
     {
         SetBusy(true); try { var report = await _service.BuildReportAsync(new Progress<string>(x => StatusText.Text = x)); Components.ItemsSource = report.Components.Select(x => new ComponentRow(x.Name, x.Ready, x.State, FormatBytes(x.Bytes), x.License)).ToArray(); StatusText.Text = $"检查完成：数据库 v{report.DatabaseVersion}，完整性 {report.DatabaseIntegrity}；组件 {report.Components.Count(x => x.Ready)}/{report.Components.Count} 就绪。"; } catch (Exception ex) { StatusText.Text = $"健康检查失败：{ex.Message}"; } finally { SetBusy(false); }
     }
+    private async void ProbeServices_Click(object sender, RoutedEventArgs e)
+    {
+        SetBusy(true); try { var results = await _service.ProbeModelServicesAsync(); ServiceStatus.Text = string.Join(Environment.NewLine, results.Select(x => $"{x.Name}：{(x.Reachable ? "可达" : "不可达")} / {(x.Secure ? "HTTPS" : "不安全")} / {x.LatencyMs} ms / {x.Detail}")); StatusText.Text = "模型服务探测完成"; } catch (Exception ex) { ServiceStatus.Text = $"探测失败：{ex.Message}"; } finally { SetBusy(false); }
+    }
     private async void Json_Click(object sender, RoutedEventArgs e) { var path = Save("JSON 报告|*.json", "picer-diagnostic.json"); if (path is null) return; SetBusy(true); try { await _service.ExportJsonAsync(path); StatusText.Text = $"JSON 报告已导出：{path}"; } catch (Exception ex) { StatusText.Text = ex.Message; } finally { SetBusy(false); } }
     private async void Csv_Click(object sender, RoutedEventArgs e) { var path = Save("CSV 报告|*.csv", "picer-diagnostic.csv"); if (path is null) return; SetBusy(true); try { await _service.ExportCsvAsync(path); StatusText.Text = $"CSV 报告已导出：{path}"; } catch (Exception ex) { StatusText.Text = ex.Message; } finally { SetBusy(false); } }
     private async void Package_Click(object sender, RoutedEventArgs e) { var path = Save("诊断包|*.zip", "picer-diagnostic-redacted.zip"); if (path is null) return; SetBusy(true); try { await _service.CreateDiagnosticPackageAsync(path); StatusText.Text = $"脱敏诊断包已生成：{path}"; } catch (Exception ex) { StatusText.Text = ex.Message; } finally { SetBusy(false); } }

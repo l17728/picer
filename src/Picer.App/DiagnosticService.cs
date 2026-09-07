@@ -7,6 +7,7 @@ using System.Text.RegularExpressions;
 using Picer.Core.Data;
 using Picer.Core.Storage;
 using Picer.Core.Thumbnails;
+using Picer.Core.Diagnostics;
 
 namespace Picer.App;
 
@@ -19,6 +20,18 @@ public sealed record CacheArea(string Id, string Name, string Path, long Bytes, 
 public sealed partial class DiagnosticService(PicerDatabase database, IStorageProvider storage, ThumbnailService thumbnails, string runtimeRoot, string dataRoot)
 {
     private readonly string _dataRoot = Path.GetFullPath(dataRoot);
+    public async Task<IReadOnlyList<ModelServiceProbeResult>> ProbeModelServicesAsync(CancellationToken cancellationToken = default)
+    {
+        var settings = CloudVisionSettings.Load(AppPaths.CloudVisionSettingsPath);
+        var targets = new List<(string, Uri)>();
+        if (Uri.TryCreate(settings.FaceTrainingEndpoint, UriKind.Absolute, out var training)) targets.Add(("人脸训练平台", training));
+        foreach (var feature in new[] { (AiFeatureIds.PhotoAnalysis, "视觉分析"), (AiFeatureIds.VideoTranscription, "视频语音转写"), (AiFeatureIds.AiQuestion, "AI 问答") })
+            if (settings.Resolve(feature.Item1) is { } resolved && Uri.TryCreate(resolved.Provider.BaseUrl, UriKind.Absolute, out var endpoint)) targets.Add((feature.Item2, endpoint));
+        using var probe = new ModelServiceProbe();
+        var results = new List<ModelServiceProbeResult>();
+        foreach (var target in targets) results.Add(await probe.CheckAsync(target.Item1, target.Item2, cancellationToken).ConfigureAwait(false));
+        return results;
+    }
     public async Task<DiagnosticReport> BuildReportAsync(IProgress<string>? progress = null, CancellationToken cancellationToken = default)
     {
         progress?.Report("正在校验运行组件……");
