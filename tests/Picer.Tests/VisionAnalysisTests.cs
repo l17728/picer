@@ -108,6 +108,16 @@ public sealed class VisionAnalysisTests : IDisposable
             new FaceAnalysisResult([new FaceDetection(new NormalizedFaceBox(0, 0, .01f, .01f), .9f, null, null)])));
     }
 
+    [Fact]
+    public void FaceModelReview_BlocksReplacementWhenAdapterIsStillSufficient()
+    {
+        var baseline = new FaceModelProfile("sface", "v1", "Apache-2.0", 100, 20, 200, .95, .01, true, false);
+        var candidate = baseline with { ModelId = "candidate", Version = "v2" };
+        var result = FaceModelReviewService.Review(baseline, candidate, adapterInsufficient: false);
+        Assert.False(result.Eligible);
+        Assert.Contains(result.Reasons, x => x.Contains("适配器"));
+    }
+
     private sealed class StubHandler : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
