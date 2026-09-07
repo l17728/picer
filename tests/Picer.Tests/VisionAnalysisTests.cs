@@ -119,6 +119,16 @@ public sealed class VisionAnalysisTests : IDisposable
     }
 
     [Fact]
+    public void FaceTrainingOutcomeAnalyzer_ExplainsGateFailure()
+    {
+        var result = new FaceTrainingResult("d", "j", "a", 20, 2, .03, .04, false, "未应用");
+        var analysis = FaceTrainingOutcomeAnalyzer.Analyze(result);
+        Assert.False(analysis.Success);
+        Assert.Contains(analysis.Reasons, x => x.Contains("误识率"));
+        Assert.NotEmpty(analysis.Suggestions);
+    }
+
+    [Fact]
     public void FaceTrainingReadiness_RejectsMissingSnapshot()
     {
         var service = new FaceTrainingReadinessService(new VisionAnalysisRepository(_database));

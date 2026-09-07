@@ -203,7 +203,7 @@ public partial class FaceValidationWindow : Window
             SFaceResult.Text = $"训练快照：{result.DatasetId}\n任务：{result.JobId}\n制品：{result.ArtifactId}\n" +
                 $"样本：{result.Samples}；人物：{result.People}\n" +
                 $"配方选用训练样本：{result.SelectedTrainingSamples}；同源折叠：{result.ExcludedSameSource}；人物上限平衡：{result.ExcludedPersonCap}\n" +
-                baseline + result.Message;
+                baseline + result.Message + (result.Applied ? "" : "\n\n失败分析：" + string.Join("；", FaceTrainingOutcomeAnalyzer.Analyze(result).Reasons) + "\n优化建议：" + string.Join("；", FaceTrainingOutcomeAnalyzer.Analyze(result).Suggestions));
             Status.Text = result.Message;
             AppLogger.Info($"FaceTraining completed; dataset={result.DatasetId}; job={result.JobId}; artifact={result.ArtifactId}; applied={result.Applied}; far={result.FalseAcceptRate}; frr={result.FalseRejectRate}");
         }
