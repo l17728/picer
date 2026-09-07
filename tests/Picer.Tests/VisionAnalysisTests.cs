@@ -54,6 +54,17 @@ public sealed class VisionAnalysisTests : IDisposable
     }
 
     [Fact]
+    public void FaceLearningReport_IsReadOnlyAndFlagsEmptyPeopleSet()
+    {
+        var report = new FaceLearningReportService(new VisionAnalysisRepository(_database)).Generate();
+
+        Assert.Equal("face-report-v1", report.ReportVersion);
+        Assert.Equal(0, report.TotalPeople);
+        Assert.Contains("尚未建立已命名人物", report.GlobalRisks);
+        Assert.Contains("face-report-v1", report.ToJson());
+    }
+
+    [Fact]
     public void Database_MigratesVisionSchemaToVersion4()
     {
         using var connection = new SqliteConnection($"Data Source={_databasePath}");

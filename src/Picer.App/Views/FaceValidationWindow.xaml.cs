@@ -6,6 +6,7 @@ using Picer.Core.Vision;
 using Picer.App.Infrastructure;
 using Picer.Core.Logging;
 using System.Diagnostics;
+using Microsoft.Win32;
 
 namespace Picer.App.Views;
 
@@ -15,16 +16,46 @@ public partial class FaceValidationWindow : Window
     private readonly FaceTrainingService _training;
     private readonly VisionAnalysisService? _analysis;
     private readonly string? _unavailableReason;
+    private readonly FaceLearningReportService _report;
     private readonly ObservableCollection<YuNetValidationItem> _rows = [];
     private SFaceCalibrationResult? _lastCalibration;
     private int _operationRunning;
     private CancellationTokenSource? _trainingCancellation;
 
-    public FaceValidationWindow(FaceValidationService validation, FaceTrainingService training, VisionAnalysisService? analysis, string? unavailableReason)
+    public FaceValidationWindow(FaceValidationService validation, FaceTrainingService training, VisionAnalysisService? analysis, string? unavailableReason, VisionAnalysisRepository repository)
     {
         InitializeComponent();
         _validation = validation; _training = training; _analysis = analysis; _unavailableReason = unavailableReason;
+        _report = new FaceLearningReportService(repository);
         YuNetGrid.ItemsSource = _rows;
+    }
+
+    private async void GenerateReport_Click(object sender, RoutedEventArgs e)
+    {
+        if (!TryBeginOperation("正在生成只读人物学习报告…")) return;
+        try
+        {
+            var report = await UiWork.RunDatabaseAsync(_report.Generate);
+            ReportText.Text = $"生成时间：{report.GeneratedUtc.ToLocalTime():yyyy-MM-dd HH:mm:ss}\n" +
+                $"人物 {report.TotalPeople}；确认正样本 {report.TotalConfirmedFaces}；排他负样本 {report.TotalRejectedFaces}；待确认建议 {report.TotalSuggestedFaces}\n" +
+                (report.GlobalRisks.Count == 0 ? "总体风险：未发现" : "总体风险：" + string.Join("；", report.GlobalRisks)) + "\n\n" +
+                string.Join("\n", report.People.Select(p => $"{p.Name}：正 {p.ConfirmedPositive} / 负 {p.RejectedNegative} / 建议 {p.Suggested}，原型 {p.PrototypeCount}，质量 {p.AverageQuality:P0}" + (p.Risks.Count == 0 ? "" : " ⚠ " + string.Join("、", p.Risks)))) +
+                (report.Confusions.Count == 0 ? "\n\n混淆对象：未发现" : "\n\n混淆对象：\n" + string.Join("\n", report.Confusions.Take(20).Select(c => $"{c.PersonName} ↔ {c.ConfusedWithName}：{c.Count} 次")));
+            _lastReportJson = report.ToJson();
+            Status.Text = "人物学习报告已生成（只读，不改变归属）";
+        }
+        catch (Exception exception) { Status.Text = $"报告生成失败：{exception.Message}"; AppLogger.Error("Face learning report failed", exception); }
+        finally { EndOperation(); }
+    }
+
+    private string? _lastReportJson;
+    private void ExportReport_Click(object sender, RoutedEventArgs e)
+    {
+        if (string.IsNullOrWhiteSpace(_lastReportJson)) { Status.Text = "请先生成报告"; return; }
+        var dialog = new SaveFileDialog { Filter = "JSON 报告|*.json", FileName = $"face-learning-report-{DateTime.Now:yyyyMMdd-HHmmss}.json" };
+        if (dialog.ShowDialog(this) != true) return;
+        File.WriteAllText(dialog.FileName, _lastReportJson);
+        Status.Text = $"报告已导出：{dialog.FileName}";
     }
 
     private async void CalibrateSFace_Click(object sender, RoutedEventArgs e)

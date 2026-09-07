@@ -16,10 +16,12 @@ public static class AiFeatureIds
 public static class AiProviderIds
 {
     public const string LocalQwenVl = "local-qwen-vl";
+    public const string LocalHttps = "local-https";
     public const string LocalQwenAsr = "local-qwen-asr";
     public const string BundledWhisper = "bundled-whisper";
     public static bool IsLocal(string? providerId) =>
         string.Equals(providerId, LocalQwenVl, StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(providerId, LocalHttps, StringComparison.OrdinalIgnoreCase) ||
         string.Equals(providerId, LocalQwenAsr, StringComparison.OrdinalIgnoreCase) ||
         string.Equals(providerId, BundledWhisper, StringComparison.OrdinalIgnoreCase);
 }
@@ -54,6 +56,17 @@ public sealed class CloudVisionSettings
         AddProviderIfMissing(new() { Id="bailian", Name="阿里云百炼", BaseUrl="https://dashscope.aliyuncs.com/compatible-mode/v1", Models=[new(){Id="qwen3-vl-8b-instruct",Name="Qwen3 VL 8B",Capability=AiModelCapability.Multimodal},new(){Id="qwen3-vl-plus",Name="Qwen3 VL Plus",Capability=AiModelCapability.Multimodal}] });
         AddProviderIfMissing(new() { Id="zhipu", Name="智谱", BaseUrl="https://open.bigmodel.cn/api/paas/v4", Models=[new(){Id="glm-4.6v-flash",Name="GLM-4.6V-Flash",Capability=AiModelCapability.Multimodal}] });
         AddProviderIfMissing(new() { Id="huawei", Name="华为", Models=[] });
+        AddProviderIfMissing(new()
+        {
+            Id = AiProviderIds.LocalHttps,
+            Name = "本地 HTTPS 模型服务",
+            BaseUrl = "https://127.0.0.1:8443/v1",
+            Models =
+            [
+                new() { Id = "qwen3-vl-8b-instruct", Name = "Qwen3-VL 8B（本地 HTTPS）", Capability = AiModelCapability.Multimodal },
+                new() { Id = "qwen3-asr-1.7b", Name = "Qwen3-ASR 1.7B（本地 HTTPS）", Capability = AiModelCapability.Language }
+            ]
+        });
         AddProviderIfMissing(new()
         {
             Id = AiProviderIds.LocalQwenVl,

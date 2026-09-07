@@ -180,7 +180,7 @@ public partial class MainWindow : Window
 
     private void FaceValidation_Click(object sender, RoutedEventArgs e)
     {
-        new Views.FaceValidationWindow(AppServices.FaceValidation, AppServices.FaceTraining, AppServices.VisionAnalysis, AppServices.VisionUnavailableReason)
+        new Views.FaceValidationWindow(AppServices.FaceValidation, AppServices.FaceTraining, AppServices.VisionAnalysis, AppServices.VisionUnavailableReason, AppServices.VisionRepository)
             { Owner = this }.ShowDialog();
     }
 

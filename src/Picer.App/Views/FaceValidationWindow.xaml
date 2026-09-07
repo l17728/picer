@@ -35,6 +35,16 @@
                     </Border>
                 </StackPanel>
             </TabItem>
+            <TabItem Header="人物学习报告">
+                <Grid Margin="14">
+                    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                    <StackPanel Orientation="Horizontal">
+                        <Button Content="生成只读报告" Click="GenerateReport_Click" Padding="14,7"/>
+                        <Button Content="导出 JSON" Click="ExportReport_Click" Padding="14,7" Margin="8,0,0,0"/>
+                    </StackPanel>
+                    <TextBox Grid.Row="1" x:Name="ReportText" Margin="0,12,0,0" IsReadOnly="True" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" TextWrapping="Wrap" FontFamily="Consolas"/>
+                </Grid>
+            </TabItem>
             <TabItem Header="YuNet 漏检评估">
                 <Grid Margin="10">
                     <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
