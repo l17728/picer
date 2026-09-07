@@ -61,18 +61,22 @@ public sealed class FaceTrainingService(
             throw new InvalidOperationException("确认后人工标注发生了变化；为避免提交错位数据，请重新确认训练快照。");
         var root = new Uri(endpoint.ToString().TrimEnd('/') + "/");
         progress?.Report(new("upload", 10, $"正在提交 {samples.Length} 个脱敏向量样本"));
-        using var datasetResponse = await _client.PostAsJsonAsync(new Uri(root, "datasets"),
-            new { snapshotId, sourceApp = "picer", modelVersion, samples }, Json, cancellationToken).ConfigureAwait(false);
+        using var datasetRequest = new HttpRequestMessage(HttpMethod.Post, new Uri(root, "datasets")) { Content = JsonContent.Create(new { snapshotId, sourceApp = "picer", modelVersion, samples }, options: Json) };
+        datasetRequest.Headers.Add("X-Picer-Api-Version", "1");
+        using var datasetResponse = await _client.SendAsync(datasetRequest, cancellationToken).ConfigureAwait(false);
         await EnsureSuccess(datasetResponse, "提交训练快照", cancellationToken).ConfigureAwait(false);
         var dataset = await datasetResponse.Content.ReadFromJsonAsync<DatasetResponse>(Json, cancellationToken)
             .ConfigureAwait(false) ?? throw new InvalidDataException("训练平台未返回数据集编号。");
 
         progress?.Report(new("queued", 18, "训练快照已接收，正在创建任务"));
-        using var jobResponse = await _client.PostAsJsonAsync(new Uri(root, "jobs"),
-            new { datasetId = dataset.Id, type = "embedding-adapter-training" }, Json, cancellationToken).ConfigureAwait(false);
+        if (string.IsNullOrWhiteSpace(dataset.Id)) throw new InvalidDataException("训练平台返回了空数据集编号。");
+        using var jobRequest = new HttpRequestMessage(HttpMethod.Post, new Uri(root, "jobs")) { Content = JsonContent.Create(new { datasetId = dataset.Id, type = "embedding-adapter-training" }, options: Json) };
+        jobRequest.Headers.Add("X-Picer-Api-Version", "1");
+        using var jobResponse = await _client.SendAsync(jobRequest, cancellationToken).ConfigureAwait(false);
         await EnsureSuccess(jobResponse, "创建训练任务", cancellationToken).ConfigureAwait(false);
         var job = await jobResponse.Content.ReadFromJsonAsync<JobResponse>(Json, cancellationToken).ConfigureAwait(false)
                   ?? throw new InvalidDataException("训练平台未返回任务编号。");
+        if (string.IsNullOrWhiteSpace(job.Id)) throw new InvalidDataException("训练平台返回了空任务编号。");
         var submittedJobId = job.Id;
         using var cancelRegistration = cancellationToken.Register(() =>
             _ = _client.PostAsync(new Uri(root, $"jobs/{submittedJobId}/cancel"), content: null, CancellationToken.None));
@@ -92,6 +96,11 @@ public sealed class FaceTrainingService(
         var artifact = JsonSerializer.Deserialize<ArtifactResponse>(artifactJson, Json)
                        ?? throw new InvalidDataException("训练制品格式无效。");
         if (artifact.BaseModelVersion != modelVersion) throw new InvalidDataException("训练制品基础模型版本不匹配。");
+        if (!string.IsNullOrWhiteSpace(artifact.Sha256))
+        {
+            var actualHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(artifactJson))).ToLowerInvariant();
+            if (!string.Equals(actualHash, artifact.Sha256, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("训练制品 SHA-256 校验失败。");
+        }
         if (artifact.People.Any(value => !people.Contains(value.PersonId))) throw new InvalidDataException("训练制品包含快照以外的人物编号。");
         var applied = artifact.Metrics.FalseAcceptRate <= 0.01 && artifact.Metrics.PositiveEvaluated >= 20 &&
                       artifact.Metrics.NegativeEvaluated >= 10 && artifact.People.Count >= 2 &&
@@ -246,5 +255,5 @@ public sealed class FaceTrainingService(
         bool NoFalseAcceptRegression, bool AcceptableFalseRejectRegression);
     private sealed record ArtifactResponse(string Id, string BaseModelVersion, List<PersonPolicyResponse> People,
         MetricsResponse Metrics, RecipeReportResponse? RecipeReport = null,
-        BaselineMetricsResponse? BaselineMetrics = null, ComparisonResponse? Comparison = null);
+        BaselineMetricsResponse? BaselineMetrics = null, ComparisonResponse? Comparison = null, string? Sha256 = null);
 }
