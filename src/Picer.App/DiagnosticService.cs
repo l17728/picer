@@ -25,6 +25,7 @@ public sealed partial class DiagnosticService(PicerDatabase database, IStoragePr
         var settings = CloudVisionSettings.Load(AppPaths.CloudVisionSettingsPath);
         var targets = new List<(string, Uri)>();
         if (Uri.TryCreate(settings.FaceTrainingEndpoint, UriKind.Absolute, out var training)) targets.Add(("人脸训练平台", training));
+        if (Uri.TryCreate("http://127.0.0.1:8090/api/tts/health", UriKind.Absolute, out var tts)) targets.Add(("中文 TTS", tts));
         foreach (var feature in new[] { (AiFeatureIds.PhotoAnalysis, "视觉分析"), (AiFeatureIds.VideoTranscription, "视频语音转写"), (AiFeatureIds.AiQuestion, "AI 问答") })
             if (settings.Resolve(feature.Item1) is { } resolved && Uri.TryCreate(resolved.Provider.BaseUrl, UriKind.Absolute, out var endpoint)) targets.Add((feature.Item2, endpoint));
         using var probe = new ModelServiceProbe();
