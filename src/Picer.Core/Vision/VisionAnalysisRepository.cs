@@ -529,6 +529,13 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
         catch (JsonException) { return null; }
     }
 
+    public string GetActiveFaceAdapterVersion(string modelVersion)
+    {
+        using var command = database.Command("SELECT artifact_id FROM face_training_artifacts WHERE state='active' AND model_version=$model ORDER BY applied_utc DESC LIMIT 1");
+        command.Parameters.AddWithValue("$model", modelVersion);
+        return command.ExecuteScalar() as string ?? "none";
+    }
+
     public void ApplyLearnedFaceArtifact(string artifactId, string datasetId, string endpoint, string modelVersion,
         string artifactJson, double falseAcceptRate, double falseRejectRate,
         IReadOnlyCollection<FaceLearnedPolicy> policies)
