@@ -4,6 +4,7 @@
   "modelProbeRoot": "third_party/model-probe",
   "benchmarkRoot": "artifacts/benchmarks",
   "releaseOutput": "artifacts/release/Picer-win-x64",
+  "serviceReleaseOutput": "artifacts/release/Picer.IndexService-win-x64",
   "visionProbeRoot": "artifacts/vision-probe",
   "nugetPackages": "artifacts/nuget"
 }

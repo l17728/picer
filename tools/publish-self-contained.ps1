@@ -1,19 +1,25 @@
 param(
     [string]$OutputDirectory = '',
+    [string]$ServiceOutputDirectory = '',
     [switch]$SkipArchive
 )
 
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot
-if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
-    $configured = $null
+if ([string]::IsNullOrWhiteSpace($OutputDirectory) -or [string]::IsNullOrWhiteSpace($ServiceOutputDirectory)) {
+    $config = $null
     $configPath = Join-Path $repoRoot 'picer.paths.json'
     if (Test-Path -LiteralPath $configPath) {
         $config = Get-Content -LiteralPath $configPath -Raw -Encoding UTF8 | ConvertFrom-Json
-        if ($config.releaseOutput) { $configured = $config.releaseOutput }
     }
-    if (-not $configured) { $configured = 'artifacts/release/Picer-win-x64' }
-    $OutputDirectory = if ([IO.Path]::IsPathRooted($configured)) { $configured } else { Join-Path $repoRoot $configured }
+    if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
+        $configured = if ($config -and $config.releaseOutput) { $config.releaseOutput } else { 'artifacts/release/Picer-win-x64' }
+        $OutputDirectory = if ([IO.Path]::IsPathRooted($configured)) { $configured } else { Join-Path $repoRoot $configured }
+    }
+    if ([string]::IsNullOrWhiteSpace($ServiceOutputDirectory)) {
+        $configured = if ($config -and $config.serviceReleaseOutput) { $config.serviceReleaseOutput } else { 'artifacts/release/Picer.IndexService-win-x64' }
+        $ServiceOutputDirectory = if ([IO.Path]::IsPathRooted($configured)) { $configured } else { Join-Path $repoRoot $configured }
+    }
 }
 $runtimeSource = Join-Path $repoRoot 'third_party\runtime'
 $required = @(
@@ -74,6 +80,12 @@ foreach ($item in $native) {
     if ((Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -ne $item.Hash) { throw "Native runtime SHA-256 mismatch: $path" }
 }
 
+New-Item -ItemType Directory -Force -Path $ServiceOutputDirectory | Out-Null
+dotnet publish (Join-Path $repoRoot 'server\Picer.IndexService\Picer.IndexService.csproj') -c Release -r win-x64 --self-contained true -o $ServiceOutputDirectory
+if ($LASTEXITCODE -ne 0) { throw 'Index service publish failed.' }
+Assert-Runtime (Join-Path $ServiceOutputDirectory 'runtime')
+if (-not (Test-Path -LiteralPath (Join-Path $ServiceOutputDirectory 'Picer.IndexService.exe'))) { throw 'Published index service executable is missing.' }
+
 if (-not $SkipArchive) {
     $archive = "$OutputDirectory.zip"
     if (Test-Path -LiteralPath $archive) { Remove-Item -LiteralPath $archive -Force }
@@ -81,4 +93,12 @@ if (-not $SkipArchive) {
     Write-Output "Self-contained release: $archive"
 } else {
     Write-Output "Self-contained release: $OutputDirectory"
+}
+$serviceArchive = "$ServiceOutputDirectory.zip"
+if (-not $SkipArchive) {
+    if (Test-Path -LiteralPath $serviceArchive) { Remove-Item -LiteralPath $serviceArchive -Force }
+    Compress-Archive -Path (Join-Path $ServiceOutputDirectory '*') -DestinationPath $serviceArchive -CompressionLevel Optimal
+    Write-Output "Index service release: $serviceArchive"
+} else {
+    Write-Output "Index service release: $ServiceOutputDirectory"
 }

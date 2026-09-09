@@ -24,6 +24,15 @@ public sealed partial class DiagnosticService(PicerDatabase database, IStoragePr
     {
         var settings = CloudVisionSettings.Load(AppPaths.CloudVisionSettingsPath);
         var targets = new List<(string, Uri)>();
+        try
+        {
+            var indexBackend = AppPaths.LoadIndexBackend();
+            if (indexBackend.BaseUrl is { Length: > 0 } indexBaseUrl && Uri.TryCreate(indexBaseUrl.TrimEnd('/') + "/health", UriKind.Absolute, out var indexService))
+                targets.Add(("索引服务", indexService));
+        }
+        catch
+        {
+        }
         if (Uri.TryCreate(settings.FaceTrainingEndpoint, UriKind.Absolute, out var training)) targets.Add(("人脸训练平台", training));
         if (Uri.TryCreate("http://127.0.0.1:8090/api/tts/health", UriKind.Absolute, out var tts)) targets.Add(("中文 TTS", tts));
         foreach (var feature in new[] { (AiFeatureIds.PhotoAnalysis, "视觉分析"), (AiFeatureIds.VideoTranscription, "视频语音转写"), (AiFeatureIds.AiQuestion, "AI 问答") })

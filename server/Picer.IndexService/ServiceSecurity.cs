@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.Json;
+using Picer.Core.Logging;
 
 namespace Picer.IndexService;
 
@@ -32,6 +33,11 @@ public static class ServiceSecurity
     public static X509Certificate2 EnsureHttpsCertificate(string dataRoot)
     {
         var path = Path.Combine(dataRoot, "https-cert.pfx.enc");
+        if (Environment.GetEnvironmentVariable("PICER_INDEX_SERVICE_RENEW_CERT") == "1" && File.Exists(path))
+        {
+            File.Delete(path);
+            AppLogger.Info("检测到 PICER_INDEX_SERVICE_RENEW_CERT=1，已轮换服务证书（客户端需重新确认 SPKI 指纹）。");
+        }
         if (File.Exists(path)) return new X509Certificate2(Unprotect(File.ReadAllBytes(path)));
         using var rsa = RSA.Create(2048);
         var request = new CertificateRequest("CN=picer-index-service", rsa, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);

@@ -38,6 +38,7 @@ For face-model tests alone, `tools/Picer.VisionProbe/download-models.ps1` fetche
 - `PICER_FFMPEG_PATH` — FFmpeg override used by `Picer.Core.Video.VideoIndexService`.
 - `PICER_MODEL_SERVER_API_KEY` — bearer token required by ModelServer `/api/*` routes.
 - `PICER_INDEX_DATA_ROOT` / `PICER_INDEX_SERVICE_PORT` / `PICER_INDEX_SERVICE_TOKEN` — data root, port (default 8445) and token for `Picer.IndexService`.
+- `PICER_INDEX_SERVICE_RENEW_CERT=1` — rotates the service HTTPS certificate on next start (clients must re-confirm the SPKI pin).
 
 ## Architecture invariants (from docs/SDD.md — enforced by tests)
 
