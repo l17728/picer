@@ -66,6 +66,9 @@ public sealed class ServiceBrowseWindowTests
         public Task<int> RemoveRecycledRecordsAsync(IReadOnlyList<long> imageIds, CancellationToken cancellationToken = default) =>
             Task.FromResult(0);
 
+        public Task<string> BackupAsync(string destinationPath, CancellationToken cancellationToken = default) =>
+            Task.FromResult(destinationPath);
+
         public void Dispose() { }
     }
 
