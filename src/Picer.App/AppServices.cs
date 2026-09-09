@@ -4,6 +4,7 @@ using Picer.App.FileOperations;
 using Picer.App.Security;
 using Picer.Core.Data;
 using Picer.Core.FileOperations;
+using Picer.Core.Gateway;
 using Picer.Core.Indexing;
 using Picer.Core.Geocoding;
 using Picer.Core.Logging;
@@ -19,6 +20,8 @@ namespace Picer.App;
 
 public static class AppServices
 {
+    public static IIndexGateway Gateway { get; private set; } = null!;
+    public static bool ServiceMode { get; private set; }
     public static PicerDatabase Db { get; private set; } = null!;
     public static IStorageProvider Storage { get; private set; } = null!;
     public static ThumbnailService Thumbnails { get; private set; } = null!;
@@ -58,6 +61,17 @@ public static class AppServices
     {
         AppLogger.Initialize(Path.Combine(AppPaths.DataRoot, "logs"));
         AppLogger.Info("AppServices 初始化开始");
+
+        var backend = AppPaths.LoadIndexBackend();
+        ServiceMode = backend.Mode == IndexBackendConfig.ServiceMode;
+        if (ServiceMode)
+        {
+            Gateway = backend.BaseUrl is { Length: > 0 } baseUrl
+                ? new HttpIndexGateway(baseUrl, RequireToken(backend), backend.SpkiPin)
+                : new PipeIndexGateway(backend.PipeName ?? throw new InvalidOperationException("service-endpoint.json 缺少管道名与 URL。"), RequireToken(backend));
+            AppLogger.Info("AppServices 已进入 service 模式（零构建逻辑，仅网关）");
+            return;
+        }
 
         Db = new PicerDatabase(AppPaths.DbPath);
 
@@ -125,12 +139,17 @@ public static class AppServices
             AppLogger.Info(VisionUnavailableReason);
         }
         AppLogger.Info("AppServices 初始化完成");
+        Gateway = new LocalGateway(Db, Thumbnails, Index);
     }
+
+    private static string RequireToken(IndexBackendOptions backend) =>
+        backend.Token ?? throw new InvalidOperationException("service-endpoint.json 缺少访问令牌。");
 
     public static void Reinitialize(IStorageProvider provider)
     {
         Storage = provider;
         Index = new IndexEngine(Db, Storage, Thumbnails);
+        if (!ServiceMode) Gateway = new LocalGateway(Db, Thumbnails, Index);
     }
 
     public static string? GetWebDavPassword() => new WindowsCredentialStore().Read(PicerCredentialTargets.WebDav);
@@ -256,6 +275,11 @@ public static class AppServices
     public static void Shutdown()
     {
         AppLogger.Info("AppServices 关闭");
+        if (ServiceMode)
+        {
+            (Gateway as IDisposable)?.Dispose();
+            return;
+        }
         VisionAnalysis?.Dispose();
         FaceTraining?.Dispose();
         (FaceAnalyzer as IDisposable)?.Dispose();

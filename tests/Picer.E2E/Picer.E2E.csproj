@@ -8,6 +8,8 @@
 
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
+    <!-- 同 Picer.Tests：xunit 传递链的版本化 RID 资产在 Windows-only 仓库中无需解析 -->
+    <NoWarn>$(NoWarn);NETSDK1206</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
@@ -23,6 +25,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Picer.App\Picer.App.csproj" />
+    <ProjectReference Include="..\..\server\Picer.IndexService\Picer.IndexService.csproj" />
   </ItemGroup>
 
 </Project>

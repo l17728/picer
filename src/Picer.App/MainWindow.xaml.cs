@@ -143,6 +143,11 @@ public partial class MainWindow : Window
         new Views.RuntimeComponentsWindow { Owner = this }.ShowDialog();
     }
 
+    private void IndexService_Click(object sender, RoutedEventArgs e)
+    {
+        new Views.IndexServiceWindow { Owner = this }.ShowDialog();
+    }
+
     private void ClipSemantic_Click(object sender, RoutedEventArgs e)
     {
         new Views.ClipSemanticWindow(AppServices.EnsureClipSemantic(), AppServices.ClipRepository, AppServices.ClipUnavailableReason)

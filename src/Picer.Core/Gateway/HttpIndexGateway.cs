@@ -1,0 +1,169 @@
+using System.Net;
+using System.Net.Http.Headers;
+using System.Net.Http.Json;
+using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
+using System.Text.Json;
+using Picer.Core.Models;
+using Picer.Core.Search;
+
+namespace Picer.Core.Gateway;
+
+public sealed class HttpIndexGateway : IIndexGateway, IDisposable
+{
+    private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
+    private readonly HttpClient _client;
+    private readonly bool _ownsClient;
+
+    public byte[]? DiscoveredSpkiPin { get; private set; }
+
+    public HttpIndexGateway(string baseUrl, string bearerToken, byte[]? expectedSpkiPin = null, HttpClient? client = null)
+    {
+        if (client is null)
+        {
+            var handler = new HttpClientHandler();
+            handler.ServerCertificateCustomValidationCallback = (_, certificate, _, _) =>
+            {
+                if (certificate is null) return false;
+                var pin = ComputeSpkiPin(certificate);
+                if (expectedSpkiPin is null)
+                {
+                    DiscoveredSpkiPin = pin;
+                    return true;
+                }
+                return CryptographicOperations.FixedTimeEquals(pin, expectedSpkiPin);
+            };
+            _client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(30) };
+            _ownsClient = true;
+        }
+        else
+        {
+            _client = client;
+            _ownsClient = false;
+        }
+        _client.BaseAddress = new Uri(baseUrl.TrimEnd('/') + "/");
+        _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", bearerToken);
+    }
+
+    public static byte[] ComputeSpkiPin(X509Certificate2 certificate) => certificate.PublicKey.ExportSubjectPublicKeyInfo();
+
+    public async Task<GatewayHealth> GetHealthAsync(CancellationToken cancellationToken = default)
+    {
+        using var response = await _client.GetAsync("health", cancellationToken);
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadFromJsonAsync<GatewayHealth>(Json, cancellationToken)
+            ?? throw new InvalidOperationException("Empty health payload.");
+    }
+
+    public async Task<GatewayPage> ListImagesAsync(long? sourceId = null, bool includeMissing = false, int pageSize = 200, string? cursor = null, CancellationToken cancellationToken = default)
+    {
+        var query = new List<string> { $"pageSize={Math.Clamp(pageSize, 1, 500)}", $"includeMissing={includeMissing}" };
+        if (sourceId is not null) query.Add($"sourceId={sourceId}");
+        if (!string.IsNullOrEmpty(cursor)) query.Add($"cursor={Uri.EscapeDataString(cursor)}");
+        using var response = await _client.GetAsync($"api/gateway/v1/images?{string.Join("&", query)}", cancellationToken);
+        return await ReadPageAsync(response, cancellationToken);
+    }
+
+    public async Task<ImageRecord?> GetImageAsync(long id, CancellationToken cancellationToken = default)
+    {
+        using var response = await _client.GetAsync($"api/gateway/v1/images/{id}", cancellationToken);
+        if (response.StatusCode == HttpStatusCode.NotFound) return null;
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadFromJsonAsync<ImageRecord>(Json, cancellationToken);
+    }
+
+    public async Task<Stream?> OpenThumbnailAsync(long imageId, CancellationToken cancellationToken = default)
+    {
+        var response = await _client.GetAsync($"api/gateway/v1/thumbs/{imageId}", cancellationToken);
+        if (response.StatusCode == HttpStatusCode.NotFound)
+        {
+            response.Dispose();
+            return null;
+        }
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadAsStreamAsync(cancellationToken);
+    }
+
+    public async Task<GatewayPage> SearchAsync(SearchFilters filters, int pageSize = 200, string? cursor = null, CancellationToken cancellationToken = default)
+    {
+        var payload = new { filters, pageSize = Math.Clamp(pageSize, 1, 500), cursor };
+        using var response = await _client.PostAsJsonAsync("api/gateway/v1/search", payload, Json, cancellationToken);
+        return await ReadPageAsync(response, cancellationToken);
+    }
+
+    private static async Task<GatewayPage> ReadPageAsync(HttpResponseMessage response, CancellationToken cancellationToken)
+    {
+        await EnsureSuccessAsync(response, cancellationToken);
+        return await response.Content.ReadFromJsonAsync<GatewayPage>(Json, cancellationToken)
+            ?? throw new InvalidOperationException("Empty page payload.");
+    }
+
+    private static async Task EnsureSuccessAsync(HttpResponseMessage response, CancellationToken cancellationToken)
+    {
+        if (response.IsSuccessStatusCode) return;
+        var body = await response.Content.ReadAsStringAsync(cancellationToken);
+        throw new HttpRequestException($"Gateway returned {(int)response.StatusCode} {response.StatusCode}: {body}");
+    }
+
+    public async Task<IReadOnlyList<SourceFolder>> ListSourcesAsync(CancellationToken cancellationToken = default)
+    {
+        using var response = await _client.GetAsync("api/gateway/v1/sources", cancellationToken);
+        await EnsureSuccessAsync(response, cancellationToken);
+        return await response.Content.ReadFromJsonAsync<IReadOnlyList<SourceFolder>>(Json, cancellationToken) ?? [];
+    }
+
+    public async Task<SourceFolder> RegisterSourceAsync(string path, CancellationToken cancellationToken = default)
+    {
+        using var response = await _client.PostAsJsonAsync("api/gateway/v1/sources", new { path }, Json, cancellationToken);
+        await EnsureSuccessAsync(response, cancellationToken);
+        return await response.Content.ReadFromJsonAsync<SourceFolder>(Json, cancellationToken)
+            ?? throw new InvalidOperationException("Empty source payload.");
+    }
+
+    public async Task<bool> RemoveSourceAsync(long sourceId, CancellationToken cancellationToken = default)
+    {
+        using var response = await _client.DeleteAsync($"api/gateway/v1/sources/{sourceId}", cancellationToken);
+        if (response.StatusCode == HttpStatusCode.NotFound) return false;
+        await EnsureSuccessAsync(response, cancellationToken);
+        return true;
+    }
+
+    public async Task<string> StartScanAsync(long sourceId, CancellationToken cancellationToken = default)
+    {
+        using var response = await _client.PostAsJsonAsync("api/gateway/v1/scan", new { sourceId }, Json, cancellationToken);
+        await EnsureSuccessAsync(response, cancellationToken);
+        var started = await response.Content.ReadFromJsonAsync<GatewayScanStarted>(Json, cancellationToken)
+            ?? throw new InvalidOperationException("Empty scan payload.");
+        return started.JobId;
+    }
+
+    public async Task<ScanJobInfo?> GetScanJobAsync(string jobId, CancellationToken cancellationToken = default)
+    {
+        using var response = await _client.GetAsync($"api/gateway/v1/jobs/{Uri.EscapeDataString(jobId)}", cancellationToken);
+        if (response.StatusCode == HttpStatusCode.NotFound) return null;
+        await EnsureSuccessAsync(response, cancellationToken);
+        return await response.Content.ReadFromJsonAsync<ScanJobInfo>(Json, cancellationToken);
+    }
+
+    public async Task<bool> CancelScanAsync(string jobId, CancellationToken cancellationToken = default)
+    {
+        using var response = await _client.PostAsJsonAsync($"api/gateway/v1/jobs/{Uri.EscapeDataString(jobId)}/cancel", new { }, Json, cancellationToken);
+        if (response.StatusCode == HttpStatusCode.NotFound) return false;
+        await EnsureSuccessAsync(response, cancellationToken);
+        return true;
+    }
+
+    public async Task<int> RemoveRecycledRecordsAsync(IReadOnlyList<long> imageIds, CancellationToken cancellationToken = default)
+    {
+        using var response = await _client.PostAsJsonAsync("api/gateway/v1/verified-changes", new { imageIds }, Json, cancellationToken);
+        await EnsureSuccessAsync(response, cancellationToken);
+        var result = await response.Content.ReadFromJsonAsync<GatewayVerifiedChangesResult>(Json, cancellationToken)
+            ?? throw new InvalidOperationException("Empty verified-changes payload.");
+        return result.Removed;
+    }
+
+    public void Dispose()
+    {
+        if (_ownsClient) _client.Dispose();
+    }
+}

@@ -7,18 +7,24 @@ public static class AppPaths
 {
     private static string BootstrapDirectory => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Picer", "bootstrap");
     private static string DataLocationPath => Path.Combine(BootstrapDirectory, "data-location.json");
+    public static string BackendConfigPath => Path.Combine(BootstrapDirectory, "backend.json");
+    public static string ServiceEndpointPath => Path.Combine(BootstrapDirectory, "service-endpoint.json");
+    public static Picer.Core.Gateway.IndexBackendOptions LoadIndexBackend() =>
+        Picer.Core.Gateway.IndexBackendConfig.Load(BackendConfigPath, ServiceEndpointPath,
+            static cipher => System.Security.Cryptography.ProtectedData.Unprotect(cipher, null, System.Security.Cryptography.DataProtectionScope.CurrentUser));
     public static string RuntimeRoot => Path.Combine(AppContext.BaseDirectory, "runtime");
 
     public static string DataRoot
     {
         get
         {
-            if (Environment.GetEnvironmentVariable("PICER_DATA_ROOT") is { Length: > 0 } isolatedRoot) return Path.GetFullPath(isolatedRoot);
-            try { if (File.Exists(DataLocationPath) && JsonSerializer.Deserialize<DataLocation>(File.ReadAllText(DataLocationPath)) is { Path.Length: > 0 } configured) return Path.GetFullPath(configured.Path); } catch { }
+            if (Environment.GetEnvironmentVariable("PICER_DATA_ROOT") is { Length: > 0 } isolatedRoot) return ResolveConfiguredPath(isolatedRoot);
+            try { if (File.Exists(DataLocationPath) && JsonSerializer.Deserialize<DataLocation>(File.ReadAllText(DataLocationPath)) is { Path.Length: > 0 } configured) return ResolveConfiguredPath(configured.Path); } catch { }
             return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "picer");
         }
     }
-    public static void SetDataRoot(string path) { Directory.CreateDirectory(BootstrapDirectory); File.WriteAllText(DataLocationPath, JsonSerializer.Serialize(new DataLocation(Path.GetFullPath(path)))); }
+    public static void SetDataRoot(string path) { Directory.CreateDirectory(BootstrapDirectory); File.WriteAllText(DataLocationPath, JsonSerializer.Serialize(new DataLocation(path.Trim()))); }
+    private static string ResolveConfiguredPath(string path) => Path.IsPathRooted(path) ? Path.GetFullPath(path) : Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, path));
 
     public static string DbPath => Path.Combine(DataRoot, "picer.db");
 

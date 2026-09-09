@@ -71,6 +71,15 @@ public partial class App : Application
         try
         {
             LogInfo("正在创建 ViewModel...");
+            if (AppServices.ServiceMode)
+            {
+                var serviceWindow = new Views.IndexServiceWindow();
+                MainWindow = serviceWindow;
+                serviceWindow.Show();
+                PicerEventSource.Log.StartupStage("shell-visible", Stopwatch.GetElapsedTime(startupTimestamp).TotalMilliseconds);
+                LogInfo("service 模式：索引服务窗口已显示（浏览界面随 P2 完整版交付）");
+                return;
+            }
             var peopleViewModel = new PeopleViewModel(
                 AppServices.Db, AppServices.People, AppServices.VisionRepository,
                 AppServices.VisionAnalysis, AppServices.FaceThumbnails, AppServices.FaceSuggestions,
