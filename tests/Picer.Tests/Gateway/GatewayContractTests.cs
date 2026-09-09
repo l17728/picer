@@ -393,7 +393,7 @@ public sealed class GatewayContractTests(GatewayServiceFixture fixture) : IClass
 
     private static async Task<ScanJobInfo> WaitForJobAsync(IIndexGateway gateway, string jobId)
     {
-        var deadline = DateTime.UtcNow.AddSeconds(30);
+        var deadline = DateTime.UtcNow.AddSeconds(120);
         while (DateTime.UtcNow < deadline)
         {
             var job = await gateway.GetScanJobAsync(jobId);

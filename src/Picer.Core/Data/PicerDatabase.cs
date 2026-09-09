@@ -7,7 +7,7 @@ namespace Picer.Core.Data;
 
 public sealed class PicerDatabase : IDisposable
 {
-    public const int CurrentSchemaVersion = 30;
+    public const int CurrentSchemaVersion = 31;
     private readonly SqliteConnection _conn;
     private readonly string _connectionString;
 
@@ -828,6 +828,43 @@ public sealed class PicerDatabase : IDisposable
                 PRAGMA user_version = 30;
                 """;
             contentMigration.ExecuteNonQuery();
+        }
+        if (schemaVersion < 31)
+        {
+            using var curationMigration = _conn.CreateCommand();
+            curationMigration.CommandText = """
+                CREATE TABLE IF NOT EXISTS face_training_snapshots (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    created_utc TEXT NOT NULL,
+                    rule_version TEXT NOT NULL,
+                    random_seed INTEGER NOT NULL,
+                    status TEXT NOT NULL,
+                    train_ratio REAL NOT NULL DEFAULT 0.7,
+                    validation_ratio REAL NOT NULL DEFAULT 0.2,
+                    counts_json TEXT NOT NULL DEFAULT '{}',
+                    warnings_json TEXT NOT NULL DEFAULT '[]',
+                    manifest_hash TEXT NOT NULL DEFAULT ''
+                );
+                CREATE TABLE IF NOT EXISTS face_snapshot_members (
+                    snapshot_id INTEGER NOT NULL REFERENCES face_training_snapshots(id) ON DELETE CASCADE,
+                    face_id INTEGER NOT NULL,
+                    image_id INTEGER NOT NULL,
+                    leakage_group INTEGER NOT NULL,
+                    person_id INTEGER NOT NULL,
+                    split TEXT NOT NULL,
+                    PRIMARY KEY (snapshot_id, face_id, person_id)
+                );
+                CREATE TABLE IF NOT EXISTS face_snapshot_rejections (
+                    snapshot_id INTEGER NOT NULL REFERENCES face_training_snapshots(id) ON DELETE CASCADE,
+                    face_id INTEGER NOT NULL,
+                    person_id INTEGER NOT NULL,
+                    split TEXT NOT NULL,
+                    PRIMARY KEY (snapshot_id, face_id, person_id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_face_snapshot_members_split ON face_snapshot_members(snapshot_id, split);
+                PRAGMA user_version = 31;
+                """;
+            curationMigration.ExecuteNonQuery();
         }
     }
 
