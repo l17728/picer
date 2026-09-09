@@ -17,6 +17,7 @@ internal sealed record PipeIdRequest(long Id = 0);
 internal sealed record PipeJobRequest(string JobId = "");
 internal sealed record PipeScanRequest(long SourceId = 0);
 internal sealed record PipeVerifiedChangesRequest(IReadOnlyList<long> ImageIds);
+internal sealed record PipeBackupRequest(string DestinationPath = "");
 
 public sealed class NamedPipeIndexServer : IDisposable
 {
@@ -95,6 +96,9 @@ public sealed class NamedPipeIndexServer : IDisposable
                 ? null
                 : payload.Value.Deserialize<PipeVerifiedChangesRequest>(Json);
             var changes = changesRequest?.ImageIds ?? [];
+            var backupRequest = payload is null || payload.Value.ValueKind != JsonValueKind.Object
+                ? new PipeBackupRequest()
+                : payload.Value.Deserialize<PipeBackupRequest>(Json) ?? new PipeBackupRequest();
             var body = op switch
             {
                 "health" => JsonSerializer.SerializeToElement(_handlers.Health()),
@@ -106,6 +110,7 @@ public sealed class NamedPipeIndexServer : IDisposable
                 "add_source" => JsonSerializer.SerializeToElement(_handlers.RegisterSource(sourceRequest.Path)),
                 "remove_source" => JsonSerializer.SerializeToElement(new PipeFlagResponse(_handlers.RemoveSource(idRequest.Id))),
                 "verified_changes" => JsonSerializer.SerializeToElement(new GatewayVerifiedChangesResult(_handlers.RemoveRecycledRecords(changes))),
+                "backup" => JsonSerializer.SerializeToElement(new GatewayBackupResult(_handlers.Backup(backupRequest.DestinationPath))),
                 "scan" => JsonSerializer.SerializeToElement(_handlers.GetSource(scanRequest.SourceId) is { } source
                     ? new GatewayScanStarted(_jobs.Start(_engine, source.Id, source.Path))
                     : throw new KeyNotFoundException($"来源不存在：{scanRequest.SourceId}")),

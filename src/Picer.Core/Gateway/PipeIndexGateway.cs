@@ -116,5 +116,11 @@ public sealed class PipeIndexGateway : IIndexGateway, IDisposable
         return result?.Removed ?? 0;
     }
 
+    public async Task<string> BackupAsync(string destinationPath, CancellationToken cancellationToken = default)
+    {
+        var result = await CallAsync<GatewayBackupResult>("backup", new { destinationPath }, cancellationToken);
+        return result?.Path ?? throw new InvalidOperationException("Empty backup payload.");
+    }
+
     public void Dispose() => _stream?.Dispose();
 }

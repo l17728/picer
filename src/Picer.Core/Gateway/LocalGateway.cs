@@ -72,7 +72,7 @@ public sealed class LocalGateway(PicerDatabase db, ThumbnailService thumbnails, 
     public Task<bool> CancelScanAsync(string jobId, CancellationToken cancellationToken = default) =>
         Task.FromResult((_jobs ?? new ScanJobManager()).Cancel(jobId));
 
-    public async Task<int> RemoveRecycledRecordsAsync(IReadOnlyList<long> imageIds, CancellationToken cancellationToken = default)
+    public Task<int> RemoveRecycledRecordsAsync(IReadOnlyList<long> imageIds, CancellationToken cancellationToken = default)
     {
         var removed = 0;
         foreach (var id in imageIds)
@@ -82,7 +82,15 @@ public sealed class LocalGateway(PicerDatabase db, ThumbnailService thumbnails, 
             thumbnails.Delete(id);
             removed++;
         }
-        await Task.CompletedTask;
-        return removed;
+        return Task.FromResult(removed);
+    }
+
+    public Task<string> BackupAsync(string destinationPath, CancellationToken cancellationToken = default)
+    {
+        var full = Path.GetFullPath(destinationPath);
+        var directory = Path.GetDirectoryName(full);
+        if (!string.IsNullOrEmpty(directory)) Directory.CreateDirectory(directory);
+        db.BackupTo(full);
+        return Task.FromResult(full);
     }
 }

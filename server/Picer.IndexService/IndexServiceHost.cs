@@ -77,6 +77,15 @@ public sealed class IndexApiHandlers(PicerDatabase db, ThumbnailService thumbnai
         }
         return removed;
     }
+
+    public string Backup(string destinationPath)
+    {
+        var full = Path.GetFullPath(destinationPath);
+        var directory = Path.GetDirectoryName(full);
+        if (!string.IsNullOrEmpty(directory)) Directory.CreateDirectory(directory);
+        db.BackupTo(full);
+        return full;
+    }
 }
 
 public sealed record IndexServiceInstance(WebApplication App, X509Certificate2 Certificate, IndexApiHandlers Handlers, IndexEngine Engine, ScanJobManager Jobs);
@@ -163,6 +172,8 @@ public static class IndexServiceHost
             jobs.Cancel(jobId) ? Results.NoContent() : Results.NotFound());
         app.MapPost("/api/gateway/v1/verified-changes", (GatewayVerifiedChangesRequest request) =>
             Results.Json(new GatewayVerifiedChangesResult(handlers.RemoveRecycledRecords(request.ImageIds))));
+        app.MapPost("/api/gateway/v1/backup", (GatewayBackupRequest request) =>
+            Results.Json(new GatewayBackupResult(handlers.Backup(request.DestinationPath))));
 
         app.Lifetime.ApplicationStopped.Register(() =>
         {

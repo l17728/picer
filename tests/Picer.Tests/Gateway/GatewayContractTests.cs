@@ -283,6 +283,18 @@ public sealed class GatewayContractTests(GatewayServiceFixture fixture) : IClass
         Assert.Equal(5, page.Items.Count);
     }
 
+    [Theory]
+    [MemberData(nameof(Transports))]
+    public async Task Backup_CreatesReadableDatabaseCopy(string transport)
+    {
+        using var gateway = fixture.CreateGateway(transport);
+        var destination = Path.Combine(fixture.Root + "-backup", $"backup-{transport}.db");
+        var result = await gateway.BackupAsync(destination);
+        Assert.Equal(Path.GetFullPath(destination), result);
+        Assert.True(File.Exists(result));
+        Assert.True(new FileInfo(result).Length > 0);
+    }
+
     [Fact]
     public async Task Api_RequiresBearerToken()
     {

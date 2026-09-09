@@ -21,4 +21,5 @@ public interface IIndexGateway : IDisposable
     Task<ScanJobInfo?> GetScanJobAsync(string jobId, CancellationToken cancellationToken = default);
     Task<bool> CancelScanAsync(string jobId, CancellationToken cancellationToken = default);
     Task<int> RemoveRecycledRecordsAsync(IReadOnlyList<long> imageIds, CancellationToken cancellationToken = default);
+    Task<string> BackupAsync(string destinationPath, CancellationToken cancellationToken = default);
 }

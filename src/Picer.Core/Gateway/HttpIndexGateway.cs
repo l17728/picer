@@ -162,6 +162,15 @@ public sealed class HttpIndexGateway : IIndexGateway, IDisposable
         return result.Removed;
     }
 
+    public async Task<string> BackupAsync(string destinationPath, CancellationToken cancellationToken = default)
+    {
+        using var response = await _client.PostAsJsonAsync("api/gateway/v1/backup", new { destinationPath }, Json, cancellationToken);
+        await EnsureSuccessAsync(response, cancellationToken);
+        var result = await response.Content.ReadFromJsonAsync<GatewayBackupResult>(Json, cancellationToken)
+            ?? throw new InvalidOperationException("Empty backup payload.");
+        return result.Path;
+    }
+
     public void Dispose()
     {
         if (_ownsClient) _client.Dispose();

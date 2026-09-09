@@ -34,7 +34,14 @@
 
 验证：构建 0/0；网关契约+性能 46/46；service/browse E2E 2/2；发布脚本语法解析 0 错误。
 
-## 遗留（按设计顺序）
+## 增量 9：P3 收尾——备份 API（已实施）
+
+- `POST /api/gateway/v1/backup {destinationPath}`（HTTP + 管道双通道）：服务端 `PicerDatabase.BackupTo` 全量一致性备份，目录自动创建，返回实际落盘路径。
+- `IIndexGateway.BackupAsync` 三网关实现 + 契约测试 `Backup_CreatesReadableDatabaseCopy`（43/43 契约用例）。
+
+最终验证：`Picer.Tests` **254/254**（13 m 52 s）；`Picer.E2E` **32/33**（唯一失败仍为既有首窗预算抖动）。构建 0 警告 0 错误。
+
+## 遗留（文档级收尾）
 
 1. **P2 最后一环**：MainViewModel/PhotoGrid 读路径全量走 gateway（"客户端全量切 service 模式可浏览"），涉及 `AppServices.Db` 的 33 处消费点改造（§13.2 策略 A→B）。
 2. **P3**：远端 opt-in 授权 UI、证书轮换、备份/恢复 API 化、诊断中心接入服务探针、`publish-self-contained.ps1` GUI 精简包/服务完整包双产物、SDD 与 USER_GUIDE 收尾。

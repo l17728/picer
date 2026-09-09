@@ -13,3 +13,7 @@ public sealed record ScanJobInfo(string JobId, long SourceId, string Stage, int 
 public sealed record GatewayVerifiedChangesRequest(IReadOnlyList<long> ImageIds);
 
 public sealed record GatewayVerifiedChangesResult(int Removed);
+
+public sealed record GatewayBackupRequest(string DestinationPath);
+
+public sealed record GatewayBackupResult(string Path);
