@@ -1,0 +1,9 @@
+{
+  "$comment": "开发/测试/工具路径配置。相对路径以仓库根目录（picer.sln 所在目录）为基准解析。环境变量 PICER_TEST_TEMP、PICER_MODEL_ROOT 优先于本文件。",
+  "testTemp": "artifacts/test-temp",
+  "modelProbeRoot": "third_party/model-probe",
+  "benchmarkRoot": "artifacts/benchmarks",
+  "releaseOutput": "artifacts/release/Picer-win-x64",
+  "visionProbeRoot": "artifacts/vision-probe",
+  "nugetPackages": "artifacts/nuget"
+}

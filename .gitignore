@@ -31,6 +31,7 @@ third_party/*.nupkg
 third_party/runtime/ffmpeg/
 third_party/runtime/models/
 third_party/runtime/whisper/
+third_party/model-probe/
 
 # Credentials and machine-local configuration
 .env

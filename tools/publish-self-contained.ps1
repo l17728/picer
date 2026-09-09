@@ -1,10 +1,20 @@
 param(
-    [string]$OutputDirectory = 'D:\PicerData\releases\Picer-win-x64',
+    [string]$OutputDirectory = '',
     [switch]$SkipArchive
 )
 
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot
+if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
+    $configured = $null
+    $configPath = Join-Path $repoRoot 'picer.paths.json'
+    if (Test-Path -LiteralPath $configPath) {
+        $config = Get-Content -LiteralPath $configPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ($config.releaseOutput) { $configured = $config.releaseOutput }
+    }
+    if (-not $configured) { $configured = 'artifacts/release/Picer-win-x64' }
+    $OutputDirectory = if ([IO.Path]::IsPathRooted($configured)) { $configured } else { Join-Path $repoRoot $configured }
+}
 $runtimeSource = Join-Path $repoRoot 'third_party\runtime'
 $required = @(
     @{ Path='models\face\face_detection_yunet_2023mar.onnx'; Bytes=232589; Hash='8F2383E4DD3CFBB4553EA8718107FC0423210DC964F9F4280604804ED2552FA4' },

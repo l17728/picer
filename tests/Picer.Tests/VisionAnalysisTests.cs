@@ -620,7 +620,7 @@ public sealed class VisionAnalysisTests : IDisposable
     [Fact]
     public async Task YuNetSFaceAnalyzer_LoadsCachedModelsAndHandlesImageWithoutFaces()
     {
-        var modelRoot = Environment.GetEnvironmentVariable("PICER_MODEL_ROOT") ?? @"D:\PicerData\model-probe";
+        var modelRoot = Environment.GetEnvironmentVariable("PICER_MODEL_ROOT") ?? Picer.Core.PicerPaths.Resolve("modelProbeRoot", "third_party/model-probe");
         var detector = Path.Combine(modelRoot, "face_detection_yunet_2023mar.onnx");
         var recognizer = Path.Combine(modelRoot, "face_recognition_sface_2021dec.onnx");
         if (!File.Exists(detector) || !File.Exists(recognizer)) return;
@@ -663,7 +663,7 @@ public sealed class VisionAnalysisTests : IDisposable
     public async Task YuNetSFaceAnalyzer_ProducesNormalizedEmbeddingsForRealGroupPhotoWhenAvailable()
     {
         var photo = @"G:\Apple照片\2000-04-08 - 2019-01-06 学生\Internal Storage\DCIM\100APPLE\IMG_0158.JPG";
-        var modelRoot = Environment.GetEnvironmentVariable("PICER_MODEL_ROOT") ?? @"D:\PicerData\model-probe";
+        var modelRoot = Environment.GetEnvironmentVariable("PICER_MODEL_ROOT") ?? Picer.Core.PicerPaths.Resolve("modelProbeRoot", "third_party/model-probe");
         var detector = Path.Combine(modelRoot, "face_detection_yunet_2023mar.onnx");
         var recognizer = Path.Combine(modelRoot, "face_recognition_sface_2021dec.onnx");
         if (!File.Exists(photo) || !File.Exists(detector) || !File.Exists(recognizer)) return;

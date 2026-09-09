@@ -1,6 +1,21 @@
-param([string]$Destination = $(if ($env:PICER_MODEL_ROOT) { $env:PICER_MODEL_ROOT } else { 'D:\PicerData\model-probe' }))
+param([string]$Destination = '')
 
 $ErrorActionPreference = 'Stop'
+if ([string]::IsNullOrWhiteSpace($Destination)) {
+    if ($env:PICER_MODEL_ROOT) {
+        $Destination = $env:PICER_MODEL_ROOT
+    } else {
+        $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+        $configured = $null
+        $configPath = Join-Path $repoRoot 'picer.paths.json'
+        if (Test-Path -LiteralPath $configPath) {
+            $config = Get-Content -LiteralPath $configPath -Raw -Encoding UTF8 | ConvertFrom-Json
+            if ($config.modelProbeRoot) { $configured = $config.modelProbeRoot }
+        }
+        if (-not $configured) { $configured = 'third_party/model-probe' }
+        $Destination = if ([IO.Path]::IsPathRooted($configured)) { $configured } else { Join-Path $repoRoot $configured }
+    }
+}
 New-Item -ItemType Directory -Force -Path $Destination | Out-Null
 $models = @(
     @{ Name='face_detection_yunet_2023mar.onnx'; Url='https://raw.githubusercontent.com/opencv/opencv_zoo/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx' },

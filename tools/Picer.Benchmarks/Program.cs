@@ -90,7 +90,7 @@ if (args.Length >= 2 && args[0] == "--face-diagnostics")
 var count = args.Length > 0 && int.TryParse(args[0], out var parsed) ? parsed : 1_000;
 if (count is < 1 or > 1_000_000) throw new ArgumentOutOfRangeException(nameof(count));
 var iterations = args.Length > 1 && int.TryParse(args[1], out var parsedIterations) ? parsedIterations : 30;
-var benchmarkBase = args.Length > 2 ? Path.GetFullPath(args[2]) : @"D:\PicerData\benchmarks";
+var benchmarkBase = args.Length > 2 ? Path.GetFullPath(args[2]) : Picer.Core.PicerPaths.Resolve("benchmarkRoot", "artifacts/benchmarks");
 Directory.CreateDirectory(benchmarkBase);
 var root = Path.Combine(benchmarkBase, "picer-benchmark-" + Guid.NewGuid().ToString("N"));
 Directory.CreateDirectory(root);
