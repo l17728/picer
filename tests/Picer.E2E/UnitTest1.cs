@@ -24,7 +24,7 @@ public sealed class DesktopSmokeTests
 
         group.RemoveFaces(new HashSet<long> { 1 });
         Assert.Equal(1, group.FaceCount);
-        Assert.Equal("测试人物 · 1 张待确认", group.Summary);
+        Assert.Equal("测试人物 · 1 张高相似待确认", group.Summary);
         Assert.Equal(2, Assert.Single(group.Faces).FaceId);
 
         group.RemoveFaces(new HashSet<long> { 2 });
