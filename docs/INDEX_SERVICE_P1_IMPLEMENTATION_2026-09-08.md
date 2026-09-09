@@ -25,6 +25,15 @@
 
 验证：全量 E2E 32/33 通过；唯一失败为既有"首窗 4s 预算"抖动（连续负载下干净 HEAD 同样失败，见增量 6 说明）。
 
+## 增量 8：P3 首批——发布双产物、诊断探针、证书轮换（已实施）
+
+- `Picer.IndexService.csproj`：`third_party/runtime` 内容打包（模型/FFmpeg/whisper 随服务分发，§4.1 模型栈单份部署）。
+- `tools/publish-self-contained.ps1`：双产物——GUI 自包含包 + `Picer.IndexService-win-x64` 服务自包含包（均经运行时哈希与许可证门禁）；`picer.paths.json` 新增 `serviceReleaseOutput`。
+- `DiagnosticService.ProbeModelServicesAsync`：service 模式自动加入"索引服务"健康探针（解析失败静默跳过，不影响诊断）。
+- `PICER_INDEX_SERVICE_RENEW_CERT=1`：下次启动轮换服务证书（设计 §5.1；客户端需重新确认 SPKI 指纹）；AGENTS.md 已更新。
+
+验证：构建 0/0；网关契约+性能 46/46；service/browse E2E 2/2；发布脚本语法解析 0 错误。
+
 ## 遗留（按设计顺序）
 
 1. **P2 最后一环**：MainViewModel/PhotoGrid 读路径全量走 gateway（"客户端全量切 service 模式可浏览"），涉及 `AppServices.Db` 的 33 处消费点改造（§13.2 策略 A→B）。
