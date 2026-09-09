@@ -15,6 +15,16 @@
 
 验证：构建 0/0；`Picer.Tests` 251/251；`Picer.E2E` 31/32——唯一失败为 `MainWindow_Exposes...` 首窗 4s 预算抖动：连续高负载后本机冷启动 4.4–5.2s，**干净 HEAD 同样失败**（历史通过；CI windows-latest 为准）。
 
+## 增量 7：P2.4 收尾——service 模式浏览视图（已实施）
+
+- `ViewModels/ServiceBrowseViewModel.cs` + `Views/ServiceBrowseWindow.xaml(.cs)`：经 `IIndexGateway` 的浏览界面（FTS 搜索、keyset"加载更多"、4 并发缩略图加载、虚拟化 WrapPanel）——不依赖 `AppServices.Db`，零 MainViewModel 改造。
+- `IndexServiceWindow`：service 模式新增"浏览图库"入口（local 模式隐藏）。
+- E2E `ServiceBrowseWindowTests`：桩网关 + STA 消息泵，验证经网关的列表渲染与搜索过滤。
+
+至此设计 §2.1 目标 2"GUI 零构建逻辑"与 §6.2 service 模式可用性在 UI 层打通：service 模式下用户可经"索引服务状态 → 浏览图库"完成搜索与浏览，全部数据来自 HTTPS/管道网关。
+
+验证：全量 E2E 32/33 通过；唯一失败为既有"首窗 4s 预算"抖动（连续负载下干净 HEAD 同样失败，见增量 6 说明）。
+
 ## 遗留（按设计顺序）
 
 1. **P2 最后一环**：MainViewModel/PhotoGrid 读路径全量走 gateway（"客户端全量切 service 模式可浏览"），涉及 `AppServices.Db` 的 33 处消费点改造（§13.2 策略 A→B）。
