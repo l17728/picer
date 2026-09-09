@@ -212,15 +212,30 @@ public sealed class IndexEngine
     private void PersistPreparedImage(PreparedImage prepared, SqliteTransaction tx)
     {
         var record = prepared.Record;
-        _db.UpsertImageInTransaction(record, tx);
-        if (!prepared.NeedsThumbnail)
+        void AttachThumbnail()
         {
-            _db.UpdateImageInTransaction(record, tx);
-            return;
+            if (!prepared.NeedsThumbnail) return;
+            record.ThumbPath = prepared.DecodedImage is not null
+                ? _thumbnails.GetOrCreateFromImage(prepared.DecodedImage, record.Id)
+                : _thumbnails.GetOrCreate(record.Path, record.Id);
         }
-        record.ThumbPath = prepared.DecodedImage is not null
-            ? _thumbnails.GetOrCreateFromImage(prepared.DecodedImage, record.Id)
-            : _thumbnails.GetOrCreate(record.Path, record.Id);
+
+        if (!string.IsNullOrEmpty(record.Sha256))
+        {
+            _db.UpsertContentInTransaction(record.Sha256, record.FileSize, record.AverageHash, record.DifferenceHash, tx);
+            var relocated = _db.FindRelocatableMissingRecordInTransaction(record.Sha256, record.Path, record.SourceId, tx);
+            if (relocated is not null && !File.Exists(relocated.Path))
+            {
+                AppLogger.Info($"哈希命中，重建移动关联: ID={relocated.Id} {relocated.Path} -> {record.Path}");
+                record.Id = relocated.Id;
+                AttachThumbnail();
+                _db.UpdateImageInTransaction(record, tx);
+                return;
+            }
+        }
+
+        _db.UpsertImageInTransaction(record, tx);
+        AttachThumbnail();
         _db.UpdateImageInTransaction(record, tx);
     }
 

@@ -27,4 +27,6 @@ public sealed class ImageRecord
     // Perceptual hashes for deduplication
     public long AverageHash { get; set; }
     public long DifferenceHash { get; set; }
+
+    public string? ContentSha256 { get; set; }
 }

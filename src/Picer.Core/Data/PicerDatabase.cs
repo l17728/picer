@@ -7,7 +7,7 @@ namespace Picer.Core.Data;
 
 public sealed class PicerDatabase : IDisposable
 {
-    public const int CurrentSchemaVersion = 29;
+    public const int CurrentSchemaVersion = 30;
     private readonly SqliteConnection _conn;
     private readonly string _connectionString;
 
@@ -808,6 +808,27 @@ public sealed class PicerDatabase : IDisposable
                 """;
             algorithmMigration.ExecuteNonQuery();
         }
+        if (schemaVersion < 30)
+        {
+            using var contentMigration = _conn.CreateCommand();
+            contentMigration.CommandText = """
+                CREATE TABLE IF NOT EXISTS image_contents (
+                    sha256 TEXT PRIMARY KEY,
+                    file_size INTEGER NOT NULL,
+                    ahash INTEGER,
+                    dhash INTEGER,
+                    content_hash_state TEXT NOT NULL DEFAULT 'complete',
+                    derivative_version INTEGER NOT NULL DEFAULT 1
+                );
+                ALTER TABLE images ADD COLUMN content_sha256 TEXT;
+                INSERT OR IGNORE INTO image_contents (sha256, file_size, ahash, dhash, content_hash_state, derivative_version)
+                    SELECT sha256, file_size, ahash, dhash, 'complete', 1 FROM images WHERE sha256 IS NOT NULL;
+                UPDATE images SET content_sha256 = sha256 WHERE sha256 IS NOT NULL;
+                CREATE INDEX IF NOT EXISTS idx_images_content_sha256 ON images(content_sha256);
+                PRAGMA user_version = 30;
+                """;
+            contentMigration.ExecuteNonQuery();
+        }
     }
 
     public SqliteCommand Command(string sql)
@@ -1135,8 +1156,8 @@ public sealed class PicerDatabase : IDisposable
         {
             using var cmd = Command("""
                 INSERT INTO images (source_id, path, file_size, modified_utc, sha256, width, height,
-                                    taken_utc, camera, gps, thumb_path, status, indexed_utc, ahash, dhash,file_created_utc)
-                VALUES ($sid, $p, $fs, $m, $sha, $w, $h, $t, $cam, $gps, $th, $st, $ix, $ah, $dh,$created);
+                                    taken_utc, camera, gps, thumb_path, status, indexed_utc, ahash, dhash, file_created_utc, content_sha256)
+                VALUES ($sid, $p, $fs, $m, $sha, $w, $h, $t, $cam, $gps, $th, $st, $ix, $ah, $dh, $created, $csha);
                 SELECT last_insert_rowid();
                 """);
             BindRecord(cmd, rec);
@@ -1165,7 +1186,7 @@ public sealed class PicerDatabase : IDisposable
             UPDATE images SET source_id = $sid, path = $p, file_size = $fs, modified_utc = $m,
                 sha256 = $sha, width = $w, height = $h, taken_utc = $t, camera = $cam,
                 gps = $gps, thumb_path = $th, status = $st, indexed_utc = $ix,
-                ahash = $ah, dhash = $dh, file_created_utc=$created
+                ahash = $ah, dhash = $dh, file_created_utc = $created, content_sha256 = $csha
             WHERE id = $id
             """);
         BindRecord(cmd, rec);
@@ -1213,6 +1234,7 @@ public sealed class PicerDatabase : IDisposable
         cmd.Parameters.AddWithValue("$ix", Fmt(rec.IndexedUtc));
         cmd.Parameters.AddWithValue("$ah", rec.AverageHash);
         cmd.Parameters.AddWithValue("$dh", rec.DifferenceHash);
+        cmd.Parameters.AddWithValue("$csha", (object?)rec.Sha256 ?? DBNull.Value);
     }
 
     private static ImageRecord ReadRecord(SqliteDataReader r) => new()
@@ -1233,7 +1255,8 @@ public sealed class PicerDatabase : IDisposable
         Status = r.GetString(r.GetOrdinal("status")) == "active" ? ImageStatus.Active : ImageStatus.Missing,
         IndexedUtc = Parse(r.GetString(r.GetOrdinal("indexed_utc"))),
         AverageHash = r.GetInt64(r.GetOrdinal("ahash")),
-        DifferenceHash = r.GetInt64(r.GetOrdinal("dhash"))
+        DifferenceHash = r.GetInt64(r.GetOrdinal("dhash")),
+        ContentSha256 = r.IsDBNull(r.GetOrdinal("content_sha256")) ? null : r.GetString(r.GetOrdinal("content_sha256"))
     };
 
     public SqliteTransaction BeginTransaction() => _conn.BeginTransaction();
@@ -1263,8 +1286,8 @@ public sealed class PicerDatabase : IDisposable
         {
             using var cmd = Command("""
                 INSERT INTO images (source_id, path, file_size, modified_utc, sha256, width, height,
-                                    taken_utc, camera, gps, thumb_path, status, indexed_utc, ahash, dhash,file_created_utc)
-                VALUES ($sid, $p, $fs, $m, $sha, $w, $h, $t, $cam, $gps, $th, $st, $ix, $ah, $dh,$created);
+                                    taken_utc, camera, gps, thumb_path, status, indexed_utc, ahash, dhash, file_created_utc, content_sha256)
+                VALUES ($sid, $p, $fs, $m, $sha, $w, $h, $t, $cam, $gps, $th, $st, $ix, $ah, $dh, $created, $csha);
                 SELECT last_insert_rowid();
                 """);
             cmd.Transaction = tx;
@@ -1292,13 +1315,59 @@ public sealed class PicerDatabase : IDisposable
             UPDATE images SET source_id = $sid, path = $p, file_size = $fs, modified_utc = $m,
                 sha256 = $sha, width = $w, height = $h, taken_utc = $t, camera = $cam,
                 gps = $gps, thumb_path = $th, status = $st, indexed_utc = $ix,
-                ahash = $ah, dhash = $dh, file_created_utc=$created
+                ahash = $ah, dhash = $dh, file_created_utc = $created, content_sha256 = $csha
             WHERE id = $id
             """);
         cmd.Transaction = tx;
         BindRecord(cmd, rec);
         cmd.Parameters.AddWithValue("$id", rec.Id);
         cmd.ExecuteNonQuery();
+    }
+
+    public void UpsertContentInTransaction(string sha256, long fileSize, long ahash, long dhash, SqliteTransaction tx)
+    {
+        using var cmd = Command("""
+            INSERT OR IGNORE INTO image_contents (sha256, file_size, ahash, dhash, content_hash_state, derivative_version)
+            VALUES ($sha, $fs, $ah, $dh, 'complete', 1)
+            """);
+        cmd.Transaction = tx;
+        cmd.Parameters.AddWithValue("$sha", sha256);
+        cmd.Parameters.AddWithValue("$fs", fileSize);
+        cmd.Parameters.AddWithValue("$ah", ahash);
+        cmd.Parameters.AddWithValue("$dh", dhash);
+        cmd.ExecuteNonQuery();
+    }
+
+    public void UpsertContent(string sha256, long fileSize, long ahash, long dhash)
+    {
+        using var transaction = _conn.BeginTransaction();
+        UpsertContentInTransaction(sha256, fileSize, ahash, dhash, transaction);
+        transaction.Commit();
+    }
+
+    public ImageRecord? FindRelocatableMissingRecordInTransaction(string sha256, string excludePath, long preferSourceId, SqliteTransaction tx)
+    {
+        using var cmd = Command("""
+            SELECT * FROM images
+            WHERE content_sha256 = $sha AND status = 'missing' AND path <> $exclude
+            ORDER BY (source_id = $prefer) DESC, id ASC
+            """);
+        cmd.Transaction = tx;
+        cmd.Parameters.AddWithValue("$sha", sha256);
+        cmd.Parameters.AddWithValue("$exclude", excludePath);
+        cmd.Parameters.AddWithValue("$prefer", preferSourceId);
+        using var reader = cmd.ExecuteReader();
+        return reader.Read() ? ReadRecord(reader) : null;
+    }
+
+    public long CountContentRows() =>
+        Convert.ToInt64(Command("SELECT COUNT(*) FROM image_contents").ExecuteScalar());
+
+    public string? GetContentHashState(string sha256)
+    {
+        using var cmd = Command("SELECT content_hash_state FROM image_contents WHERE sha256 = $sha");
+        cmd.Parameters.AddWithValue("$sha", sha256);
+        return Convert.ToString(cmd.ExecuteScalar());
     }
 
     public void BackupTo(string destinationPath)
