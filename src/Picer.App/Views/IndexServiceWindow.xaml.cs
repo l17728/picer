@@ -12,8 +12,12 @@ public partial class IndexServiceWindow : Window
         TargetText.Text = AppServices.ServiceMode
             ? "客户端零构建逻辑：扫描、哈希、缩略图与识别均由索引服务完成（详见 docs/INDEX_SERVICE_CS_DESIGN_2026-09-08.md）。"
             : "当前为本机模式：索引在 Picer 进程内构建，未启用索引服务。";
+        BrowseButton.Visibility = AppServices.ServiceMode ? Visibility.Visible : Visibility.Collapsed;
         HealthText.Text = "尚未测试连接。";
     }
+
+    private void Browse_Click(object sender, RoutedEventArgs e) =>
+        new ServiceBrowseWindow { Owner = this }.Show();
 
     private async void Probe_Click(object sender, RoutedEventArgs e)
     {
