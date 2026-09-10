@@ -453,7 +453,11 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         StatusText = "正在后台保存人工确认…";
         try
         {
-            await UiWork.RunDatabaseAsync("ConfirmAutomaticSuggestion", () => _peopleService.ConfirmFace(face.FaceId, personId));
+            await UiWork.RunDatabaseAsync("ConfirmAutomaticSuggestion", () =>
+            {
+                _peopleService.ConfirmFace(face.FaceId, personId);
+                AuditFaceAction("confirm", face.FaceId, personId, face.Record.SuggestedPersonId, face.Record.Similarity);
+            });
             StatusText = "已确认该人脸，后续自动归类会将其作为人物参照";
         }
         catch (Exception exception)
@@ -472,7 +476,11 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         StatusText = "已从当前人物移除，正在后台保存拒绝标记…";
         try
         {
-            await UiWork.RunDatabaseAsync("RejectAutomaticSuggestion", () => _peopleService.MarkNotThisPerson(face.FaceId, personId));
+            await UiWork.RunDatabaseAsync("RejectAutomaticSuggestion", () =>
+            {
+                _peopleService.MarkNotThisPerson(face.FaceId, personId);
+                AuditFaceAction("reject", face.FaceId, null, personId, face.Record.Similarity);
+            });
             StatusText = "已标记不是此人；请选择正确人物，或保留在待分类";
         }
         catch (Exception exception)
@@ -499,6 +507,8 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             var result = await UiWork.RunDatabaseAsync($"FaceMove#{operationId}", () =>
             {
                 var value = _peopleService.MoveFaces(faceIds, person.Id);
+                foreach (var fid in faceIds)
+                    AuditFaceAction("move_out", fid, person.Id, null, null);
                 backgroundCompleted = Stopwatch.GetTimestamp();
                 return value;
             });
@@ -517,6 +527,37 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             AppLogger.Error($"批量移动人脸到人物失败：{string.Join(',', faceIds)}", exception);
             RefreshDisplayedFaces();
             StatusText = $"移动到“{person.DisplayName}”失败，界面正在恢复：{exception.Message}";
+        }
+    }
+
+    private void AuditFaceAction(string action, long faceId, long? personId, long? sourcePersonId, double? similarity)
+    {
+        try
+        {
+            var coFaces = new List<long>();
+            var coPersons = new List<long>();
+            if (sourcePersonId is long src)
+                using (var cmd = database.Command("""
+                    SELECT fa.face_id, fa.person_id
+                    FROM face_person_assignments fa
+                    WHERE fa.person_id = $sp AND fa.state = 'confirmed' AND fa.face_id != $f
+                    LIMIT 20
+                    """))
+                {
+                    cmd.Parameters.AddWithValue("$sp", src);
+                    cmd.Parameters.AddWithValue("$f", faceId);
+                    using var reader = cmd.ExecuteReader();
+                    while (reader.Read())
+                    {
+                        coFaces.Add(reader.GetInt64(0));
+                        coPersons.Add(reader.GetInt64(1));
+                    }
+                }
+            FaceActionLogService.Record(database, action, faceId, personId, sourcePersonId, coFaces, coPersons, similarity, "sface");
+        }
+        catch (Exception exception)
+        {
+            AppLogger.Error($"记录人脸审计日志失败：{action} face={faceId}", exception);
         }
     }
 
