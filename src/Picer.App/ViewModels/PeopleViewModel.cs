@@ -241,6 +241,24 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
     private bool CanCancelAnalysis() => IsAnalyzing && _analysisCancellation is not null;
 
     [RelayCommand]
+    private async Task ScanConsistencyAsync()
+    {
+        StatusText = "正在扫描人脸与描述一致性…";
+        try
+        {
+            var report = await UiWork.RunDatabaseAsync(() => FaceConsistencyService.ScanAndRepair(_database));
+            var summary = FaceConsistencyService.BuildTrainingSummary(_database);
+            StatusText = $"一致性扫描完成：{report.ScannedImages} 张照片 / {report.ScannedFaces} 张人脸，发现 {report.Issues.Count} 个问题，已修复 {report.Repaired} 个";
+            AppLogger.Info($"人脸一致性报告：{StatusText}\n{summary}");
+            await RefreshAsync();
+        }
+        catch (Exception exception)
+        {
+            StatusText = $"一致性扫描失败：{exception.Message}";
+            AppLogger.Error("人脸一致性扫描失败", exception);
+        }
+    }
+
     private async Task CreatePersonAsync()
     {
         if (string.IsNullOrWhiteSpace(NewPersonName))
@@ -272,7 +290,13 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         try
         {
             var person = await UiWork.RunDatabaseAsync("People.CreateAndAssignFaces",
-                () => _peopleService.CreateAndAssignFaces(name, faceIds));
+                () =>
+                {
+                    var created = _peopleService.CreateAndAssignFaces(name, faceIds);
+                    foreach (var fid in faceIds)
+                        AuditFaceAction("create_person", fid, created.Id, null);
+                    return created;
+                });
             await RefreshPeopleDropdownAsync(person.Id);
             StatusText = faceIds.Length == 0
                 ? $"已创建人物“{person.DisplayName}”"
@@ -554,10 +578,51 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
                     }
                 }
             FaceActionLogService.Record(_database, action, faceId, personId, sourcePersonId, coFaces, coPersons, null, "sface");
+            EnsureImageDescriptionTag(faceId, personId);
         }
         catch (Exception exception)
         {
             AppLogger.Error($"记录人脸审计日志失败：{action} face={faceId}", exception);
+        }
+    }
+
+    private void EnsureImageDescriptionTag(long faceId, long? personId)
+    {
+        if (personId is not long pid) return;
+        try
+        {
+            using (var imageCmd = _database.Command("SELECT image_id FROM detected_faces WHERE id = $f"))
+            {
+                imageCmd.Parameters.AddWithValue("$f", faceId);
+                var imageId = imageCmd.ExecuteScalar();
+                if (imageId is null) return;
+
+                using (var nameCmd = _database.Command("SELECT display_name FROM people WHERE id = $p"))
+                {
+                    nameCmd.Parameters.AddWithValue("$p", pid);
+                    var name = nameCmd.ExecuteScalar() as string;
+                    if (string.IsNullOrEmpty(name)) return;
+                    var tag = $"人物：{name}";
+                    using var descCmd = _database.Command(
+                        "SELECT COALESCE(description,'') FROM cloud_vision_results WHERE image_id = $i ORDER BY created_utc DESC LIMIT 1");
+                    descCmd.Parameters.AddWithValue("$i", (long)imageId);
+                    var existing = Convert.ToString(descCmd.ExecuteScalar()) ?? "";
+                    if (existing.Contains(tag)) return;
+                    var updated = string.IsNullOrEmpty(existing) ? tag : $"{tag}。{existing}";
+                    using var insertCmd = _database.Command("""
+                        INSERT INTO cloud_vision_results (image_id, description, provider, model_version, created_utc)
+                        VALUES ($i, $d, 'consistency', 'auto', $t)
+                        """);
+                    insertCmd.Parameters.AddWithValue("$i", (long)imageId);
+                    insertCmd.Parameters.AddWithValue("$d", updated);
+                    insertCmd.Parameters.AddWithValue("$t", DateTime.UtcNow.ToString("o"));
+                    insertCmd.ExecuteNonQuery();
+                }
+            }
+        }
+        catch (Exception exception)
+        {
+            AppLogger.Error($"更新照片人物标记失败：face={faceId}", exception);
         }
     }
 
@@ -572,7 +637,11 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         StatusText = $"正在后台将 {faceIds.Length} 张人脸移到待分类…";
         await UiWork.RunDatabaseAsync("MoveFacesToUnassigned", () =>
         {
-            foreach (var faceId in faceIds) _peopleService.MoveFaceToUnassigned(faceId);
+            foreach (var faceId in faceIds)
+            {
+                _peopleService.MoveFaceToUnassigned(faceId);
+                AuditFaceAction("move_to_unassigned", faceId, null, null);
+            }
         });
         StatusText = $"已将 {faceIds.Length} 张人脸移到待分类";
     }
@@ -589,7 +658,13 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         var changed = 0;
         try
         {
-            changed = (await UiWork.RunDatabaseAsync("IgnoreFaces", () => _peopleService.IgnoreFaces(faceIds))).Changed;
+            changed = (await UiWork.RunDatabaseAsync("IgnoreFaces", () =>
+            {
+                var result = _peopleService.IgnoreFaces(faceIds);
+                foreach (var faceId in faceIds)
+                    AuditFaceAction("ignore", faceId, null, null);
+                return result;
+            })).Changed;
             var verified = await UiWork.RunDatabaseAsync(() =>
                 _repository.GetIgnoredFaces(5000).Select(face => face.FaceId).ToHashSet());
             var missing = faceIds.Where(faceId => !verified.Contains(faceId)).ToArray();
