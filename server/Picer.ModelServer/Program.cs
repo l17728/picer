@@ -24,7 +24,8 @@ app.MapGet("/v1/models", () => Results.Ok(new
     data = new object[]
     {
         new { id = "picer-prototype-calibration", owned_by = "picer", permission = Array.Empty<object>() },
-        new { id = "picer-face-training", owned_by = "picer", permission = Array.Empty<object>() }
+        new { id = "picer-face-training", owned_by = "picer", permission = Array.Empty<object>() },
+        new { id = "picer-index-service", owned_by = "picer", permission = Array.Empty<object>() }
     }
 }));
 

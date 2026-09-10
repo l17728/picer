@@ -104,12 +104,50 @@ public sealed class MediaTextIndexRepository
                 rows.Add((image, string.Join(" ", fields.Where(v => !string.IsNullOrWhiteSpace(v))), version));
             }
         }
-        foreach (var row in rows)
+        Microsoft.Data.Sqlite.SqliteTransaction? tx = null;
+        var batchSize = 0;
+        try
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            UpsertImage(row.Image, [row.Content], row.Version);
+            foreach (var row in rows)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                tx ??= _database.BeginTransaction();
+                UpsertImageInTransaction(row.Image, [row.Content], row.Version, tx);
+                if (++batchSize >= 500)
+                {
+                    tx.Commit();
+                    tx.Dispose();
+                    tx = null;
+                    batchSize = 0;
+                }
+            }
+            tx?.Commit();
+        }
+        finally
+        {
+            tx?.Dispose();
         }
         return rows.Count;
+    }
+
+    private void UpsertImageInTransaction(ImageRecord image, IEnumerable<string?> fields, string sourceVersion, Microsoft.Data.Sqlite.SqliteTransaction tx)
+    {
+        var content = string.Join(" ", fields.Where(value => !string.IsNullOrWhiteSpace(value)).Select(value => value!.Trim()).Distinct(StringComparer.OrdinalIgnoreCase));
+        var fingerprint = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(
+            $"{image.Id}|{image.FileSize}|{image.ModifiedUtc:o}|{sourceVersion}|{content}")));
+        using var doc = _database.Command("""
+            INSERT INTO media_text_documents(media_id,media_type,content,fingerprint,source_version,updated_utc)
+            VALUES($id,'photo',$content,$fingerprint,$version,$now)
+            ON CONFLICT(media_id) DO UPDATE SET media_type=excluded.media_type,content=excluded.content,
+              fingerprint=excluded.fingerprint,source_version=excluded.source_version,updated_utc=excluded.updated_utc
+            """);
+        doc.Transaction = tx;
+        doc.Parameters.AddWithValue("$id", image.Id);
+        doc.Parameters.AddWithValue("$content", content);
+        doc.Parameters.AddWithValue("$fingerprint", fingerprint);
+        doc.Parameters.AddWithValue("$version", sourceVersion);
+        doc.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("o"));
+        doc.ExecuteNonQuery();
     }
 
     private static ImageRecord ReadImage(Microsoft.Data.Sqlite.SqliteDataReader r) => new()
