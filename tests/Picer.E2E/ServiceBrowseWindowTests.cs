@@ -110,6 +110,10 @@ public sealed class ServiceBrowseWindowTests
             window.Dispatcher.Invoke(() => { }, DispatcherPriority.Background);
             Thread.Sleep(50);
         }
-        if (!condition()) throw new TimeoutException($"条件未在时限内满足，status={((ServiceBrowseWindow)window).ViewModel.StatusText}");
+        if (!condition())
+        {
+            var statusText = ((ServiceBrowseWindow)window).ViewModel.StatusText;
+            throw new TimeoutException($"条件未在时限内满足，status={statusText}");
+        }
     }
 }

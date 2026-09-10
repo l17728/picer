@@ -3,6 +3,7 @@ using System.IO;
 using System.Net;
 using System.Net.Sockets;
 using System.Security.Cryptography;
+using System.Text;
 using Picer.Core.Gateway;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.Formats.Png;
@@ -39,12 +40,16 @@ public sealed class ServiceModeSmokeTests
         {
             UseShellExecute = false,
             CreateNoWindow = true,
-            RedirectStandardError = true
+            RedirectStandardError = true,
+            RedirectStandardOutput = true
         };
         startInfo.EnvironmentVariables["PICER_INDEX_DATA_ROOT"] = dataRoot;
         startInfo.EnvironmentVariables["PICER_INDEX_SERVICE_PORT"] = port.ToString();
         startInfo.EnvironmentVariables["PICER_INDEX_SERVICE_TOKEN"] = Token;
         using var process = Process.Start(startInfo) ?? throw new InvalidOperationException("服务进程启动失败。");
+        var stderrTail = new StringBuilder();
+        var stderrTask = process.StandardError.ReadToEndAsync();
+        var stdoutTask = process.StandardOutput.ReadToEndAsync();
 
         try
         {
@@ -52,7 +57,11 @@ public sealed class ServiceModeSmokeTests
             var deadline = DateTime.UtcNow.AddSeconds(30);
             while (!File.Exists(endpointPath))
             {
-                if (process.HasExited) throw new InvalidOperationException($"服务进程提前退出：{process.ExitCode}");
+                if (process.HasExited)
+                {
+                    var tail = stderrTail.Length > 0 ? stderrTail.ToString() : stdoutTask.Status == TaskStatus.RanToCompletion ? stdoutTask.Result : "";
+                    throw new InvalidOperationException($"服务进程提前退出：{process.ExitCode}。stderr 尾部：{tail}");
+                }
                 if (DateTime.UtcNow > deadline) throw new TimeoutException("service-endpoint.json 未在时限内生成。");
                 await Task.Delay(250);
             }
@@ -96,6 +105,8 @@ public sealed class ServiceModeSmokeTests
                 process.Kill(entireProcessTree: true);
                 await process.WaitForExitAsync();
             }
+            if (stderrTail.Length == 0)
+                try { stderrTail.Append(await stderrTask); } catch { }
             try { Directory.Delete(dataRoot, true); } catch { }
             try { Directory.Delete(sourceRoot, true); } catch { }
         }

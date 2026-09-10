@@ -47,10 +47,17 @@ public static class IndexBackendConfig
         {
             token = environmentToken;
         }
+        else if (endpoint.TokenCipher.StartsWith("plain:", StringComparison.OrdinalIgnoreCase))
+        {
+            token = Encoding.UTF8.GetString(Convert.FromBase64String(endpoint.TokenCipher["plain:".Length..]));
+        }
         else
         {
             if (unprotect is null) throw new InvalidOperationException("service 模式缺少 token 解密委托。");
-            token = Encoding.UTF8.GetString(unprotect(Convert.FromBase64String(endpoint.TokenCipher)));
+            var base64 = endpoint.TokenCipher.StartsWith("dpapi:", StringComparison.OrdinalIgnoreCase)
+                ? endpoint.TokenCipher["dpapi:".Length..]
+                : endpoint.TokenCipher;
+            token = Encoding.UTF8.GetString(unprotect(Convert.FromBase64String(base64)));
         }
 
         var baseUrl = string.IsNullOrWhiteSpace(baseUrlOverride) ? endpoint.Url : baseUrlOverride;

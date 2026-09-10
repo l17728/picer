@@ -22,23 +22,25 @@ public static class ServiceSecurity
         {
             var file = JsonSerializer.Deserialize<TokenFile>(File.ReadAllText(path));
             if (file is not null)
-                return Encoding.UTF8.GetString(Unprotect(Convert.FromBase64String(file.TokenCipher)));
+                return Encoding.UTF8.GetString(SafeUnprotectBase64(file.TokenCipher));
         }
         var token = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
-        var payload = JsonSerializer.Serialize(new TokenFile(Convert.ToBase64String(Protect(Encoding.UTF8.GetBytes(token)))));
+        var payload = JsonSerializer.Serialize(new TokenFile(SafeProtectText(token)));
         File.WriteAllText(path, payload);
         return token;
     }
 
     public static X509Certificate2 EnsureHttpsCertificate(string dataRoot)
     {
-        var path = Path.Combine(dataRoot, "https-cert.pfx.enc");
-        if (Environment.GetEnvironmentVariable("PICER_INDEX_SERVICE_RENEW_CERT") == "1" && File.Exists(path))
+        var protectedPath = Path.Combine(dataRoot, "https-cert.pfx.enc");
+        var plainPath = Path.Combine(dataRoot, "https-cert.pfx");
+        if (Environment.GetEnvironmentVariable("PICER_INDEX_SERVICE_RENEW_CERT") == "1")
         {
-            File.Delete(path);
-            AppLogger.Info("检测到 PICER_INDEX_SERVICE_RENEW_CERT=1，已轮换服务证书（客户端需重新确认 SPKI 指纹）。");
+            foreach (var file in new[] { protectedPath, plainPath })
+                if (File.Exists(file)) { File.Delete(file); AppLogger.Info($"检测到 PICER_INDEX_SERVICE_RENEW_CERT=1，已删除 {Path.GetFileName(file)}（客户端需重新确认 SPKI 指纹）。"); }
         }
-        if (File.Exists(path)) return new X509Certificate2(Unprotect(File.ReadAllBytes(path)));
+        if (File.Exists(protectedPath)) return new X509Certificate2(Unprotect(File.ReadAllBytes(protectedPath)));
+        if (File.Exists(plainPath)) return new X509Certificate2(File.ReadAllBytes(plainPath));
         using var rsa = RSA.Create(2048);
         var request = new CertificateRequest("CN=picer-index-service", rsa, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
         var san = new SubjectAlternativeNameBuilder();
@@ -48,7 +50,16 @@ public static class ServiceSecurity
         request.CertificateExtensions.Add(new X509BasicConstraintsExtension(true, false, 0, true));
         var certificate = request.CreateSelfSigned(DateTimeOffset.UtcNow.AddDays(-1), DateTimeOffset.UtcNow.AddYears(5));
         var exported = certificate.Export(X509ContentType.Pkcs12);
-        File.WriteAllBytes(path, Protect(exported));
+        try
+        {
+            File.WriteAllBytes(protectedPath, Protect(exported));
+            try { File.Delete(plainPath); } catch { }
+        }
+        catch (Exception exception) when (exception is CryptographicException or IOException)
+        {
+            File.WriteAllBytes(plainPath, exported);
+            AppLogger.Info("DPAPI 不可用，证书密钥以明文回退落盘（受限目录 ACL）。");
+        }
         return new X509Certificate2(exported);
     }
 
@@ -59,9 +70,33 @@ public static class ServiceSecurity
         var payload = JsonSerializer.Serialize(new EndpointFile(
             baseUrl,
             Convert.ToBase64String(spkiPin),
-            Convert.ToBase64String(Protect(Encoding.UTF8.GetBytes(token))),
+            SafeProtectText(token),
             pipeName));
         File.WriteAllText(Path.Combine(dataRoot, "service-endpoint.json"), payload);
+    }
+
+    public static string SafeProtectText(string plainText)
+    {
+        var plain = Encoding.UTF8.GetBytes(plainText);
+        try
+        {
+            return "dpapi:" + Convert.ToBase64String(Protect(plain));
+        }
+        catch (Exception exception) when (exception is CryptographicException or IOException)
+        {
+            return "plain:" + Convert.ToBase64String(plain);
+        }
+    }
+
+    public static byte[] SafeUnprotectBase64(string base64)
+    {
+        var bytes = Convert.FromBase64String(base64);
+        if (bytes.Length > 6 && bytes[0] == 'd' && bytes[1] == 'p')
+        {
+            try { return Unprotect(Convert.FromBase64String(Encoding.UTF8.GetString(bytes, 6, bytes.Length - 6))); }
+            catch (CryptographicException) { return Convert.FromBase64String(Encoding.UTF8.GetString(bytes, 6, bytes.Length - 6)); }
+        }
+        return bytes;
     }
 
     private static byte[] Protect(byte[] plain) => ProtectedData.Protect(plain, null, DataProtectionScope.CurrentUser);

@@ -17,6 +17,18 @@ app.Use(async (context, next) =>
 });
 
 app.MapGet("/health", () => Results.Ok(new { status = "ok", service = "picer-model-server", version = "v1" }));
+app.MapGet("/", () =>
+{
+    var html = "<!doctype html><html lang=\"zh\"><head><meta charset=\"utf-8\"><title>Picer 统一模型平台</title></head>" +
+        "<body style=\"font-family:sans-serif;margin:40px\"><h2>Picer 统一模型平台 · 运行中</h2>" +
+        "<p>本机算力由各服务按需调用；训练执行器接入后在此显示任务状态。</p><ul>" +
+        "<li><a href=\"/health\">/health</a> — 存活探针</li>" +
+        "<li><a href=\"/api/models\">/api/models</a> — VL/ASR/TTS 能力清单</li>" +
+        "<li>/api/index/v1/records — 远端索引元数据（占位）</li>" +
+        "<li>/api/face-training/datasets · /jobs — 数据集与任务生命周期</li></ul>" +
+        "<p style=\"color:#666\">索引服务：HTTPS 127.0.0.1:8445 / 命名管道；日志：D:\\vl-models\\logs\\</p></body></html>";
+    return Results.Text(html, "text/html");
+});
 app.MapGet("/api/models", () => Results.Ok(new[] {
     new { id = "qwen3-vl-8b-instruct", capability = "multimodal", status = "configured" },
     new { id = "qwen3-asr-1.7b", capability = "language", status = "configured" },

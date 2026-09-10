@@ -14,10 +14,10 @@
             <MenuItem Header="文件(_F)" AutomationProperties.Name="文件菜单">
                 <MenuItem Header="添加文件夹" Command="{Binding AddFolderCommand}"/>
                 <MenuItem Header="存储设置" Click="StorageSettings_Click"/>
-            <MenuItem Header="索引服务状态" Click="IndexService_Click"/>
                 <Separator/>
                 <MenuItem Header="删除所选" Command="{Binding DeleteSelectedFilesCommand}"/>
                 <MenuItem Header="备份与恢复" Click="DataProtection_Click"/>
+                <MenuItem Header="索引服务状态" Click="IndexService_Click"/>
             </MenuItem>
             <MenuItem Header="AI 功能(_A)" AutomationProperties.Name="AI 功能菜单">
                 <MenuItem Header="AI 模型设置" Click="CloudVisionSettings_Click"/>
