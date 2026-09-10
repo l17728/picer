@@ -40,8 +40,7 @@ public sealed class ServiceModeSmokeTests
         {
             UseShellExecute = false,
             CreateNoWindow = true,
-            RedirectStandardError = true,
-            RedirectStandardOutput = true
+            RedirectStandardError = true
         };
         startInfo.EnvironmentVariables["PICER_INDEX_DATA_ROOT"] = dataRoot;
         startInfo.EnvironmentVariables["PICER_INDEX_SERVICE_PORT"] = port.ToString();
@@ -49,7 +48,6 @@ public sealed class ServiceModeSmokeTests
         using var process = Process.Start(startInfo) ?? throw new InvalidOperationException("服务进程启动失败。");
         var stderrTail = new StringBuilder();
         var stderrTask = process.StandardError.ReadToEndAsync();
-        var stdoutTask = process.StandardOutput.ReadToEndAsync();
 
         try
         {
@@ -59,7 +57,7 @@ public sealed class ServiceModeSmokeTests
             {
                 if (process.HasExited)
                 {
-                    var tail = stderrTail.Length > 0 ? stderrTail.ToString() : stdoutTask.Status == TaskStatus.RanToCompletion ? stdoutTask.Result : "";
+                    var tail = stderrTail.Length > 0 ? stderrTail.ToString() : "（无 stderr 输出）";
                     throw new InvalidOperationException($"服务进程提前退出：{process.ExitCode}。stderr 尾部：{tail}");
                 }
                 if (DateTime.UtcNow > deadline) throw new TimeoutException("service-endpoint.json 未在时限内生成。");
