@@ -7,7 +7,7 @@ namespace Picer.Core.Data;
 
 public sealed class PicerDatabase : IDisposable
 {
-    public const int CurrentSchemaVersion = 31;
+    public const int CurrentSchemaVersion = 32;
     private readonly SqliteConnection _conn;
     private readonly string _connectionString;
 
@@ -865,6 +865,29 @@ public sealed class PicerDatabase : IDisposable
                 PRAGMA user_version = 31;
                 """;
             curationMigration.ExecuteNonQuery();
+        }
+        if (schemaVersion < 32)
+        {
+            using var auditMigration = _conn.CreateCommand();
+            auditMigration.CommandText = """
+                CREATE TABLE IF NOT EXISTS face_action_log (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    created_utc TEXT NOT NULL,
+                    action TEXT NOT NULL,
+                    face_id INTEGER NOT NULL,
+                    person_id INTEGER,
+                    source_person_id INTEGER,
+                    co_clustered_face_ids TEXT NOT NULL DEFAULT '[]',
+                    co_clustered_person_ids TEXT NOT NULL DEFAULT '[]',
+                    cluster_confidence REAL,
+                    model_version TEXT NOT NULL,
+                    error_type TEXT
+                );
+                CREATE INDEX IF NOT EXISTS idx_face_action_log_action ON face_action_log(action, created_utc);
+                CREATE INDEX IF NOT EXISTS idx_face_action_log_face ON face_action_log(face_id);
+                PRAGMA user_version = 32;
+                """;
+            auditMigration.ExecuteNonQuery();
         }
     }
 
