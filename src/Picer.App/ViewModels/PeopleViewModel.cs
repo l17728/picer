@@ -456,7 +456,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             await UiWork.RunDatabaseAsync("ConfirmAutomaticSuggestion", () =>
             {
                 _peopleService.ConfirmFace(face.FaceId, personId);
-                AuditFaceAction("confirm", face.FaceId, personId, face.Record.SuggestedPersonId, face.Record.Similarity);
+                AuditFaceAction("confirm", face.FaceId, personId, face.Record.SuggestedPersonId);
             });
             StatusText = "已确认该人脸，后续自动归类会将其作为人物参照";
         }
@@ -479,7 +479,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             await UiWork.RunDatabaseAsync("RejectAutomaticSuggestion", () =>
             {
                 _peopleService.MarkNotThisPerson(face.FaceId, personId);
-                AuditFaceAction("reject", face.FaceId, null, personId, face.Record.Similarity);
+                AuditFaceAction("reject", face.FaceId, null, personId);
             });
             StatusText = "已标记不是此人；请选择正确人物，或保留在待分类";
         }
@@ -508,7 +508,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             {
                 var value = _peopleService.MoveFaces(faceIds, person.Id);
                 foreach (var fid in faceIds)
-                    AuditFaceAction("move_out", fid, person.Id, null, null);
+                    AuditFaceAction("move_out", fid, person.Id, null);
                 backgroundCompleted = Stopwatch.GetTimestamp();
                 return value;
             });
@@ -530,14 +530,14 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         }
     }
 
-    private void AuditFaceAction(string action, long faceId, long? personId, long? sourcePersonId, double? similarity)
+    private void AuditFaceAction(string action, long faceId, long? personId, long? sourcePersonId)
     {
         try
         {
             var coFaces = new List<long>();
             var coPersons = new List<long>();
             if (sourcePersonId is long src)
-                using (var cmd = database.Command("""
+                using (var cmd = _database.Command("""
                     SELECT fa.face_id, fa.person_id
                     FROM face_person_assignments fa
                     WHERE fa.person_id = $sp AND fa.state = 'confirmed' AND fa.face_id != $f
@@ -553,7 +553,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
                         coPersons.Add(reader.GetInt64(1));
                     }
                 }
-            FaceActionLogService.Record(database, action, faceId, personId, sourcePersonId, coFaces, coPersons, similarity, "sface");
+            FaceActionLogService.Record(_database, action, faceId, personId, sourcePersonId, coFaces, coPersons, null, "sface");
         }
         catch (Exception exception)
         {
