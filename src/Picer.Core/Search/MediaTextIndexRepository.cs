@@ -67,10 +67,14 @@ public sealed class MediaTextIndexRepository
     {
         var rows = new List<(ImageRecord Image, string Content, string Version)>();
         using (var command = _database.Command("""
-            SELECT i.*, c.summary, c.result_json, c.provider, c.model_version, c.prompt_version
-            FROM images i JOIN cloud_vision_analyses c ON c.image_id=i.id
-            WHERE c.status='completed' AND c.result_json IS NOT NULL
-              AND c.updated_utc=(SELECT MAX(c2.updated_utc) FROM cloud_vision_analyses c2 WHERE c2.image_id=c.image_id AND c2.status='completed')
+            SELECT i.*, c.summary, c.result_json, c.provider, c.model_version, c.prompt_version,
+                   il.display_name AS il_display, il.search_text AS il_search
+            FROM images i
+            LEFT JOIN cloud_vision_analyses c ON c.image_id=i.id
+                AND c.status='completed' AND c.result_json IS NOT NULL
+                AND c.updated_utc=(SELECT MAX(c2.updated_utc) FROM cloud_vision_analyses c2 WHERE c2.image_id=c.image_id AND c2.status='completed')
+            LEFT JOIN image_locations il ON il.image_id=i.id
+            WHERE i.status='active'
             """))
         using (var reader = command.ExecuteReader())
         {
@@ -79,16 +83,24 @@ public sealed class MediaTextIndexRepository
                 cancellationToken.ThrowIfCancellationRequested();
                 var image = ReadImage(reader);
                 var summary = reader.IsDBNull(reader.GetOrdinal("summary")) ? null : reader.GetString(reader.GetOrdinal("summary"));
-                var json = reader.GetString(reader.GetOrdinal("result_json"));
-                var version = $"cloud:{reader.GetString(reader.GetOrdinal("provider"))}:{reader.GetString(reader.GetOrdinal("model_version"))}:{reader.GetString(reader.GetOrdinal("prompt_version"))}";
-                var fields = new List<string?> { image.Path, image.Camera, image.Gps, image.TakenUtc?.ToString("O"), summary };
-                try
+                var json = reader.IsDBNull(reader.GetOrdinal("result_json")) ? null : reader.GetString(reader.GetOrdinal("result_json"));
+                var provider = reader.IsDBNull(reader.GetOrdinal("provider")) ? "none" : reader.GetString(reader.GetOrdinal("provider"));
+                var modelVersion = reader.IsDBNull(reader.GetOrdinal("model_version")) ? "none" : reader.GetString(reader.GetOrdinal("model_version"));
+                var promptVersion = reader.IsDBNull(reader.GetOrdinal("prompt_version")) ? "none" : reader.GetString(reader.GetOrdinal("prompt_version"));
+                var locationDisplay = reader.IsDBNull(reader.GetOrdinal("il_display")) ? null : reader.GetString(reader.GetOrdinal("il_display"));
+                var locationSearch = reader.IsDBNull(reader.GetOrdinal("il_search")) ? null : reader.GetString(reader.GetOrdinal("il_search"));
+                var version = $"cloud:{provider}:{modelVersion}:{promptVersion}:loc:{(locationDisplay is null ? "none" : "v1")}";
+                var fields = new List<string?> { image.Path, image.Camera, image.Gps, image.TakenUtc?.ToString("O"), summary, locationDisplay, locationSearch };
+                if (json is not null)
                 {
-                    var result = System.Text.Json.JsonSerializer.Deserialize<Picer.Core.Vision.CloudVisionResult>(json,
-                        new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
-                    if (result is not null) fields.AddRange((result.Scenes ?? []).Concat(result.Activities ?? []).Concat(result.Objects ?? []).Concat(result.SearchTerms ?? []));
+                    try
+                    {
+                        var result = System.Text.Json.JsonSerializer.Deserialize<Picer.Core.Vision.CloudVisionResult>(json,
+                            new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                        if (result is not null) fields.AddRange((result.Scenes ?? []).Concat(result.Activities ?? []).Concat(result.Objects ?? []).Concat(result.SearchTerms ?? []));
+                    }
+                    catch (System.Text.Json.JsonException) { }
                 }
-                catch (System.Text.Json.JsonException) { }
                 rows.Add((image, string.Join(" ", fields.Where(v => !string.IsNullOrWhiteSpace(v))), version));
             }
         }

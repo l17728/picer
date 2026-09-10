@@ -93,6 +93,8 @@ public sealed class AiMediaRetrievalService(PicerDatabase database, PeopleServic
             plan,
             photos = photos.Select(image => new { id = image.Id, file = Path.GetFileName(image.Path),
                 time = image.TakenUtc ?? image.CreatedUtc ?? image.ModifiedUtc,
+                gps = image.Gps,
+                location = GetLocationDisplay(image.Id),
                 description = cloud.GetLatestCompleted(image.Id)?.Result.Summary }).ToArray(),
             videos = videoCandidates.Select(video => new { id = video.Id, file = Path.GetFileName(video.Path),
                 time = video.TakenUtc ?? video.ModifiedUtc, durationSeconds = video.DurationSeconds,
@@ -152,6 +154,21 @@ public sealed class AiMediaRetrievalService(PicerDatabase database, PeopleServic
         value.Contains("白昼", StringComparison.OrdinalIgnoreCase) || value.Contains("晚上", StringComparison.OrdinalIgnoreCase) ||
         value.Contains("夜间", StringComparison.OrdinalIgnoreCase) || value.Contains("夜晚", StringComparison.OrdinalIgnoreCase) ||
         value.Contains("深夜", StringComparison.OrdinalIgnoreCase);
+
+    private string? GetLocationDisplay(long imageId)
+    {
+        try
+        {
+            using var command = database.Command(
+                "SELECT display_name FROM image_locations WHERE image_id = $i");
+            command.Parameters.AddWithValue("$i", imageId);
+            return Convert.ToString(command.ExecuteScalar()) is { Length: > 0 } result ? result : null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
 
     private sealed record Review(string? Markdown, IReadOnlyList<long>? PhotoIds, IReadOnlyList<long>? VideoIds);
 }

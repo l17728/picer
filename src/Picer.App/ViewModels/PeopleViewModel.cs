@@ -596,27 +596,16 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
                 imageCmd.Parameters.AddWithValue("$f", faceId);
                 var imageId = imageCmd.ExecuteScalar();
                 if (imageId is null) return;
-
                 using (var nameCmd = _database.Command("SELECT display_name FROM people WHERE id = $p"))
                 {
                     nameCmd.Parameters.AddWithValue("$p", pid);
                     var name = nameCmd.ExecuteScalar() as string;
                     if (string.IsNullOrEmpty(name)) return;
                     var tag = $"人物：{name}";
-                    using var descCmd = _database.Command(
-                        "SELECT COALESCE(description,'') FROM cloud_vision_results WHERE image_id = $i ORDER BY created_utc DESC LIMIT 1");
-                    descCmd.Parameters.AddWithValue("$i", (long)imageId);
-                    var existing = Convert.ToString(descCmd.ExecuteScalar()) ?? "";
-                    if (existing.Contains(tag)) return;
-                    var updated = string.IsNullOrEmpty(existing) ? tag : $"{tag}。{existing}";
-                    using var insertCmd = _database.Command("""
-                        INSERT INTO cloud_vision_results (image_id, description, provider, model_version, created_utc)
-                        VALUES ($i, $d, 'consistency', 'auto', $t)
-                        """);
-                    insertCmd.Parameters.AddWithValue("$i", (long)imageId);
-                    insertCmd.Parameters.AddWithValue("$d", updated);
-                    insertCmd.Parameters.AddWithValue("$t", DateTime.UtcNow.ToString("o"));
-                    insertCmd.ExecuteNonQuery();
+                    var record = _database.GetImage((long)imageId);
+                    if (record is null) return;
+                    var textIndex = new Picer.Core.Search.MediaTextIndexRepository(_database);
+                    textIndex.UpsertImage(record, [record.Path, record.Camera, record.Gps, tag, name], $"person-tag:{pid}");
                 }
             }
         }

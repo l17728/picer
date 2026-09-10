@@ -942,6 +942,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
             if (result.CoordinateGroups == 0) return;
 
             AppendOutput($"位置索引完成：更新 {result.SavedImages} 张，失败位置 {result.FailedGroups} 个");
+            if (result.SavedImages > 0)
+            {
+                AppendOutput("正在将地理位置写入文字索引…");
+                var rebuilt = await Task.Run(() => new Picer.Core.Search.MediaTextIndexRepository(_db).RebuildFromCloudAnalyses());
+                AppendOutput($"文字索引已更新 {rebuilt} 条（含地理位置）");
+            }
             StatusText = result.FailedGroups == 0
                 ? $"位置索引已更新 {result.SavedImages} 张照片"
                 : $"位置索引更新 {result.SavedImages} 张，{result.FailedGroups} 个位置稍后重试";

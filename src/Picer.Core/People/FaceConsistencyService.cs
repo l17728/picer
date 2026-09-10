@@ -72,7 +72,7 @@ public static class FaceConsistencyService
             var expectedTag = "人物：" + string.Join("、", names);
 
             string? existingDescription = null;
-            using (var cmd = db.Command("SELECT COALESCE(description,'') FROM cloud_vision_results WHERE image_id = $i ORDER BY created_utc DESC LIMIT 1"))
+            using (var cmd = db.Command("SELECT COALESCE(summary,'') FROM cloud_vision_analyses WHERE image_id = $i AND status='completed' ORDER BY updated_utc DESC LIMIT 1"))
             {
                 cmd.Parameters.AddWithValue("$i", imageId);
                 existingDescription = Convert.ToString(cmd.ExecuteScalar());
@@ -81,19 +81,18 @@ public static class FaceConsistencyService
             if (string.IsNullOrEmpty(existingDescription) || !existingDescription.Contains(expectedTag))
             {
                 issues.Add(new FaceConsistencyIssue(imageId, faces[0].FaceId, faces[0].PersonId, "description_stale",
-                    $"照片 {imageId} 有 {faces.Count} 张已确认人脸（{expectedTag}）但描述未包含最新人物标记"));
+                    $"照片 {imageId} 有 {faces.Count} 张已确认人脸（{expectedTag}）但文字索引未包含最新人物标记"));
                 if (repair)
                 {
-                    var updated = string.IsNullOrEmpty(existingDescription) ? expectedTag : expectedTag + "。" + existingDescription;
-                    using var updateCmd = db.Command("""
-                        INSERT INTO cloud_vision_results (image_id, description, provider, model_version, created_utc)
-                        VALUES ($i, $d, 'consistency', 'auto', $t)
-                        """);
-                    updateCmd.Parameters.AddWithValue("$i", imageId);
-                    updateCmd.Parameters.AddWithValue("$d", updated);
-                    updateCmd.Parameters.AddWithValue("$t", DateTime.UtcNow.ToString("o"));
-                    updateCmd.ExecuteNonQuery();
-                    repaired++;
+                    var textIndex = new Picer.Core.Search.MediaTextIndexRepository(db);
+                    var record = db.GetImage(imageId);
+                    if (record is not null)
+                    {
+                        var current = existingDescription ?? "";
+                        var updated = string.IsNullOrEmpty(current) ? expectedTag : $"{expectedTag}。{current}";
+                        textIndex.UpsertImage(record, [record.Path, record.Camera, record.Gps, updated, expectedTag], "consistency:v1");
+                        repaired++;
+                    }
                 }
             }
         }
