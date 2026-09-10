@@ -63,8 +63,13 @@ public sealed class MediaTextIndexRepository
     }
 
     /// <summary>Rebuilds documents for existing completed cloud analyses without re-calling a model.</summary>
-    public int RebuildFromCloudAnalyses(CancellationToken cancellationToken = default)
+    public int RebuildFromCloudAnalyses(CancellationToken cancellationToken = default, IProgress<(int Done, int Total)>? progress = null)
     {
+        var existing = new HashSet<string>();
+        using (var fpCmd = _database.Command("SELECT fingerprint FROM media_text_documents"))
+        using (var fpReader = fpCmd.ExecuteReader())
+            while (fpReader.Read())
+                existing.Add(fpReader.GetString(0));
         var rows = new List<(ImageRecord Image, string Content, string Version)>();
         using (var command = _database.Command("""
             SELECT i.*, c.summary, c.result_json, c.provider, c.model_version, c.prompt_version,
@@ -106,13 +111,23 @@ public sealed class MediaTextIndexRepository
         }
         Microsoft.Data.Sqlite.SqliteTransaction? tx = null;
         var batchSize = 0;
+        var done = 0;
+        var total = rows.Count;
+        var changed = 0;
         try
         {
             foreach (var row in rows)
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                done++;
+                if (done % 500 == 0) progress?.Report((done, total));
+                var content = string.Join(" ", new[] { row.Content }.Where(v => !string.IsNullOrWhiteSpace(v)));
+                var fingerprint = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+                    Encoding.UTF8.GetBytes($"{row.Image.Id}|{row.Image.FileSize}|{row.Image.ModifiedUtc:o}|{row.Version}|{content}")));
+                if (existing.Contains(fingerprint)) continue;
                 tx ??= _database.BeginTransaction();
                 UpsertImageInTransaction(row.Image, [row.Content], row.Version, tx);
+                changed++;
                 if (++batchSize >= 500)
                 {
                     tx.Commit();
@@ -127,7 +142,8 @@ public sealed class MediaTextIndexRepository
         {
             tx?.Dispose();
         }
-        return rows.Count;
+        progress?.Report((total, total));
+        return changed;
     }
 
     private void UpsertImageInTransaction(ImageRecord image, IEnumerable<string?> fields, string sourceVersion, Microsoft.Data.Sqlite.SqliteTransaction tx)

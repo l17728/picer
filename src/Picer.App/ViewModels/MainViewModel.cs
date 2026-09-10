@@ -277,6 +277,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         await LoadDirectoryTreeAsync();
         _ = Video.LoadAsync();
         _ = EnrichLocationHierarchyAsync();
+        _ = RebuildTextIndexAsync();
         PicerEventSource.Log.StartupStage("first-page-ready", Stopwatch.GetElapsedTime(started).TotalMilliseconds);
         BackfillBurstGroupsAsync().Forget();
     }
@@ -921,6 +922,25 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private bool CanCancelIndex() => IsIndexing && _indexCts is not null;
 
+    private async Task RebuildTextIndexAsync()
+    {
+        try
+        {
+            var progress = new Progress<(int Done, int Total)>(value =>
+            {
+                if (value.Total > 0 && value.Done < value.Total)
+                    StatusText = $"正在更新文字索引 {value.Done}/{value.Total}（期间搜索结果可能不完整）";
+            });
+            var changed = await Task.Run(() => new Picer.Core.Search.MediaTextIndexRepository(_db).RebuildFromCloudAnalyses(progress: progress));
+            if (changed > 0)
+                AppendOutput($"文字索引已更新 {changed} 条（含地理位置与人物标记）");
+        }
+        catch (Exception exception)
+        {
+            AppLogger.Error("文字索引重建失败", exception);
+        }
+    }
+
     private async Task EnrichLocationHierarchyAsync()
     {
         if (Interlocked.CompareExchange(ref _locationEnrichmentRunning, 1, 0) != 0) return;
@@ -945,8 +965,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             if (result.SavedImages > 0)
             {
                 AppendOutput("正在将地理位置写入文字索引…");
-                var rebuilt = await Task.Run(() => new Picer.Core.Search.MediaTextIndexRepository(_db).RebuildFromCloudAnalyses());
-                AppendOutput($"文字索引已更新 {rebuilt} 条（含地理位置）");
+                await RebuildTextIndexAsync();
             }
             StatusText = result.FailedGroups == 0
                 ? $"位置索引已更新 {result.SavedImages} 张照片"

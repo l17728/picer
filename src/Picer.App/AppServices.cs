@@ -96,20 +96,6 @@ public static class AppServices
         FaceValidation = new FaceValidationService(Db, VisionRepository);
         FaceTraining = new FaceTrainingService(VisionRepository);
         CloudVisionRepository = new CloudVisionRepository(Db);
-        // Rebuild the local text index from already completed analyses in the background;
-        // startup/UI remains responsive and no model calls are performed.
-        _ = Task.Run(() =>
-        {
-            try
-            {
-                var rebuilt = new Picer.Core.Search.MediaTextIndexRepository(Db).RebuildFromCloudAnalyses();
-                AppLogger.Info($"媒体文字索引回建完成: {rebuilt} 条");
-            }
-            catch (Exception ex)
-            {
-                AppLogger.Error("媒体文字索引回建失败", ex);
-            }
-        });
         VisualConceptRepository = new VisualConceptRepository(Db);
         Videos = new VideoRepository(Db);
         MediaSearch = new MediaSearchTool(Db, Videos);
