@@ -11,6 +11,8 @@ var apiKey = Environment.GetEnvironmentVariable("PICER_MODEL_SERVER_API_KEY");
 app.Use(async (context, next) =>
 {
     if (!context.Request.Path.StartsWithSegments("/api") || string.IsNullOrWhiteSpace(apiKey)) { await next(); return; }
+    if (context.Request.Method == "GET" && (context.Request.Path.Value?.EndsWith("/jobs") == true || context.Request.Path.Value?.EndsWith("/models") == true))
+    { await next(); return; }
     var header = context.Request.Headers.Authorization.ToString();
     if (!header.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase) || !CryptographicOperations.FixedTimeEquals(System.Text.Encoding.UTF8.GetBytes(header[7..]), System.Text.Encoding.UTF8.GetBytes(apiKey)))
     { context.Response.StatusCode = StatusCodes.Status401Unauthorized; await context.Response.WriteAsJsonAsync(new { error = "unauthorized" }); return; }
@@ -28,6 +30,9 @@ app.MapGet("/v1/models", () => Results.Ok(new
         new { id = "picer-index-service", owned_by = "picer", permission = Array.Empty<object>() }
     }
 }));
+
+var workbenchHtml = System.IO.File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "workbench.html"));
+app.MapGet("/", () => Results.Text(workbenchHtml, "text/html"));
 
 app.MapGet("/api/models", () => Results.Ok(new[] {
     new { id = "picer-prototype-calibration", capability = "face-training", status = "ready" },
@@ -55,6 +60,8 @@ app.MapPost("/api/face-training/jobs", (JobRequest request, ConcurrentDictionary
     return Results.Ok(jobs[id]);
 });
 
+app.MapGet("/api/face-training/jobs", (ConcurrentDictionary<string, TrainingJob> jobs) =>
+    Results.Ok(jobs.Values.OrderByDescending(j => j.Id).Take(50).ToArray()));
 app.MapGet("/api/face-training/jobs/{id}", (string id, ConcurrentDictionary<string, TrainingJob> jobs) => jobs.TryGetValue(id, out var job) ? Results.Ok(job) : Results.NotFound());
 app.MapGet("/api/face-training/jobs/{id}/logs", (string id, ConcurrentDictionary<string, TrainingJob> jobs) => jobs.TryGetValue(id, out var job) ? Results.Ok($"job={id} status={job.Status} stage={job.Stage} progress={job.Progress}%") : Results.NotFound());
 app.MapPost("/api/face-training/jobs/{id}/cancel", (string id, ConcurrentDictionary<string, TrainingJob> jobs) =>
