@@ -1,5 +1,7 @@
 using System.Collections.Concurrent;
 using System.Security.Cryptography;
+using System.Diagnostics;
+using System.Text.Json;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddSingleton<ConcurrentDictionary<string, TrainingJob>>();
@@ -133,6 +135,22 @@ public sealed class TrainingExecutor
     {
         try
         {
+            var workerPython = Environment.GetEnvironmentVariable("PICER_GPU_WORKER_PYTHON");
+            var workerScript = Environment.GetEnvironmentVariable("PICER_GPU_WORKER_SCRIPT");
+            if (!string.IsNullOrWhiteSpace(workerPython) && !string.IsNullOrWhiteSpace(workerScript))
+            {
+                jobs[jobId] = jobs[jobId] with { Status = "running", Stage = "gpu-worker", Progress = 5 };
+                var payload = JsonSerializer.Serialize(new { modelVersion = dataset.ModelVersion ?? "sface", samples = dataset.Samples ?? [] });
+                var start = new ProcessStartInfo(workerPython, $"\"{workerScript}\"") { RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true };
+                using var process = Process.Start(start) ?? throw new InvalidOperationException("GPU worker process could not start");
+                await process.StandardInput.WriteAsync(payload); process.StandardInput.Close();
+                var output = await process.StandardOutput.ReadToEndAsync(); var error = await process.StandardError.ReadToEndAsync();
+                await process.WaitForExitAsync();
+                if (process.ExitCode != 0) throw new InvalidOperationException($"GPU worker failed: {error.Trim()}");
+                using var parsed = JsonDocument.Parse(output);
+                if (parsed.RootElement.TryGetProperty("error", out var workerError)) throw new InvalidOperationException(workerError.GetString());
+                throw new InvalidOperationException("GPU worker completed but artifact persistence is not configured");
+            }
             jobs[jobId] = jobs[jobId] with { Status = "running", Stage = "extracting", Progress = 5 };
             await Task.Delay(200);
 
