@@ -107,7 +107,14 @@ public partial class MainWindow : Window
         }
         var window = new Views.VoiceAssistantWindow(new VoiceCommandAgent(chat),
             _mainVm.GetVoiceLocationPaths,
-            () => AppServices.People.GetAll().Select(person => person.DisplayName).ToArray(), ExecuteVoiceActionAsync,
+            // Voice planning only exposes manually confirmed people. Candidate
+            // clusters and unassigned/automatic suggestions must not enter the
+            // LLM context.
+            () => AppServices.People.GetAll()
+                .Where(person => person.ConfirmedFaceCount > 0)
+                .Select(person => person.DisplayName)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray(), ExecuteVoiceActionAsync,
             asrEndpoint, speech.Value.Model.Id, new Uri("http://127.0.0.1:8090/api/tts/speech"))
             { Owner = this };
         window.Closed += (_, _) => chat.Dispose();
