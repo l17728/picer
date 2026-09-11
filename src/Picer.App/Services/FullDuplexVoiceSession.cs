@@ -29,6 +29,8 @@ public sealed class FullDuplexVoiceSession : IDisposable
     private DateTime _playbackEndedUtc = DateTime.MinValue;
     private DateTime _speechStartedUtc = DateTime.MinValue;
     private double _noiseFloor = 0.02;
+    private string? _lastRecognized;
+    private DateTime _lastRecognizedUtc;
 
     public event Action<string>? StateChanged;
     /// Raised for UI diagnostics only; contains an RMS level, never audio data.
@@ -146,6 +148,14 @@ public sealed class FullDuplexVoiceSession : IDisposable
                 AppLogger.Info($"Voice ASR ignored filler; textLength={text.Length}");
                 return;
             }
+            var normalized = NormalizeUtterance(text);
+            if (normalized.Length > 0 && string.Equals(normalized, _lastRecognized, StringComparison.Ordinal) &&
+                DateTime.UtcNow - _lastRecognizedUtc < TimeSpan.FromSeconds(8))
+            {
+                AppLogger.Info($"Voice ASR ignored duplicate; textLength={text.Length}");
+                return;
+            }
+            _lastRecognized = normalized; _lastRecognizedUtc = DateTime.UtcNow;
             if (!string.IsNullOrWhiteSpace(text) && UtteranceRecognized is not null)
                 await UtteranceRecognized.Invoke(text.Trim()).ConfigureAwait(false);
         }
@@ -163,6 +173,8 @@ public sealed class FullDuplexVoiceSession : IDisposable
         var value = text.Trim().Replace(" ", "", StringComparison.Ordinal);
         return value.Length <= 2 || value is "嗯" or "嗯嗯" or "哼" or "啊" or "哦" or "好的" or "好吧";
     }
+
+    private static string NormalizeUtterance(string text) => new(text.Trim().Where(c => !char.IsWhiteSpace(c)).ToArray());
 
     private async Task<string> RecognizeAsync(byte[] wave, CancellationToken token)
     {
