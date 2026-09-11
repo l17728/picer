@@ -925,6 +925,24 @@ public sealed class PicerDatabase : IDisposable
                 """;
             jobMigration.ExecuteNonQuery();
         }
+        if (schemaVersion < 35)
+        {
+            using var evidenceMigration = _conn.CreateCommand();
+            evidenceMigration.CommandText = """
+                CREATE TABLE IF NOT EXISTS face_user_action_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    face_id INTEGER NOT NULL,
+                    person_id INTEGER,
+                    action TEXT NOT NULL,
+                    occurred_utc TEXT NOT NULL,
+                    source TEXT NOT NULL DEFAULT 'user',
+                    correlation_id TEXT
+                );
+                CREATE INDEX IF NOT EXISTS idx_face_user_action_events_face ON face_user_action_events(face_id, occurred_utc);
+                PRAGMA user_version = 35;
+                """;
+            evidenceMigration.ExecuteNonQuery();
+        }
     }
 
     public SqliteCommand Command(string sql)
