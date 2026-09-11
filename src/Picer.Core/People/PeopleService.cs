@@ -15,6 +15,31 @@ public sealed record PersonQueryMention(PersonRecord Person, string MatchedName,
 /// </summary>
 public sealed class PeopleService(PicerDatabase database)
 {
+    public void RecordTrainingAction(FaceUserActionEvent action)
+    {
+        using var command = database.Command("""
+            INSERT INTO face_user_action_events(face_id, person_id, action, occurred_utc, source, correlation_id)
+            VALUES($face,$person,$action,$time,$source,$correlation)
+            """);
+        command.Parameters.AddWithValue("$face", action.FaceId);
+        command.Parameters.AddWithValue("$person", (object?)action.PersonId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$action", action.Action);
+        command.Parameters.AddWithValue("$time", action.OccurredUtc.ToString("o"));
+        command.Parameters.AddWithValue("$source", action.Source);
+        command.Parameters.AddWithValue("$correlation", (object?)action.CorrelationId ?? DBNull.Value);
+        command.ExecuteNonQuery();
+    }
+
+    public IReadOnlyList<FaceUserActionEvent> GetTrainingActions(long faceId)
+    {
+        using var command = database.Command("SELECT face_id,person_id,action,occurred_utc,source,correlation_id FROM face_user_action_events WHERE face_id=$face ORDER BY occurred_utc");
+        command.Parameters.AddWithValue("$face", faceId);
+        using var reader = command.ExecuteReader();
+        var result = new List<FaceUserActionEvent>();
+        while (reader.Read()) result.Add(new FaceUserActionEvent(reader.GetInt64(0), reader.IsDBNull(1) ? null : reader.GetInt64(1), reader.GetString(2), DateTime.Parse(reader.GetString(3)), reader.GetString(4), reader.IsDBNull(5) ? null : reader.GetString(5)));
+        return result;
+    }
+
     public IReadOnlyList<string> GetConfirmedPersonNamesForImage(long imageId)
     {
         using var command = database.Command("""
