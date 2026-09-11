@@ -17,7 +17,9 @@ jobs:
     env:
       DOTNET_CLI_TELEMETRY_OPTOUT: 1
       DOTNET_NOLOGO: 1
-      PICER_TEST_DATA_ROOT: ${{ github.workspace }}\.test-data
+      PICER_DATA_ROOT: ${{ github.workspace }}\.test-data
+      PICER_TEST_TEMP: ${{ github.workspace }}\artifacts\test-temp
+      VSTEST_CONNECTION_TIMEOUT: 30
 
     steps:
       - name: Checkout
@@ -35,10 +37,15 @@ jobs:
         run: dotnet build picer.sln --configuration Debug --no-restore --warnaserror
 
       - name: Unit and integration tests
-        run: dotnet test tests/Picer.Tests/Picer.Tests.csproj --configuration Debug --no-build --no-restore --filter "Category!=RuntimeComponent" --logger "trx;LogFileName=unit.trx"
+        run: dotnet test tests/Picer.Tests/Picer.Tests.csproj --configuration Debug --no-build --no-restore --filter "Category!=RuntimeComponent" --logger "trx;LogFileName=unit.trx" --blame-hang --blame-hang-timeout 60s
 
       - name: Desktop tests
-        run: dotnet test tests/Picer.E2E/Picer.E2E.csproj --configuration Debug --no-build --no-restore --filter "Category!=RuntimeComponent" --logger "trx;LogFileName=desktop.trx"
+        run: dotnet test tests/Picer.E2E/Picer.E2E.csproj --configuration Debug --no-build --no-restore --filter "Category!=RuntimeComponent" --logger "trx;LogFileName=desktop.trx" --blame-hang --blame-hang-timeout 90s
+
+      - name: Cleanup desktop processes
+        if: always()
+        shell: pwsh
+        run: Get-Process Picer.App,testhost,vstest.console -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 
       - name: Upload test reports
         if: always()
