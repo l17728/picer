@@ -67,6 +67,7 @@ public sealed class FullDuplexVoiceSession : IDisposable
 
     private void OnAudio(object? sender, WaveInEventArgs e)
     {
+        var playbackFrame = _speaking;
         double sum = 0;
         for (var index = 0; index + 1 < e.BytesRecorded; index += 2)
         {
@@ -96,6 +97,10 @@ public sealed class FullDuplexVoiceSession : IDisposable
             }
         }
         else if (_speaking) _playbackSpeechFrames = 0;
+        // Never place playback audio into the next utterance. If a genuine
+        // interruption was confirmed above, recording resumes on subsequent
+        // frames after playback has been cancelled.
+        if (playbackFrame || _speaking) return;
         if (_speechFrames > 0)
         {
             lock (_utterance) { _utterance.Write(e.Buffer, 0, e.BytesRecorded); }
