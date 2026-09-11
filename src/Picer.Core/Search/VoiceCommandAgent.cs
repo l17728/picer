@@ -16,6 +16,13 @@ public sealed class VoiceCommandAgent(OpenAiCompatibleChatClient chat)
         IReadOnlyList<string> people, CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(utterance)) return new(VoiceActionKind.Clarify, "请告诉我想看什么。");
+        if (utterance.Contains("打开目录浏览", StringComparison.OrdinalIgnoreCase))
+        {
+            var japan = locationPaths.FirstOrDefault(p => p.Contains("日本", StringComparison.OrdinalIgnoreCase));
+            if (japan is not null && utterance.Contains("日本", StringComparison.OrdinalIgnoreCase))
+                return new(VoiceActionKind.OpenLocation, "正在打开日本照片。", japan);
+            return new(VoiceActionKind.OpenModule, "已打开目录浏览，请选择地点。", "目录浏览");
+        }
         var context = JsonSerializer.Serialize(new
         {
             locations = locationPaths.Take(500),
