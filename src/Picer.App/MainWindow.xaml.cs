@@ -3,6 +3,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using Picer.App.ViewModels;
 using Picer.Core.Search;
+using Picer.Core.Logging;
 
 namespace Picer.App;
 
@@ -127,7 +128,9 @@ public partial class MainWindow : Window
         {
             case VoiceActionKind.OpenLocation:
                 MainTabs.SelectedIndex = 0;
-                if (action.Target is not null) _mainVm.OpenVoiceLocation(action.Target);
+                var opened = action.Target is not null && _mainVm.OpenVoiceLocation(action.Target);
+                AppLogger.Info($"Voice location action result; success={opened}; targetPresent={action.Target is not null}");
+                if (!opened) throw new InvalidOperationException("语音指定的地点未找到，未执行目录跳转");
                 break;
             case VoiceActionKind.OpenModule:
                 MainTabs.SelectedIndex = action.Target switch { "目录浏览" => 0, "搜索" => 1, "人物" => 2, "标签与相册" => 3, "视频" => 4, _ => MainTabs.SelectedIndex };
