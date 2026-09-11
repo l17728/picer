@@ -27,6 +27,8 @@ public sealed class FullDuplexVoiceSession : IDisposable
     private DateTime _lastLevelLogUtc;
     private int _playbackSpeechFrames;
     private DateTime _playbackEndedUtc = DateTime.MinValue;
+    private DateTime _speechStartedUtc = DateTime.MinValue;
+    private double _noiseFloor = 0.02;
 
     public event Action<string>? StateChanged;
     /// Raised for UI diagnostics only; contains an RMS level, never audio data.
@@ -86,11 +88,14 @@ public sealed class FullDuplexVoiceSession : IDisposable
         if (DateTime.UtcNow - _lastLevelLogUtc > TimeSpan.FromSeconds(2)) { _lastLevelLogUtc = DateTime.UtcNow; AppLogger.Info($"Voice audio level rms={rms:F4}; speaking={_speaking}; processing={_processing}"); }
         // The microphone's measured room-noise floor is ~0.03-0.06 RMS;
         // 0.025 kept the utterance open forever and prevented ASR submission.
-        var speech = rms >= (_speaking ? 0.18 : 0.08);
+        if (!_speaking && _speechFrames == 0) _noiseFloor = Math.Clamp(_noiseFloor * 0.98 + rms * 0.02, 0.005, 0.12);
+        var threshold = _speaking ? Math.Max(0.18, _noiseFloor * 3.5) : Math.Max(0.08, _noiseFloor * 3.5);
+        var speech = rms >= threshold;
         if (speech)
         {
             if (_speechFrames == 0) StateChanged?.Invoke("检测到语音，正在录音…");
             _lastSpeechUtc = DateTime.UtcNow;
+            if (_speechFrames == 0) _speechStartedUtc = DateTime.UtcNow;
             _speechFrames++;
             if (_speaking)
             {
@@ -111,7 +116,7 @@ public sealed class FullDuplexVoiceSession : IDisposable
         if (_speechFrames > 0)
         {
             lock (_utterance) { _utterance.Write(e.Buffer, 0, e.BytesRecorded); }
-            if (!_processing && _speechFrames >= 3 && DateTime.UtcNow - _lastSpeechUtc > TimeSpan.FromMilliseconds(520))
+            if (!_processing && _speechFrames >= 8 && DateTime.UtcNow - _speechStartedUtc >= TimeSpan.FromMilliseconds(320) && DateTime.UtcNow - _lastSpeechUtc > TimeSpan.FromMilliseconds(520))
                 _ = CompleteUtteranceAsync();
         }
     }
