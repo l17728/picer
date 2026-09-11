@@ -7,7 +7,7 @@ namespace Picer.Core.Data;
 
 public sealed class PicerDatabase : IDisposable
 {
-    public const int CurrentSchemaVersion = 33;
+    public const int CurrentSchemaVersion = 34;
     private readonly SqliteConnection _conn;
     private readonly string _connectionString;
 
@@ -905,6 +905,25 @@ public sealed class PicerDatabase : IDisposable
                 PRAGMA user_version = 33;
                 """;
             protoMigration.ExecuteNonQuery();
+        }
+        if (schemaVersion < 34)
+        {
+            using var jobMigration = _conn.CreateCommand();
+            jobMigration.CommandText = """
+                CREATE TABLE IF NOT EXISTS face_training_jobs (
+                    job_id TEXT PRIMARY KEY,
+                    endpoint TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    stage TEXT NOT NULL,
+                    progress INTEGER NOT NULL DEFAULT 0,
+                    artifact_id TEXT,
+                    error TEXT,
+                    updated_utc TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_face_training_jobs_status ON face_training_jobs(status, updated_utc DESC);
+                PRAGMA user_version = 34;
+                """;
+            jobMigration.ExecuteNonQuery();
         }
     }
 

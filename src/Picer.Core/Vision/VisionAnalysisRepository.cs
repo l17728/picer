@@ -8,6 +8,28 @@ namespace Picer.Core.Vision;
 public sealed class VisionAnalysisRepository(PicerDatabase database)
 {
     public PicerDatabase Database => database;
+    public void UpsertTrainingJob(string jobId, string endpoint, string status, string stage, int progress, string? artifactId = null, string? error = null)
+    {
+        using var command = database.Command("""
+            INSERT INTO face_training_jobs(job_id,endpoint,status,stage,progress,artifact_id,error,updated_utc)
+            VALUES($id,$endpoint,$status,$stage,$progress,$artifact,$error,$updated)
+            ON CONFLICT(job_id) DO UPDATE SET endpoint=excluded.endpoint,status=excluded.status,stage=excluded.stage,
+              progress=excluded.progress,artifact_id=excluded.artifact_id,error=excluded.error,updated_utc=excluded.updated_utc
+            """);
+        command.Parameters.AddWithValue("$id", jobId); command.Parameters.AddWithValue("$endpoint", endpoint);
+        command.Parameters.AddWithValue("$status", status); command.Parameters.AddWithValue("$stage", stage);
+        command.Parameters.AddWithValue("$progress", progress); command.Parameters.AddWithValue("$artifact", (object?)artifactId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$error", (object?)error ?? DBNull.Value); command.Parameters.AddWithValue("$updated", DateTime.UtcNow.ToString("O"));
+        command.ExecuteNonQuery();
+    }
+
+    public IReadOnlyList<(string JobId, string Endpoint, string Status, string Stage, int Progress, string? ArtifactId)> GetActiveTrainingJobs()
+    {
+        using var command = database.Command("SELECT job_id,endpoint,status,stage,progress,artifact_id FROM face_training_jobs WHERE status IN ('queued','running') ORDER BY updated_utc");
+        using var reader = command.ExecuteReader(); var result = new List<(string,string,string,string,int,string?)>();
+        while (reader.Read()) result.Add((reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetString(3), reader.GetInt32(4), reader.IsDBNull(5) ? null : reader.GetString(5)));
+        return result;
+    }
     public IReadOnlyList<FaceTrainingArtifactSummary> GetFaceTrainingHistory(int limit = 20)
     {
         using var command = database.Command("SELECT artifact_id,dataset_id,model_version,false_accept_rate,false_reject_rate,state,created_utc,applied_utc FROM face_training_artifacts ORDER BY created_utc DESC LIMIT $limit");
