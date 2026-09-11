@@ -47,7 +47,9 @@ public partial class VoiceAssistantWindow : Window
         InputBox.Clear(); Conversation.Items.Add($"用户：{text}"); StatusText.Text = "正在理解指令…";
         try
         {
+            AppLogger.Info($"Voice turn started; inputLength={text.Length}");
             var action = await _agent.PlanAsync(text, _locations(), _people(), token);
+            AppLogger.Info($"Voice plan completed; kind={action.Kind}; hasTarget={!string.IsNullOrWhiteSpace(action.Target)}");
             Conversation.Items.Add($"助手：{action.Reply}"); Conversation.ScrollIntoView(Conversation.Items[^1]);
             await _execute(action); StatusText.Text = action.Kind == VoiceActionKind.Clarify ? "等待补充信息" : "已执行";
             if (_voice.IsListening) await _voice.SpeakAsync(action.Reply, token);

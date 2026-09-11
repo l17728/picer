@@ -24,6 +24,7 @@ public sealed class FullDuplexVoiceSession : IDisposable
     private int _speechFrames;
     private bool _speaking;
     private bool _processing;
+    private DateTime _lastLevelLogUtc;
 
     public event Action<string>? StateChanged;
     /// Raised for UI diagnostics only; contains an RMS level, never audio data.
@@ -48,6 +49,7 @@ public sealed class FullDuplexVoiceSession : IDisposable
         _input.DataAvailable += OnAudio;
         _input.RecordingStopped += (_, args) => { if (args.Exception is not null) StateChanged?.Invoke($"麦克风异常：{args.Exception.Message}"); };
         _input.StartRecording();
+        AppLogger.Info($"Voice listen started; endpoint={_asrEndpoint.Host}:{_asrEndpoint.Port}; model={_asrModel}");
         StateChanged?.Invoke("正在聆听（说话可打断播报）");
     }
 
@@ -72,6 +74,7 @@ public sealed class FullDuplexVoiceSession : IDisposable
         }
         var rms = Math.Sqrt(sum / Math.Max(1, e.BytesRecorded / 2));
         AudioLevelChanged?.Invoke(rms);
+        if (DateTime.UtcNow - _lastLevelLogUtc > TimeSpan.FromSeconds(2)) { _lastLevelLogUtc = DateTime.UtcNow; AppLogger.Info($"Voice audio level rms={rms:F4}; speaking={_speaking}; processing={_processing}"); }
         var speech = rms >= (_speaking ? 0.075 : 0.025);
         if (speech)
         {
@@ -109,7 +112,9 @@ public sealed class FullDuplexVoiceSession : IDisposable
         try
         {
             StateChanged?.Invoke("正在识别语音…");
+            AppLogger.Info($"Voice utterance captured; pcmBytes={pcm.Length}");
             var text = await RecognizeAsync(CreateWave(pcm), _recognition.Token).ConfigureAwait(false);
+            AppLogger.Info($"Voice ASR completed; textLength={text.Length}");
             if (!string.IsNullOrWhiteSpace(text) && UtteranceRecognized is not null)
                 await UtteranceRecognized.Invoke(text.Trim()).ConfigureAwait(false);
         }
@@ -131,6 +136,7 @@ public sealed class FullDuplexVoiceSession : IDisposable
         form.Add(new StringContent(_asrModel), "model");
         form.Add(new StringContent("zh"), "language");
         using var response = await _http.PostAsync(_asrEndpoint, form, token).ConfigureAwait(false);
+        AppLogger.Info($"Voice ASR request completed; status={(int)response.StatusCode}");
         var json = await response.Content.ReadAsStringAsync(token).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode) throw new InvalidOperationException($"ASR HTTP {(int)response.StatusCode}: {json}");
         using var document = JsonDocument.Parse(json);
@@ -147,6 +153,7 @@ public sealed class FullDuplexVoiceSession : IDisposable
             Content = new StringContent(JsonSerializer.Serialize(new { model = "sherpa-onnx-vits-zh-ll", input = text, voice = 0, speed = 1.05 }), Encoding.UTF8, "application/json")
         };
         using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token).ConfigureAwait(false);
+        AppLogger.Info($"Voice TTS request completed; status={(int)response.StatusCode}");
         var bytes = await response.Content.ReadAsByteArrayAsync(token).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode) throw new InvalidOperationException($"TTS HTTP {(int)response.StatusCode}: {Encoding.UTF8.GetString(bytes)}");
         await PlayAsync(bytes, token).ConfigureAwait(false);
