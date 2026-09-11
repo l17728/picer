@@ -71,7 +71,7 @@
 
 ## TODO（按执行顺序）
 
-- [ ] FACE-TRAIN-001：新增训练证据 DTO、JSON Schema 和版本校验。
+- [x] FACE-TRAIN-001：新增训练证据 DTO、JSON Schema 和版本校验。
 - [ ] FACE-TRAIN-002：新增不可变用户操作事件表及 GUI 事件采集。
 - [ ] FACE-TRAIN-003：ModelServer 实现 AI 数据配方器和可复现随机种子。
 - [ ] FACE-TRAIN-004：ModelServer 接入 VL 属性标注、缓存和重试。
