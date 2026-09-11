@@ -25,8 +25,9 @@ public sealed class VoiceCommandAgent(OpenAiCompatibleChatClient chat)
         }
         var context = JsonSerializer.Serialize(new
         {
-            locations = locationPaths.Take(500),
-            people = people.Take(300),
+            // Keep the voice-planning prompt below the local VL context limit.
+            locations = locationPaths.Take(80).Select(p => p.Length > 180 ? p[..180] : p),
+            people = people.Take(100).Select(p => p.Length > 80 ? p[..80] : p),
             modules = new[] { "目录浏览", "搜索", "人物", "标签与相册", "视频" }
         });
         var content = await chat.CompleteAsync("""
