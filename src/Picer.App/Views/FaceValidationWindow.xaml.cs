@@ -226,7 +226,7 @@ public partial class FaceValidationWindow : Window
         finally
         {
             _trainingCancellation?.Dispose(); _trainingCancellation = null;
-            TrainFaceButton.Content = "提交训练并自动应用";
+            TrainFaceButton.Content = "提交训练任务";
             CancelTrainingButton.IsEnabled = false;
             EndOperation();
         }
