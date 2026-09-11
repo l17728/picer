@@ -149,7 +149,11 @@ public sealed class TrainingExecutor
                 if (process.ExitCode != 0) throw new InvalidOperationException($"GPU worker failed: {error.Trim()}");
                 using var parsed = JsonDocument.Parse(output);
                 if (parsed.RootElement.TryGetProperty("error", out var workerError)) throw new InvalidOperationException(workerError.GetString());
-                throw new InvalidOperationException("GPU worker completed but artifact persistence is not configured");
+                var artifact = JsonSerializer.Deserialize<TrainingArtifact>(output, new JsonSerializerOptions(JsonSerializerDefaults.Web))
+                    ?? throw new InvalidOperationException("GPU worker returned invalid artifact");
+                _artifacts[artifact.ArtifactId] = artifact;
+                jobs[jobId] = jobs[jobId] with { Status = "completed", Stage = "gpu-worker-completed", Progress = 100, ArtifactId = artifact.ArtifactId };
+                return;
             }
             jobs[jobId] = jobs[jobId] with { Status = "running", Stage = "extracting", Progress = 5 };
             await Task.Delay(200);

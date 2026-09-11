@@ -1,5 +1,5 @@
 """GPU face prototype worker. Reads one JSON job from stdin and writes one JSON artifact."""
-import json, sys, math
+import json, sys, math, uuid, datetime
 import torch
 
 def cosine(a, b):
@@ -27,7 +27,7 @@ def main():
         if int(s["personId"]) == best["personId"] and cosine(v, torch.tensor(best["centroid"], device=device)) >= best["threshold"]:
             correct += 1
     accuracy = correct / len(evals)
-    return {"algorithm": "prototype-calibration-gpu", "modelVersion": request.get("modelVersion", "sface"), "device": device, "prototypes": prototypes, "metrics": {"totalSamples": len(samples), "totalPersons": len(prototypes), "trainAccuracy": accuracy, "validationAccuracy": accuracy, "falseAcceptRate": 0.0, "falseRejectRate": 1.0 - accuracy, "meanSimilaritySame": 0.0, "meanSimilarityDiff": 0.0}}
+    return {"artifactId": "artifact-" + uuid.uuid4().hex[:12], "algorithm": "prototype-calibration-gpu", "modelVersion": request.get("modelVersion", "sface"), "createdUtc": datetime.datetime.now(datetime.timezone.utc).isoformat(), "prototypes": prototypes, "metrics": {"totalSamples": len(samples), "totalPersons": len(prototypes), "trainAccuracy": accuracy, "validationAccuracy": accuracy, "falseAcceptRate": 0.0, "falseRejectRate": 1.0 - accuracy, "meanSimilaritySame": 0.0, "meanSimilarityDiff": 0.0}}
 
 if __name__ == "__main__":
     try: print(json.dumps(main(), ensure_ascii=False))
