@@ -26,6 +26,8 @@ public sealed class FullDuplexVoiceSession : IDisposable
     private bool _processing;
 
     public event Action<string>? StateChanged;
+    /// Raised for UI diagnostics only; contains an RMS level, never audio data.
+    public event Action<double>? AudioLevelChanged;
     /// Raised when speech is detected while TTS is playing. The host must cancel
     /// the in-flight agent turn as well as stopping audio playback.
     public event Action? SpeechDetectedDuringPlayback;
@@ -69,9 +71,11 @@ public sealed class FullDuplexVoiceSession : IDisposable
             sum += sample * sample;
         }
         var rms = Math.Sqrt(sum / Math.Max(1, e.BytesRecorded / 2));
+        AudioLevelChanged?.Invoke(rms);
         var speech = rms >= (_speaking ? 0.075 : 0.025);
         if (speech)
         {
+            if (_speechFrames == 0) StateChanged?.Invoke("检测到语音，正在录音…");
             _lastSpeechUtc = DateTime.UtcNow;
             _speechFrames++;
             if (_speaking)

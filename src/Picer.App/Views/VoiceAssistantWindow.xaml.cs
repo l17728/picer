@@ -22,6 +22,7 @@ public partial class VoiceAssistantWindow : Window
         _agent = agent; _locations = locations; _people = people; _execute = execute;
         _voice = new FullDuplexVoiceSession(asrEndpoint, asrModel, ttsEndpoint);
         _voice.StateChanged += value => Dispatcher.BeginInvoke(() => StatusText.Text = value);
+        _voice.AudioLevelChanged += level => Dispatcher.BeginInvoke(() => MicLevel.Value = Math.Min(1d, level * 8d));
         _voice.SpeechDetectedDuringPlayback += () => Dispatcher.BeginInvoke(() =>
         {
             // Stopping TTS alone leaves the agent request running. Cancel the
@@ -35,7 +36,7 @@ public partial class VoiceAssistantWindow : Window
 
     private async void Send_Click(object sender, RoutedEventArgs e) => await RunTurnAsync(InputBox.Text);
     private async void InputBox_KeyDown(object sender, KeyEventArgs e) { if (e.Key != Key.Enter || Keyboard.Modifiers.HasFlag(ModifierKeys.Shift)) return; e.Handled = true; await RunTurnAsync(InputBox.Text); }
-    private void Listen_Checked(object sender, RoutedEventArgs e) { try { _voice.Start(); ListenButton.Content = "停止语音"; } catch (Exception exception) { ListenButton.IsChecked = false; StatusText.Text = $"无法启动麦克风：{exception.Message}"; } }
+    private void Listen_Checked(object sender, RoutedEventArgs e) { try { _voice.Start(); ListenButton.Content = "停止语音"; StatusText.Text = "正在监听，请对着麦克风说话…"; } catch (Exception exception) { ListenButton.IsChecked = false; StatusText.Text = $"无法启动麦克风：{exception.Message}（请检查系统输入设备权限）"; } }
     private void Listen_Unchecked(object sender, RoutedEventArgs e) { _voice.Stop(); ListenButton.Content = "开始语音"; }
 
     private async Task RunTurnAsync(string input)
