@@ -7,7 +7,7 @@ namespace Picer.Core.Data;
 
 public sealed class PicerDatabase : IDisposable
 {
-    public const int CurrentSchemaVersion = 32;
+    public const int CurrentSchemaVersion = 33;
     private readonly SqliteConnection _conn;
     private readonly string _connectionString;
 
@@ -888,6 +888,23 @@ public sealed class PicerDatabase : IDisposable
                 PRAGMA user_version = 32;
                 """;
             auditMigration.ExecuteNonQuery();
+        }
+        if (schemaVersion < 33)
+        {
+            using var protoMigration = _conn.CreateCommand();
+            protoMigration.CommandText = """
+                CREATE TABLE IF NOT EXISTS face_person_prototypes (
+                    person_id INTEGER NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+                    centroid BLOB NOT NULL,
+                    threshold REAL NOT NULL,
+                    sample_count INTEGER NOT NULL,
+                    model_version TEXT NOT NULL,
+                    updated_utc TEXT NOT NULL,
+                    PRIMARY KEY (person_id, model_version)
+                );
+                PRAGMA user_version = 33;
+                """;
+            protoMigration.ExecuteNonQuery();
         }
     }
 
