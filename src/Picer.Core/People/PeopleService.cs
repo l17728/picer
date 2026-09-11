@@ -380,6 +380,7 @@ public sealed class PeopleService(PicerDatabase database)
             InsertCorrection(faceId, oldPersonId, newPersonId, "move", transaction);
         }
         transaction.Commit();
+        foreach (var faceId in ids) RecordTrainingAction(new FaceUserActionEvent(faceId, newPersonId, "assign", DateTime.UtcNow));
         return new FaceMoveResult(ids.Length, ids.Length - alreadyAssigned, alreadyAssigned);
     }
 
@@ -447,6 +448,7 @@ public sealed class PeopleService(PicerDatabase database)
             }
         }
         transaction.Commit();
+        foreach (var faceId in ids) RecordTrainingAction(new FaceUserActionEvent(faceId, null, "ignore", DateTime.UtcNow));
         return new FaceIgnoreResult(ids.Length, changed, ids.Length - changed);
     }
 
