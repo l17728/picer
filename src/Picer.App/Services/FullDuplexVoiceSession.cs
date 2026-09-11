@@ -136,6 +136,11 @@ public sealed class FullDuplexVoiceSession : IDisposable
             AppLogger.Info($"Voice utterance captured; pcmBytes={pcm.Length}");
             var text = await RecognizeAsync(CreateWave(pcm), _recognition.Token).ConfigureAwait(false);
             AppLogger.Info($"Voice ASR completed; textLength={text.Length}");
+            if (IsFillerUtterance(text))
+            {
+                AppLogger.Info($"Voice ASR ignored filler; textLength={text.Length}");
+                return;
+            }
             if (!string.IsNullOrWhiteSpace(text) && UtteranceRecognized is not null)
                 await UtteranceRecognized.Invoke(text.Trim()).ConfigureAwait(false);
         }
@@ -146,6 +151,12 @@ public sealed class FullDuplexVoiceSession : IDisposable
             StateChanged?.Invoke($"语音识别失败：{exception.Message}");
         }
         finally { _processing = false; if (IsListening && !_speaking) StateChanged?.Invoke("正在聆听（说话可打断播报）"); }
+    }
+
+    private static bool IsFillerUtterance(string text)
+    {
+        var value = text.Trim().Replace(" ", "", StringComparison.Ordinal);
+        return value.Length <= 2 || value is "嗯" or "嗯嗯" or "哼" or "啊" or "哦" or "好的" or "好吧";
     }
 
     private async Task<string> RecognizeAsync(byte[] wave, CancellationToken token)
