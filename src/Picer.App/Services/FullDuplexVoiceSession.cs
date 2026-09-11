@@ -26,6 +26,7 @@ public sealed class FullDuplexVoiceSession : IDisposable
     private bool _processing;
     private DateTime _lastLevelLogUtc;
     private int _playbackSpeechFrames;
+    private DateTime _playbackEndedUtc = DateTime.MinValue;
 
     public event Action<string>? StateChanged;
     /// Raised for UI diagnostics only; contains an RMS level, never audio data.
@@ -67,6 +68,12 @@ public sealed class FullDuplexVoiceSession : IDisposable
 
     private void OnAudio(object? sender, WaveInEventArgs e)
     {
+        if (DateTime.UtcNow - _playbackEndedUtc < TimeSpan.FromMilliseconds(900))
+        {
+            lock (_utterance) { _utterance.SetLength(0); }
+            _speechFrames = 0;
+            return;
+        }
         var playbackFrame = _speaking;
         double sum = 0;
         for (var index = 0; index + 1 < e.BytesRecorded; index += 2)
@@ -182,6 +189,7 @@ public sealed class FullDuplexVoiceSession : IDisposable
         _output.PlaybackStopped += (_, args) =>
         {
             _speaking = false;
+            _playbackEndedUtc = DateTime.UtcNow;
             reader.Dispose();
             _output?.Dispose(); _output = null;
             if (args.Exception is null) completion.TrySetResult(); else completion.TrySetException(args.Exception);
