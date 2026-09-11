@@ -241,6 +241,136 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
     private bool CanCancelAnalysis() => IsAnalyzing && _analysisCancellation is not null;
 
     [RelayCommand]
+    private async Task StartTrainingAsync()
+    {
+        var eligibility = await UiWork.RunDatabaseAsync(() => FaceTrainingSnapshotService.CheckEligibility(_database));
+        if (eligibility.PositiveFaceCount < 2)
+        {
+            StatusText = "至少需要确认 2 张人脸才能开始训练";
+            return;
+        }
+
+        IsAnalyzing = true;
+        StatusText = $"正在准备训练数据（{eligibility.PersonCount} 位人物 / {eligibility.PositiveFaceCount} 张已确认人脸）…";
+        try
+        {
+            var snapshot = await UiWork.RunDatabaseAsync(() => FaceTrainingSnapshotService.BuildSnapshot(_database));
+            var samples = await UiWork.RunDatabaseAsync(() => ExtractEmbeddings(snapshot.SnapshotId));
+
+            var baseUrl = Environment.GetEnvironmentVariable("PICER_MODEL_SERVER_URL")
+                ?.Trim() ?? "http://127.0.0.1:8091";
+            if (!Uri.TryCreate(baseUrl, UriKind.Absolute, out var modelServerUri)
+                || (modelServerUri.Scheme != Uri.UriSchemeHttp && modelServerUri.Scheme != Uri.UriSchemeHttps))
+            {
+                StatusText = "训练服务地址无效，请检查 PICER_MODEL_SERVER_URL";
+                return;
+            }
+            string? apiKey = null;
+            try
+            {
+                var keyPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".picer", "model-server-key");
+                if (File.Exists(keyPath)) apiKey = File.ReadAllText(keyPath).Trim();
+            }
+            catch { }
+            apiKey ??= Environment.GetEnvironmentVariable("PICER_MODEL_SERVER_API_KEY")?.Trim();
+
+            using var submission = new FaceTrainingSubmissionService(modelServerUri.ToString(), apiKey ?? "");
+            StatusText = $"正在提交训练任务（{samples.Count} 个样本）…";
+            var result = await submission.SubmitAsync(snapshot, samples);
+            if (result.Status == "failed")
+            {
+                StatusText = $"训练提交失败：{result.Error}";
+                return;
+            }
+
+            StatusText = $"训练已启动（任务 {result.JobId.Substring(0, 12)}…），正在等待完成…";
+            var pollCount = 0;
+            while (pollCount++ < 120)
+            {
+                await Task.Delay(1000);
+                var status = await submission.PollAsync(result.JobId);
+                if (status.Status == "completed" && status.ArtifactId is not null)
+                {
+                    var artifact = await submission.GetArtifactAsync(status.ArtifactId);
+                    if (artifact is not null)
+                    {
+                        await UiWork.RunDatabaseAsync(() => ApplyTrainedPrototypes(artifact));
+                        StatusText = $"训练完成并已自动应用：准确率 {(artifact.Metrics.ValidationAccuracy * 100):F1}%，" +
+                                     $"误识率 {(artifact.Metrics.FalseAcceptRate * 100):F2}%，" +
+                                     $"拒识率 {(artifact.Metrics.FalseRejectRate * 100):F2}%，" +
+                                     $"{artifact.Prototypes.Count} 位人物原型已更新";
+                        AppLogger.Info($"人脸训练完成并已应用：{artifact.ArtifactId} acc={artifact.Metrics.ValidationAccuracy:F3} far={artifact.Metrics.FalseAcceptRate:F3}");
+                    }
+                    break;
+                }
+                if (status.Status == "failed" || status.Status == "canceled")
+                {
+                    StatusText = $"训练{status.Status}：{status.Error ?? "无详细信息"}";
+                    break;
+                }
+                if (pollCount % 5 == 0)
+                    StatusText = $"训练进行中…（已等待 {pollCount} 秒）";
+            }
+            if (pollCount >= 120) StatusText = $"训练超时（2 分钟），请在工作台 {modelServerUri} 查看";
+        }
+        catch (Exception exception)
+        {
+            StatusText = $"训练失败：{exception.Message}";
+            AppLogger.Error("人脸训练提交失败", exception);
+        }
+        finally
+        {
+            IsAnalyzing = false;
+        }
+    }
+
+    private List<(long FaceId, long PersonId, float[] Embedding, string Split)> ExtractEmbeddings(long snapshotId)
+    {
+        var results = new List<(long, long, float[], string)>();
+        using var cmd = _database.Command("""
+            SELECT m.face_id, m.person_id, m.split, f.embedding
+            FROM face_snapshot_members m
+            JOIN detected_faces f ON f.id = m.face_id
+            WHERE m.snapshot_id = $s AND f.embedding IS NOT NULL
+            """);
+        cmd.Parameters.AddWithValue("$s", snapshotId);
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            var blob = (byte[])reader.GetValue(3);
+            var embedding = new float[blob.Length / 4];
+            Buffer.BlockCopy(blob, 0, embedding, 0, blob.Length);
+            results.Add((reader.GetInt64(0), reader.GetInt64(1), embedding, reader.GetString(2)));
+        }
+        return results;
+    }
+
+    private void ApplyTrainedPrototypes(TrainingArtifactData artifact)
+    {
+        using var clear = _database.Command("DELETE FROM face_person_prototypes WHERE model_version = $mv");
+        clear.Parameters.AddWithValue("$mv", artifact.ModelVersion);
+        clear.ExecuteNonQuery();
+        using var tx = _database.BeginTransaction();
+        foreach (var proto in artifact.Prototypes)
+        {
+            using var cmd = _database.Command("""
+                INSERT OR REPLACE INTO face_person_prototypes (person_id, centroid, threshold, sample_count, model_version, updated_utc)
+                VALUES ($p, $c, $t, $n, $mv, $u)
+                """);
+            cmd.Transaction = tx;
+            cmd.Parameters.AddWithValue("$p", proto.PersonId);
+            cmd.Parameters.AddWithValue("$c", proto.Centroid);
+            cmd.Parameters.AddWithValue("$t", proto.Threshold);
+            cmd.Parameters.AddWithValue("$n", proto.SampleCount);
+            cmd.Parameters.AddWithValue("$mv", artifact.ModelVersion);
+            cmd.Parameters.AddWithValue("$u", DateTime.UtcNow.ToString("o"));
+            cmd.ExecuteNonQuery();
+        }
+        tx.Commit();
+        AppLogger.Info($"已应用 {artifact.Prototypes.Count} 个训练原型（{artifact.ArtifactId}）");
+    }
+
+    [RelayCommand]
     private async Task ScanConsistencyAsync()
     {
         StatusText = "正在扫描人脸与描述一致性…";
