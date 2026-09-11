@@ -42,7 +42,17 @@ public sealed class FaceTrainingSubmissionService : IDisposable
             {
                 snapshotId = snapshot.SnapshotId.ToString(),
                 modelVersion = "sface",
-                samples = samples.Select(s => new { faceId = s.FaceId, personId = s.PersonId, embedding = s.Embedding, split = s.Split })
+                protocolVersion = "face-evidence.v1",
+                samples = samples.Select(s => new
+                {
+                    faceId = s.FaceId, personId = s.PersonId, embedding = s.Embedding, split = s.Split,
+                    evidence = new
+                    {
+                        source = "user-confirmed",
+                        modelVersion = "sface",
+                        selectionReason = s.Split == "validation" ? "独立验证集" : "用户已确认归类"
+                    }
+                })
             };
             var dataset = await _client.PostAsJsonAsync("api/face-training/datasets", payload, Json, ct);
             if (!dataset.IsSuccessStatusCode)
