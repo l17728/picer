@@ -58,6 +58,13 @@ public partial class App : Application
             LogInfo("正在初始化 AppServices...");
             AppServices.Initialize();
             LogInfo("AppServices 初始化完成");
+            if (!AppServices.ServiceMode)
+            {
+                var recovery = new Picer.Core.People.TrainingJobRecoveryService(AppServices.VisionRepository);
+                var recoveryTasks = recovery.ResumeAsync().GetAwaiter().GetResult();
+                _ = Task.WhenAll(recoveryTasks);
+                LogInfo($"已恢复后台训练任务监控：{recoveryTasks.Count} 个");
+            }
         }
         catch (Exception ex)
         {
