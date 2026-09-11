@@ -49,7 +49,7 @@ public sealed class FaceTrainingService(
 
     public async Task<FaceTrainingResult> SubmitAndApplyAsync(Uri endpoint,
         IProgress<FaceTrainingProgress>? progress = null, CancellationToken cancellationToken = default,
-        string? expectedSnapshotId = null)
+        string? expectedSnapshotId = null, bool applyArtifact = true)
     {
         progress?.Report(new("snapshot", 2, "正在冻结人工确认与排他负样本"));
         var samples = BuildSamples(out var modelVersion);
@@ -116,7 +116,8 @@ public sealed class FaceTrainingService(
         var applied = artifact.Metrics.FalseAcceptRate <= 0.01 && artifact.Metrics.PositiveEvaluated >= 20 &&
                       artifact.Metrics.NegativeEvaluated >= 10 && artifact.People.Count >= 2 &&
                       artifact.Comparison is { NoFalseAcceptRegression: true, AcceptableFalseRejectRegression: true };
-        if (applied)
+        var accepted = applied && applyArtifact;
+        if (applied && applyArtifact)
         {
             repository.ApplyLearnedFaceArtifact(artifact.Id, dataset.Id, root.ToString(), modelVersion, artifactJson,
                 artifact.Metrics.FalseAcceptRate, artifact.Metrics.FalseRejectRate,
@@ -126,7 +127,7 @@ public sealed class FaceTrainingService(
         progress?.Report(new(applied ? "applied" : "review", 100,
             applied ? "评估门禁通过，增强策略已应用" : "误识率未通过门禁，制品未应用"));
         return new(dataset.Id, job.Id, artifact.Id, samples.Length, artifact.People.Count,
-            artifact.Metrics.FalseAcceptRate, artifact.Metrics.FalseRejectRate, applied,
+            artifact.Metrics.FalseAcceptRate, artifact.Metrics.FalseRejectRate, accepted,
             applied ? "训练完成并已应用；人工分类未改变。" : ExplainGateFailure(artifact),
             artifact.RecipeReport?.SelectedTrainingPositives ?? 0,
             artifact.RecipeReport?.ExcludedSameSource ?? 0, artifact.RecipeReport?.ExcludedPersonCap ?? 0,
