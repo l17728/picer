@@ -202,7 +202,7 @@ public partial class FaceValidationWindow : Window
                 SFaceProgressText.Text = $"训练：{value.Detail}";
                 Status.Text = $"训练阶段 {value.Stage} · {value.Percent}%";
             });
-            var result = await _training.SubmitAndApplyAsync(endpoint, progress, _trainingCancellation.Token, plan.SnapshotId);
+            var result = await _training.SubmitAndApplyAsync(endpoint, progress, _trainingCancellation.Token, plan.SnapshotId, applyArtifact: false);
             var baseline = result.BaselineFalseAcceptRate is double baselineFar && result.BaselineFalseRejectRate is double baselineFrr
                 ? $"当前基线：误识 {baselineFar:P2} / 漏识 {baselineFrr:P2}\n候选版本：误识 {result.FalseAcceptRate:P2} / 漏识 {result.FalseRejectRate:P2}\n"
                 : $"候选版本：误识 {result.FalseAcceptRate:P2} / 漏识 {result.FalseRejectRate:P2}\n";
@@ -211,6 +211,7 @@ public partial class FaceValidationWindow : Window
                 $"配方选用训练样本：{result.SelectedTrainingSamples}；同源折叠：{result.ExcludedSameSource}；人物上限平衡：{result.ExcludedPersonCap}\n" +
                 baseline + result.Message + (result.Applied ? "" : "\n\n失败分析：" + string.Join("；", FaceTrainingOutcomeAnalyzer.Analyze(result).Reasons) + "\n优化建议：" + string.Join("；", FaceTrainingOutcomeAnalyzer.Analyze(result).Suggestions));
             Status.Text = result.Message;
+            ApplyArtifactButton.IsEnabled = _training.HasPendingArtifact;
             AppLogger.Info($"FaceTraining completed; dataset={result.DatasetId}; job={result.JobId}; artifact={result.ArtifactId}; applied={result.Applied}; far={result.FalseAcceptRate}; frr={result.FalseRejectRate}");
         }
         catch (OperationCanceledException)
@@ -230,6 +231,19 @@ public partial class FaceValidationWindow : Window
             CancelTrainingButton.IsEnabled = false;
             EndOperation();
         }
+    }
+
+    private async void ApplyArtifact_Click(object sender, RoutedEventArgs e)
+    {
+        if (!_training.HasPendingArtifact) { Status.Text = "当前没有待应用制品。"; return; }
+        if (MessageBox.Show("确认应用训练制品？当前人物原型将被替换，人工分类不会改变。", "应用制品", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
+        try
+        {
+            var artifactId = await UiWork.RunDatabaseAsync(_training.ApplyPendingArtifact);
+            ApplyArtifactButton.IsEnabled = false;
+            Status.Text = $"制品 {artifactId} 已应用；请刷新人物列表以查看最新匹配。";
+        }
+        catch (Exception exception) { Status.Text = $"应用制品失败：{exception.Message}"; }
     }
 
     private void CancelTraining_Click(object sender, RoutedEventArgs e)
