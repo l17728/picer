@@ -21,7 +21,10 @@ public sealed class AiMediaRetrievalService(PicerDatabase database, PeopleServic
         IProgress<(string Stage, int Percent)>? progress = null, CancellationToken cancellationToken = default)
     {
         progress?.Report(("理解问题", 5));
-        var names = people.GetAll().Select(value => value.DisplayName).ToArray();
+        // Only expose manually confirmed identities to the planner; candidate
+        // and unassigned clusters are not valid person filters.
+        var names = people.GetAll().Where(value => value.ConfirmedFaceCount > 0)
+            .Select(value => value.DisplayName).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         var planText = await chat.CompleteAsync("""
             你是私人媒体库的查询规划器。只输出JSON：personName、location、startDate、endDate、keywords、intent。
             日期必须为yyyy-MM-dd；keywords是字符串数组，只保留人物/地点/日期之外的服装、颜色、活动、物体和场景词。
