@@ -31,8 +31,44 @@ app.MapGet("/v1/models", () => Results.Ok(new
     }
 }));
 
-var workbenchHtml = System.IO.File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "workbench.html"));
-app.MapGet("/", () => Results.Text(workbenchHtml, "text/html"));
+app.MapGet("/", () => Results.Text("""
+<!doctype html><html lang="zh"><head><meta charset="utf-8"><title>Picer 模型服务工作台</title>
+<style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:'Segoe UI',sans-serif;background:#f5f7fa;color:#1a1a2e;padding:20px}h1{font-size:24px;margin-bottom:4px;color:#16213e}h2{font-size:16px;margin:20px 0 10px;color:#0f3460}.sub{color:#666;font-size:13px;margin-bottom:16px}.card{background:#fff;border-radius:10px;padding:16px;margin-bottom:14px;box-shadow:0 1px 4px rgba(0,0,0,.08)}.badge{display:inline-block;padding:3px 10px;border-radius:12px;font-size:12px;font-weight:600}.badge.ok{background:#d4edda;color:#155724}.badge.err{background:#f8d7da;color:#721c24}.badge.run{background:#cce5ff;color:#004085}.badge.q{background:#fff3cd;color:#856404}table{width:100%;border-collapse:collapse;font-size:13px}th,td{padding:8px 12px;text-align:left;border-bottom:1px solid #eee}th{background:#f8f9fa;font-weight:600}button{padding:8px 16px;border:1px solid #0f3460;background:#0f3460;color:#fff;border-radius:6px;cursor:pointer;font-size:13px}button:hover{background:#1a4a7a}button.sm{padding:3px 8px;font-size:11px}textarea{padding:8px;border:1px solid #ddd;border-radius:6px;font-size:12px;width:100%;height:80px;font-family:monospace}input{padding:8px;border:1px solid #ddd;border-radius:6px;font-size:13px}.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.metric{text-align:center}.metric .val{font-size:26px;font-weight:700;color:#0f3460}.metric .lbl{font-size:11px;color:#888;text-transform:uppercase}.bar{height:6px;background:#e9ecef;border-radius:3px;overflow:hidden}.bar-fill{height:100%;background:#007bff;transition:width .3s}#msg{font-size:12px;color:#666;margin-top:6px}</style></head><body>
+<h1>Picer 模型服务工作台</h1>
+<p class="sub">人脸训练 &middot; 原型校准 &middot; 制品管理 &middot; <a href="http://127.0.0.1:8090">返回统一管理台</a></p>
+<div class="card"><div class="grid">
+<div class="metric"><div class="val" id="m-jobs">-</div><div class="lbl">训练任务</div></div>
+<div class="metric"><div class="val" id="m-acc">-</div><div class="lbl">验证准确率</div></div>
+<div class="metric"><div class="val" id="m-far">-</div><div class="lbl">误识率</div></div>
+<div class="metric"><div class="val"><span class="badge ok" id="hp">检查中</span></div><div class="lbl">服务状态</div></div>
+</div></div>
+<h2>提交训练</h2>
+<div class="card">
+<textarea id="samples" placeholder='[{"faceId":1,"personId":1,"embedding":[0.1,0.2,...],"split":"train"}]'></textarea>
+<div style="margin-top:8px;display:flex;gap:8px"><input id="name" placeholder="数据集名称" style="flex:1"/><button onclick="go()">&#9654; 开始训练</button></div>
+<div id="msg"></div>
+</div>
+<h2>训练任务</h2>
+<div class="card"><table><thead><tr><th>ID</th><th>状态</th><th>阶段</th><th>进度</th><th>制品</th><th></th></tr></thead><tbody id="jobs"></tbody></table></div>
+<h2>制品详情</h2>
+<div class="card" id="art" style="color:#555;font-size:13px">提交训练后在此显示制品指标。</div>
+<script>
+const A='/api/face-training';
+async function rf(){try{const h=await fetch('/health').then(r=>r.json());const b=document.getElementById('hp');b.className='badge '+(h.status==='ok'?'ok':'err');b.textContent=h.status==='ok'?'运行中':'异常';}catch(e){const b=document.getElementById('hp');b.className='badge err';b.textContent='连接失败';}
+try{const js=await fetch(A+'/jobs').then(r=>r.json());document.getElementById('m-jobs').textContent=js.length;
+document.getElementById('jobs').innerHTML=js.map(j=>`<tr><td title="${j.id}">${j.id.substring(0,14)}…</td><td><span class="badge ${j.status==='completed'?'ok':j.status==='failed'?'err':j.status==='running'?'run':'q'}">${j.status}</span></td><td>${j.stage||''}</td><td><div class="bar"><div class="bar-fill" style="width:${j.progress||0}%"></div></div></td><td>${j.artifactId?`<a href="#" onclick="sa('${j.artifactId}');return false" style="color:#0f3460">${j.artifactId}</a>`:'—'}</td><td>${(j.status==='queued'||j.status==='running')?`<button class="sm" onclick="cj('${j.id}')">取消</button>`:''}</td></tr>`).join('')||'<tr><td colspan="6" style="color:#999;text-align:center">暂无任务</td></tr>';}catch(e){}}
+async function go(){const t=document.getElementById('samples').value.trim();if(!t){document.getElementById('msg').textContent='请输入样本JSON';return;}
+try{const s=JSON.parse(t);const d=await fetch(A+'/datasets',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({snapshotId:document.getElementById('name').value||'manual',samples:s})}).then(r=>r.json());
+const j=await fetch(A+'/jobs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({datasetId:d.id,type:'prototype-calibration'})}).then(r=>r.json());
+document.getElementById('msg').textContent='已提交：'+j.id;setTimeout(rf,500);}catch(e){document.getElementById('msg').textContent='失败：'+e.message;}}
+async function cj(id){await fetch(A+'/jobs/'+id+'/cancel',{method:'POST'});rf();}
+async function sa(id){const a=await fetch(A+'/artifacts/'+id).then(r=>r.ok?r.json():null);if(!a){alert('制品不存在');return;}
+document.getElementById('m-acc').textContent=(a.metrics.validationAccuracy*100).toFixed(1)+'%';
+document.getElementById('m-far').textContent=(a.metrics.falseAcceptRate*100).toFixed(1)+'%';
+document.getElementById('art').innerHTML=`<h3 style="color:#0f3460">${a.artifactId}</h3><p>算法：${a.algorithm} | 创建：${new Date(a.createdUtc).toLocaleString()}</p><table style="margin-top:8px"><tr><th>指标</th><th>值</th><th>指标</th><th>值</th></tr><tr><td>总样本</td><td>${a.metrics.totalSamples}</td><td>人物数</td><td>${a.metrics.totalPersons}</td></tr><tr><td>训练准确率</td><td><b>${(a.metrics.trainAccuracy*100).toFixed(1)}%</b></td><td>验证准确率</td><td><b>${(a.metrics.validationAccuracy*100).toFixed(1)}%</b></td></tr><tr><td>误识率</td><td>${(a.metrics.falseAcceptRate*100).toFixed(2)}%</td><td>拒识率</td><td>${(a.metrics.falseRejectRate*100).toFixed(2)}%</td></tr><tr><td>同类相似度</td><td>${a.metrics.meanSimilaritySame.toFixed(3)}</td><td>异类相似度</td><td>${a.metrics.meanSimilarityDiff.toFixed(3)}</td></tr></table><h3 style="margin-top:12px;font-size:13px">人物原型（${a.prototypes.length}）</h3><table><tr><th>人物ID</th><th>样本数</th><th>阈值</th></tr>${a.prototypes.map(p=>`<tr><td>${p.personId}</td><td>${p.sampleCount}</td><td>${p.threshold.toFixed(3)}</td></tr>`).join('')}</table>`;}
+setInterval(rf,3000);rf();
+</script></body></html>
+""", "text/html"));
 
 app.MapGet("/api/models", () => Results.Ok(new[] {
     new { id = "picer-prototype-calibration", capability = "face-training", status = "ready" },
