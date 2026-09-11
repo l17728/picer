@@ -22,6 +22,21 @@ public sealed class FaceTrainingService(
     private readonly HttpClient _client = client ?? new HttpClient { Timeout = TimeSpan.FromMinutes(30) };
     private readonly bool _ownsClient = client is null;
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
+    private PendingArtifact? _pendingArtifact;
+
+    public bool HasPendingArtifact => _pendingArtifact is not null;
+
+    public string ApplyPendingArtifact()
+    {
+        var pending = _pendingArtifact ?? throw new InvalidOperationException("No pending training artifact.");
+        repository.ApplyLearnedFaceArtifact(pending.Artifact.Id, pending.DatasetId, pending.Endpoint,
+            pending.ModelVersion, pending.Json, pending.Artifact.Metrics.FalseAcceptRate,
+            pending.Artifact.Metrics.FalseRejectRate,
+            pending.Artifact.People.Select(value => new FaceLearnedPolicy(value.PersonId, pending.Artifact.Id,
+                pending.ModelVersion, value.Prototype, value.Threshold)).ToArray());
+        _pendingArtifact = null;
+        return pending.Artifact.Id;
+    }
 
     public FaceTrainingPlan Prepare()
     {
@@ -117,6 +132,8 @@ public sealed class FaceTrainingService(
                       artifact.Metrics.NegativeEvaluated >= 10 && artifact.People.Count >= 2 &&
                       artifact.Comparison is { NoFalseAcceptRegression: true, AcceptableFalseRejectRegression: true };
         var accepted = applied && applyArtifact;
+        if (applied && !applyArtifact)
+            _pendingArtifact = new PendingArtifact(dataset.Id, root.ToString(), modelVersion, artifactJson, artifact);
         if (applied && applyArtifact)
         {
             repository.ApplyLearnedFaceArtifact(artifact.Id, dataset.Id, root.ToString(), modelVersion, artifactJson,
@@ -265,6 +282,7 @@ public sealed class FaceTrainingService(
     private sealed record BaselineMetricsResponse(double FalseAcceptRate, double FalseRejectRate);
     private sealed record ComparisonResponse(double FalseAcceptRateDelta, double FalseRejectRateDelta,
         bool NoFalseAcceptRegression, bool AcceptableFalseRejectRegression);
+    private sealed record PendingArtifact(string DatasetId, string Endpoint, string ModelVersion, string Json, ArtifactResponse Artifact);
     private sealed record ArtifactResponse(string Id, string BaseModelVersion, List<PersonPolicyResponse> People,
         MetricsResponse Metrics, RecipeReportResponse? RecipeReport = null,
         BaselineMetricsResponse? BaselineMetrics = null, ComparisonResponse? Comparison = null, string? Sha256 = null, string? Signature = null, string? SignatureAlgorithm = null);
