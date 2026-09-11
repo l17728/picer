@@ -81,6 +81,9 @@ app.MapGet("/api/models", () => Results.Ok(new[] {
 
 app.MapPost("/api/face-training/datasets", (DatasetRequest request, ConcurrentDictionary<string, object> index) =>
 {
+    if (request.ProtocolVersion != "face-evidence.v1") return Results.BadRequest(new { error = "unsupported protocolVersion" });
+    if (request.Samples?.Any(s => s.Embedding is null || s.Embedding.Length == 0) == true)
+        return Results.BadRequest(new { error = "sample embedding is required" });
     var datasetId = "dataset-" + Guid.NewGuid().ToString("N");
     index[datasetId] = request;
     return Results.Ok(new { id = datasetId, snapshotId = request.SnapshotId, sampleCount = request.Samples?.Length ?? 0 });
@@ -114,8 +117,19 @@ app.MapGet("/api/face-training/artifacts/{id}", (string id, TrainingExecutor exe
 
 app.Run();
 
-public record DatasetRequest(string SnapshotId, string? SourceApp = null, string? ModelVersion = null, FaceSample[]? Samples = null);
-public record FaceSample(long FaceId, long PersonId, float[] Embedding, string Split = "train");
+public record DatasetRequest(string SnapshotId, string? SourceApp = null, string? ModelVersion = null,
+    FaceSample[]? Samples = null, string ProtocolVersion = "face-evidence.v1",
+    UserActionEvidence[]? Actions = null, MediaGroupEvidence[]? Groups = null);
+public record FaceSample(long FaceId, long PersonId, float[] Embedding, string Split = "train",
+    SampleEvidence? Evidence = null, VlAttributes? Attributes = null);
+public record SampleEvidence(string Source, string? ImageHash = null, string? FileName = null,
+    string? GroupId = null, string? ModelVersion = null, string? SelectionReason = null,
+    string? ExclusionReason = null);
+public record UserActionEvidence(long FaceId, long? PersonId, string Action, DateTime OccurredUtc,
+    string Source = "user");
+public record MediaGroupEvidence(string GroupId, string Kind, long[] MemberIds);
+public record VlAttributes(string Pose, string Lighting, string[] Occlusion, string Expression,
+    double FaceQuality, bool IsUsefulForTraining, string ModelVersion, string PromptVersion);
 public record JobRequest(string DatasetId, string Type);
 public record TrainingJob(string Id, string Status, string Stage, int Progress, string? ArtifactId, string? Error);
 public record TrainingArtifact(
