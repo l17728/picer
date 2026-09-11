@@ -25,6 +25,7 @@ public sealed class FullDuplexVoiceSession : IDisposable
     private bool _speaking;
     private bool _processing;
     private DateTime _lastLevelLogUtc;
+    private int _playbackSpeechFrames;
 
     public event Action<string>? StateChanged;
     /// Raised for UI diagnostics only; contains an RMS level, never audio data.
@@ -77,7 +78,7 @@ public sealed class FullDuplexVoiceSession : IDisposable
         if (DateTime.UtcNow - _lastLevelLogUtc > TimeSpan.FromSeconds(2)) { _lastLevelLogUtc = DateTime.UtcNow; AppLogger.Info($"Voice audio level rms={rms:F4}; speaking={_speaking}; processing={_processing}"); }
         // The microphone's measured room-noise floor is ~0.03-0.06 RMS;
         // 0.025 kept the utterance open forever and prevented ASR submission.
-        var speech = rms >= (_speaking ? 0.075 : 0.08);
+        var speech = rms >= (_speaking ? 0.18 : 0.08);
         if (speech)
         {
             if (_speechFrames == 0) StateChanged?.Invoke("检测到语音，正在录音…");
@@ -85,10 +86,16 @@ public sealed class FullDuplexVoiceSession : IDisposable
             _speechFrames++;
             if (_speaking)
             {
-                SpeechDetectedDuringPlayback?.Invoke();
-                CancelPlayback();
+                _playbackSpeechFrames++;
+                if (_playbackSpeechFrames >= 3)
+                {
+                    SpeechDetectedDuringPlayback?.Invoke();
+                    CancelPlayback();
+                    _playbackSpeechFrames = 0;
+                }
             }
         }
+        else if (_speaking) _playbackSpeechFrames = 0;
         if (_speechFrames > 0)
         {
             lock (_utterance) { _utterance.Write(e.Buffer, 0, e.BytesRecorded); }

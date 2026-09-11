@@ -1452,18 +1452,37 @@ public partial class MainViewModel : ObservableObject, IDisposable
         var root = DirectoryTree.FirstOrDefault(node => node.IsGeoRoot);
         if (root is null) return false;
         var parts = path.Split('/', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        // LLMs may return a localized name (e.g. 长崎县/長崎県) rather than
+        // the exact stored node path. Resolve by the unique suffix before
+        // walking the tree, but never fall back to an unrelated node.
+        if (parts.Length > 0 && !string.Equals(parts[0], root.Name, StringComparison.OrdinalIgnoreCase))
+        {
+            var candidate = EnumerateDirectoryPaths(root, root.Name)
+                .FirstOrDefault(p => p.EndsWith('/' + parts[^1], StringComparison.OrdinalIgnoreCase) ||
+                    p.Contains(parts[^1], StringComparison.OrdinalIgnoreCase));
+            if (candidate is null) return false;
+            parts = candidate.Split('/', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        }
         if (parts.Length == 0 || !string.Equals(parts[0], root.Name, StringComparison.OrdinalIgnoreCase)) return false;
         var current = root;
         current.IsExpanded = true;
         foreach (var part in parts.Skip(1))
         {
-            var next = current.Children.FirstOrDefault(node => string.Equals(node.Name, part, StringComparison.OrdinalIgnoreCase));
+            var next = current.Children.FirstOrDefault(node => string.Equals(node.Name, part, StringComparison.OrdinalIgnoreCase))
+                ?? current.Children.FirstOrDefault(node => node.Name.Contains(part, StringComparison.OrdinalIgnoreCase) || part.Contains(node.Name, StringComparison.OrdinalIgnoreCase));
             if (next is null) return false;
             current = next;
             current.IsExpanded = true;
         }
         SelectedDirectory = current;
         return true;
+    }
+
+    private static IEnumerable<string> EnumerateDirectoryPaths(DirectoryNodeViewModel node, string path)
+    {
+        yield return path;
+        foreach (var child in node.Children)
+            foreach (var nested in EnumerateDirectoryPaths(child, $"{path}/{child.Name}")) yield return nested;
     }
 
     private static void AddVoiceLocationPaths(DirectoryNodeViewModel node, string path, ICollection<string> result)
