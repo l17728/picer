@@ -27,6 +27,7 @@ video-summary-cache/
 remote-cache/
 
 # Downloaded runtime packages and large AI models
+.venv-training/
 third_party/*.nupkg
 third_party/runtime/ffmpeg/
 third_party/runtime/models/

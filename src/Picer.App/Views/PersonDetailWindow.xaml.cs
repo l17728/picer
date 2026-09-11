@@ -93,7 +93,14 @@ public partial class PersonDetailWindow : Window
     private async void Photos_DoubleClick(object sender, MouseButtonEventArgs e)
     {
         if (Photos.SelectedItem is not PersonPhotoItem item || !File.Exists(item.Record.Path)) return;
-        new FaceDetailWindow(item.Record, _faces, _people) { Owner = this }.ShowDialog();
+        // Keep the face that was double-clicked as the active overlay.  Previously
+        // the detail window was opened without an initial face id and always
+        // selected the first face in the source image, which made navigation jump
+        // away from the user's current position.
+        var initialFaceId = await Task.Run(() =>
+            _faces.GetFaces(item.Record.Id)
+                .FirstOrDefault(face => face.PersonId == _personId)?.FaceId);
+        new FaceDetailWindow(item.Record, _faces, _people, initialFaceId) { Owner = this }.ShowDialog();
         PeopleChanged = true; await RefreshAsync();
     }
 
