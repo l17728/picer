@@ -7,11 +7,33 @@ using Picer.Core.Hashing;
 using Picer.Core.Data;
 using Picer.Core.Models;
 using Picer.Core.Search;
+using Picer.Core.Video;
 
 namespace Picer.E2E;
 
 public sealed class DesktopSmokeTests
 {
+    [Fact]
+    public async Task VideoThumbnail_UsesPosterLoaderInsteadOfDecodingVideoFile()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "picer-video-poster-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var videoPath = Path.Combine(root, "sample.mp4");
+        await File.WriteAllBytesAsync(videoPath, [0, 0, 0, 24]);
+        var loaderCalled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var video = new VideoRecord(7, 1, videoPath, 4, DateTime.UtcNow, null, 0, 0, null, null, "active");
+        var item = new Picer.App.ViewModels.ImageItemViewModel(video, null, (_, _) =>
+        {
+            loaderCalled.TrySetResult();
+            return Task.FromResult<string?>(null);
+        });
+
+        item.EnsureThumbnailLoad();
+
+        await loaderCalled.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        try { Directory.Delete(root, true); } catch { }
+    }
+
     [Fact]
     public void SuggestedPersonGroup_RemovesProcessedFacesAndUpdatesCount()
     {

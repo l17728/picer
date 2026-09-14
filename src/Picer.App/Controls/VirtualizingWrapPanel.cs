@@ -26,6 +26,11 @@ public sealed class VirtualizingWrapPanel : VirtualizingPanel, IScrollInfo
     private bool _generatorRetryScheduled;
     private bool _cleanupInProgress;
     private Rect[] _layouts = [];
+    private bool _layoutDirty = true;
+    private int _layoutItemCount = -1;
+    private double _layoutWidth = double.NaN;
+    private double _layoutItemWidth = double.NaN;
+    private double _layoutItemHeight = double.NaN;
 
     protected override Size MeasureOverride(Size availableSize)
     {
@@ -36,8 +41,8 @@ public sealed class VirtualizingWrapPanel : VirtualizingPanel, IScrollInfo
             ? Math.Max(ItemWidth, availableSize.Width)
             : Math.Max(ItemWidth, double.IsFinite(ownerWidth) ? ownerWidth : ItemWidth);
         _itemsPerRow = Math.Max(1, (int)Math.Floor(width / ItemWidth));
-        _layouts = BuildLayouts(owner, count, width);
-        var extentHeight = _layouts.Length == 0 ? 0 : _layouts.Max(rect => rect.Bottom);
+        EnsureLayouts(owner, count, width);
+        var extentHeight = _layouts.Length == 0 ? 0 : _layouts[^1].Bottom;
         _extent = new Size(width, extentHeight);
         var height = double.IsFinite(availableSize.Height) ? availableSize.Height : _extent.Height;
         _viewport = new Size(width, height);
@@ -45,11 +50,67 @@ public sealed class VirtualizingWrapPanel : VirtualizingPanel, IScrollInfo
         if (_offset.Y > maximumVerticalOffset) _offset.Y = maximumVerticalOffset;
         ScrollOwner?.InvalidateScrollInfo();
 
-        var first = Array.FindIndex(_layouts, rect => rect.Bottom >= _offset.Y - ItemHeight);
-        var last = Array.FindLastIndex(_layouts, rect => rect.Top <= _offset.Y + _viewport.Height + ItemHeight);
+        var first = FindFirstVisibleIndex(_offset.Y - ItemHeight);
+        var last = FindLastVisibleIndex(_offset.Y + _viewport.Height + ItemHeight);
         var range = (FirstIndex: Math.Max(0, first), LastIndex: last);
         RealizeRange(range.FirstIndex, range.LastIndex, new Size(width, height));
         return new Size(width, _extent.Height);
+    }
+
+    private void EnsureLayouts(ItemsControl? owner, int count, double width)
+    {
+        if (!_layoutDirty && _layoutItemCount == count && Math.Abs(_layoutWidth - width) < .1 &&
+            Math.Abs(_layoutItemWidth - ItemWidth) < .1 && Math.Abs(_layoutItemHeight - ItemHeight) < .1)
+            return;
+
+        _layouts = BuildLayouts(owner, count, width);
+        _layoutItemCount = count;
+        _layoutWidth = width;
+        _layoutItemWidth = ItemWidth;
+        _layoutItemHeight = ItemHeight;
+        _layoutDirty = false;
+    }
+
+    private int FindFirstVisibleIndex(double minimumBottom)
+    {
+        var low = 0;
+        var high = _layouts.Length - 1;
+        var result = -1;
+        while (low <= high)
+        {
+            var middle = low + ((high - low) / 2);
+            if (_layouts[middle].Bottom >= minimumBottom)
+            {
+                result = middle;
+                high = middle - 1;
+            }
+            else low = middle + 1;
+        }
+        return result;
+    }
+
+    private int FindLastVisibleIndex(double maximumTop)
+    {
+        var low = 0;
+        var high = _layouts.Length - 1;
+        var result = -1;
+        while (low <= high)
+        {
+            var middle = low + ((high - low) / 2);
+            if (_layouts[middle].Top <= maximumTop)
+            {
+                result = middle;
+                low = middle + 1;
+            }
+            else high = middle - 1;
+        }
+        return result;
+    }
+
+    protected override void OnItemsChanged(object sender, ItemsChangedEventArgs args)
+    {
+        _layoutDirty = true;
+        base.OnItemsChanged(sender, args);
     }
 
     private Rect[] BuildLayouts(ItemsControl? owner, int count, double width)

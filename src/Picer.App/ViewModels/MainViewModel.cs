@@ -1831,14 +1831,28 @@ public partial class MainViewModel : ObservableObject, IDisposable
             var displayItems = photoItems.Concat(videoItems)
                 .OrderBy(item => IsChronologicalAscending ? item.EffectiveTime.Ticks : -item.EffectiveTime.Ticks)
                 .ThenBy(item => item.Id).ToArray();
-            await UiWork.AddInBatchesAsync(displayItems,
-                item =>
+            var displayed = 0;
+            while (displayed < displayItems.Length)
+            {
+                cts.Token.ThrowIfCancellationRequested();
+                if (!IsCurrentLoad()) return;
+                // Paint roughly the first row immediately, then use larger batches so
+                // large directories do not spend hundreds of dispatcher turns filling
+                // view-model collections that are already visually virtualized.
+                var batchSize = displayed == 0 ? 16 : 64;
+                var batchEnd = Math.Min(displayItems.Length, displayed + batchSize);
+                for (; displayed < batchEnd; displayed++)
                 {
-                    if (!IsCurrentLoad()) return;
+                    cts.Token.ThrowIfCancellationRequested();
+                    var item = displayItems[displayed];
                     item.SetTimelineGranularity(TimelineGranularityIndex);
                     DirectoryImages.Add(item);
                     AddTimelineItem(item);
-                }, cts.Token, batchSize: 8);
+                }
+                if (displayed < displayItems.Length)
+                    StatusText = $"[{selectedDirectory.Name}] 正在渐进显示：{displayed} / {displayItems.Length}";
+                await Dispatcher.Yield(DispatcherPriority.Background);
+            }
             if (!IsCurrentLoad()) return;
             RefreshDirectoryTimelineView(resetPosition: true);
             OnPropertyChanged(nameof(DirectoryImageCount));

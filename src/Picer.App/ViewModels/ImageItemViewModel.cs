@@ -114,10 +114,7 @@ public partial class ImageItemViewModel : ObservableObject
     {
         get
         {
-            if (_thumbnail is null && !_isLoadingThumbnail && File.Exists(GetImagePath()))
-            {
-                LoadThumbnailAsync();
-            }
+            if (_thumbnail is null && !_isLoadingThumbnail) LoadThumbnailAsync();
             return _thumbnail;
         }
     }
@@ -146,16 +143,16 @@ public partial class ImageItemViewModel : ObservableObject
 
         try
         {
-            var imagePaths = GetImagePaths();
+            await ThumbnailLoadGate.WaitAsync(cts.Token);
+            acquired = true;
+            var imagePaths = await Task.Run(GetImagePaths, cts.Token);
             if (imagePaths.Count == 0 && VideoRecord is { } video && _videoPreviewLoader is not null)
             {
                 _previewPath = await _videoPreviewLoader(video, cts.Token);
-                imagePaths = GetImagePaths();
+                imagePaths = await Task.Run(GetImagePaths, cts.Token);
             }
             if (imagePaths.Count == 0)
                 return;
-            await ThumbnailLoadGate.WaitAsync(cts.Token);
-            acquired = true;
             var bi = await Task.Run(() =>
             {
                 cts.Token.ThrowIfCancellationRequested();
@@ -184,6 +181,8 @@ public partial class ImageItemViewModel : ObservableObject
             }
         }
         catch (OperationCanceledException) { }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
         finally
         {
             if (acquired) ThumbnailLoadGate.Release();
@@ -198,15 +197,13 @@ public partial class ImageItemViewModel : ObservableObject
 
     public void CancelThumbnailLoad() => _thumbnailCts?.Cancel();
 
-    private string? GetImagePath() => GetImagePaths().FirstOrDefault();
-
     private IReadOnlyList<string> GetImagePaths()
     {
         var paths = new List<string>(2);
         if (IsVideo && !string.IsNullOrWhiteSpace(_previewPath) && File.Exists(_previewPath)) paths.Add(_previewPath);
         if (!string.IsNullOrWhiteSpace(_record.ThumbPath) && File.Exists(_record.ThumbPath))
             paths.Add(_record.ThumbPath);
-        if (File.Exists(_record.Path) && !paths.Contains(_record.Path, StringComparer.OrdinalIgnoreCase))
+        if (!IsVideo && File.Exists(_record.Path) && !paths.Contains(_record.Path, StringComparer.OrdinalIgnoreCase))
             paths.Add(_record.Path);
         return paths;
     }
