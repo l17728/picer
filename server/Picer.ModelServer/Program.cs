@@ -94,6 +94,20 @@ app.MapPost("/api/face-training/recipe/preview", (DatasetRequest request, Traini
     Results.Ok(new { protocolVersion = request.ProtocolVersion, selections = builder.Build(request) }));
 app.MapPost("/api/face-training/recipe/enrich", (VlEnrichmentRequest request) =>
     Results.Ok(new { protocolVersion = request.ProtocolVersion, attributes = request.Attributes ?? [] }));
+app.MapPost("/api/face-training/quality-report", (DatasetRequest request) =>
+{
+    var samples = request.Samples ?? [];
+    var groups = samples.Where(s => s.Evidence is not null)
+        .GroupBy(s => s.Evidence!.GroupId ?? s.Evidence.ImageHash ?? $"face:{s.FaceId}", StringComparer.OrdinalIgnoreCase)
+        .ToArray();
+    var leaked = groups.Where(g => g.Select(s => s.Split).Distinct(StringComparer.OrdinalIgnoreCase).Count() > 1)
+        .Select(g => g.Key).ToArray();
+    var persons = samples.Select(s => s.PersonId).Distinct().Count();
+    return Results.Ok(new { protocolVersion = request.ProtocolVersion, totalSamples = samples.Length,
+        totalPersons = persons, trainSamples = samples.Count(s => s.Split == "train"),
+        validationSamples = samples.Count(s => s.Split == "validation"), leakageGroups = leaked,
+        passed = leaked.Length == 0 && persons > 0 });
+});
 
 app.MapPost("/api/face-training/jobs", (JobRequest request, ConcurrentDictionary<string, TrainingJob> jobs, TrainingExecutor executor, ConcurrentDictionary<string, object> datasets) =>
 {
