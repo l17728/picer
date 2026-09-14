@@ -194,7 +194,11 @@ public sealed class TrainingExecutor
                     throw new TimeoutException($"GPU worker timed out after {timeoutSeconds}s");
                 }
                 var output = await outputTask; var error = await errorTask;
-                if (process.ExitCode != 0) throw new InvalidOperationException($"GPU worker failed: {error.Trim()}");
+                if (process.ExitCode != 0)
+                {
+                    var detail = string.IsNullOrWhiteSpace(error) ? output : error;
+                    throw new InvalidOperationException($"GPU worker failed: {detail.Trim()}");
+                }
                 using var parsed = JsonDocument.Parse(output);
                 if (parsed.RootElement.TryGetProperty("error", out var workerError)) throw new InvalidOperationException(workerError.GetString());
                 var gpuArtifact = JsonSerializer.Deserialize<TrainingArtifact>(output, new JsonSerializerOptions(JsonSerializerDefaults.Web))
