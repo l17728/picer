@@ -227,6 +227,32 @@ public sealed class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void Schema_Version34MigratesFaceUserActionEventsTo35()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "picer_migration_34_" + Guid.NewGuid().ToString("n") + ".db");
+        try
+        {
+            using (var legacy = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={path}"))
+            {
+                legacy.Open();
+                using var command = legacy.CreateCommand();
+                command.CommandText = "PRAGMA user_version = 34";
+                command.ExecuteNonQuery();
+            }
+
+            using var migrated = new PicerDatabase(path);
+            using var check = migrated.Command("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='face_user_action_events'");
+            Assert.Equal(1L, (long)check.ExecuteScalar()!);
+            using var version = migrated.Command("PRAGMA user_version");
+            Assert.Equal(35L, (long)version.ExecuteScalar()!);
+        }
+        finally
+        {
+            try { File.Delete(path); } catch { }
+        }
+    }
+
+    [Fact]
     public async Task LocationHierarchy_EnrichesExistingImageAndMatchesEveryAdministrativeLevel()
     {
         var source = _db.AddSource(@"D:\Photos");
