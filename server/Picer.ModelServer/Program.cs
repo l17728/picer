@@ -10,6 +10,7 @@ builder.Services.AddSingleton<ConcurrentDictionary<string, object>>();
 builder.Services.AddSingleton<TrainingExecutor>();
 builder.Services.AddSingleton<TrainingRecipeBuilder>();
 builder.Services.AddSingleton<ITrainingAlgorithmAdapter, PrototypeCalibrationAdapter>();
+builder.Services.AddSingleton<ArtifactSigner>();
 var app = builder.Build();
 
 var apiKey = Environment.GetEnvironmentVariable("PICER_MODEL_SERVER_API_KEY");
@@ -83,6 +84,7 @@ app.MapGet("/api/models", () => Results.Ok(new[] {
 }));
 app.MapGet("/api/face-training/algorithms", (IEnumerable<ITrainingAlgorithmAdapter> adapters) =>
     Results.Ok(adapters.Select(a => new { id = a.Id, modelVersion = a.ModelVersion })));
+app.MapGet("/api/face-training/signing-key", (ArtifactSigner signer) => Results.Ok(signer.GetInfo()));
 
 app.MapPost("/api/face-training/datasets", (DatasetRequest request, ConcurrentDictionary<string, object> index) =>
 {
@@ -158,7 +160,8 @@ public record JobRequest(string DatasetId, string Type);
 public record TrainingJob(string Id, string Status, string Stage, int Progress, string? ArtifactId, string? Error);
 public record TrainingArtifact(
     string ArtifactId, string Algorithm, string ModelVersion, DateTime CreatedUtc,
-    IReadOnlyList<PersonPrototype> Prototypes, TrainingMetrics Metrics);
+    IReadOnlyList<PersonPrototype> Prototypes, TrainingMetrics Metrics,
+    string? Sha256 = null, string? Signature = null, string? SignatureAlgorithm = null, string? SigningKeyId = null);
 public record PersonPrototype(long PersonId, float[] Centroid, double Threshold, int SampleCount);
 public record TrainingMetrics(int TotalSamples, int TotalPersons, double TrainAccuracy, double ValidationAccuracy,
     double FalseAcceptRate, double FalseRejectRate, double MeanSimilaritySame, double MeanSimilarityDiff);
@@ -166,6 +169,9 @@ public record TrainingMetrics(int TotalSamples, int TotalPersons, double TrainAc
 public sealed class TrainingExecutor
 {
     private readonly ConcurrentDictionary<string, TrainingArtifact> _artifacts = new();
+    private readonly ArtifactSigner _signer;
+
+    public TrainingExecutor(ArtifactSigner signer) => _signer = signer;
 
     public bool TryGetArtifact(string artifactId, out TrainingArtifact artifact) => _artifacts.TryGetValue(artifactId, out artifact!);
 
@@ -203,6 +209,7 @@ public sealed class TrainingExecutor
                 if (parsed.RootElement.TryGetProperty("error", out var workerError)) throw new InvalidOperationException(workerError.GetString());
                 var gpuArtifact = JsonSerializer.Deserialize<TrainingArtifact>(output, new JsonSerializerOptions(JsonSerializerDefaults.Web))
                     ?? throw new InvalidOperationException("GPU worker returned invalid artifact");
+                gpuArtifact = _signer.Sign(gpuArtifact);
                 _artifacts[gpuArtifact.ArtifactId] = gpuArtifact;
                 jobs[jobId] = jobs[jobId] with { Status = "completed", Stage = "gpu-worker-completed", Progress = 100, ArtifactId = gpuArtifact.ArtifactId };
                 return;
@@ -298,7 +305,7 @@ public sealed class TrainingExecutor
                 Math.Round(countDiff > 0 ? sumDiff / countDiff : 0, 4));
 
             var artifactId = "artifact-" + Guid.NewGuid().ToString("N")[..12];
-            var artifact = new TrainingArtifact(artifactId, "prototype-calibration", dataset.ModelVersion ?? "sface", DateTime.UtcNow, prototypes, metrics);
+            var artifact = _signer.Sign(new TrainingArtifact(artifactId, "prototype-calibration", dataset.ModelVersion ?? "sface", DateTime.UtcNow, prototypes, metrics));
             _artifacts[artifactId] = artifact;
 
             jobs[jobId] = jobs[jobId] with { Status = "completed", Stage = "completed", Progress = 100, ArtifactId = artifactId };

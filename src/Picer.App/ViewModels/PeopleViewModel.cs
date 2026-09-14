@@ -294,6 +294,12 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
                     var artifact = await submission.GetArtifactAsync(status.ArtifactId);
                     if (artifact is not null)
                     {
+                        if (!await submission.VerifyArtifactAsync(artifact))
+                        {
+                            StatusText = "训练制品签名校验失败，已阻止应用。";
+                            AppLogger.Error("训练制品签名校验失败，已阻止应用");
+                            break;
+                        }
                         await UiWork.RunDatabaseAsync(() => ApplyTrainedPrototypes(artifact));
                         StatusText = $"训练完成并已自动应用：准确率 {(artifact.Metrics.ValidationAccuracy * 100):F1}%，" +
                                      $"误识率 {(artifact.Metrics.FalseAcceptRate * 100):F2}%，" +

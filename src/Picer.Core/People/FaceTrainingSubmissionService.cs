@@ -1,6 +1,7 @@
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Security.Cryptography;
 using System.Text.Json;
 
 namespace Picer.Core.People;
@@ -10,7 +11,10 @@ public sealed record TrainingSubmissionResult(string JobId, string Status, strin
 
 public sealed record TrainingArtifactData(
     string ArtifactId, string Algorithm, string ModelVersion, DateTime CreatedUtc,
-    IReadOnlyList<PrototypeData> Prototypes, MetricsData Metrics);
+    IReadOnlyList<PrototypeData> Prototypes, MetricsData Metrics,
+    string? Sha256 = null, string? Signature = null, string? SignatureAlgorithm = null, string? SigningKeyId = null);
+
+public sealed record ArtifactSigningInfoData(string Algorithm, string PublicKey, string KeyId);
 
 public sealed record PrototypeData(long PersonId, float[] Centroid, double Threshold, int SampleCount);
 
@@ -114,6 +118,21 @@ public sealed class FaceTrainingSubmissionService : IDisposable
         {
             return null;
         }
+    }
+
+    public async Task<bool> VerifyArtifactAsync(TrainingArtifactData artifact, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(artifact.Sha256) || string.IsNullOrWhiteSpace(artifact.Signature)
+            || !string.Equals(artifact.SignatureAlgorithm, "ecdsa-p256-sha256", StringComparison.OrdinalIgnoreCase))
+            return false;
+        var signing = await _client.GetFromJsonAsync<ArtifactSigningInfoData>("api/face-training/signing-key", Json, ct);
+        if (signing is null || !string.Equals(signing.KeyId, artifact.SigningKeyId, StringComparison.Ordinal)) return false;
+        var unsigned = artifact with { Sha256 = null, Signature = null, SignatureAlgorithm = null, SigningKeyId = null };
+        var hash = SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(unsigned, Json));
+        if (!CryptographicOperations.FixedTimeEquals(hash, Convert.FromHexString(artifact.Sha256))) return false;
+        using var verifier = ECDsa.Create();
+        verifier.ImportSubjectPublicKeyInfo(Convert.FromBase64String(signing.PublicKey), out _);
+        return verifier.VerifyHash(hash, Convert.FromBase64String(artifact.Signature));
     }
 
     public void Dispose() => _client.Dispose();

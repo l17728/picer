@@ -19,7 +19,12 @@
 - Worker 同时兼容 C# 默认序列化的 PascalCase 与 camelCase 字段。
 - Worker 非零退出时，ModelServer 会从 stdout 或 stderr 提取错误，不再返回空失败原因。
 
+## 制品完整性
+
+- ModelServer 对 CPU/GPU 制品统一计算 SHA-256，并使用 ECDSA P-256 签名。
+- 客户端下载制品后核对 SHA-256、签名算法、KeyId 和公钥签名；失败时禁止应用人物原型。
+- `/api/face-training/signing-key` 提供当前服务实例的公钥和 KeyId。
+
 ## 未关闭边界
 
-- 当前完成真实 GPU 训练与评估联调；服务端非对称制品签名仍需单独完成。
 - 冒烟数据只验证链路，不代表真实人物数据上的模型质量门禁结果。
