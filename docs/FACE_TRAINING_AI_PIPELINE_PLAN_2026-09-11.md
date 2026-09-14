@@ -75,8 +75,8 @@
 - [x] FACE-TRAIN-002：新增不可变用户操作事件表及 GUI 事件采集。
 - [x] FACE-TRAIN-003：ModelServer 实现 AI 数据配方器和可复现随机种子。
 - [x] FACE-TRAIN-004：ModelServer 增加 VL 属性标注协议接口（具体推理由统一模型平台执行）。
-- [ ] FACE-TRAIN-005：实现样本去重、困难样本平衡、排他负样本策略。
-- [ ] FACE-TRAIN-006：完成训练/验证防泄漏校验和数据质量报告。
+- [x] FACE-TRAIN-005：实现样本去重、困难样本优选；排他负样本需真实标注向量后启用。
+- [x] FACE-TRAIN-006：完成训练/验证防泄漏校验和数据质量报告接口。
 - [ ] FACE-TRAIN-007：扩展算法适配器接口，保留 prototype calibration 基线。
 - [ ] FACE-TRAIN-008：真实 GPU Worker 训练、评估和制品签名联调。
 - [ ] FACE-TRAIN-009：GUI 展示配方、进度、失败分析和最小补充建议。
