@@ -90,6 +90,8 @@ app.MapPost("/api/face-training/datasets", (DatasetRequest request, ConcurrentDi
     index[datasetId] = request;
     return Results.Ok(new { id = datasetId, snapshotId = request.SnapshotId, sampleCount = request.Samples?.Length ?? 0 });
 });
+app.MapPost("/api/face-training/recipe/preview", (DatasetRequest request, TrainingRecipeBuilder builder) =>
+    Results.Ok(new { protocolVersion = request.ProtocolVersion, selections = builder.Build(request) }));
 
 app.MapPost("/api/face-training/jobs", (JobRequest request, ConcurrentDictionary<string, TrainingJob> jobs, TrainingExecutor executor, ConcurrentDictionary<string, object> datasets) =>
 {
