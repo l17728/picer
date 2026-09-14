@@ -8,7 +8,7 @@
 
 - 已有：训练快照、基本防泄漏分组、ModelServer jobs/datasets/artifacts、GPU Worker、异步进度、制品哈希和客户端应用。
 - 部分已有：人物确认向量、错误归类记录、相似度去重、训练门禁。
-- 未完成：操作日志正式协议、VL 属性标注、AI 样本配方器、困难样本平衡、数据不足反馈、真正模型训练适配器、多算法切换验收。
+- 当前进度：证据协议、操作日志、AI 样本配方器已完成；VL 属性接口已完成协议边界，具体推理由统一模型平台执行。其余训练适配、门禁和真实硬件联调仍待完成。
 
 ## 分阶段路线
 
@@ -72,9 +72,9 @@
 ## TODO（按执行顺序）
 
 - [x] FACE-TRAIN-001：新增训练证据 DTO、JSON Schema 和版本校验。
-- [ ] FACE-TRAIN-002：新增不可变用户操作事件表及 GUI 事件采集。
-- [ ] FACE-TRAIN-003：ModelServer 实现 AI 数据配方器和可复现随机种子。
-- [ ] FACE-TRAIN-004：ModelServer 接入 VL 属性标注、缓存和重试。
+- [x] FACE-TRAIN-002：新增不可变用户操作事件表及 GUI 事件采集。
+- [x] FACE-TRAIN-003：ModelServer 实现 AI 数据配方器和可复现随机种子。
+- [x] FACE-TRAIN-004：ModelServer 增加 VL 属性标注协议接口（具体推理由统一模型平台执行）。
 - [ ] FACE-TRAIN-005：实现样本去重、困难样本平衡、排他负样本策略。
 - [ ] FACE-TRAIN-006：完成训练/验证防泄漏校验和数据质量报告。
 - [ ] FACE-TRAIN-007：扩展算法适配器接口，保留 prototype calibration 基线。
