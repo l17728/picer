@@ -92,6 +92,8 @@ app.MapPost("/api/face-training/datasets", (DatasetRequest request, ConcurrentDi
 });
 app.MapPost("/api/face-training/recipe/preview", (DatasetRequest request, TrainingRecipeBuilder builder) =>
     Results.Ok(new { protocolVersion = request.ProtocolVersion, selections = builder.Build(request) }));
+app.MapPost("/api/face-training/recipe/enrich", (VlEnrichmentRequest request) =>
+    Results.Ok(new { protocolVersion = request.ProtocolVersion, attributes = request.Attributes ?? [] }));
 
 app.MapPost("/api/face-training/jobs", (JobRequest request, ConcurrentDictionary<string, TrainingJob> jobs, TrainingExecutor executor, ConcurrentDictionary<string, object> datasets) =>
 {
@@ -134,6 +136,7 @@ public record UserActionEvidence(long FaceId, long? PersonId, string Action, Dat
 public record MediaGroupEvidence(string GroupId, string Kind, long[] MemberIds);
 public record VlAttributes(string Pose, string Lighting, string[] Occlusion, string Expression,
     double FaceQuality, bool IsUsefulForTraining, string ModelVersion, string PromptVersion);
+public record VlEnrichmentRequest(string ProtocolVersion = "face-evidence.v1", VlAttributes[]? Attributes = null);
 public record JobRequest(string DatasetId, string Type);
 public record TrainingJob(string Id, string Status, string Stage, int Progress, string? ArtifactId, string? Error);
 public record TrainingArtifact(
