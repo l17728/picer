@@ -30,6 +30,7 @@
                 <MenuItem Header="本地描述任务" Click="FlorenceBatch_Click"/>
             </MenuItem>
             <MenuItem Header="工具(_T)" AutomationProperties.Name="工具菜单">
+                <MenuItem Header="增量更新索引" Command="{Binding StartIndexCommand}"/>
                 <MenuItem Header="检查缺失" Command="{Binding VerifyCommand}"/>
                 <MenuItem Header="查找重复" Command="{Binding OpenDuplicatesCommand}"/>
                 <MenuItem Header="运行组件" Click="RuntimeComponents_Click"/>
