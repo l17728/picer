@@ -7,6 +7,7 @@ using Picer.App.Infrastructure;
 using Picer.Core.Logging;
 using System.Diagnostics;
 using Microsoft.Win32;
+using Picer.App.ViewModels;
 
 namespace Picer.App.Views;
 
@@ -241,7 +242,16 @@ public partial class FaceValidationWindow : Window
         {
             var artifactId = await UiWork.RunDatabaseAsync(_training.ApplyPendingArtifact);
             ApplyArtifactButton.IsEnabled = false;
-            Status.Text = $"制品 {artifactId} 已应用；请刷新人物列表以查看最新匹配。";
+            Status.Text = $"制品 {artifactId} 已应用，正在使用新标准更新候选人物…";
+            var progress = new Progress<(int Completed, int Total)>(value =>
+            {
+                WorkProgress.IsIndeterminate = false;
+                WorkProgress.Value = value.Total == 0 ? 100 : value.Completed * 100d / value.Total;
+                Status.Text = $"正在使用新标准更新候选人物：{value.Completed}/{value.Total}";
+            });
+            var suggestions = await UiWork.RunDatabaseAsync(() => AppServices.FaceSuggestions.Suggest(progress: progress));
+            if (Owner?.DataContext is MainViewModel main) await main.People.RefreshSharedIdentityAsync();
+            Status.Text = $"制品 {artifactId} 已应用；候选人物已更新 {suggestions.Suggested} 张，人物界面已刷新。";
         }
         catch (Exception exception) { Status.Text = $"应用制品失败：{exception.Message}"; }
     }
