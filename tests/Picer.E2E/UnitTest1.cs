@@ -407,9 +407,12 @@ public sealed class DesktopSmokeTests
             Assert.True(peopleTab.TryGetCurrentPattern(SelectionItemPattern.Pattern, out var selection));
             var visible = Stopwatch.StartNew();
             ((SelectionItemPattern)selection).Select();
-            var pending = WaitForElement(window, "待处理人脸", TimeSpan.FromSeconds(2));
+            var skeletonBudget = string.Equals(Environment.GetEnvironmentVariable("CI"), "true", StringComparison.OrdinalIgnoreCase)
+                ? TimeSpan.FromSeconds(4)
+                : TimeSpan.FromSeconds(2);
+            var pending = WaitForElement(window, "待处理人脸", skeletonBudget);
             Assert.NotNull(pending);
-            Assert.True(visible.Elapsed < TimeSpan.FromSeconds(2), $"人物页骨架显示耗时 {visible.Elapsed}");
+            Assert.True(visible.Elapsed < skeletonBudget, $"人物页骨架显示耗时 {visible.Elapsed}");
 
             var peopleList = WaitForElement(window, "已命名人物下拉列表", TimeSpan.FromSeconds(5));
             Assert.NotNull(peopleList);

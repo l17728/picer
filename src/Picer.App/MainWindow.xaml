@@ -88,7 +88,8 @@
                 <Button Command="{Binding StartIndexCommand}" Content="增量更新索引" Padding="8,3"
                         ToolTip="扫描目录，仅处理新增或发生变化的文件；未变化照片直接跳过"/>
                 <Button Command="{Binding CancelIndexCommand}" Content="取消索引" Padding="8,3"/>
-                <Button Command="{Binding VerifyCommand}" Content="检查缺失" Padding="8,3"/>
+                <Button Command="{Binding VerifyCommand}" Content="检查缺失" Padding="8,3"
+                        ToolBar.OverflowMode="Never"/>
                 <Separator/>
                 <Button Command="{Binding OpenDuplicatesCommand}" Content="查找重复" Padding="10,3"/>
                 <Button Command="{Binding DeleteSelectedFilesCommand}" Content="删除所选" Padding="10,3" Foreground="#A00000"
