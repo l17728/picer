@@ -199,6 +199,12 @@ public partial class MainWindow : Window
             { Owner = this }.ShowDialog();
     }
 
+    private async void CreateEmptyPerson_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement { DataContext: PeopleViewModel people })
+            await people.CreateEmptyPersonFromUiAsync();
+    }
+
     private async void MainTabs_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (!ReferenceEquals(e.Source, MainTabs) || DataContext is not MainViewModel) return;

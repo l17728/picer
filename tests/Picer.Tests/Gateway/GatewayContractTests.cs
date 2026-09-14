@@ -118,6 +118,10 @@ public sealed class GatewayServiceFixture : IDisposable
     }
 }
 
+[CollectionDefinition(nameof(GatewayContractCollection), DisableParallelization = true)]
+public sealed class GatewayContractCollection { }
+
+[Collection(nameof(GatewayContractCollection))]
 public sealed class GatewayContractTests(GatewayServiceFixture fixture) : IClassFixture<GatewayServiceFixture>
 {
     public static IEnumerable<object[]> Transports()

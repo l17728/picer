@@ -396,9 +396,11 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
 
     private async Task CreatePersonAsync()
     {
+        AppLogger.Info($"People create-empty invoked; hasName={!string.IsNullOrWhiteSpace(NewPersonName)}");
         if (string.IsNullOrWhiteSpace(NewPersonName))
         {
             StatusText = "请输入人物名称";
+            AppLogger.Info("People create-empty stopped because the UI name binding is empty");
             return;
         }
         try
@@ -406,8 +408,14 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             var name = NewPersonName;
             var person = await UiWork.RunDatabaseAsync(() => _peopleService.Create(name));
             NewPersonName = "";
-            await RefreshPeopleDropdownAsync(person.Id);
-            SelectedPerson = People.FirstOrDefault(value => value.Id == person.Id);
+            var summary = new PersonSummary(person.Id, person.DisplayName, 0, 0);
+            var insertionIndex = 0;
+            while (insertionIndex < People.Count &&
+                   StringComparer.CurrentCultureIgnoreCase.Compare(People[insertionIndex].DisplayName, summary.DisplayName) < 0)
+                insertionIndex++;
+            People.Insert(insertionIndex, summary);
+            CandidateTargetPerson = summary;
+            AppLogger.Info($"People create-empty completed; person={person.Id}; dropdownCount={People.Count}");
             StatusText = $"已创建人物“{person.DisplayName}”";
         }
         catch (Exception exception)
@@ -415,6 +423,8 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             StatusText = $"创建人物失败：{exception.Message}";
         }
     }
+
+    public Task CreateEmptyPersonFromUiAsync() => CreatePersonAsync();
 
     public async Task CreatePersonWithFacesAsync(string name, IReadOnlyCollection<UnassignedFaceViewModel> faces)
     {

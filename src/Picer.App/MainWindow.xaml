@@ -429,7 +429,7 @@
                                 </DockPanel>
                                 <DockPanel Margin="0,6,0,0">
                                     <Button DockPanel.Dock="Right" Content="只新建人物" AutomationProperties.Name="只新建人物"
-                                            Command="{Binding CreatePersonCommand}" Padding="8,4" Margin="5,0,0,0"
+                                            Click="CreateEmptyPerson_Click" Padding="8,4" Margin="5,0,0,0"
                                             ToolTip="建立一个空人物分类，之后可在右侧多选人脸并移动过去"/>
                                     <TextBlock Text="单张或跨组整理" VerticalAlignment="Center" Foreground="#666"/>
                                 </DockPanel>
