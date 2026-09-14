@@ -9,6 +9,7 @@ builder.Services.AddSingleton<ConcurrentDictionary<string, TrainingJob>>();
 builder.Services.AddSingleton<ConcurrentDictionary<string, object>>();
 builder.Services.AddSingleton<TrainingExecutor>();
 builder.Services.AddSingleton<TrainingRecipeBuilder>();
+builder.Services.AddSingleton<ITrainingAlgorithmAdapter, PrototypeCalibrationAdapter>();
 var app = builder.Build();
 
 var apiKey = Environment.GetEnvironmentVariable("PICER_MODEL_SERVER_API_KEY");
@@ -80,6 +81,8 @@ app.MapGet("/api/models", () => Results.Ok(new[] {
     new { id = "qwen3-asr-1.7b", capability = "language", status = "configured" },
     new { id = "sherpa-onnx-vits-zh-ll", capability = "tts", status = "pending" }
 }));
+app.MapGet("/api/face-training/algorithms", (IEnumerable<ITrainingAlgorithmAdapter> adapters) =>
+    Results.Ok(adapters.Select(a => new { id = a.Id, modelVersion = a.ModelVersion })));
 
 app.MapPost("/api/face-training/datasets", (DatasetRequest request, ConcurrentDictionary<string, object> index) =>
 {
