@@ -308,8 +308,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
                     StatusText = $"训练{status.Status}：{status.Error ?? "无详细信息"}";
                     break;
                 }
-                if (pollCount % 5 == 0)
-                    StatusText = $"训练进行中…（已等待 {pollCount} 秒）";
+                StatusText = $"训练进行中：{status.Stage ?? status.Status} {status.Progress}%（已等待 {pollCount} 秒）";
             }
             if (pollCount >= 120) StatusText = $"训练超时（2 分钟），请在工作台 {modelServerUri} 查看";
         }

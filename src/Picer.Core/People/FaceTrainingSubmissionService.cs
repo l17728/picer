@@ -5,7 +5,8 @@ using System.Text.Json;
 
 namespace Picer.Core.People;
 
-public sealed record TrainingSubmissionResult(string JobId, string Status, string? ArtifactId, string? Error);
+public sealed record TrainingSubmissionResult(string JobId, string Status, string? ArtifactId, string? Error,
+    string? Stage = null, int Progress = 0);
 
 public sealed record TrainingArtifactData(
     string ArtifactId, string Algorithm, string ModelVersion, DateTime CreatedUtc,
@@ -65,7 +66,10 @@ public sealed class FaceTrainingSubmissionService : IDisposable
                 return new TrainingSubmissionResult("", "failed", null, $"任务提交失败：{job.StatusCode}");
             var jobData = await job.Content.ReadFromJsonAsync<JsonElement>(Json, ct);
             var jobId = jobData.GetProperty("id").GetString() ?? "";
-            return new TrainingSubmissionResult(jobId, jobData.GetProperty("status").GetString() ?? "queued", null, null);
+            var status = jobData.GetProperty("status").GetString() ?? "queued";
+            var stage = jobData.TryGetProperty("stage", out var initialStage) ? initialStage.GetString() : null;
+            var progress = jobData.TryGetProperty("progress", out var initialProgress) ? initialProgress.GetInt32() : 0;
+            return new TrainingSubmissionResult(jobId, status, null, null, stage, progress);
         }
         catch (Exception exception)
         {
@@ -86,7 +90,11 @@ public sealed class FaceTrainingSubmissionService : IDisposable
                 ? art.GetString() : null;
             var error = data.TryGetProperty("error", out var err) && err.ValueKind == JsonValueKind.String
                 ? err.GetString() : null;
-            return new TrainingSubmissionResult(jobId, status, artifactId, error);
+            var stage = data.TryGetProperty("stage", out var stageValue) && stageValue.ValueKind == JsonValueKind.String
+                ? stageValue.GetString() : null;
+            var progress = data.TryGetProperty("progress", out var progressValue) && progressValue.ValueKind == JsonValueKind.Number
+                ? progressValue.GetInt32() : 0;
+            return new TrainingSubmissionResult(jobId, status, artifactId, error, stage, progress);
         }
         catch (Exception exception)
         {
