@@ -7,6 +7,7 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddSingleton<ConcurrentDictionary<string, TrainingJob>>();
 builder.Services.AddSingleton<ConcurrentDictionary<string, object>>();
 builder.Services.AddSingleton<TrainingExecutor>();
+builder.Services.AddSingleton<TrainingRecipeBuilder>();
 var app = builder.Build();
 
 var apiKey = Environment.GetEnvironmentVariable("PICER_MODEL_SERVER_API_KEY");
