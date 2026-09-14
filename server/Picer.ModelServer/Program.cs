@@ -182,8 +182,18 @@ public sealed class TrainingExecutor
                 var start = new ProcessStartInfo(workerPython, $"\"{workerScript}\"") { RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true };
                 using var process = Process.Start(start) ?? throw new InvalidOperationException("GPU worker process could not start");
                 await process.StandardInput.WriteAsync(payload); process.StandardInput.Close();
-                var output = await process.StandardOutput.ReadToEndAsync(); var error = await process.StandardError.ReadToEndAsync();
-                await process.WaitForExitAsync();
+                var outputTask = process.StandardOutput.ReadToEndAsync();
+                var errorTask = process.StandardError.ReadToEndAsync();
+                var timeoutSeconds = int.TryParse(Environment.GetEnvironmentVariable("PICER_GPU_WORKER_TIMEOUT_SECONDS"), out var configured)
+                    ? Math.Clamp(configured, 30, 86400) : 1800;
+                using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds));
+                try { await process.WaitForExitAsync(timeout.Token); }
+                catch (OperationCanceledException)
+                {
+                    try { process.Kill(entireProcessTree: true); } catch { /* process may have exited */ }
+                    throw new TimeoutException($"GPU worker timed out after {timeoutSeconds}s");
+                }
+                var output = await outputTask; var error = await errorTask;
                 if (process.ExitCode != 0) throw new InvalidOperationException($"GPU worker failed: {error.Trim()}");
                 using var parsed = JsonDocument.Parse(output);
                 if (parsed.RootElement.TryGetProperty("error", out var workerError)) throw new InvalidOperationException(workerError.GetString());
