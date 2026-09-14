@@ -12,8 +12,17 @@ public sealed class TrainingRecipeBuilder
     {
         var samples = (dataset.Samples ?? [])
             .Where(s => s.Evidence?.Source == "user-confirmed")
-            .GroupBy(s => s.Evidence?.ImageHash ?? $"face:{s.FaceId}", StringComparer.OrdinalIgnoreCase)
-            .Select(g => g.OrderBy(s => Stable(seed, s.FaceId)).First())
+            // Keep an original/derived burst in one recipe item.  Image hash is
+            // preferred; GroupId prevents leakage when a burst has been resized.
+            .GroupBy(s => s.Evidence?.ImageHash is { Length: > 0 } hash
+                ? $"hash:{hash}"
+                : s.Evidence?.GroupId is { Length: > 0 } group
+                    ? $"group:{group}"
+                    : $"face:{s.FaceId}", StringComparer.OrdinalIgnoreCase)
+            // Prefer usable, difficult examples, then use a stable tie-breaker.
+            .Select(g => g.OrderByDescending(s => s.Attributes?.IsUsefulForTraining ?? true)
+                .ThenByDescending(s => s.Attributes?.FaceQuality ?? 0)
+                .ThenBy(s => Stable(seed, s.FaceId)).First())
             .ToArray();
         return samples.Select(s => new RecipeSelection(s.FaceId, s.PersonId, s.Split,
             s.Evidence?.SelectionReason ?? "user-confirmed;deduplicated")).ToArray();
