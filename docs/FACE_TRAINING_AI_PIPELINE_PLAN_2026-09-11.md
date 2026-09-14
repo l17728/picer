@@ -79,8 +79,8 @@
 - [x] FACE-TRAIN-006：完成训练/验证防泄漏校验和数据质量报告接口。
 - [x] FACE-TRAIN-007：扩展算法适配器接口，保留 prototype calibration 基线。
 - [x] FACE-TRAIN-008：真实 GPU Worker 训练、评估、ECDSA 制品签名与客户端验签已联调。
-- [ ] FACE-TRAIN-009：GUI 展示配方、进度、失败分析和最小补充建议。
-- [ ] FACE-TRAIN-010：客户端制品下载、门禁校验、应用和索引刷新。
+- [x] FACE-TRAIN-009：GUI 展示配方、真实阶段进度、失败分析和最小补充建议。
+- [ ] FACE-TRAIN-010：客户端制品下载、签名/门禁校验和原型应用已完成；应用后自动重新归类与 UI 刷新待完成。
 - [ ] FACE-TRAIN-011：补齐端到端测试、故障恢复测试和回归测试。
 - [ ] FACE-TRAIN-012：在真实设备上完成 GPU、VL、ASR、TTS 和 AEC3 验收。
 
