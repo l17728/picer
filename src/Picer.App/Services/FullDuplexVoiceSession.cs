@@ -17,9 +17,11 @@ public sealed class FullDuplexVoiceSession : IDisposable
     private readonly string _asrModel;
     private readonly HttpClient _http = new() { Timeout = TimeSpan.FromMinutes(2) };
     private readonly MemoryStream _utterance = new();
+    private readonly WebRtcAec3Processor? _aec3;
     private WaveInEvent? _input;
     private WaveOutEvent? _output;
     private CancellationTokenSource? _recognition;
+    private bool _aecAlignmentWarningLogged;
     private DateTime _lastSpeechUtc;
     private int _speechFrames;
     private bool _speaking;
@@ -46,6 +48,8 @@ public sealed class FullDuplexVoiceSession : IDisposable
         _asrEndpoint = asrEndpoint;
         _asrModel = asrModel;
         _ttsEndpoint = ttsEndpoint;
+        if (WebRtcAec3Processor.TryCreate(SampleRate, out var processor, out var detail)) _aec3 = processor;
+        AppLogger.Info($"Voice echo cancellation backend={(_aec3 is null ? "playback-gate" : "webrtc-aec3")}; detail={detail}");
     }
 
     public void Start()
@@ -72,11 +76,18 @@ public sealed class FullDuplexVoiceSession : IDisposable
 
     private void OnAudio(object? sender, WaveInEventArgs e)
     {
-        if (DateTime.UtcNow - _playbackEndedUtc < TimeSpan.FromMilliseconds(900))
+        if (_aec3 is null && DateTime.UtcNow - _playbackEndedUtc < TimeSpan.FromMilliseconds(900))
         {
             lock (_utterance) { _utterance.SetLength(0); }
             _speechFrames = 0;
             return;
+        }
+        if (_aec3 is not null &&
+            !_aec3.ProcessCapture(e.Buffer.AsSpan(0, e.BytesRecorded), 80) &&
+            !_aecAlignmentWarningLogged)
+        {
+            _aecAlignmentWarningLogged = true;
+            AppLogger.Info("Voice AEC3 rejected a non-10ms-aligned capture buffer");
         }
         var playbackFrame = _speaking;
         double sum = 0;
@@ -91,7 +102,9 @@ public sealed class FullDuplexVoiceSession : IDisposable
         // The microphone's measured room-noise floor is ~0.03-0.06 RMS;
         // 0.025 kept the utterance open forever and prevented ASR submission.
         if (!_speaking && _speechFrames == 0) _noiseFloor = Math.Clamp(_noiseFloor * 0.98 + rms * 0.02, 0.005, 0.12);
-        var threshold = _speaking ? Math.Max(0.18, _noiseFloor * 3.5) : Math.Max(0.08, _noiseFloor * 3.5);
+        var threshold = _speaking && _aec3 is null
+            ? Math.Max(0.18, _noiseFloor * 3.5)
+            : Math.Max(0.08, _noiseFloor * 3.5);
         var speech = rms >= threshold;
         if (speech)
         {
@@ -212,13 +225,26 @@ public sealed class FullDuplexVoiceSession : IDisposable
     {
         var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var reader = new WaveFileReader(new MemoryStream(wave, writable: false));
+        IDisposable playbackResource = reader;
+        IWaveProvider playbackProvider = reader;
+        if (_aec3 is not null)
+        {
+            if (reader.WaveFormat.SampleRate != SampleRate || reader.WaveFormat.Channels != 1 || reader.WaveFormat.BitsPerSample != 16)
+            {
+                var resampler = new MediaFoundationResampler(reader, new WaveFormat(SampleRate, 16, 1)) { ResamplerQuality = 60 };
+                playbackResource = resampler;
+                playbackProvider = resampler;
+            }
+            playbackProvider = new EchoRenderWaveProvider(playbackProvider,
+                (buffer, offset, count) => _aec3.FeedRender(buffer.AsSpan(offset, count)));
+        }
         _output = new WaveOutEvent();
-        _output.Init(reader);
+        _output.Init(playbackProvider);
         _output.PlaybackStopped += (_, args) =>
         {
             _speaking = false;
             _playbackEndedUtc = DateTime.UtcNow;
-            reader.Dispose();
+            playbackResource.Dispose();
             _output?.Dispose(); _output = null;
             if (args.Exception is null) completion.TrySetResult(); else completion.TrySetException(args.Exception);
         };
@@ -244,5 +270,5 @@ public sealed class FullDuplexVoiceSession : IDisposable
         return stream.ToArray();
     }
 
-    public void Dispose() { Stop(); _http.Dispose(); _recognition?.Dispose(); _utterance.Dispose(); }
+    public void Dispose() { Stop(); _http.Dispose(); _recognition?.Dispose(); _utterance.Dispose(); _aec3?.Dispose(); }
 }

@@ -42,7 +42,7 @@ dotnet test tests/Picer.E2E/Picer.E2E.csproj -c Debug --no-build --no-restore --
 
 1. 外放扬声器 + 真实麦克风，开启全双工会话（`FullDuplexVoiceSession`）。
 2. 用例：播放 TTS 的同时说话 → 回声不得触发误识别；静音期说话必须拾取；打断 TTS 必须即时停播并转向新轮次。
-3. 判定：误识别 0 次/10 分钟；打断响应 < 1 s。若能量门限不足，记录并评估接入 WebRTC AEC3 的工作量（当前为能量门限 + 打断取消，非 AEC3）。
+3. 判定：误识别 0 次/10 分钟；打断响应 < 1 s。客户端已接入 WebRTC AEC3；若未达标，记录 AEC 后端、设备、音量、麦克风距离和失败时间点，禁止仅靠提高门限掩盖问题。
 
 ## 5. 用户真实人物数据规模
 

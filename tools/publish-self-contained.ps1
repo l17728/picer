@@ -28,6 +28,7 @@ $required = @(
     @{ Path='ffmpeg\ffmpeg.exe'; Bytes=102856192; Hash='72A489ECCD008C2EC2C0A5856C5C75BC3D8BBFA90166C4566865C246445E6AA3' },
     @{ Path='whisper\whisper-cli.exe'; Bytes=479232; Hash='800A0FD754AFA75E109C7248286AD735670FB6B23D92CA5D12604647EF638A65' },
     @{ Path='whisper\whisper.dll'; Bytes=1368064; Hash='0A29E5824C7495185B833AD07DF7AB9CADF130A9BE848F967C6B88AECA971566' },
+    @{ Path='webrtc\picer_aec3.dll'; Bytes=1196544; Hash='AC405193CB90F963177B883FDC1533660128B3C15CCA00986FBAFF0A215BC6DD' },
     @{ Path='models\whisper\ggml-base-q5_1.bin'; Bytes=59707625; Hash='422F1AE452ADE6F30A004D7E5C6A43195E4433BC370BF23FAC9CC591F01A8898' },
     @{ Path='models\chinese-clip\model_quantized.onnx'; Bytes=190842404; Hash='A2C2849329EAFB24100ACEC5A9421A39F8CB445296444C5C98855B69E5E7A751' },
     @{ Path='models\chinese-clip\vocab.txt'; Bytes=109540; Hash='45BBAC6B341C319ADC98A532532882E91A9CEFC0329AA57BAC9AE761C27B291C' },
@@ -56,7 +57,7 @@ function Assert-Runtime([string]$root) {
         $hash = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash
         if ($hash -ne $item.Hash) { throw "Offline component SHA-256 mismatch: $path" }
     }
-    $licenses = @('YuNet-MIT.txt','SFace-Apache-2.0.txt','whisper.cpp-MIT.txt','FFmpeg-GPLv3.txt','Chinese-CLIP-MIT.txt','Florence-2-MIT.txt','DirectML-MIT.txt','DirectML-ThirdPartyNotices.txt','ONNXRuntime-MIT.txt','ONNXRuntime-ThirdPartyNotices.txt','THIRD-PARTY-NOTICES.txt')
+    $licenses = @('YuNet-MIT.txt','SFace-Apache-2.0.txt','whisper.cpp-MIT.txt','FFmpeg-GPLv3.txt','Chinese-CLIP-MIT.txt','Florence-2-MIT.txt','DirectML-MIT.txt','DirectML-ThirdPartyNotices.txt','ONNXRuntime-MIT.txt','ONNXRuntime-ThirdPartyNotices.txt','WebRTC-BSD.txt','THIRD-PARTY-NOTICES.txt')
     foreach ($license in $licenses) {
         $path = Join-Path $root "licenses\$license"
         if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Required license is missing: $path" }

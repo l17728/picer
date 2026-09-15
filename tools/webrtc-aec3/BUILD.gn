@@ -1,0 +1,14 @@
+import("//build/config/clang/clang.gni")
+
+shared_library("picer_aec3") {
+  sources = [
+    "picer_aec3.cc",
+    "picer_aec3.h",
+  ]
+  deps = [
+    "//api/audio:audio_processing",
+    "//api/audio:builtin_audio_processing_builder",
+    "//api/environment:environment_factory",
+    "//modules/audio_processing",
+  ]
+}

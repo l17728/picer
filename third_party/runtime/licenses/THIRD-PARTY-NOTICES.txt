@@ -35,3 +35,8 @@ License: MIT and bundled third-party notices (see DirectML-MIT.txt and DirectML-
 Microsoft ONNX Runtime DirectML 1.22.1
 Source: https://www.nuget.org/packages/Microsoft.ML.OnnxRuntime.DirectML/1.22.1
 License: MIT and bundled third-party notices (see ONNXRuntime-MIT.txt and ONNXRuntime-ThirdPartyNotices.txt)
+
+WebRTC Audio Processing Module / AEC3
+Source revision: 69dfe169014664ef156db5a2599586b994b54ec7
+Source: https://webrtc.googlesource.com/src
+License: BSD-3-Clause (see WebRTC-BSD.txt)

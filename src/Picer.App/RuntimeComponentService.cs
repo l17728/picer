@@ -21,6 +21,7 @@ public sealed class RuntimeComponentService(string runtimeRoot)
         new("FFmpeg", "ffmpeg/ffmpeg.exe", 102856192, "72A489ECCD008C2EC2C0A5856C5C75BC3D8BBFA90166C4566865C246445E6AA3", "GPL-3.0"),
         new("whisper.cpp", "whisper/whisper-cli.exe", 479232, "800A0FD754AFA75E109C7248286AD735670FB6B23D92CA5D12604647EF638A65", "MIT"),
         new("whisper.cpp 运行库", "whisper/whisper.dll", 1368064, "0A29E5824C7495185B833AD07DF7AB9CADF130A9BE848F967C6B88AECA971566", "MIT"),
+        new("WebRTC AEC3 回声消除", "webrtc/picer_aec3.dll", 1196544, "AC405193CB90F963177B883FDC1533660128B3C15CCA00986FBAFF0A215BC6DD", "BSD-3-Clause"),
         new("Whisper base-q5_1 模型", "models/whisper/ggml-base-q5_1.bin", 59707625, "422F1AE452ADE6F30A004D7E5C6A43195E4433BC370BF23FAC9CC591F01A8898", "MIT/model data"),
         new("Chinese-CLIP 中文语义模型", "models/chinese-clip/model_quantized.onnx", 190842404, "A2C2849329EAFB24100ACEC5A9421A39F8CB445296444C5C98855B69E5E7A751", "MIT/model data"),
         new("Chinese-CLIP 中文词表", "models/chinese-clip/vocab.txt", 109540, "45BBAC6B341C319ADC98A532532882E91A9CEFC0329AA57BAC9AE761C27B291C", "MIT/model data"),

@@ -269,9 +269,11 @@ public sealed class DesktopSmokeTests
         var firstWindowBudget = TimeSpan.FromSeconds(Environment.ProcessorCount <= 4 ? 20 : 4);
         var measurements = new List<TimeSpan>();
         AutomationElement? window = null;
-        using var process = new Process();
+        Process? process = null;
         for (var attempt = 1; attempt <= 3 && window is null; attempt++)
         {
+            process?.Dispose();
+            process = new Process();
             var startup = Stopwatch.StartNew();
             process.StartInfo = new ProcessStartInfo(executable)
             {
@@ -302,6 +304,7 @@ public sealed class DesktopSmokeTests
         }
         try
         {
+            Assert.NotNull(process);
             Assert.NotNull(window);
             Assert.True(measurements.Any(m => m < firstWindowBudget),
                 $"首窗三次测量均超 {firstWindowBudget.TotalSeconds:F0}s 预算：{string.Join(", ", measurements.Select(m => $"{m.TotalMilliseconds:F0}ms"))}");
@@ -337,7 +340,7 @@ public sealed class DesktopSmokeTests
                 Assert.InRange(grid.FindAll(TreeScope.Descendants,
                     new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.ListItem)).Count, 1, 100);
             }
-            process.Refresh();
+            process!.Refresh();
             var workingSetBudgetMb = Environment.ProcessorCount <= 4 ? 600 : 300;
             Assert.True(process.WorkingSet64 < workingSetBudgetMb * 1024 * 1024, $"滚动后工作集 {process.WorkingSet64 / 1024 / 1024} MB（预算 {workingSetBudgetMb} MB）");
             if (window.TryGetCurrentPattern(TransformPattern.Pattern, out var transformObject) &&
@@ -368,11 +371,12 @@ public sealed class DesktopSmokeTests
         }
         finally
         {
-            if (!process.HasExited)
+            if (process is not null && !process.HasExited)
             {
                 process.CloseMainWindow();
                 if (!process.WaitForExit(3000)) process.Kill(true);
             }
+            process?.Dispose();
             try { Directory.Delete(isolatedData, true); } catch { }
         }
     }
