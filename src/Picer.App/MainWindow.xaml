@@ -371,7 +371,10 @@
                                 <Button Content="刷新" Command="{Binding RefreshPageCommand}" Padding="12,5" Margin="4,0"
                                         ToolTip="仅从数据库同步最新人物、候选组和人脸状态，不重新扫描或归类"/>
                             </StackPanel>
-                            <TextBlock Text="{Binding StatusText}" TextWrapping="Wrap" VerticalAlignment="Center"/>
+                            <StackPanel VerticalAlignment="Center">
+                                <TextBlock Text="{Binding StatusText}" TextWrapping="Wrap"/>
+                                <TextBlock Text="{Binding TrainingResultText}" TextWrapping="Wrap" Foreground="#315B86" FontSize="11" Margin="0,3,0,0"/>
+                            </StackPanel>
                         </DockPanel>
                     </Border>
                     <Border Grid.Row="1" Grid.ColumnSpan="2" Background="#E7F2FF" BorderBrush="#4C87C2" BorderThickness="1"

@@ -73,6 +73,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
     public DisplayedFaceCollectionKind DisplayedCollectionKind { get; private set; }
     [ObservableProperty] private string _newPersonName = "";
     [ObservableProperty] private string _statusText = "人物分析尚未开始";
+    [ObservableProperty] private string _trainingResultText = "训练制品：尚未应用";
     [ObservableProperty] private double _progressValue;
     [ObservableProperty] private bool _showOrganizeProgress;
     [ObservableProperty] private string _organizeProgressText = "尚未运行自动归类";
@@ -309,6 +310,10 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
                                      $"误识率 {(artifact.Metrics.FalseAcceptRate * 100):F2}%，" +
                                      $"拒识率 {(artifact.Metrics.FalseRejectRate * 100):F2}%，" +
                                      $"{artifact.Prototypes.Count} 位人物原型已更新";
+                        TrainingResultText = $"已应用模型版本：{artifact.ModelVersion}；制品：{artifact.ArtifactId}；" +
+                                             $"评测：准确率 {(artifact.Metrics.ValidationAccuracy * 100):F1}% / " +
+                                             $"误识率 {(artifact.Metrics.FalseAcceptRate * 100):F2}% / " +
+                                             $"拒识率 {(artifact.Metrics.FalseRejectRate * 100):F2}%";
                         AppLogger.Info($"人脸训练完成并已应用：{artifact.ArtifactId} acc={artifact.Metrics.ValidationAccuracy:F3} far={artifact.Metrics.FalseAcceptRate:F3}");
                     }
                     break;
@@ -368,7 +373,9 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
                 """);
             cmd.Transaction = tx;
             cmd.Parameters.AddWithValue("$p", proto.PersonId);
-            cmd.Parameters.AddWithValue("$c", proto.Centroid);
+            // SQLite cannot bind float[] directly. Store the float32 vector as
+            // the same little-endian blob format used by the vision repositories.
+            cmd.Parameters.AddWithValue("$c", FloatArrayToBlob(proto.Centroid));
             cmd.Parameters.AddWithValue("$t", proto.Threshold);
             cmd.Parameters.AddWithValue("$n", proto.SampleCount);
             cmd.Parameters.AddWithValue("$mv", artifact.ModelVersion);
@@ -377,6 +384,13 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         }
         tx.Commit();
         AppLogger.Info($"已应用 {artifact.Prototypes.Count} 个训练原型（{artifact.ArtifactId}）");
+    }
+
+    private static byte[] FloatArrayToBlob(float[] values)
+    {
+        var bytes = new byte[values.Length * sizeof(float)];
+        Buffer.BlockCopy(values, 0, bytes, 0, bytes.Length);
+        return bytes;
     }
 
     [RelayCommand]
