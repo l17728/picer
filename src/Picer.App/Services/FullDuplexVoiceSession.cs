@@ -12,6 +12,8 @@ namespace Picer.App.Services;
 public sealed class FullDuplexVoiceSession : IDisposable
 {
     private const int SampleRate = 16000;
+    private const int BytesPerSample = 2;
+    private const int PreRollMilliseconds = 240;
     private readonly Uri _asrEndpoint;
     private readonly Uri _ttsEndpoint;
     private readonly string _asrModel;
@@ -29,10 +31,12 @@ public sealed class FullDuplexVoiceSession : IDisposable
     private DateTime _lastLevelLogUtc;
     private int _playbackSpeechFrames;
     private DateTime _playbackEndedUtc = DateTime.MinValue;
+    private DateTime _playbackStartedUtc = DateTime.MinValue;
     private DateTime _speechStartedUtc = DateTime.MinValue;
     private double _noiseFloor = 0.02;
     private string? _lastRecognized;
     private DateTime _lastRecognizedUtc;
+    private readonly MemoryStream _preRoll = new();
 
     public event Action<string>? StateChanged;
     /// Raised for UI diagnostics only; contains an RMS level, never audio data.
@@ -71,6 +75,9 @@ public sealed class FullDuplexVoiceSession : IDisposable
         CancelPlayback();
         _recognition?.Cancel();
         lock (_utterance) { _utterance.SetLength(0); }
+        lock (_preRoll) { _preRoll.SetLength(0); }
+        _speechFrames = 0;
+        _playbackSpeechFrames = 0;
         StateChanged?.Invoke("语音已停止");
     }
 
@@ -79,6 +86,7 @@ public sealed class FullDuplexVoiceSession : IDisposable
         if (_aec3 is null && DateTime.UtcNow - _playbackEndedUtc < TimeSpan.FromMilliseconds(900))
         {
             lock (_utterance) { _utterance.SetLength(0); }
+            lock (_preRoll) { _preRoll.SetLength(0); }
             _speechFrames = 0;
             return;
         }
@@ -97,17 +105,33 @@ public sealed class FullDuplexVoiceSession : IDisposable
             sum += sample * sample;
         }
         var rms = Math.Sqrt(sum / Math.Max(1, e.BytesRecorded / 2));
+        lock (_preRoll)
+        {
+            _preRoll.Write(e.Buffer, 0, e.BytesRecorded);
+            var maximum = SampleRate * BytesPerSample * PreRollMilliseconds / 1000;
+            if (_preRoll.Length > maximum)
+            {
+                var bytes = _preRoll.ToArray();
+                _preRoll.SetLength(0);
+                _preRoll.Write(bytes, bytes.Length - maximum, maximum);
+            }
+        }
         AudioLevelChanged?.Invoke(rms);
         if (DateTime.UtcNow - _lastLevelLogUtc > TimeSpan.FromSeconds(2)) { _lastLevelLogUtc = DateTime.UtcNow; AppLogger.Info($"Voice audio level rms={rms:F4}; speaking={_speaking}; processing={_processing}"); }
         // The microphone's measured room-noise floor is ~0.03-0.06 RMS;
         // 0.025 kept the utterance open forever and prevented ASR submission.
         if (!_speaking && _speechFrames == 0) _noiseFloor = Math.Clamp(_noiseFloor * 0.98 + rms * 0.02, 0.005, 0.12);
-        var threshold = _speaking && _aec3 is null
-            ? Math.Max(0.18, _noiseFloor * 3.5)
+        // AEC3 output is still allowed to contain a small residual. A low
+        // interruption threshold treats that residual as an inserted user
+        // utterance and cuts TTS after one syllable. Require a sustained,
+        // materially louder signal while playback is active.
+        var threshold = _speaking
+            ? Math.Max(_aec3 is null ? 0.18 : 0.14, _noiseFloor * 5.0)
             : Math.Max(0.08, _noiseFloor * 3.5);
         var speech = rms >= threshold;
         if (speech)
         {
+            if (_speechFrames == 0) AppLogger.Info($"Voice speech started; rms={rms:F4}; threshold={threshold:F4}; speaking={_speaking}");
             if (_speechFrames == 0) StateChanged?.Invoke("检测到语音，正在录音…");
             _lastSpeechUtc = DateTime.UtcNow;
             if (_speechFrames == 0) _speechStartedUtc = DateTime.UtcNow;
@@ -115,8 +139,9 @@ public sealed class FullDuplexVoiceSession : IDisposable
             if (_speaking)
             {
                 _playbackSpeechFrames++;
-                if (_playbackSpeechFrames >= 3)
+                if (_playbackSpeechFrames >= 6 && DateTime.UtcNow - _playbackStartedUtc >= TimeSpan.FromMilliseconds(350))
                 {
+                    AppLogger.Info($"Voice interruption accepted; rms={rms:F4}; threshold={threshold:F4}; frames={_playbackSpeechFrames}");
                     SpeechDetectedDuringPlayback?.Invoke();
                     CancelPlayback();
                     _playbackSpeechFrames = 0;
@@ -130,8 +155,15 @@ public sealed class FullDuplexVoiceSession : IDisposable
         if (playbackFrame || _speaking) return;
         if (_speechFrames > 0)
         {
-            lock (_utterance) { _utterance.Write(e.Buffer, 0, e.BytesRecorded); }
-            if (!_processing && _speechFrames >= 8 && DateTime.UtcNow - _speechStartedUtc >= TimeSpan.FromMilliseconds(320) && DateTime.UtcNow - _lastSpeechUtc > TimeSpan.FromMilliseconds(520))
+            lock (_utterance)
+            {
+                if (_speechFrames == 1)
+                {
+                    lock (_preRoll) _utterance.Write(_preRoll.GetBuffer(), 0, (int)Math.Min(_preRoll.Length, _preRoll.Capacity));
+                }
+                else _utterance.Write(e.Buffer, 0, e.BytesRecorded);
+            }
+            if (!_processing && _speechFrames >= 4 && DateTime.UtcNow - _speechStartedUtc >= TimeSpan.FromMilliseconds(180) && DateTime.UtcNow - _lastSpeechUtc > TimeSpan.FromMilliseconds(520))
                 _ = CompleteUtteranceAsync();
         }
     }
@@ -215,8 +247,8 @@ public sealed class FullDuplexVoiceSession : IDisposable
             Content = new StringContent(JsonSerializer.Serialize(new { model = "sherpa-onnx-vits-zh-ll", input = text, voice = 0, speed = 1.05 }), Encoding.UTF8, "application/json")
         };
         using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token).ConfigureAwait(false);
-        AppLogger.Info($"Voice TTS request completed; status={(int)response.StatusCode}");
         var bytes = await response.Content.ReadAsByteArrayAsync(token).ConfigureAwait(false);
+        AppLogger.Info($"Voice TTS request completed; status={(int)response.StatusCode}; bytes={bytes.Length}");
         if (!response.IsSuccessStatusCode) throw new InvalidOperationException($"TTS HTTP {(int)response.StatusCode}: {Encoding.UTF8.GetString(bytes)}");
         await PlayAsync(bytes, token).ConfigureAwait(false);
     }
@@ -246,9 +278,11 @@ public sealed class FullDuplexVoiceSession : IDisposable
             _playbackEndedUtc = DateTime.UtcNow;
             playbackResource.Dispose();
             _output?.Dispose(); _output = null;
+            AppLogger.Info($"Voice TTS playback stopped; canceled={token.IsCancellationRequested}; error={args.Exception is not null}");
             if (args.Exception is null) completion.TrySetResult(); else completion.TrySetException(args.Exception);
         };
         _speaking = true;
+        _playbackStartedUtc = DateTime.UtcNow;
         StateChanged?.Invoke("正在播报（直接说话即可打断）");
         token.Register(CancelPlayback);
         _output.Play();
@@ -258,6 +292,7 @@ public sealed class FullDuplexVoiceSession : IDisposable
     public void CancelPlayback()
     {
         if (!_speaking) return;
+        AppLogger.Info("Voice TTS playback canceled");
         _speaking = false;
         try { _output?.Stop(); } catch { }
         StateChanged?.Invoke(IsListening ? "已打断，正在聆听" : "播报已停止");

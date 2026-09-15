@@ -574,6 +574,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private async Task ApplyAiQuestionAsync(long version, CancellationTokenSource searchCancellation, string question)
     {
+        using var operation = AppLogger.BeginOperation("ai-question.execute",
+            ("includeVideos", IncludeVideosInAiQuestion), ("queryLength", question.Length));
         _aiQuestionCts?.Cancel(); _aiQuestionCts?.Dispose();
         _aiQuestionCts = CancellationTokenSource.CreateLinkedTokenSource(searchCancellation.Token);
         var token = _aiQuestionCts.Token;
@@ -607,13 +609,14 @@ public partial class MainViewModel : ObservableObject, IDisposable
             foreach (var video in answer.Videos) AiVideoResults.Add(new AiVideoResultViewModel(video));
             OnPropertyChanged(nameof(TotalCount)); OnPropertyChanged(nameof(ResultsSummary));
             StatusText = $"AI 问答完成：照片 {answer.Photos.Count} 张，视频 {answer.Videos.Count} 个";
-            AppLogger.Info($"AiQuestion completed; photos={answer.Photos.Count}; videos={answer.Videos.Count}; person={answer.Plan.PersonName ?? "none"}; location={answer.Plan.Location ?? "none"}; keywords={string.Join(',', answer.Plan.Keywords)}");
+            AppLogger.Info($"AiQuestion completed; photos={answer.Photos.Count}; videos={answer.Videos.Count}; hasPersonFilter={!string.IsNullOrWhiteSpace(answer.Plan.PersonName)}; hasLocationFilter={!string.IsNullOrWhiteSpace(answer.Plan.Location)}; keywordCount={answer.Plan.Keywords.Count}");
         }
-        catch (OperationCanceledException) { AppLogger.Info("AiQuestion superseded or canceled"); }
+        catch (OperationCanceledException) { operation.Cancel("superseded-or-canceled"); AppLogger.Info("AiQuestion superseded or canceled"); }
         catch (Exception exception)
         {
             QuestionAnswerText = $"## 查询失败\n\n{exception.Message}";
             StatusText = $"AI 问答失败：{exception.Message}";
+            operation.Fail(exception);
             AppLogger.Error("AiQuestion failed", exception);
         }
     }
@@ -843,6 +846,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private async Task RunIndexAsync(IReadOnlyList<SourceFolder> sources)
     {
         if (IsIndexing) return;
+        using var operation = AppLogger.BeginOperation("index.run", ("sourceCount", sources.Count));
         IsIndexing = true;
         IsBusy = true;
         _indexCts = new CancellationTokenSource();
@@ -899,11 +903,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
         catch (OperationCanceledException)
         {
+            operation.Cancel("user-canceled");
             StatusText = "索引已取消；已完成的记录仍然有效。";
             AppendOutput("用户取消了索引任务");
         }
         catch (Exception ex)
         {
+            operation.Fail(ex);
             StatusText = $"索引失败：{ex.Message}";
             AppendOutput($"索引失败：{ex}");
             MessageBox.Show($"索引未完成：{ex.Message}", "索引失败", MessageBoxButton.OK, MessageBoxImage.Error);

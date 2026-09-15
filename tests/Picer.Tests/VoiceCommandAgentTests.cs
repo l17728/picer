@@ -32,6 +32,28 @@ public sealed class VoiceCommandAgentTests
         Assert.Equal(VoiceActionKind.Clarify, result.Kind);
     }
 
+    [Fact]
+    public async Task PlanAsync_OpensParentLocationAndListsChildren()
+    {
+        using var chat = Chat("invalid");
+        var agent = new VoiceCommandAgent(chat);
+        var result = await agent.PlanAsync("打开上海的照片", ["地球/中国/上海", "地球/中国/上海/浦东新区", "地球/中国/上海/徐汇区"], []);
+        Assert.Equal(VoiceActionKind.OpenLocation, result.Kind);
+        Assert.Equal("地球/中国/上海", result.Target);
+        Assert.Contains("浦东新区", result.Reply);
+    }
+
+    [Fact]
+    public async Task PlanAsync_ConfirmationReusesPreviousLocation()
+    {
+        using var chat = Chat("invalid");
+        var agent = new VoiceCommandAgent(chat);
+        await agent.PlanAsync("打开上海的照片", ["地球/中国/上海"], []);
+        var result = await agent.PlanAsync("对", ["地球/中国/上海"], []);
+        Assert.Equal(VoiceActionKind.OpenLocation, result.Kind);
+        Assert.Equal("地球/中国/上海", result.Target);
+    }
+
     private static OpenAiCompatibleChatClient Chat(string response)
     {
         var handler = new ReplyHandler(response);

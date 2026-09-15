@@ -42,6 +42,7 @@ public partial class VoiceAssistantWindow : Window
     private async Task RunTurnAsync(string input)
     {
         var text = input.Trim(); if (text.Length == 0) return;
+        using var operation = AppLogger.BeginOperation("voice.turn", ("inputLength", text.Length));
         _turn?.Cancel(); _turn?.Dispose(); _turn = new CancellationTokenSource(); _voice.CancelPlayback();
         var token = _turn.Token; SendButton.IsEnabled = false; StopButton.IsEnabled = true;
         InputBox.Clear(); Conversation.Items.Add($"用户：{text}"); StatusText.Text = "正在理解指令…";

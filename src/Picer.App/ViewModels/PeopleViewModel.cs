@@ -194,6 +194,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
 
     public async Task ProcessNewPhotosAsync()
     {
+        using var operation = AppLogger.BeginOperation("people.analyze-and-organize");
         await _analysisGate.WaitAsync();
         if (_analysisService is null)
         {
@@ -218,10 +219,12 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         }
         catch (OperationCanceledException)
         {
+            operation.Cancel("user-canceled");
             StatusText = "人物分析已取消，已完成结果仍然有效";
         }
         catch (Exception exception)
         {
+            operation.Fail(exception);
             StatusText = $"人物自动归类失败：{exception.Message}";
         }
         finally
@@ -449,7 +452,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         }
         catch (Exception exception)
         {
-            AppLogger.Error($"创建人物并归类失败：name={name}; faces={string.Join(',', faceIds)}", exception);
+            AppLogger.Error($"创建人物并归类失败：faceCount={faceIds.Length}", exception);
             await RefreshAsync();
             StatusText = $"创建人物并归类失败，界面已恢复：{exception.Message}";
         }
@@ -1105,7 +1108,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         DisplayedCollectionKind = DisplayedFaceCollectionKind.NamedPerson;
         DisplayedFacesTitle = $"{value.DisplayName} · 正在加载…";
         DisplayedFaces.Clear();
-        AppLogger.Info($"People named-person selection: person={value.Id}; name={value.DisplayName}");
+        AppLogger.Info($"People named-person selection: person={value.Id}");
         _ = LoadPersonFacesAsync(value, cancellation.Token);
     }
 
@@ -1154,7 +1157,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         catch (OperationCanceledException) { }
         catch (Exception exception)
         {
-            AppLogger.Error($"People named-person load failed: person={person.Id}; name={person.DisplayName}", exception);
+            AppLogger.Error($"People named-person load failed: person={person.Id}", exception);
             if (SelectedPerson?.Id == person.Id)
             {
                 DisplayedFacesTitle = $"{person.DisplayName} · 加载失败";

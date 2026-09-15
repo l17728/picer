@@ -403,4 +403,17 @@ public sealed class LoggerTests : IDisposable
         var content = File.ReadAllText(Directory.GetFiles(_logDir, "*.log")[0]);
         Assert.Matches(@"\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}\]", content);
     }
+
+    [Fact]
+    public void OperationScope_WritesCorrelationAndRedactsCredential()
+    {
+        using (AppLogger.BeginOperation("test.operation", ("count", 3), ("token", "secret-value"))) { }
+
+        var operationFile = Directory.GetFiles(_logDir, "picer-operations-*.jsonl").Single();
+        var content = File.ReadAllText(operationFile);
+        Assert.Contains("test.operation", content);
+        Assert.Contains("\"durationMs\"", content);
+        Assert.Contains("[REDACTED]", content);
+        Assert.DoesNotContain("secret-value", content);
+    }
 }
