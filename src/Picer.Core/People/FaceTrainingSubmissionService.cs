@@ -19,6 +19,9 @@ public sealed record ArtifactSigningInfoData(string Algorithm, string PublicKey,
 public sealed record PrototypeData(long PersonId, float[] Centroid, double Threshold, int SampleCount);
 public sealed record TrainingVisualAttribute(string Pose, string Lighting, IReadOnlyList<string> Occlusion,
     string Expression, double FaceQuality, bool IsUsefulForTraining, string ModelVersion, string PromptVersion);
+public sealed record TrainingActionEvidence(long FaceId, long? PersonId, long? SourcePersonId,
+    string Action, DateTime OccurredUtc, IReadOnlyList<long> CoClusteredFaceIds,
+    IReadOnlyList<long> CoClusteredPersonIds, double? ClusterConfidence, string ModelVersion, string? ErrorType);
 
 public sealed record MetricsData(
     int TotalSamples, int TotalPersons,
@@ -44,7 +47,8 @@ public sealed class FaceTrainingSubmissionService : IDisposable
     public async Task<TrainingSubmissionResult> SubmitAsync(FaceTrainingSnapshotResult snapshot,
         IReadOnlyList<(long FaceId, long PersonId, float[] Embedding, string Split)> samples,
         CancellationToken ct = default, int attempt = 1, string? trainingHints = null,
-        IReadOnlyDictionary<long, TrainingVisualAttribute>? visualAttributes = null)
+        IReadOnlyDictionary<long, TrainingVisualAttribute>? visualAttributes = null,
+        IReadOnlyList<TrainingActionEvidence>? actions = null)
     {
         try
         {
@@ -54,6 +58,7 @@ public sealed class FaceTrainingSubmissionService : IDisposable
                 modelVersion = "sface",
                 attempt,
                 trainingHints,
+                actions,
                 protocolVersion = "face-evidence.v1",
                 samples = samples.Select(s => new
                 {

@@ -255,13 +255,18 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         {
             var snapshot = await UiWork.RunDatabaseAsync(() => FaceTrainingSnapshotService.BuildSnapshot(_database));
             var samples = await UiWork.RunDatabaseAsync(() => ExtractEmbeddings(snapshot.SnapshotId));
+            var actions = await UiWork.RunDatabaseAsync(() => FaceActionLogService.GetActions(_database, limit: 5000)
+                .Select(value => new TrainingActionEvidence(value.FaceId, value.PersonId, value.SourcePersonId,
+                    value.Action, value.CreatedUtc, value.CoClusteredFaceIds, value.CoClusteredPersonIds,
+                    value.ClusterConfidence, value.ModelVersion, value.ErrorType)).ToArray());
             var endpoint = Environment.GetEnvironmentVariable("PICER_MODEL_SERVER_URL")?.Trim() ?? "http://127.0.0.1:8090";
             string? key = Environment.GetEnvironmentVariable("PICER_MODEL_SERVER_API_KEY")?.Trim();
             using var submission = new FaceTrainingSubmissionService(endpoint, key ?? "");
             var agent = new FaceTrainingAgent(submission);
             var result = await agent.RunAsync(snapshot, samples,
                 (attempt, artifact, token) => AnalyzeTrainingFailureAsync(attempt, artifact, .90, token),
-                new Progress<string>(text => StatusText = text));
+                new Progress<string>(text => StatusText = text),
+                actions: actions);
             if (!result.Passed || result.Artifact is null)
             {
                 StatusText = $"训练失败：{result.FailureReason}；制品未应用";
