@@ -244,6 +244,11 @@ public partial class FaceValidationWindow : Window
                 result = await _training.SubmitAndApplyAsync(endpoint, progress, _trainingCancellation.Token,
                     plan.SnapshotId, applyArtifact: false, attempt: attempt,
                     recipeFingerprint: $"face-validation-{plan.SnapshotId}-attempt-{attempt}", recipeReason: recipeReason);
+                if (string.Equals(result.DiagnosticAction, "upgrade-model", StringComparison.OrdinalIgnoreCase))
+                {
+                    Status.Text = $"训练诊断：当前基模能力不足，停止重复调阈值。{result.DiagnosticExplanation}";
+                    break;
+                }
                 if (result.GatePassed) break;
                 if (attempt < 9)
                     Status.Text = $"训练 Agent：第 {attempt}/9 轮未通过，正在调整下一轮数据配方";

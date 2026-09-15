@@ -17,7 +17,9 @@ public sealed class FaceTrainingAgent(FaceTrainingSubmissionService submission)
     {
         const double gate = 0.90;
         const int maxAttempts = 9;
+        const string corePrinciples = "核心训练准则：按时间跨度分层抽样，保证同一人物覆盖不同年份/季节/设备；同一原图、连拍组和视频关键帧不得跨分区；连拍或内容哈希高度相似的人脸先去重，避免单一时刻过度代表；优先保留跨时间稳定特征，并用时间变化样本检验泛化能力；先判断阈值可达性，若扫描仍低于90%则停止低频调阈值并升级基模。";
         string? hints = await submission.GetTrainingMemoryAsync(cancellationToken);
+        hints = string.IsNullOrWhiteSpace(hints) ? corePrinciples : $"{corePrinciples}\n历史训练记忆：{hints}";
         if (!string.IsNullOrWhiteSpace(initialHints))
             hints = string.IsNullOrWhiteSpace(hints) ? initialHints : $"{hints}\n用户操作摘要：{initialHints}";
         TrainingArtifactData? last = null;
@@ -66,6 +68,11 @@ public sealed class FaceTrainingAgent(FaceTrainingSubmissionService submission)
                 if (attempt == maxAttempts) return new(false, attempt, artifact, "制品签名校验失败");
                 continue;
             }
+            if (string.Equals(artifact.Diagnostics?.RecommendedAction, "upgrade-model", StringComparison.OrdinalIgnoreCase))
+            {
+                progress?.Report($"训练 Agent：第 {attempt} 次诊断为基模能力不足，停止重复调阈值：{artifact.Diagnostics?.Explanation}");
+                return new(false, attempt, artifact, "阈值扫描仍无法达到 90%，应切换或并行评测更强人脸基模");
+            }
             if (artifact.Metrics.ValidationAccuracy >= gate)
                 return new(true, attempt, artifact, "准确率门禁通过");
             var advice = advisor is null ? "提高困难负样本覆盖并重新评测" : await advisor(attempt, artifact, cancellationToken);
@@ -89,8 +96,21 @@ public sealed class FaceTrainingAgent(FaceTrainingSubmissionService submission)
                 .ThenByDescending(s => Difficulty(s, attributes, attempt))
                 .ThenBy(s => Stable(attempt, s.FaceId)).ToArray();
             var count = Math.Min(ordered.Length, Math.Max(2, (int)Math.Ceiling(ordered.Length * fraction)));
-            var chosen = ordered.Take(count).ToList();
-            foreach (var item in ordered.Where(s => s.Split != "train" && !chosen.Contains(s)).Take(1)) chosen.Add(item);
+            var deduplicated = ordered.GroupBy(s =>
+            {
+                if (attributes?.TryGetValue(s.FaceId, out var value) == true)
+                    return value.BurstGroup ?? value.ContentHash ?? $"face:{s.FaceId}";
+                return $"face:{s.FaceId}";
+            }, StringComparer.OrdinalIgnoreCase).Select(g => g.First()).ToArray();
+            var chosen = new List<(long FaceId, long PersonId, float[] Embedding, string Split)>();
+            // If capture dates are available, reserve one representative from
+            // each year before filling the remaining quota. This prevents a
+            // burst from dominating a person and tests time-shifted features.
+            var dated = deduplicated.Where(s => attributes?.TryGetValue(s.FaceId, out var value) == true && value.CaptureUtc is not null)
+                .GroupBy(s => attributes![s.FaceId].CaptureUtc!.Value.Year).Select(g => g.First());
+            chosen.AddRange(dated.Take(count));
+            chosen.AddRange(deduplicated.Where(s => !chosen.Contains(s)).Take(Math.Max(0, count - chosen.Count)));
+            foreach (var item in deduplicated.Where(s => s.Split != "train" && !chosen.Contains(s)).Take(1)) chosen.Add(item);
             return chosen;
         }).DistinctBy(s => s.FaceId).OrderBy(s => s.FaceId).ToArray();
         var fingerprintText = string.Join('|', selected.Select(s => $"{s.FaceId}:{s.PersonId}:{s.Split}"));

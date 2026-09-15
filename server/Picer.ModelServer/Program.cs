@@ -210,10 +210,14 @@ public record TrainingJob(string Id, string Status, string Stage, int Progress, 
 public record TrainingArtifact(
     string ArtifactId, string Algorithm, string ModelVersion, DateTime CreatedUtc,
     IReadOnlyList<PersonPrototype> Prototypes, TrainingMetrics Metrics,
-    string? Sha256 = null, string? Signature = null, string? SignatureAlgorithm = null, string? SigningKeyId = null);
+    string? Sha256 = null, string? Signature = null, string? SignatureAlgorithm = null, string? SigningKeyId = null,
+    TrainingDiagnostics? Diagnostics = null);
 public record PersonPrototype(long PersonId, float[] Centroid, double Threshold, int SampleCount);
 public record TrainingMetrics(int TotalSamples, int TotalPersons, double TrainAccuracy, double ValidationAccuracy,
     double FalseAcceptRate, double FalseRejectRate, double MeanSimilaritySame, double MeanSimilarityDiff);
+public record TrainingDiagnostics(string RecommendedAction, double ThresholdSweepBestAccuracy,
+    double ThresholdSweepBestScale, double ThresholdSweepBestFar, double ThresholdSweepBestFrr,
+    double CurrentAccuracy, string Explanation);
 
 public sealed class TrainingExecutor
 {

@@ -12,13 +12,18 @@ public sealed record TrainingSubmissionResult(string JobId, string Status, strin
 public sealed record TrainingArtifactData(
     string ArtifactId, string Algorithm, string ModelVersion, DateTime CreatedUtc,
     IReadOnlyList<PrototypeData> Prototypes, MetricsData Metrics,
-    string? Sha256 = null, string? Signature = null, string? SignatureAlgorithm = null, string? SigningKeyId = null);
+    string? Sha256 = null, string? Signature = null, string? SignatureAlgorithm = null, string? SigningKeyId = null,
+    TrainingDiagnosticsData? Diagnostics = null);
+public sealed record TrainingDiagnosticsData(string RecommendedAction, double ThresholdSweepBestAccuracy,
+    double ThresholdSweepBestScale, double ThresholdSweepBestFar, double ThresholdSweepBestFrr,
+    double CurrentAccuracy, string Explanation);
 
 public sealed record ArtifactSigningInfoData(string Algorithm, string PublicKey, string KeyId);
 
 public sealed record PrototypeData(long PersonId, float[] Centroid, double Threshold, int SampleCount);
 public sealed record TrainingVisualAttribute(string Pose, string Lighting, IReadOnlyList<string> Occlusion,
-    string Expression, double FaceQuality, bool IsUsefulForTraining, string ModelVersion, string PromptVersion);
+    string Expression, double FaceQuality, bool IsUsefulForTraining, string ModelVersion, string PromptVersion,
+    DateTime? CaptureUtc = null, string? BurstGroup = null, string? ContentHash = null);
 public sealed record TrainingActionEvidence(long FaceId, long? PersonId, long? SourcePersonId,
     string Action, DateTime OccurredUtc, IReadOnlyList<long> CoClusteredFaceIds,
     IReadOnlyList<long> CoClusteredPersonIds, double? ClusterConfidence, string ModelVersion, string? ErrorType);

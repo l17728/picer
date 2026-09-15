@@ -15,7 +15,7 @@ public sealed record FaceTrainingResult(string DatasetId, string JobId, string A
     int People, double FalseAcceptRate, double FalseRejectRate, bool Applied, string Message,
     int SelectedTrainingSamples = 0, int ExcludedSameSource = 0, int ExcludedPersonCap = 0,
     double? BaselineFalseAcceptRate = null, double? BaselineFalseRejectRate = null,
-    bool GatePassed = false);
+    bool GatePassed = false, string? DiagnosticAction = null, string? DiagnosticExplanation = null);
 public sealed record FaceTrainingPlan(string SnapshotId, string ModelVersion, int Samples, int People,
     int PositiveSamples, int NegativeSamples, int LeakageGroups, int TrainSamples, int ValidationSamples,
     int TestSamples, int VideoSamples, IReadOnlyList<string> Warnings);
@@ -179,7 +179,8 @@ public sealed class FaceTrainingService(
             applied ? "训练完成并已应用；人工分类未改变。" : ExplainGateFailure(artifact),
             artifact.RecipeReport?.SelectedTrainingPositives ?? 0,
             artifact.RecipeReport?.ExcludedSameSource ?? 0, artifact.RecipeReport?.ExcludedPersonCap ?? 0,
-            artifact.BaselineMetrics?.FalseAcceptRate, artifact.BaselineMetrics?.FalseRejectRate, applied);
+            artifact.BaselineMetrics?.FalseAcceptRate, artifact.BaselineMetrics?.FalseRejectRate, applied,
+            artifact.Diagnostics?.RecommendedAction, artifact.Diagnostics?.Explanation);
     }
 
     public string Rollback()
@@ -373,9 +374,12 @@ public sealed class FaceTrainingService(
     private sealed record BaselineMetricsResponse(double FalseAcceptRate, double FalseRejectRate);
     private sealed record ComparisonResponse(double FalseAcceptRateDelta, double FalseRejectRateDelta,
         bool NoFalseAcceptRegression, bool AcceptableFalseRejectRegression);
+    private sealed record DiagnosticResponse(string RecommendedAction, double ThresholdSweepBestAccuracy,
+        double ThresholdSweepBestScale, double ThresholdSweepBestFar, double ThresholdSweepBestFrr,
+        double CurrentAccuracy, string Explanation);
     private sealed record PendingArtifact(string DatasetId, string Endpoint, string ModelVersion, string Json, ArtifactResponse Artifact);
     private sealed record ArtifactResponse(string Id, string? BaseModelVersion, List<PersonPolicyResponse> People,
         MetricsResponse Metrics, RecipeReportResponse? RecipeReport = null,
         BaselineMetricsResponse? BaselineMetrics = null, ComparisonResponse? Comparison = null, string? Sha256 = null, string? Signature = null, string? SignatureAlgorithm = null,
-        string? ModelVersion = null);
+        string? ModelVersion = null, DiagnosticResponse? Diagnostics = null);
 }
