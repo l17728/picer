@@ -126,6 +126,20 @@ app.MapPost("/api/face-training/datasets", (DatasetRequest request, ConcurrentDi
     if (request.ProtocolVersion != "face-evidence.v1") return Results.BadRequest(new { error = "unsupported protocolVersion" });
     if (request.Samples?.Any(s => s.Embedding is null || s.Embedding.Length == 0) == true)
         return Results.BadRequest(new { error = "sample embedding is required" });
+    var samples = request.Samples ?? [];
+    if (samples.Length == 0) return Results.BadRequest(new { error = "at least one sample is required" });
+    var dimensions = samples.Select(s => s.Embedding.Length).Distinct().ToArray();
+    if (dimensions.Length != 1) return Results.BadRequest(new { error = "embedding dimensions must match" });
+    if (request.SelectedSampleCount > 0 && request.SelectedSampleCount != samples.Length)
+        return Results.BadRequest(new { error = "selectedSampleCount does not match samples" });
+    var leakage = samples
+        .GroupBy(s => s.Evidence?.GroupId ?? s.Evidence?.ImageHash ?? $"face:{s.FaceId}", StringComparer.OrdinalIgnoreCase)
+        .Where(g => g.Select(s => s.Split).Distinct(StringComparer.OrdinalIgnoreCase).Count() > 1)
+        .Select(g => g.Key).Take(20).ToArray();
+    if (leakage.Length > 0) return Results.BadRequest(new { error = "data leakage group crosses splits", groups = leakage });
+    var evidenceVersions = samples.Select(s => s.Evidence?.ModelVersion).Where(v => !string.IsNullOrWhiteSpace(v)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+    if (evidenceVersions.Length > 1 || evidenceVersions.Any(v => !string.Equals(v, request.ModelVersion ?? "sface", StringComparison.OrdinalIgnoreCase)))
+        return Results.BadRequest(new { error = "embedding model version mismatch" });
     if (!string.IsNullOrWhiteSpace(request.IdempotencyKey))
     {
         var existing = index.FirstOrDefault(pair => pair.Value is DatasetRequest d &&
