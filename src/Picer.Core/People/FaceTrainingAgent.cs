@@ -30,7 +30,7 @@ public sealed class FaceTrainingAgent(FaceTrainingSubmissionService submission)
             // The server history is part of the Agent memory. Avoid replaying a
             // recipe that was already attempted in an earlier run, not only in
             // this process.
-            if (hints.Contains(recipe.Fingerprint, StringComparison.OrdinalIgnoreCase))
+            if ((hints ?? string.Empty).Contains(recipe.Fingerprint, StringComparison.OrdinalIgnoreCase))
             {
                 progress?.Report($"训练 Agent：历史已存在配方 {recipe.Fingerprint}，跳过重复提交");
                 return new(false, Math.Max(0, attempt - 1), last,
