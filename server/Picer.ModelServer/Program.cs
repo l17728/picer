@@ -262,6 +262,13 @@ public sealed class TrainingExecutor
                 gpuArtifact = _signer.Sign(gpuArtifact);
                 _artifacts[gpuArtifact.ArtifactId] = gpuArtifact;
                 jobs[jobId] = jobs[jobId] with { Status = "completed", Stage = "gpu-worker-completed", Progress = 100, ArtifactId = gpuArtifact.ArtifactId };
+                _archive.Append(new TrainingAttemptRecord("", "", jobId, gpuArtifact.ArtifactId, dataset.Attempt,
+                    dataset.ModelVersion ?? "sface", dataset.Samples?.Length ?? 0,
+                    dataset.Samples?.Select(sample => sample.PersonId).Distinct().Count() ?? 0,
+                    "completed", gpuArtifact.Metrics.ValidationAccuracy, gpuArtifact.Metrics.FalseAcceptRate,
+                    gpuArtifact.Metrics.FalseRejectRate, dataset.Attempt > 1 ? "glm-4.6v-flash" : null,
+                    dataset.Attempt > 1 ? "face-training-advisor.v1" : null, dataset.TrainingHints, DateTime.UtcNow,
+                    dataset.RecipeFingerprint, dataset.RecipeReason, dataset.SelectedSampleCount, dataset.ExcludedSampleCount));
                 return;
             }
             jobs[jobId] = jobs[jobId] with { Status = "running", Stage = "extracting", Progress = 5 };
