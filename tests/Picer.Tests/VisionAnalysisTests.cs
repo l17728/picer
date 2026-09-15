@@ -248,6 +248,24 @@ public sealed class VisionAnalysisTests : IDisposable
     }
 
     [Fact]
+    public async Task PersonFaces_PreserveConfirmedAssignmentForUiStatus()
+    {
+        var repository = new VisionAnalysisRepository(_database);
+        using var analysis = new VisionAnalysisService(repository, new FakeFaceAnalyzer("model-1"));
+        await analysis.AnalyzeAsync([_image]);
+        var faceId = Assert.Single(repository.GetFaceIds(_image.Id));
+        var people = new PeopleService(_database);
+        var person = people.Create("已命名人物");
+        people.ConfirmFace(faceId, person.Id);
+
+        var face = Assert.Single(repository.GetPersonFaces(person.Id));
+
+        Assert.Equal(person.Id, face.SuggestedPersonId);
+        Assert.Equal(person.DisplayName, face.SuggestedPersonName);
+        Assert.Equal("confirmed", face.AssignmentState);
+    }
+
+    [Fact]
     public async Task People_CreateAndAssignFaces_IsAtomicAndConfirmsEveryFace()
     {
         var repository = new VisionAnalysisRepository(_database);

@@ -41,7 +41,8 @@ public sealed record UnassignedFaceRecord(
     NormalizedFaceBox Box,
     float Confidence,
     long? SuggestedPersonId = null,
-    string? SuggestedPersonName = null);
+    string? SuggestedPersonName = null,
+    string? AssignmentState = null);
 
 public sealed record FaceEmbeddingRecord(long FaceId, long ImageId, string ModelVersion, long? PersonId,
     string? AssignmentState, float[] Embedding, float DetectionConfidence = 1, float RelativeArea = 1);

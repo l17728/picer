@@ -119,7 +119,9 @@ public sealed class FaceTrainingService(
             progress?.Report(new(job.Stage, Math.Clamp(18 + job.Progress * 7 / 10, 18, 88),
                 $"统一平台：{job.Stage} {job.Progress}%"));
         }
-        if (job.Status != "ready" || string.IsNullOrWhiteSpace(job.ArtifactId))
+        // ModelServer reports a finished asynchronous job as "completed".
+        // Older gateways used "ready"; accept both protocol values.
+        if (job.Status is not ("completed" or "ready") || string.IsNullOrWhiteSpace(job.ArtifactId))
             throw new InvalidOperationException($"训练任务{job.Status}：{job.Error ?? "未生成制品"}");
         progress?.Report(new("download", 90, "正在校验训练制品与评估指标"));
         var artifactJson = await _client.GetStringAsync(new Uri(root, $"artifacts/{job.ArtifactId}"), cancellationToken)

@@ -30,6 +30,7 @@ public sealed class FullDuplexVoiceSession : IDisposable
     private bool _processing;
     private DateTime _lastLevelLogUtc;
     private int _playbackSpeechFrames;
+    private int _playbackSpeechWindowFrames;
     private DateTime _playbackEndedUtc = DateTime.MinValue;
     private DateTime _playbackStartedUtc = DateTime.MinValue;
     private DateTime _speechStartedUtc = DateTime.MinValue;
@@ -78,6 +79,7 @@ public sealed class FullDuplexVoiceSession : IDisposable
         lock (_preRoll) { _preRoll.SetLength(0); }
         _speechFrames = 0;
         _playbackSpeechFrames = 0;
+        _playbackSpeechWindowFrames = 0;
         StateChanged?.Invoke("语音已停止");
     }
 
@@ -129,6 +131,19 @@ public sealed class FullDuplexVoiceSession : IDisposable
             ? Math.Max(_aec3 is null ? 0.18 : 0.14, _noiseFloor * 5.0)
             : Math.Max(0.08, _noiseFloor * 3.5);
         var speech = rms >= threshold;
+        // After playback stops the microphone can contain the last audio
+        // buffer from the speaker.  Never turn that tail into a new ASR
+        // request.  This is deliberately applied with AEC3 as well: AEC3 is
+        // an echo reducer, not a hard end-of-playback boundary.
+        if (!_speaking && DateTime.UtcNow - _playbackEndedUtc < TimeSpan.FromMilliseconds(650))
+        {
+            _speechFrames = 0;
+            _playbackSpeechFrames = 0;
+            _playbackSpeechWindowFrames = 0;
+            lock (_utterance) _utterance.SetLength(0);
+            lock (_preRoll) _preRoll.SetLength(0);
+            return;
+        }
         if (speech)
         {
             if (_speechFrames == 0) AppLogger.Info($"Voice speech started; rms={rms:F4}; threshold={threshold:F4}; speaking={_speaking}");
@@ -139,16 +154,33 @@ public sealed class FullDuplexVoiceSession : IDisposable
             if (_speaking)
             {
                 _playbackSpeechFrames++;
-                if (_playbackSpeechFrames >= 6 && DateTime.UtcNow - _playbackStartedUtc >= TimeSpan.FromMilliseconds(350))
+                _playbackSpeechWindowFrames++;
+                // Do not require every 40 ms frame to cross the threshold:
+                // natural speech has short zero crossings.  A real user
+                // interruption must win 6 of a rolling 12-frame window;
+                // speaker leakage normally contributes only 1-2 frames.
+                if (_playbackSpeechFrames >= 6 && _playbackSpeechWindowFrames <= 12 &&
+                    DateTime.UtcNow - _playbackStartedUtc >= TimeSpan.FromMilliseconds(350))
                 {
-                    AppLogger.Info($"Voice interruption accepted; rms={rms:F4}; threshold={threshold:F4}; frames={_playbackSpeechFrames}");
+                    AppLogger.Info($"Voice interruption accepted; rms={rms:F4}; threshold={threshold:F4}; frames={_playbackSpeechFrames}; window={_playbackSpeechWindowFrames}");
                     SpeechDetectedDuringPlayback?.Invoke();
                     CancelPlayback();
                     _playbackSpeechFrames = 0;
+                    _playbackSpeechWindowFrames = 0;
                 }
             }
         }
-        else if (_speaking) _playbackSpeechFrames = 0;
+        else if (_speaking)
+        {
+            // Keep a short rolling window, but decay a candidate rather than
+            // losing it on a single quiet frame.
+            _playbackSpeechWindowFrames++;
+            if (_playbackSpeechWindowFrames > 12)
+            {
+                _playbackSpeechWindowFrames = 0;
+                _playbackSpeechFrames = 0;
+            }
+        }
         // Never place playback audio into the next utterance. If a genuine
         // interruption was confirmed above, recording resumes on subsequent
         // frames after playback has been cancelled.
@@ -276,6 +308,8 @@ public sealed class FullDuplexVoiceSession : IDisposable
         {
             _speaking = false;
             _playbackEndedUtc = DateTime.UtcNow;
+            _playbackSpeechFrames = 0;
+            _playbackSpeechWindowFrames = 0;
             playbackResource.Dispose();
             _output?.Dispose(); _output = null;
             AppLogger.Info($"Voice TTS playback stopped; canceled={token.IsCancellationRequested}; error={args.Exception is not null}");

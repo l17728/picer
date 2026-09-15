@@ -261,7 +261,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             var samples = await UiWork.RunDatabaseAsync(() => ExtractEmbeddings(snapshot.SnapshotId));
 
             var baseUrl = Environment.GetEnvironmentVariable("PICER_MODEL_SERVER_URL")
-                ?.Trim() ?? "http://127.0.0.1:8090/picer";
+                ?.Trim() ?? "http://127.0.0.1:8090";
             if (!Uri.TryCreate(baseUrl, UriKind.Absolute, out var modelServerUri)
                 || (modelServerUri.Scheme != Uri.UriSchemeHttp && modelServerUri.Scheme != Uri.UriSchemeHttps))
             {
@@ -381,12 +381,12 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
     [RelayCommand]
     private async Task ScanConsistencyAsync()
     {
-        StatusText = "正在扫描人脸与描述一致性…";
+        StatusText = "正在检查人物归属、人物标签和搜索索引（不训练模型）…";
         try
         {
             var report = await UiWork.RunDatabaseAsync(() => FaceConsistencyService.ScanAndRepair(_database));
             var summary = FaceConsistencyService.BuildTrainingSummary(_database);
-            StatusText = $"一致性扫描完成：{report.ScannedImages} 张照片 / {report.ScannedFaces} 张人脸，发现 {report.Issues.Count} 个问题，已修复 {report.Repaired} 个";
+            StatusText = $"一致性修复完成：扫描 {report.ScannedImages} 张照片、{report.ScannedFaces} 张人脸；发现 {report.Issues.Count} 项，已修复 {report.Repaired} 项。此操作不训练模型。";
             AppLogger.Info($"人脸一致性报告：{StatusText}\n{summary}");
             await RefreshAsync();
         }
@@ -1363,7 +1363,12 @@ public partial class UnassignedFaceViewModel(UnassignedFaceRecord record, string
     public string ImagePath => Record.ImagePath;
     public int Ordinal => Record.Ordinal + 1;
     public float Confidence => Record.Confidence;
-    public string SuggestedText => Record.SuggestedPersonName is null ? "未归类" : $"可能是：{Record.SuggestedPersonName}";
+    public string SuggestedText => Record.AssignmentState switch
+    {
+        "confirmed" when Record.SuggestedPersonName is not null => $"已归类：{Record.SuggestedPersonName}",
+        "suggested" when Record.SuggestedPersonName is not null => $"可能是：{Record.SuggestedPersonName}",
+        _ => "未归类"
+    };
     public IReadOnlyList<UnassignedFaceViewModel> BurstOperationFaces => _burstOperationFaces ?? [this];
     public bool IsBurstStack => BurstOperationFaces.Count > 1;
     public int BurstCount => BurstOperationFaces.Select(face => face.Record.ImageId).Distinct().Count();

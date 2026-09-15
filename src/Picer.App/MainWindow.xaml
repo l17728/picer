@@ -362,10 +362,10 @@
                                 <Button Content="检查新照片" Command="{Binding AnalyzeAllCommand}" Padding="12,5" Margin="4,0" ToolTip="已分析的照片会使用缓存跳过"/>
                                 <Button Content="{Binding OrganizeButtonText}" Command="{Binding OrganizeFacesCommand}" Padding="12,5" Margin="4,0"
                                         ToolTip="使用最新已应用阈值匹配已命名人物，并重建待命名候选组；保留人工确认与排除结果"/>
-                                <Button Content="提交训练并自动应用" Command="{Binding StartTrainingCommand}" Padding="12,5" Margin="4,0"
-                                        ToolTip="将已确认人脸提交统一模型平台训练，完成后自动应用新原型并显示准确率与误识率"/>
-                                <Button Content="一致性扫描" Command="{Binding ScanConsistencyCommand}" Padding="12,5" Margin="4,0"
-                                        ToolTip="扫描人脸归属与描述一致性，修复缺失的人物标记"/>
+                                <Button Content="人物识别优化（平台训练）" Command="{Binding StartTrainingCommand}" Padding="12,5" Margin="4,0"
+                                        ToolTip="使用已确认人物和排他负样本提交统一模型平台异步训练；通过评估门禁后更新人物原型，不改变人工归类"/>
+                                <Button Content="一致性扫描（修复索引）" Command="{Binding ScanConsistencyCommand}" Padding="12,5" Margin="4,0"
+                                        ToolTip="不训练模型；检查并修复人物归属、人物标签和搜索索引的一致性"/>
                                 <Button Content="人脸精度验证" Click="FaceValidation_Click" Padding="12,5" Margin="4,0"/>
                                 <Button Content="取消" Command="{Binding CancelAnalysisCommand}" Padding="12,5" Margin="4,0"/>
                                 <Button Content="刷新" Command="{Binding RefreshPageCommand}" Padding="12,5" Margin="4,0"

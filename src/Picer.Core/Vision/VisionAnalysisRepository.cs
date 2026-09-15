@@ -191,8 +191,9 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
             )
             SELECT f.id, f.image_id, i.path, i.thumb_path, f.ordinal,
                    f.box_x, f.box_y, f.box_width, f.box_height, f.confidence,
-                   CASE WHEN a.state='suggested' THEN a.person_id END,
-                   CASE WHEN a.state='suggested' THEN p.display_name END,
+                   a.person_id,
+                   p.display_name,
+                   a.state,
                    i.sha256, i.ahash, i.width, i.height
             FROM ranked_faces f
             JOIN images i ON i.id=f.image_id AND i.status='active'
@@ -210,13 +211,14 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
         using var reader = command.ExecuteReader();
         while (reader.Read() && values.Count < requestedLimit)
         {
-            if (deduplicator.IsDuplicateAndAdd(ReadSelectedFaceSignature(reader, 12))) continue;
+            if (deduplicator.IsDuplicateAndAdd(ReadSelectedFaceSignature(reader, 13))) continue;
             values.Add(new UnassignedFaceRecord(
                 reader.GetInt64(0), reader.GetInt64(1), reader.GetString(2),
                 reader.IsDBNull(3) ? null : reader.GetString(3), reader.GetInt32(4),
                 new NormalizedFaceBox(reader.GetFloat(5), reader.GetFloat(6), reader.GetFloat(7), reader.GetFloat(8)),
                 reader.GetFloat(9), reader.IsDBNull(10) ? null : reader.GetInt64(10),
-                reader.IsDBNull(11) ? null : reader.GetString(11)));
+                reader.IsDBNull(11) ? null : reader.GetString(11),
+                reader.IsDBNull(12) ? null : reader.GetString(12)));
         }
         return values;
     }
@@ -337,8 +339,9 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
             )
             SELECT f.id, f.image_id, i.path, i.thumb_path, f.ordinal,
                    f.box_x, f.box_y, f.box_width, f.box_height, f.confidence,
-                   CASE WHEN a.state='suggested' THEN a.person_id END,
-                   CASE WHEN a.state='suggested' THEN p.display_name END,
+                   a.person_id,
+                   p.display_name,
+                   a.state,
                    i.sha256, i.ahash, i.width, i.height
             FROM face_person_assignments a
             JOIN ranked_faces f ON f.id=a.face_id AND f.duplicate_rank=1
@@ -356,13 +359,14 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
         using var reader = command.ExecuteReader();
         while (reader.Read() && values.Count < requestedLimit)
         {
-            if (deduplicator.IsDuplicateAndAdd(ReadSelectedFaceSignature(reader, 12), reader.GetInt64(1), reader.GetString(2))) continue;
+            if (deduplicator.IsDuplicateAndAdd(ReadSelectedFaceSignature(reader, 13), reader.GetInt64(1), reader.GetString(2))) continue;
             values.Add(new UnassignedFaceRecord(
                 reader.GetInt64(0), reader.GetInt64(1), reader.GetString(2),
                 reader.IsDBNull(3) ? null : reader.GetString(3), reader.GetInt32(4),
                 new NormalizedFaceBox(reader.GetFloat(5), reader.GetFloat(6), reader.GetFloat(7), reader.GetFloat(8)),
                 reader.GetFloat(9), reader.IsDBNull(10) ? null : reader.GetInt64(10),
-                reader.IsDBNull(11) ? null : reader.GetString(11)));
+                reader.IsDBNull(11) ? null : reader.GetString(11),
+                reader.IsDBNull(12) ? null : reader.GetString(12)));
         }
         return values;
     }
