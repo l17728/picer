@@ -674,3 +674,6 @@ LLM 先输出受约束的结构化计划或调用 `search_media` 工具，完成
 人脸训练采用三阶段授权：准备/预览快照、冻结并提交、查看评估后应用制品。三个权限点分别审计，默认不上传、不自动应用。ModelServer 返回的制品必须校验模型版本、快照关联和完整性后，事务性替换旧原型；随后仅对未确认人脸增量重算匹配并更新派生索引，人工确认、拒绝和“不分类”状态不得被覆盖。应用失败时保留旧制品和索引，并提供回滚。
 
 远端 LAN 是显式 opt-in 能力：默认 local，跨机必须 HTTPS + bearer token + SPKI pin；索引服务授权与模型服务授权相互独立。客户端不得因缓存或服务发现而静默启用远端连接。
+### 16.2 Face training Agent tooling
+
+The three-layer boundary, evaluation split, leakage constraints, temporal/burst deduplication, tool permissions, idempotency, recovery, and artifact-application authorization for face training are specified in [FACE_TRAINING_AGENT_TOOLS_SDD_2026-09-15.md](FACE_TRAINING_AGENT_TOOLS_SDD_2026-09-15.md). This is the normative supplement to this SDD; immutable snapshots, server-side validation, and user approval before applying artifacts take precedence over legacy flows.

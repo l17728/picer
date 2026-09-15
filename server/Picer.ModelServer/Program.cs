@@ -126,6 +126,13 @@ app.MapPost("/api/face-training/datasets", (DatasetRequest request, ConcurrentDi
     if (request.ProtocolVersion != "face-evidence.v1") return Results.BadRequest(new { error = "unsupported protocolVersion" });
     if (request.Samples?.Any(s => s.Embedding is null || s.Embedding.Length == 0) == true)
         return Results.BadRequest(new { error = "sample embedding is required" });
+    if (!string.IsNullOrWhiteSpace(request.IdempotencyKey))
+    {
+        var existing = index.FirstOrDefault(pair => pair.Value is DatasetRequest d &&
+            string.Equals(d.IdempotencyKey, request.IdempotencyKey, StringComparison.Ordinal));
+        if (!string.IsNullOrEmpty(existing.Key))
+            return Results.Ok(new { id = existing.Key, snapshotId = request.SnapshotId, sampleCount = request.Samples?.Length ?? 0, reused = true });
+    }
     var datasetId = "dataset-" + Guid.NewGuid().ToString("N");
     // VL attributes are optional enrichment. Their absence never blocks the
     // vector-training path; the recipe builder can continue with embeddings.
@@ -193,7 +200,8 @@ public record DatasetRequest(string SnapshotId, string? SourceApp = null, string
     FaceSample[]? Samples = null, string ProtocolVersion = "face-evidence.v1",
     UserActionEvidence[]? Actions = null, MediaGroupEvidence[]? Groups = null,
     int Attempt = 1, string? TrainingHints = null, string? RecipeFingerprint = null,
-    string? RecipeReason = null, int SelectedSampleCount = 0, int ExcludedSampleCount = 0);
+    string? RecipeReason = null, int SelectedSampleCount = 0, int ExcludedSampleCount = 0,
+    string? IdempotencyKey = null);
 public record FaceSample(long FaceId, long PersonId, float[] Embedding, string Split = "train",
     SampleEvidence? Evidence = null, VlAttributes? Attributes = null, string Label = "positive");
 public record SampleEvidence(string Source, string? ImageHash = null, string? FileName = null,

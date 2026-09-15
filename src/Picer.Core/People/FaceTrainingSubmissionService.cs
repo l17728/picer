@@ -58,6 +58,7 @@ public sealed class FaceTrainingSubmissionService : IDisposable
     {
         try
         {
+            var idempotencyKey = ComputeIdempotencyKey(snapshot.SnapshotId, "sface", recipeFingerprint, attempt);
             var payload = new
             {
                 snapshotId = snapshot.SnapshotId.ToString(),
@@ -68,6 +69,7 @@ public sealed class FaceTrainingSubmissionService : IDisposable
                 recipeReason,
                 selectedSampleCount = samples.Count,
                 excludedSampleCount,
+                idempotencyKey,
                 actions,
                 protocolVersion = "face-evidence.v1",
                 samples = samples.Select(s => new
@@ -102,6 +104,12 @@ public sealed class FaceTrainingSubmissionService : IDisposable
         {
             return new TrainingSubmissionResult("", "failed", null, exception.Message);
         }
+    }
+
+    private static string ComputeIdempotencyKey(long snapshotId, string modelVersion, string? recipeFingerprint, int attempt)
+    {
+        var value = $"{snapshotId}|{modelVersion}|{recipeFingerprint ?? "none"}|{attempt}|face-agent.v2";
+        return Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
     }
 
     public async Task<TrainingSubmissionResult> PollAsync(string jobId, CancellationToken ct = default)
