@@ -17,6 +17,20 @@ builder.Services.AddSingleton<ArtifactSigner>();
 builder.Services.AddSingleton<TrainingAttemptArchive>();
 var app = builder.Build();
 
+// Restore the observable job list after a server restart. Terminal records are
+// reconstructed from the append-only archive; in-flight work is explicitly
+// marked recoverable instead of being silently reported as running.
+var restoredArchive = app.Services.GetRequiredService<TrainingAttemptArchive>();
+var restoredJobs = app.Services.GetRequiredService<ConcurrentDictionary<string, TrainingJob>>();
+foreach (var record in restoredArchive.ReadRecent(1000).GroupBy(r => r.JobId).Select(g => g.First()))
+{
+    if (string.IsNullOrWhiteSpace(record.JobId)) continue;
+    var status = record.Status is "completed" or "failed" or "canceled" ? record.Status : "failed";
+    var error = status == "failed" && record.Status is not "failed" ? "ModelServer 重启后任务未完成，可安全重试" : null;
+    restoredJobs.TryAdd(record.JobId, new TrainingJob(record.JobId, status, status, status == "completed" ? 100 : 0,
+        record.ArtifactId, error));
+}
+
 var apiKey = Environment.GetEnvironmentVariable("PICER_MODEL_SERVER_API_KEY");
 app.Use(async (context, next) =>
 {
