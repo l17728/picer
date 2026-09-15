@@ -11,6 +11,7 @@ using Picer.Core.Indexing;
 using Picer.App.Views;
 using System.Windows;
 using Picer.App.Infrastructure;
+using Picer.App.Security;
 
 namespace Picer.App.ViewModels;
 
@@ -246,6 +247,54 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
 
     [RelayCommand]
     private async Task StartTrainingAsync()
+    {
+        var eligibility = await UiWork.RunDatabaseAsync(() => FaceTrainingSnapshotService.CheckEligibility(_database));
+        if (eligibility.PositiveFaceCount < 2) { StatusText = "至少需要确认 2 张人脸才能开始训练"; return; }
+        IsAnalyzing = true;
+        try
+        {
+            var snapshot = await UiWork.RunDatabaseAsync(() => FaceTrainingSnapshotService.BuildSnapshot(_database));
+            var samples = await UiWork.RunDatabaseAsync(() => ExtractEmbeddings(snapshot.SnapshotId));
+            var endpoint = Environment.GetEnvironmentVariable("PICER_MODEL_SERVER_URL")?.Trim() ?? "http://127.0.0.1:8090";
+            string? key = Environment.GetEnvironmentVariable("PICER_MODEL_SERVER_API_KEY")?.Trim();
+            using var submission = new FaceTrainingSubmissionService(endpoint, key ?? "");
+            var agent = new FaceTrainingAgent(submission);
+            var result = await agent.RunAsync(snapshot, samples,
+                (attempt, artifact, token) => AnalyzeTrainingFailureAsync(attempt, artifact, .90, token),
+                new Progress<string>(text => StatusText = text));
+            if (!result.Passed || result.Artifact is null)
+            {
+                StatusText = $"训练失败：{result.FailureReason}；制品未应用";
+                TrainingResultText = result.Artifact is null ? "训练制品：未生成可应用版本" : $"未应用制品：{result.Artifact.ArtifactId}；准确率 {result.Artifact.Metrics.ValidationAccuracy:P1}";
+                return;
+            }
+            var artifact = result.Artifact;
+            await UiWork.RunDatabaseAsync(() => ApplyTrainedPrototypes(artifact));
+            StatusText = $"训练通过并已应用（第 {result.Attempts} 次）：准确率 {artifact.Metrics.ValidationAccuracy:P1}";
+            TrainingResultText = $"已应用模型版本：{artifact.ModelVersion}；制品：{artifact.ArtifactId}；评测：准确率 {artifact.Metrics.ValidationAccuracy:P1} / 误识率 {artifact.Metrics.FalseAcceptRate:P2} / 拒识率 {artifact.Metrics.FalseRejectRate:P2}";
+        }
+        catch (Exception exception)
+        {
+            StatusText = $"训练失败：{exception.Message}";
+            AppLogger.Error("训练 Agent 执行失败", exception);
+        }
+        finally { IsAnalyzing = false; }
+    }
+
+    private async Task<string?> AnalyzeTrainingFailureAsync(int attempt, TrainingArtifactData artifact, double target, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var key = new WindowsCredentialStore().Read(PicerCredentialTargets.Zhipu);
+            if (string.IsNullOrWhiteSpace(key)) return "未配置智谱 API Key；增加困难负样本并调整阈值";
+            using var chat = new OpenAiCompatibleChatClient(new Uri("https://open.bigmodel.cn/api/paas/v4/chat/completions"), key, "glm-4.6v-flash");
+            return await chat.CompleteAsync("你是人脸训练 Agent。基于历史试验记忆提出下一次可执行调整；只输出简短建议，不输出个人信息。",
+                $"第{attempt}次未通过。目标准确率={target:P0}，实际={artifact.Metrics.ValidationAccuracy:P2}，误识率={artifact.Metrics.FalseAcceptRate:P2}，拒识率={artifact.Metrics.FalseRejectRate:P2}，样本={artifact.Metrics.TotalSamples}，人物={artifact.Metrics.TotalPersons}。请给出下一次正负样本和阈值策略建议。", 300, cancellationToken);
+        }
+        catch (Exception exception) { AppLogger.Warn($"智谱训练分析失败：{exception.Message}"); return "智谱分析不可用；增加困难负样本并调整阈值"; }
+    }
+
+    private async Task StartTrainingLegacyAsync()
     {
         var eligibility = await UiWork.RunDatabaseAsync(() => FaceTrainingSnapshotService.CheckEligibility(_database));
         if (eligibility.PositiveFaceCount < 2)
