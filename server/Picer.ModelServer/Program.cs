@@ -276,14 +276,6 @@ public sealed class TrainingExecutor
                 }
             }
 
-            foreach (var sample in trainSamples)
-            {
-                var best = prototypes
-                    .Select(p => (Proto: p, Sim: CosineSimilarity(sample.Embedding, p.Centroid)))
-                    .OrderByDescending(x => x.Sim)
-                    .First();
-                if (best.Proto.PersonId == sample.PersonId && best.Sim >= best.Proto.Threshold) correct++;
-            }
             var trainAccuracy = trainSamples.Count > 0 ? (double)trainSamples.Count(s =>
             {
                 var best = prototypes.Select(p => (P: p, S: CosineSimilarity(s.Embedding, p.Centroid))).OrderByDescending(x => x.S).First();

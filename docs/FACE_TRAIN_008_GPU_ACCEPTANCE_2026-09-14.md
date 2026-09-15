@@ -28,3 +28,11 @@
 ## 未关闭边界
 
 - 冒烟数据只验证链路，不代表真实人物数据上的模型质量门禁结果。
+
+## 2026-09-15 真实平台复验
+
+- 通过统一模型平台 `http://127.0.0.1:8090/picer` 代理提交 4 个向量样本，任务阶段为 `gpu-worker → gpu-worker-completed`，进度 100%。
+- 返回 `prototype-calibration-gpu` 制品；训练准确率和验证准确率均为 `1.0`，FAR/FRR 均为 `0`。
+- 返回 ECDSA P-256 签名、KeyId 和 SHA-256；`/algorithms` 与 `/signing-key` 路由均可用。
+- 发现并修复旧部署包缺少新签名路由的问题；真实 8091 内部服务已更新，旧 DLL 已备份到 `D:\vl-models\services\Picer.ModelServer.backup-20260915-150211`。
+- 指标计算也修正为只使用验证/测试分区计算 `validationAccuracy`，不再把训练集正确数重复累加。
