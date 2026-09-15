@@ -94,6 +94,9 @@ public partial class FaceValidationWindow : Window
                 () => _validation.CalibrateSFace(progress: progress));
             var applied = await UiWork.RunDatabaseAsync(() => _validation.GetAppliedSFaceThreshold(result.ModelVersion));
             _lastCalibration = result;
+            // Applying an unchanged recommendation is a no-op. Keep the
+            // button disabled until calibration produces a genuinely new value.
+            ApplySFaceThreshold.IsEnabled = applied is null || Math.Abs(applied.Value - result.RecommendedThreshold) > 0.000_001;
             var ready = result.QualifiedPeople >= 5 ? "样本人数已达标" : $"还需补足 {5 - result.QualifiedPeople} 位达到 20 张照片的成员";
             SFaceResult.Text = $"模型：{result.ModelVersion}\n" +
                 $"已确认人物：{result.ConfirmedPeople}；达到 20 张：{result.QualifiedPeople}/5（{ready}）\n" +
@@ -144,6 +147,7 @@ public partial class FaceValidationWindow : Window
                 throw new InvalidOperationException("数据库回读的阈值与待应用值不一致");
             var message = $"阈值 {applied.Value:F3} 已成功应用到模型 {_lastCalibration.ModelVersion}。";
             Status.Text = message;
+            ApplySFaceThreshold.IsEnabled = false;
             SFaceProgress.IsIndeterminate = false;
             SFaceProgress.Value = 100;
             SFaceProgressText.Text = $"SFace：应用成功 · 当前阈值 {applied.Value:F3}";
