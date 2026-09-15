@@ -6,6 +6,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Picer.Core.Data;
 using Picer.Core.Logging;
+using Picer.Core.People;
 
 namespace Picer.Core.Vision;
 
@@ -79,6 +80,7 @@ public sealed class FaceTrainingService(
         }
         progress?.Report(new("snapshot", 2, "正在冻结人工确认与排他负样本"));
         var samples = BuildSamples(out var modelVersion, attempt);
+        recipeFingerprint ??= ComputeSampleFingerprint(samples);
         var people = samples.Where(sample => sample.Label == "positive").Select(sample => sample.PersonId).Distinct().ToArray();
         if (people.Length < 2) throw new InvalidOperationException("至少需要两位已有人工确认样本的人物。");
         var snapshotId = new FaceEvaluationSnapshotService(repository).CreateSnapshot(
@@ -86,8 +88,16 @@ public sealed class FaceTrainingService(
         if (expectedSnapshotId is not null && !snapshotId.Equals(expectedSnapshotId, StringComparison.Ordinal))
             throw new InvalidOperationException("确认后人工标注发生了变化；为避免提交错位数据，请重新确认训练快照。");
         var root = NormalizeEndpoint(endpoint);
-        progress?.Report(new("upload", 10, $"正在提交 {samples.Length} 个脱敏向量样本"));
-        using var datasetRequest = new HttpRequestMessage(HttpMethod.Post, new Uri(root, "datasets")) { Content = JsonContent.Create(new { snapshotId, sourceApp = "picer", modelVersion, attempt, recipeFingerprint, recipeReason, selectedSampleCount = samples.Length, excludedSampleCount, samples }, options: Json) };
+        progress?.Report(new("upload", 10, $"第 {attempt} 轮：选中 {samples.Length}，排除 {excludedSampleCount}，配方 {recipeFingerprint}；正在提交脱敏向量与操作日志"));
+        var actions = FaceActionLogService.GetActions(repository.Database, limit: 5000)
+            .Select(value => new
+            {
+                faceId = value.FaceId, personId = value.PersonId, sourcePersonId = value.SourcePersonId,
+                action = value.Action, occurredUtc = value.CreatedUtc, coClusteredFaceIds = value.CoClusteredFaceIds,
+                coClusteredPersonIds = value.CoClusteredPersonIds, clusterConfidence = value.ClusterConfidence,
+                modelVersion = value.ModelVersion, errorType = value.ErrorType
+            }).ToArray();
+        using var datasetRequest = new HttpRequestMessage(HttpMethod.Post, new Uri(root, "datasets")) { Content = JsonContent.Create(new { snapshotId, sourceApp = "picer", modelVersion, attempt, recipeFingerprint, recipeReason, selectedSampleCount = samples.Length, excludedSampleCount, actions, samples }, options: Json) };
         datasetRequest.Headers.Add("X-Picer-Api-Version", "1");
         using var datasetResponse = await _client.SendAsync(datasetRequest, cancellationToken).ConfigureAwait(false);
         await EnsureSuccess(datasetResponse, "提交训练快照", cancellationToken).ConfigureAwait(false);
@@ -228,6 +238,13 @@ public sealed class FaceTrainingService(
 
     private static uint StableAttemptHash(int attempt, long faceId) =>
         BitConverter.ToUInt32(SHA256.HashData(Encoding.UTF8.GetBytes($"{attempt}:{faceId}")), 0);
+
+    private static string ComputeSampleFingerprint(IEnumerable<Sample> samples)
+    {
+        var value = string.Join('|', samples.OrderBy(s => s.FaceId).ThenBy(s => s.PersonId)
+            .ThenBy(s => s.Label, StringComparer.Ordinal).Select(s => $"{s.FaceId}:{s.PersonId}:{s.Label}:{s.Partition}"));
+        return "recipe-" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value)))[..16].ToLowerInvariant();
+    }
 
     private static IEnumerable<Sample> BuildConfirmedHardNegatives(IReadOnlyList<FaceEmbeddingRecord> confirmed,
         IReadOnlyDictionary<long, string> imageGroups)

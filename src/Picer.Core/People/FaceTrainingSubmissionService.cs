@@ -157,10 +157,21 @@ public sealed class FaceTrainingSubmissionService : IDisposable
     {
         try
         {
-            var response = await _client.GetAsync("api/face-training/archive/summary", ct);
+            var response = await _client.GetAsync("api/face-training/archive?limit=20", ct);
             if (!response.IsSuccessStatusCode) return null;
-            var json = await response.Content.ReadFromJsonAsync<JsonElement>(Json, ct);
-            return json.TryGetProperty("summary", out var value) ? value.GetString() : null;
+            var records = await response.Content.ReadFromJsonAsync<JsonElement>(Json, ct);
+            if (records.ValueKind != JsonValueKind.Array) return null;
+            var lines = records.EnumerateArray().Select(record =>
+            {
+                var attempt = record.TryGetProperty("attempt", out var a) ? a.ToString() : "?";
+                var status = record.TryGetProperty("status", out var s) ? s.GetString() : "unknown";
+                var accuracy = record.TryGetProperty("validationAccuracy", out var v) ? v.ToString() : "-";
+                var fingerprint = record.TryGetProperty("recipeFingerprint", out var f) ? f.GetString() : null;
+                var reason = record.TryGetProperty("recipeReason", out var r) ? r.GetString() : null;
+                var excluded = record.TryGetProperty("excludedSampleCount", out var e) ? e.ToString() : "0";
+                return $"attempt={attempt};status={status};validation={accuracy};recipe={fingerprint ?? "unknown"};excluded={excluded};reason={reason ?? "unknown"}";
+            });
+            return string.Join("\n", lines);
         }
         catch { return null; }
     }
