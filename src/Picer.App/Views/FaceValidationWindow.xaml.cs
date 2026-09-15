@@ -237,7 +237,18 @@ public partial class FaceValidationWindow : Window
                 SFaceProgressText.Text = $"训练：{value.Detail}";
                 Status.Text = $"训练阶段 {value.Stage} · {value.Percent}%";
             });
-            var result = await _training.SubmitAndApplyAsync(endpoint, progress, _trainingCancellation.Token, plan.SnapshotId, applyArtifact: false);
+            FaceTrainingResult? result = null;
+            for (var attempt = 1; attempt <= 9; attempt++)
+            {
+                var recipeReason = attempt == 1 ? "基线配方" : $"第 {attempt} 轮困难样本与阈值配方";
+                result = await _training.SubmitAndApplyAsync(endpoint, progress, _trainingCancellation.Token,
+                    plan.SnapshotId, applyArtifact: false, attempt: attempt,
+                    recipeFingerprint: $"face-validation-{plan.SnapshotId}-attempt-{attempt}", recipeReason: recipeReason);
+                if (result.GatePassed) break;
+                if (attempt < 9)
+                    Status.Text = $"训练 Agent：第 {attempt}/9 轮未通过，正在调整下一轮数据配方";
+            }
+            if (result is null) throw new InvalidOperationException("训练未返回结果");
             var baseline = result.BaselineFalseAcceptRate is double baselineFar && result.BaselineFalseRejectRate is double baselineFrr
                 ? $"当前基线：误识 {baselineFar:P2} / 漏识 {baselineFrr:P2}\n候选版本：误识 {result.FalseAcceptRate:P2} / 漏识 {result.FalseRejectRate:P2}\n"
                 : $"候选版本：误识 {result.FalseAcceptRate:P2} / 漏识 {result.FalseRejectRate:P2}\n";

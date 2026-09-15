@@ -48,7 +48,8 @@ public sealed class FaceTrainingSubmissionService : IDisposable
         IReadOnlyList<(long FaceId, long PersonId, float[] Embedding, string Split)> samples,
         CancellationToken ct = default, int attempt = 1, string? trainingHints = null,
         IReadOnlyDictionary<long, TrainingVisualAttribute>? visualAttributes = null,
-        IReadOnlyList<TrainingActionEvidence>? actions = null)
+        IReadOnlyList<TrainingActionEvidence>? actions = null,
+        string? recipeFingerprint = null, string? recipeReason = null, int excludedSampleCount = 0)
     {
         try
         {
@@ -58,6 +59,10 @@ public sealed class FaceTrainingSubmissionService : IDisposable
                 modelVersion = "sface",
                 attempt,
                 trainingHints,
+                recipeFingerprint,
+                recipeReason,
+                selectedSampleCount = samples.Count,
+                excludedSampleCount,
                 actions,
                 protocolVersion = "face-evidence.v1",
                 samples = samples.Select(s => new

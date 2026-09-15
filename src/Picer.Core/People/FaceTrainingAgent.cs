@@ -1,8 +1,11 @@
+using System.Security.Cryptography;
+using System.Text;
+
 namespace Picer.Core.People;
 
 public sealed record FaceTrainingAgentResult(bool Passed, int Attempts, TrainingArtifactData? Artifact, string FailureReason);
 
-/// <summary>Runs bounded, deterministic training attempts and never applies a failing artifact.</summary>
+/// <summary>统一的人脸训练 Agent：最多九轮，自适应配方，失败制品永不应用。</summary>
 public sealed class FaceTrainingAgent(FaceTrainingSubmissionService submission)
 {
     public async Task<FaceTrainingAgentResult> RunAsync(FaceTrainingSnapshotResult snapshot,
@@ -18,10 +21,21 @@ public sealed class FaceTrainingAgent(FaceTrainingSubmissionService submission)
         if (!string.IsNullOrWhiteSpace(initialHints))
             hints = string.IsNullOrWhiteSpace(hints) ? initialHints : $"{hints}\n用户操作摘要：{initialHints}";
         TrainingArtifactData? last = null;
+        var fingerprints = new HashSet<string>(StringComparer.Ordinal);
         for (var attempt = 1; attempt <= maxAttempts; attempt++)
         {
-            progress?.Report($"训练 Agent：第 {attempt}/{maxAttempts} 次提交");
-            var submitted = await submission.SubmitAsync(snapshot, samples, cancellationToken, attempt, hints, visualAttributes, actions);
+            var recipe = BuildRecipe(samples, attempt, visualAttributes, actions);
+            if (!fingerprints.Add(recipe.Fingerprint))
+            {
+                progress?.Report($"训练 Agent：第 {attempt}/{maxAttempts} 次，数据配方未变化，跳过重复提交（{recipe.Fingerprint}）");
+                return new(false, Math.Max(0, attempt - 1), last,
+                    "下一轮数据配方与上一轮相同，已跳过重复训练；请补充不同姿态、光照或排他负样本");
+            }
+            var recipeHints = $"数据配方={recipe.Fingerprint}；选中={recipe.Samples.Count}；排除={recipe.ExcludedCount}；原因={recipe.Reason}";
+            var roundHints = string.IsNullOrWhiteSpace(hints) ? recipeHints : $"{hints}\n{recipeHints}";
+            progress?.Report($"训练 Agent：第 {attempt}/{maxAttempts} 次：{recipe.Reason}；选中 {recipe.Samples.Count}，排除 {recipe.ExcludedCount}，指纹 {recipe.Fingerprint}");
+            var submitted = await submission.SubmitAsync(snapshot, recipe.Samples, cancellationToken, attempt, roundHints,
+                visualAttributes, actions, recipe.Fingerprint, recipe.Reason, recipe.ExcludedCount);
             if (submitted.Status == "failed")
             {
                 if (attempt == maxAttempts) return new(false, attempt, null, submitted.Error ?? "训练提交失败");
@@ -55,9 +69,54 @@ public sealed class FaceTrainingAgent(FaceTrainingSubmissionService submission)
             if (artifact.Metrics.ValidationAccuracy >= gate)
                 return new(true, attempt, artifact, "准确率门禁通过");
             var advice = advisor is null ? "提高困难负样本覆盖并重新评测" : await advisor(attempt, artifact, cancellationToken);
-            hints = string.IsNullOrWhiteSpace(hints) ? advice : $"{hints}\n本轮调整建议：{advice}";
-            progress?.Report($"训练 Agent：第 {attempt} 次未达 90%，已生成下一次调整建议");
+            hints = string.IsNullOrWhiteSpace(roundHints) ? advice : $"{roundHints}\n本轮调整建议：{advice}";
+            progress?.Report($"训练 Agent：第 {attempt} 次未达 90%，已生成下一轮配方调整建议");
         }
-        return new(false, maxAttempts, last, $"连续 {maxAttempts} 次未达到准确率 90%");
+        return new(false, maxAttempts, last, "连续 9 次未达到准确率 90%");
     }
+
+    private static AttemptRecipe BuildRecipe(
+        IReadOnlyList<(long FaceId, long PersonId, float[] Embedding, string Split)> source,
+        int attempt, IReadOnlyDictionary<long, TrainingVisualAttribute>? attributes,
+        IReadOnlyList<TrainingActionEvidence>? actions)
+    {
+        var errorFaces = actions?.Where(a => a.Action is "reject" or "move_out" or "reclassify" or "wrong")
+            .Select(a => a.FaceId).ToHashSet() ?? [];
+        var fraction = attempt switch { 1 => 1d, 2 => .90d, 3 => .80d, 4 => .85d, _ => .90d };
+        var selected = source.GroupBy(s => s.PersonId).SelectMany(group =>
+        {
+            var ordered = group.OrderByDescending(s => errorFaces.Contains(s.FaceId))
+                .ThenByDescending(s => Difficulty(s, attributes, attempt))
+                .ThenBy(s => Stable(attempt, s.FaceId)).ToArray();
+            var count = Math.Min(ordered.Length, Math.Max(2, (int)Math.Ceiling(ordered.Length * fraction)));
+            var chosen = ordered.Take(count).ToList();
+            foreach (var item in ordered.Where(s => s.Split != "train" && !chosen.Contains(s)).Take(1)) chosen.Add(item);
+            return chosen;
+        }).DistinctBy(s => s.FaceId).OrderBy(s => s.FaceId).ToArray();
+        var fingerprintText = string.Join('|', selected.Select(s => $"{s.FaceId}:{s.PersonId}:{s.Split}"));
+        var fingerprint = "recipe-" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(fingerprintText)))[..16].ToLowerInvariant();
+        var reason = attempt == 1 ? "基线配方：保留全部人工确认样本" :
+            errorFaces.Count > 0 ? "优先纳入用户纠错样本，并按姿态/光照/遮挡质量重新配比" :
+            "按 VL 质量与困难姿态重新配比，减少冗余样本";
+        return new(selected, source.Count - selected.Length, fingerprint, reason);
+    }
+
+    private static double Difficulty((long FaceId, long PersonId, float[] Embedding, string Split) sample,
+        IReadOnlyDictionary<long, TrainingVisualAttribute>? attributes, int attempt)
+    {
+        if (attributes is null || !attributes.TryGetValue(sample.FaceId, out var value))
+            return Stable(attempt, sample.FaceId) / (double)uint.MaxValue;
+        var score = 1d - value.FaceQuality;
+        if (!value.Pose.Equals("front", StringComparison.OrdinalIgnoreCase)) score += .25;
+        if (!value.Lighting.Equals("good", StringComparison.OrdinalIgnoreCase)) score += .2;
+        score += Math.Min(.3, value.Occlusion.Count * .1);
+        return score;
+    }
+
+    private static uint Stable(int seed, long id) =>
+        BitConverter.ToUInt32(SHA256.HashData(Encoding.UTF8.GetBytes($"{seed}:{id}")), 0);
+
+    private sealed record AttemptRecipe(
+        IReadOnlyList<(long FaceId, long PersonId, float[] Embedding, string Split)> Samples,
+        int ExcludedCount, string Fingerprint, string Reason);
 }

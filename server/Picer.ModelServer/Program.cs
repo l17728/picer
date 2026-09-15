@@ -164,7 +164,8 @@ app.MapPost("/api/face-training/jobs", (JobRequest request, ConcurrentDictionary
             dataset.ModelVersion ?? "sface", dataset.Samples?.Length ?? 0,
             dataset.Samples?.Select(sample => sample.PersonId).Distinct().Count() ?? 0,
             "queued", null, null, null, dataset.Attempt > 1 ? "glm-4.6v-flash" : null,
-            dataset.Attempt > 1 ? "face-training-advisor.v1" : null, dataset.TrainingHints, DateTime.UtcNow));
+            dataset.Attempt > 1 ? "face-training-advisor.v1" : null, dataset.TrainingHints, DateTime.UtcNow,
+            dataset.RecipeFingerprint, dataset.RecipeReason, dataset.SelectedSampleCount, dataset.ExcludedSampleCount));
         _ = Task.Run(async () => await executor.RunAsync(id, dataset, jobs));
     }
     else
@@ -191,7 +192,8 @@ app.Run();
 public record DatasetRequest(string SnapshotId, string? SourceApp = null, string? ModelVersion = null,
     FaceSample[]? Samples = null, string ProtocolVersion = "face-evidence.v1",
     UserActionEvidence[]? Actions = null, MediaGroupEvidence[]? Groups = null,
-    int Attempt = 1, string? TrainingHints = null);
+    int Attempt = 1, string? TrainingHints = null, string? RecipeFingerprint = null,
+    string? RecipeReason = null, int SelectedSampleCount = 0, int ExcludedSampleCount = 0);
 public record FaceSample(long FaceId, long PersonId, float[] Embedding, string Split = "train",
     SampleEvidence? Evidence = null, VlAttributes? Attributes = null);
 public record SampleEvidence(string Source, string? ImageHash = null, string? FileName = null,
@@ -357,7 +359,8 @@ public sealed class TrainingExecutor
                 dataset.ModelVersion ?? "sface", samples.Length, prototypes.Count, "completed",
                 metrics.ValidationAccuracy, metrics.FalseAcceptRate, metrics.FalseRejectRate,
                 dataset.Attempt > 1 ? "glm-4.6v-flash" : null,
-                dataset.Attempt > 1 ? "face-training-advisor.v1" : null, dataset.TrainingHints, DateTime.UtcNow));
+                dataset.Attempt > 1 ? "face-training-advisor.v1" : null, dataset.TrainingHints, DateTime.UtcNow,
+                dataset.RecipeFingerprint, dataset.RecipeReason, dataset.SelectedSampleCount, dataset.ExcludedSampleCount));
         }
         catch (Exception exception)
         {
@@ -366,7 +369,8 @@ public sealed class TrainingExecutor
                 dataset.ModelVersion ?? "sface", dataset.Samples?.Length ?? 0,
                 dataset.Samples?.Select(sample => sample.PersonId).Distinct().Count() ?? 0,
                 "failed", null, null, null, dataset.Attempt > 1 ? "glm-4.6v-flash" : null,
-                dataset.Attempt > 1 ? "face-training-advisor.v1" : null, dataset.TrainingHints, DateTime.UtcNow));
+                dataset.Attempt > 1 ? "face-training-advisor.v1" : null, dataset.TrainingHints, DateTime.UtcNow,
+                dataset.RecipeFingerprint, dataset.RecipeReason, dataset.SelectedSampleCount, dataset.ExcludedSampleCount));
         }
     }
 

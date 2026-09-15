@@ -13,7 +13,8 @@ public sealed record FaceTrainingProgress(string Stage, int Percent, string Deta
 public sealed record FaceTrainingResult(string DatasetId, string JobId, string ArtifactId, int Samples,
     int People, double FalseAcceptRate, double FalseRejectRate, bool Applied, string Message,
     int SelectedTrainingSamples = 0, int ExcludedSameSource = 0, int ExcludedPersonCap = 0,
-    double? BaselineFalseAcceptRate = null, double? BaselineFalseRejectRate = null);
+    double? BaselineFalseAcceptRate = null, double? BaselineFalseRejectRate = null,
+    bool GatePassed = false);
 public sealed record FaceTrainingPlan(string SnapshotId, string ModelVersion, int Samples, int People,
     int PositiveSamples, int NegativeSamples, int LeakageGroups, int TrainSamples, int ValidationSamples,
     int TestSamples, int VideoSamples, IReadOnlyList<string> Warnings);
@@ -67,7 +68,8 @@ public sealed class FaceTrainingService(
 
     public async Task<FaceTrainingResult> SubmitAndApplyAsync(Uri endpoint,
         IProgress<FaceTrainingProgress>? progress = null, CancellationToken cancellationToken = default,
-        string? expectedSnapshotId = null, bool applyArtifact = true)
+        string? expectedSnapshotId = null, bool applyArtifact = true, int attempt = 1,
+        string? recipeFingerprint = null, string? recipeReason = null, int excludedSampleCount = 0)
     {
         if (_client.DefaultRequestHeaders.Authorization is null)
         {
@@ -76,7 +78,7 @@ public sealed class FaceTrainingService(
                 _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", key);
         }
         progress?.Report(new("snapshot", 2, "正在冻结人工确认与排他负样本"));
-        var samples = BuildSamples(out var modelVersion);
+        var samples = BuildSamples(out var modelVersion, attempt);
         var people = samples.Where(sample => sample.Label == "positive").Select(sample => sample.PersonId).Distinct().ToArray();
         if (people.Length < 2) throw new InvalidOperationException("至少需要两位已有人工确认样本的人物。");
         var snapshotId = new FaceEvaluationSnapshotService(repository).CreateSnapshot(
@@ -85,7 +87,7 @@ public sealed class FaceTrainingService(
             throw new InvalidOperationException("确认后人工标注发生了变化；为避免提交错位数据，请重新确认训练快照。");
         var root = NormalizeEndpoint(endpoint);
         progress?.Report(new("upload", 10, $"正在提交 {samples.Length} 个脱敏向量样本"));
-        using var datasetRequest = new HttpRequestMessage(HttpMethod.Post, new Uri(root, "datasets")) { Content = JsonContent.Create(new { snapshotId, sourceApp = "picer", modelVersion, samples }, options: Json) };
+        using var datasetRequest = new HttpRequestMessage(HttpMethod.Post, new Uri(root, "datasets")) { Content = JsonContent.Create(new { snapshotId, sourceApp = "picer", modelVersion, attempt, recipeFingerprint, recipeReason, selectedSampleCount = samples.Length, excludedSampleCount, samples }, options: Json) };
         datasetRequest.Headers.Add("X-Picer-Api-Version", "1");
         using var datasetResponse = await _client.SendAsync(datasetRequest, cancellationToken).ConfigureAwait(false);
         await EnsureSuccess(datasetResponse, "提交训练快照", cancellationToken).ConfigureAwait(false);
@@ -166,7 +168,7 @@ public sealed class FaceTrainingService(
             applied ? "训练完成并已应用；人工分类未改变。" : ExplainGateFailure(artifact),
             artifact.RecipeReport?.SelectedTrainingPositives ?? 0,
             artifact.RecipeReport?.ExcludedSameSource ?? 0, artifact.RecipeReport?.ExcludedPersonCap ?? 0,
-            artifact.BaselineMetrics?.FalseAcceptRate, artifact.BaselineMetrics?.FalseRejectRate);
+            artifact.BaselineMetrics?.FalseAcceptRate, artifact.BaselineMetrics?.FalseRejectRate, applied);
     }
 
     public string Rollback()
@@ -189,7 +191,7 @@ public sealed class FaceTrainingService(
         throw new InvalidOperationException($"{operation}失败（{(int)response.StatusCode}）：{detail}");
     }
 
-    private Sample[] BuildSamples(out string modelVersion)
+    private Sample[] BuildSamples(out string modelVersion, int attempt = 1)
     {
         var confirmed = repository.GetEmbeddingsForMatching()
             .Where(face => face.AssignmentState == "confirmed" && face.PersonId is not null).ToArray();
@@ -209,9 +211,22 @@ public sealed class FaceTrainingService(
             .Concat(BuildConfirmedHardNegatives(confirmed, imageGroups));
         var videos = repository.GetVideoTrainingFaces().Select(face => CreateSample(-face.VideoFaceId, face.PersonId,
             face.Label, $"video:{face.VideoId}", face.Embedding, face.DetectionConfidence, face.RelativeArea));
-        return photos.Concat(videos).OrderBy(sample => sample.FaceId).ThenBy(sample => sample.PersonId)
+        var all = photos.Concat(videos).OrderBy(sample => sample.FaceId).ThenBy(sample => sample.PersonId)
             .ThenBy(sample => sample.Label, StringComparer.Ordinal).ToArray();
+        if (attempt <= 1) return all;
+        var fraction = attempt switch { 2 => .90, 3 => .80, 4 => .85, _ => .90 };
+        return all.GroupBy(sample => sample.PersonId).SelectMany(group =>
+        {
+            var ordered = group.OrderBy(sample => StableAttemptHash(attempt, sample.FaceId)).ToArray();
+            var count = Math.Min(ordered.Length, Math.Max(2, (int)Math.Ceiling(ordered.Length * fraction)));
+            var selected = ordered.Take(count).ToList();
+            foreach (var item in ordered.Where(sample => sample.Label == "negative" && !selected.Contains(sample)).Take(1)) selected.Add(item);
+            return selected;
+        }).OrderBy(sample => sample.FaceId).ThenBy(sample => sample.PersonId).ThenBy(sample => sample.Label, StringComparer.Ordinal).ToArray();
     }
+
+    private static uint StableAttemptHash(int attempt, long faceId) =>
+        BitConverter.ToUInt32(SHA256.HashData(Encoding.UTF8.GetBytes($"{attempt}:{faceId}")), 0);
 
     private static IEnumerable<Sample> BuildConfirmedHardNegatives(IReadOnlyList<FaceEmbeddingRecord> confirmed,
         IReadOnlyDictionary<long, string> imageGroups)

@@ -54,4 +54,5 @@ public sealed record TrainingAttemptRecord(
     int Attempt, string ModelVersion, int SampleCount, int PersonCount,
     string Status, double? ValidationAccuracy, double? FalseAcceptRate,
     double? FalseRejectRate, string? AdvisorModel, string? AdvisorPromptVersion,
-    string? TrainingHints, DateTime CreatedUtc);
+    string? TrainingHints, DateTime CreatedUtc, string? RecipeFingerprint = null,
+    string? RecipeReason = null, int SelectedSampleCount = 0, int ExcludedSampleCount = 0);
