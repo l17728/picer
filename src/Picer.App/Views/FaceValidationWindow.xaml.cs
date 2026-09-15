@@ -21,6 +21,7 @@ public partial class FaceValidationWindow : Window
     private readonly VisionAnalysisRepository _repository;
     private readonly ObservableCollection<YuNetValidationItem> _rows = [];
     private SFaceCalibrationResult? _lastCalibration;
+    private (string ModelVersion, double Threshold, double Far, double Frr)? _lastCalculatedCalibration;
     private int _operationRunning;
     private CancellationTokenSource? _trainingCancellation;
 
@@ -93,10 +94,18 @@ public partial class FaceValidationWindow : Window
             var result = await UiWork.RunDatabaseAsync("FaceValidation.CalibrateSFace",
                 () => _validation.CalibrateSFace(progress: progress));
             var applied = await UiWork.RunDatabaseAsync(() => _validation.GetAppliedSFaceThreshold(result.ModelVersion));
+            var sameAsPreviousCalculation = _lastCalculatedCalibration is { } previous &&
+                string.Equals(previous.ModelVersion, result.ModelVersion, StringComparison.Ordinal) &&
+                Math.Abs(previous.Threshold - result.RecommendedThreshold) <= 0.000_001 &&
+                Math.Abs(previous.Far - result.FalseAcceptRate) <= 0.000_000_1 &&
+                Math.Abs(previous.Frr - result.FalseRejectRate) <= 0.000_000_1;
+            _lastCalculatedCalibration = (result.ModelVersion, result.RecommendedThreshold,
+                result.FalseAcceptRate, result.FalseRejectRate);
             _lastCalibration = result;
-            // Applying an unchanged recommendation is a no-op. Keep the
-            // button disabled until calibration produces a genuinely new value.
-            ApplySFaceThreshold.IsEnabled = applied is null || Math.Abs(applied.Value - result.RecommendedThreshold) > 0.000_001;
+            // Applying an unchanged recommendation is a no-op. This covers
+            // both an already-applied threshold and repeated calculations.
+            ApplySFaceThreshold.IsEnabled = !sameAsPreviousCalculation &&
+                (applied is null || Math.Abs(applied.Value - result.RecommendedThreshold) > 0.000_001);
             var ready = result.QualifiedPeople >= 5 ? "样本人数已达标" : $"还需补足 {5 - result.QualifiedPeople} 位达到 20 张照片的成员";
             SFaceResult.Text = $"模型：{result.ModelVersion}\n" +
                 $"已确认人物：{result.ConfirmedPeople}；达到 20 张：{result.QualifiedPeople}/5（{ready}）\n" +
