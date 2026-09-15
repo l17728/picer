@@ -259,14 +259,16 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
                 .Select(value => new TrainingActionEvidence(value.FaceId, value.PersonId, value.SourcePersonId,
                     value.Action, value.CreatedUtc, value.CoClusteredFaceIds, value.CoClusteredPersonIds,
                     value.ClusterConfidence, value.ModelVersion, value.ErrorType)).ToArray());
+            var actionSummary = string.Join("；", actions.GroupBy(value => value.Action, StringComparer.OrdinalIgnoreCase)
+                .OrderByDescending(group => group.Count()).Select(group => $"{group.Key}={group.Count()}"));
             var endpoint = Environment.GetEnvironmentVariable("PICER_MODEL_SERVER_URL")?.Trim() ?? "http://127.0.0.1:8090";
             string? key = Environment.GetEnvironmentVariable("PICER_MODEL_SERVER_API_KEY")?.Trim();
             using var submission = new FaceTrainingSubmissionService(endpoint, key ?? "");
             var agent = new FaceTrainingAgent(submission);
             var result = await agent.RunAsync(snapshot, samples,
-                (attempt, artifact, token) => AnalyzeTrainingFailureAsync(attempt, artifact, .90, token),
+                (attempt, artifact, token) => AnalyzeTrainingFailureAsync(attempt, artifact, .90, actionSummary, token),
                 new Progress<string>(text => StatusText = text),
-                actions: actions);
+                actions: actions, initialHints: actionSummary);
             if (!result.Passed || result.Artifact is null)
             {
                 StatusText = $"训练失败：{result.FailureReason}；制品未应用";
@@ -286,7 +288,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         finally { IsAnalyzing = false; }
     }
 
-    private async Task<string?> AnalyzeTrainingFailureAsync(int attempt, TrainingArtifactData artifact, double target, CancellationToken cancellationToken)
+    private async Task<string?> AnalyzeTrainingFailureAsync(int attempt, TrainingArtifactData artifact, double target, string actionSummary, CancellationToken cancellationToken)
     {
         try
         {
@@ -302,7 +304,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
                 platform += "/picer";
             using var chat = new OpenAiCompatibleChatClient(new Uri($"{platform}/api/ai/chat/completions"), key, "glm-4.6v-flash");
             return await chat.CompleteAsync("你是人脸训练 Agent。基于历史试验记忆提出下一次可执行调整；只输出简短建议，不输出个人信息。",
-                $"第{attempt}次未通过。目标准确率={target:P0}，实际={artifact.Metrics.ValidationAccuracy:P2}，误识率={artifact.Metrics.FalseAcceptRate:P2}，拒识率={artifact.Metrics.FalseRejectRate:P2}，样本={artifact.Metrics.TotalSamples}，人物={artifact.Metrics.TotalPersons}。请给出下一次正负样本和阈值策略建议。", 300, cancellationToken);
+                $"第{attempt}次未通过。目标准确率={target:P0}，实际={artifact.Metrics.ValidationAccuracy:P2}，误识率={artifact.Metrics.FalseAcceptRate:P2}，拒识率={artifact.Metrics.FalseRejectRate:P2}，样本={artifact.Metrics.TotalSamples}，人物={artifact.Metrics.TotalPersons}。用户操作摘要：{actionSummary}。请结合拒绝、移动和确认日志给出下一次正负样本和阈值策略建议。", 300, cancellationToken);
         }
         catch (Exception exception) { AppLogger.Warn($"智谱训练分析失败：{exception.Message}"); return "智谱分析不可用；增加困难负样本并调整阈值"; }
     }

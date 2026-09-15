@@ -10,11 +10,13 @@ public sealed class FaceTrainingAgent(FaceTrainingSubmissionService submission)
         Func<int, TrainingArtifactData, CancellationToken, Task<string?>>? advisor = null,
         IProgress<string>? progress = null, CancellationToken cancellationToken = default,
         IReadOnlyDictionary<long, TrainingVisualAttribute>? visualAttributes = null,
-        IReadOnlyList<TrainingActionEvidence>? actions = null)
+        IReadOnlyList<TrainingActionEvidence>? actions = null, string? initialHints = null)
     {
         const double gate = 0.90;
         const int maxAttempts = 9;
         string? hints = await submission.GetTrainingMemoryAsync(cancellationToken);
+        if (!string.IsNullOrWhiteSpace(initialHints))
+            hints = string.IsNullOrWhiteSpace(hints) ? initialHints : $"{hints}\n用户操作摘要：{initialHints}";
         TrainingArtifactData? last = null;
         for (var attempt = 1; attempt <= maxAttempts; attempt++)
         {
