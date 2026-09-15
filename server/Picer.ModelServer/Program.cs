@@ -195,7 +195,7 @@ public record DatasetRequest(string SnapshotId, string? SourceApp = null, string
     int Attempt = 1, string? TrainingHints = null, string? RecipeFingerprint = null,
     string? RecipeReason = null, int SelectedSampleCount = 0, int ExcludedSampleCount = 0);
 public record FaceSample(long FaceId, long PersonId, float[] Embedding, string Split = "train",
-    SampleEvidence? Evidence = null, VlAttributes? Attributes = null);
+    SampleEvidence? Evidence = null, VlAttributes? Attributes = null, string Label = "positive");
 public record SampleEvidence(string Source, string? ImageHash = null, string? FileName = null,
     string? GroupId = null, string? ModelVersion = null, string? SelectionReason = null,
     string? ExclusionReason = null);
