@@ -8,6 +8,7 @@
 
 - 客户端同时读取 `baseModelVersion`（新协议）和 `modelVersion`（v1 协议）。
 - 仍要求解析后的版本与本次数据集版本逐字精确相等，不放宽跨模型版本混用保护。
+- SHA-256 校验统一为服务端约定：先将 `sha256`、`signature`、`signatureAlgorithm`、`signingKeyId` 置空，再计算哈希。
 - 在应用日志记录期望版本、制品版本和制品 ID，便于定位真实版本不一致。
 - 增加两个字段协议兼容的单元回归用例。
 

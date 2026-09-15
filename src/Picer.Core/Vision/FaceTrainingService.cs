@@ -3,6 +3,7 @@ using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Picer.Core.Data;
 using Picer.Core.Logging;
 
@@ -139,7 +140,7 @@ public sealed class FaceTrainingService(
             throw new InvalidDataException($"训练制品基础模型版本不匹配：提交版本 {modelVersion}，制品版本 {artifactModelVersion ?? "缺失"}。");
         if (!string.IsNullOrWhiteSpace(artifact.Sha256))
         {
-            var actualHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(artifactJson))).ToLowerInvariant();
+            var actualHash = ComputeUnsignedArtifactHash(artifactJson);
             if (!string.Equals(actualHash, artifact.Sha256, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("训练制品 SHA-256 校验失败。");
         }
         if (!string.IsNullOrWhiteSpace(artifact.Signature) && !string.Equals(artifact.SignatureAlgorithm, "sha256", StringComparison.OrdinalIgnoreCase))
@@ -314,6 +315,17 @@ public sealed class FaceTrainingService(
     /// <summary>Reads both v1 (modelVersion) and v2 (baseModelVersion) artifact contracts.</summary>
     public static string? ResolveArtifactModelVersion(string? baseModelVersion, string? modelVersion) =>
         string.IsNullOrWhiteSpace(baseModelVersion) ? modelVersion : baseModelVersion;
+
+    /// <summary>Matches ModelServer's hash input: integrity fields are null before hashing.</summary>
+    public static string ComputeUnsignedArtifactHash(string artifactJson)
+    {
+        var node = JsonNode.Parse(artifactJson) as JsonObject
+                   ?? throw new InvalidDataException("训练制品 JSON 根节点无效。");
+        foreach (var name in new[] { "sha256", "signature", "signatureAlgorithm", "signingKeyId" })
+            if (node.ContainsKey(name)) node[name] = null;
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(node, Json);
+        return Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+    }
     private sealed record Sample(long FaceId, long PersonId, string Label, string LeakageGroup, string Partition,
         double QualityScore, string QualityTier, float[] Embedding);
     private sealed record DatasetResponse(string Id);

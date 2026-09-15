@@ -21,6 +21,9 @@ public partial class FaceValidationWindow : Window
     private readonly VisionAnalysisRepository _repository;
     private readonly ObservableCollection<YuNetValidationItem> _rows = [];
     private SFaceCalibrationResult? _lastCalibration;
+    // Kept separately from IsEnabled because EndOperation calls SetBusy(false)
+    // and must not re-enable an already-applied/unchanged recommendation.
+    private bool _sFaceApplyAllowed;
     private (string ModelVersion, double Threshold, double Far, double Frr)? _lastCalculatedCalibration;
     private int _operationRunning;
     private CancellationTokenSource? _trainingCancellation;
@@ -68,6 +71,7 @@ public partial class FaceValidationWindow : Window
 
     private async void CalibrateSFace_Click(object sender, RoutedEventArgs e)
     {
+        _sFaceApplyAllowed = false;
         if (!TryBeginOperation("正在后台计算 SFace 阈值，请勿重复点击…")) return;
         var stopwatch = Stopwatch.StartNew();
         SFaceProgressPanel.Visibility = Visibility.Visible;
@@ -107,6 +111,7 @@ public partial class FaceValidationWindow : Window
             var sameAsApplied = applied is double appliedThreshold &&
                 Math.Abs(appliedThreshold - result.RecommendedThreshold) <= 0.000_001;
             var unchanged = sameAsPreviousCalculation || sameAsApplied;
+            _sFaceApplyAllowed = !unchanged;
             ApplySFaceThreshold.IsEnabled = !unchanged;
             var ready = result.QualifiedPeople >= 5 ? "样本人数已达标" : $"还需补足 {5 - result.QualifiedPeople} 位达到 20 张照片的成员";
             SFaceResult.Text = $"模型：{result.ModelVersion}\n" +
@@ -147,6 +152,16 @@ public partial class FaceValidationWindow : Window
                 MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
+        var currentApplied = await UiWork.RunDatabaseAsync(() =>
+            _validation.GetAppliedSFaceThreshold(_lastCalibration.ModelVersion));
+        if (currentApplied is double current &&
+            Math.Abs(current - _lastCalibration.RecommendedThreshold) <= 0.000_001)
+        {
+            _sFaceApplyAllowed = false;
+            ApplySFaceThreshold.IsEnabled = false;
+            Status.Text = "SFace 参数已经应用，当前没有新的变更";
+            return;
+        }
         if (!TryBeginOperation("正在应用 SFace 阈值…")) return;
         SFaceProgressPanel.Visibility = Visibility.Visible;
         SFaceProgress.IsIndeterminate = true;
@@ -162,6 +177,7 @@ public partial class FaceValidationWindow : Window
             var message = $"阈值 {applied.Value:F3} 已成功应用到模型 {_lastCalibration.ModelVersion}。";
             Status.Text = message;
             ApplySFaceThreshold.IsEnabled = false;
+            _sFaceApplyAllowed = false;
             SFaceProgress.IsIndeterminate = false;
             SFaceProgress.Value = 100;
             SFaceProgressText.Text = $"SFace：应用成功 · 当前阈值 {applied.Value:F3}";
@@ -380,7 +396,8 @@ public partial class FaceValidationWindow : Window
         AnalyzeYuNetButton.IsEnabled = !busy;
         SaveYuNetButton.IsEnabled = !busy;
         EvaluateYuNetButton.IsEnabled = !busy;
-        ApplySFaceThreshold.IsEnabled = !busy && _lastCalibration is { SamePairs: > 0, DifferentPairs: > 0, ModelVersion: not "none" };
+        ApplySFaceThreshold.IsEnabled = !busy && _sFaceApplyAllowed &&
+            _lastCalibration is { SamePairs: > 0, DifferentPairs: > 0, ModelVersion: not "none" };
         WorkProgress.IsIndeterminate = busy;
     }
 

@@ -22,4 +22,13 @@ public sealed class FaceTrainingEndpointTests
         Assert.Equal("sface-v2", FaceTrainingService.ResolveArtifactModelVersion("sface-v2", "old-value"));
         Assert.Null(FaceTrainingService.ResolveArtifactModelVersion(null, null));
     }
+
+    [Fact]
+    public void ArtifactHash_IgnoresIntegrityFields()
+    {
+        const string unsigned = "{\"artifactId\":\"a\",\"sha256\":null,\"signature\":null,\"signatureAlgorithm\":null,\"signingKeyId\":null}";
+        const string signed = "{\"artifactId\":\"a\",\"sha256\":\"wrong\",\"signature\":\"sig\",\"signatureAlgorithm\":\"ecdsa-p256-sha256\",\"signingKeyId\":\"key\"}";
+        Assert.Equal(FaceTrainingService.ComputeUnsignedArtifactHash(unsigned),
+            FaceTrainingService.ComputeUnsignedArtifactHash(signed));
+    }
 }
