@@ -283,6 +283,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             if (result.Status == "failed")
             {
                 StatusText = $"训练提交失败：{result.Error}";
+                AppLogger.Error($"人脸训练提交失败：status={result.Status}; error={result.Error ?? "unknown"}");
                 return;
             }
 

@@ -33,7 +33,7 @@ public sealed class FaceTrainingSubmissionService : IDisposable
     {
         var handler = new HttpClientHandler();
         handler.ServerCertificateCustomValidationCallback = (_, _, _, _) => true;
-        _client = new HttpClient(handler) { BaseAddress = new Uri(baseUrl.TrimEnd('/') + "/"), Timeout = TimeSpan.FromSeconds(30) };
+        _client = new HttpClient(handler) { BaseAddress = new Uri(NormalizeBaseUrl(baseUrl)), Timeout = TimeSpan.FromSeconds(30) };
         var resolvedKey = string.IsNullOrWhiteSpace(apiKey) ? ModelServerApiKey.Load() : apiKey.Trim();
         if (!string.IsNullOrWhiteSpace(resolvedKey))
             _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", resolvedKey);
@@ -138,4 +138,15 @@ public sealed class FaceTrainingSubmissionService : IDisposable
     }
 
     public void Dispose() => _client.Dispose();
+
+    private static string NormalizeBaseUrl(string value)
+    {
+        var uri = new Uri(value.TrimEnd('/') + "/", UriKind.Absolute);
+        var path = uri.AbsolutePath.TrimEnd('/');
+        if (uri.IsLoopback && uri.Port == 8090 &&
+            !path.Equals("/picer", StringComparison.OrdinalIgnoreCase) &&
+            !path.StartsWith("/picer/", StringComparison.OrdinalIgnoreCase))
+            return uri.GetLeftPart(UriPartial.Authority) + "/picer/";
+        return uri.ToString();
+    }
 }
