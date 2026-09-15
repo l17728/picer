@@ -1,4 +1,5 @@
 using System.Net.Http.Json;
+using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -66,6 +67,12 @@ public sealed class FaceTrainingService(
         IProgress<FaceTrainingProgress>? progress = null, CancellationToken cancellationToken = default,
         string? expectedSnapshotId = null, bool applyArtifact = true)
     {
+        if (_client.DefaultRequestHeaders.Authorization is null)
+        {
+            var key = Picer.Core.People.ModelServerApiKey.Load();
+            if (!string.IsNullOrWhiteSpace(key))
+                _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", key);
+        }
         progress?.Report(new("snapshot", 2, "正在冻结人工确认与排他负样本"));
         var samples = BuildSamples(out var modelVersion);
         var people = samples.Where(sample => sample.Label == "positive").Select(sample => sample.PersonId).Distinct().ToArray();
@@ -74,7 +81,7 @@ public sealed class FaceTrainingService(
             adapterVersion: repository.GetActiveFaceAdapterVersion(modelVersion)).SnapshotId;
         if (expectedSnapshotId is not null && !snapshotId.Equals(expectedSnapshotId, StringComparison.Ordinal))
             throw new InvalidOperationException("确认后人工标注发生了变化；为避免提交错位数据，请重新确认训练快照。");
-        var root = new Uri(endpoint.ToString().TrimEnd('/') + "/");
+        var root = NormalizeEndpoint(endpoint);
         progress?.Report(new("upload", 10, $"正在提交 {samples.Length} 个脱敏向量样本"));
         using var datasetRequest = new HttpRequestMessage(HttpMethod.Post, new Uri(root, "datasets")) { Content = JsonContent.Create(new { snapshotId, sourceApp = "picer", modelVersion, samples }, options: Json) };
         datasetRequest.Headers.Add("X-Picer-Api-Version", "1");
@@ -270,6 +277,22 @@ public sealed class FaceTrainingService(
     }
 
     public void Dispose() { if (_ownsClient) _client.Dispose(); }
+
+    /// <summary>
+    /// Accepts either the unified platform root (/picer), the face-training API
+    /// root (/picer/api/face-training), or the direct ModelServer API root.
+    /// </summary>
+    public static Uri NormalizeEndpoint(Uri endpoint)
+    {
+        var value = endpoint.ToString().TrimEnd('/');
+        if (value.EndsWith("/api/face-training", StringComparison.OrdinalIgnoreCase))
+            return new Uri(value + "/", UriKind.Absolute);
+        if (value.EndsWith("/picer", StringComparison.OrdinalIgnoreCase))
+            return new Uri(value + "/api/face-training/", UriKind.Absolute);
+        if (value.EndsWith("/api", StringComparison.OrdinalIgnoreCase))
+            return new Uri(value + "/face-training/", UriKind.Absolute);
+        return new Uri(value + "/api/face-training/", UriKind.Absolute);
+    }
     private sealed record Sample(long FaceId, long PersonId, string Label, string LeakageGroup, string Partition,
         double QualityScore, string QualityTier, float[] Embedding);
     private sealed record DatasetResponse(string Id);
