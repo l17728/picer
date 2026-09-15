@@ -854,6 +854,8 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
     [RelayCommand]
     private async Task ShowUnassignedFacesAsync()
     {
+        var stopwatch = Stopwatch.StartNew();
+        AppLogger.Info("People pending-faces load started");
         _collectionLoadCancellation?.Cancel();
         SelectedPerson = null;
         SelectedCandidateCluster = null;
@@ -867,7 +869,9 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
                 Records: _repository.OrderByFeature(_repository.GetUnassignedFaces(5000)).ToArray(),
                 Counts: _repository.GetFaceWorkQueueCounts()), cancellation.Token);
             var records = snapshot.Records;
+            if (DisplayedCollectionKind != DisplayedFaceCollectionKind.Unassigned) return;
             var items = await BuildBurstAwareFaceItemsAsync(records, cancellation.Token);
+            if (DisplayedCollectionKind != DisplayedFaceCollectionKind.Unassigned) return;
             UnassignedFaces.Clear();
             await UiWork.AddInBatchesAsync(items, item =>
             {
@@ -879,8 +883,9 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             DisplayedFacesTitle = records.Length < snapshot.Counts.Total
                 ? $"待处理人脸（已显示 {records.Length} / 共 {snapshot.Counts.Total}）"
                 : $"待处理人脸（{snapshot.Counts.Total}）";
+            AppLogger.Info($"People pending-faces load completed; records={records.Length}; rendered={DisplayedFaces.Count}; elapsedMs={stopwatch.ElapsedMilliseconds}");
         }
-        catch (OperationCanceledException) { }
+        catch (OperationCanceledException) { AppLogger.Info($"People pending-faces load canceled; elapsedMs={stopwatch.ElapsedMilliseconds}"); }
     }
 
     [RelayCommand]
@@ -899,7 +904,9 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         {
             var records = await UiWork.RunDatabaseAsync(() =>
                 _repository.OrderByFeature(_repository.GetIgnoredFaces(5000)).ToArray(), cancellation.Token);
+            if (DisplayedCollectionKind != DisplayedFaceCollectionKind.Ignored) return;
             var items = await BuildBurstAwareFaceItemsAsync(records, cancellation.Token);
+            if (DisplayedCollectionKind != DisplayedFaceCollectionKind.Ignored) return;
             await UiWork.AddInBatchesAsync(items, item =>
             {
                 DisplayedFaces.Add(item);
@@ -1183,6 +1190,8 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             new BurstGroupService(_database).GetGroupsForImages(records.Select(face => face.ImageId)), cancellationToken);
         var groupByImage = groups.Values.SelectMany(group => group.ImageIds.Select(imageId => (imageId, group)))
             .ToDictionary(value => value.imageId, value => value.group);
+        var recordsByImage = records.GroupBy(face => face.ImageId)
+            .ToDictionary(group => group.Key, group => group.ToArray());
         var handled = new HashSet<long>();
         var result = new List<UnassignedFaceViewModel>(records.Count);
         foreach (var record in records)
@@ -1194,7 +1203,10 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
                 continue;
             }
             if (!handled.Add(group.Id)) continue;
-            var members = records.Where(face => group.ImageIds.Contains(face.ImageId)).Select(CreateFaceItem).ToArray();
+            var members = group.ImageIds
+                .Where(recordsByImage.ContainsKey)
+                .SelectMany(imageId => recordsByImage[imageId])
+                .Select(CreateFaceItem).ToArray();
             if (members.Select(face => face.Record.ImageId).Distinct().Count() < 2)
             {
                 result.AddRange(members);

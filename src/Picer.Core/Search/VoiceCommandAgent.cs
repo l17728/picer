@@ -20,18 +20,19 @@ public sealed class VoiceCommandAgent(OpenAiCompatibleChatClient chat)
     {
         if (string.IsNullOrWhiteSpace(utterance)) return RememberAndReturn("请告诉我想看什么。", VoiceActionKind.Clarify, utterance);
         var normalized = utterance.Trim();
+        var effectiveUtterance = MergeContinuation(normalized);
         if (TryResolvePendingChild(normalized, locationPaths, out var pendingChild))
             return RememberAndReturn($"好的，正在打开 {pendingChild.Split('/').Last()} 的照片。", VoiceActionKind.OpenLocation, normalized, pendingChild);
         if (IsConfirmation(normalized) && TryGetPendingLocation(out var pending))
             return RememberAndReturn("好的，继续打开刚才确认的地点。", VoiceActionKind.OpenLocation, normalized, pending);
-        if (TryBuildLocationListReply(normalized, locationPaths, out var locationReply, out var locationTarget))
+        if (TryBuildLocationListReply(effectiveUtterance, locationPaths, out var locationReply, out var locationTarget))
             return RememberAndReturn(locationReply, VoiceActionKind.Clarify, normalized, locationTarget);
-        if (TryResolveLocationRequest(normalized, locationPaths, out var directLocation))
+        if (TryResolveLocationRequest(effectiveUtterance, locationPaths, out var directLocation))
             return RememberAndReturn(BuildLocationReply(directLocation, locationPaths), VoiceActionKind.OpenLocation, normalized, directLocation);
-        if (normalized.Contains("打开目录浏览", StringComparison.OrdinalIgnoreCase))
+        if (effectiveUtterance.Contains("打开目录浏览", StringComparison.OrdinalIgnoreCase))
         {
             var japan = locationPaths.FirstOrDefault(p => p.Contains("日本", StringComparison.OrdinalIgnoreCase));
-            if (japan is not null && normalized.Contains("日本", StringComparison.OrdinalIgnoreCase))
+            if (japan is not null && effectiveUtterance.Contains("日本", StringComparison.OrdinalIgnoreCase))
                 return RememberAndReturn("正在打开日本照片。", VoiceActionKind.OpenLocation, normalized, japan);
             return RememberAndReturn("已打开目录浏览，请选择地点。", VoiceActionKind.OpenModule, normalized, "目录浏览");
         }
@@ -116,6 +117,16 @@ public sealed class VoiceCommandAgent(OpenAiCompatibleChatClient chat)
     private (string Role, string Text)[] SnapshotHistory()
     {
         lock (_historyGate) return _history.ToArray();
+    }
+
+    private string MergeContinuation(string current)
+    {
+        if (!current.Contains("照片", StringComparison.OrdinalIgnoreCase) &&
+            !current.Contains("图片", StringComparison.OrdinalIgnoreCase)) return current;
+        var previousUser = SnapshotHistory().LastOrDefault(item => item.Role == "user").Text;
+        if (string.IsNullOrWhiteSpace(previousUser) ||
+            !previousUser.Contains("打开目录浏览", StringComparison.OrdinalIgnoreCase)) return current;
+        return $"{previousUser}，{current}";
     }
 
     private static bool IsConfirmation(string value) => value is "对" or "是" or "好的" or "就这个" or "这个" or "没错";

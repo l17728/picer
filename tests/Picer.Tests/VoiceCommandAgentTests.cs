@@ -66,6 +66,19 @@ public sealed class VoiceCommandAgentTests
         Assert.Equal("地球/日本/长崎县", result.Target);
     }
 
+    [Fact]
+    public async Task PlanAsync_MergesLocationRequestAfterDirectoryTurn()
+    {
+        using var chat = Chat("invalid");
+        var agent = new VoiceCommandAgent(chat);
+        var paths = new[] { "地球/日本", "地球/日本/佐贺县", "地球/日本/长崎县" };
+        var first = await agent.PlanAsync("打开目录浏览", paths, []);
+        Assert.Equal(VoiceActionKind.OpenModule, first.Kind);
+        var second = await agent.PlanAsync("看看日本的照片", paths, []);
+        Assert.Equal(VoiceActionKind.OpenLocation, second.Kind);
+        Assert.Equal("地球/日本", second.Target);
+    }
+
     private static OpenAiCompatibleChatClient Chat(string response)
     {
         var handler = new ReplyHandler(response);
