@@ -27,6 +27,15 @@ public sealed class FaceTrainingAgent(FaceTrainingSubmissionService submission)
         for (var attempt = 1; attempt <= maxAttempts; attempt++)
         {
             var recipe = BuildRecipe(samples, attempt, visualAttributes, actions);
+            // The server history is part of the Agent memory. Avoid replaying a
+            // recipe that was already attempted in an earlier run, not only in
+            // this process.
+            if (hints.Contains(recipe.Fingerprint, StringComparison.OrdinalIgnoreCase))
+            {
+                progress?.Report($"训练 Agent：历史已存在配方 {recipe.Fingerprint}，跳过重复提交");
+                return new(false, Math.Max(0, attempt - 1), last,
+                    "训练历史中已存在相同配方，已跳过重复训练");
+            }
             if (!fingerprints.Add(recipe.Fingerprint))
             {
                 progress?.Report($"训练 Agent：第 {attempt}/{maxAttempts} 次，数据配方未变化，跳过重复提交（{recipe.Fingerprint}）");
