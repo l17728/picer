@@ -81,7 +81,7 @@ app.MapGet("/api/models", () => Results.Ok(new[] {
     new { id = "picer-prototype-calibration", capability = "face-training", status = "ready" },
     new { id = "qwen3-vl-8b-instruct", capability = "multimodal", status = string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("PICER_VL_MODEL_ENDPOINT")) ? "optional-unconfigured" : "ready" },
     new { id = "qwen3-asr-1.7b", capability = "language", status = "configured" },
-    new { id = "sherpa-onnx-vits-zh-ll", capability = "tts", status = "pending" }
+    new { id = "sherpa-onnx-vits-zh-ll", capability = "tts", status = "platform-managed" }
 }));
 app.MapGet("/api/ai/capabilities", () => Results.Ok(new
 {
