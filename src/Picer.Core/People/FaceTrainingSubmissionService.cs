@@ -41,7 +41,7 @@ public sealed class FaceTrainingSubmissionService : IDisposable
 
     public async Task<TrainingSubmissionResult> SubmitAsync(FaceTrainingSnapshotResult snapshot,
         IReadOnlyList<(long FaceId, long PersonId, float[] Embedding, string Split)> samples,
-        CancellationToken ct = default)
+        CancellationToken ct = default, int attempt = 1, string? trainingHints = null)
     {
         try
         {
@@ -49,6 +49,8 @@ public sealed class FaceTrainingSubmissionService : IDisposable
             {
                 snapshotId = snapshot.SnapshotId.ToString(),
                 modelVersion = "sface",
+                attempt,
+                trainingHints,
                 protocolVersion = "face-evidence.v1",
                 samples = samples.Select(s => new
                 {

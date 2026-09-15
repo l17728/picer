@@ -299,6 +299,14 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
                     var artifact = await submission.GetArtifactAsync(status.ArtifactId);
                     if (artifact is not null)
                     {
+                        const double minimumTrainingAccuracy = 0.90;
+                        if (artifact.Metrics.ValidationAccuracy < minimumTrainingAccuracy)
+                        {
+                            StatusText = $"训练未通过门禁：准确率 {artifact.Metrics.ValidationAccuracy:P1}，要求至少 90%；制品未应用";
+                            TrainingResultText = $"未应用模型版本：{artifact.ModelVersion}；制品：{artifact.ArtifactId}；评测准确率 {artifact.Metrics.ValidationAccuracy:P1}";
+                            AppLogger.Warn($"人脸训练未通过准确率门禁：accuracy={artifact.Metrics.ValidationAccuracy:F3}; required={minimumTrainingAccuracy:F2}; artifact={artifact.ArtifactId}");
+                            break;
+                        }
                         if (!await submission.VerifyArtifactAsync(artifact))
                         {
                             StatusText = "训练制品签名校验失败，已阻止应用。";

@@ -11,6 +11,7 @@ builder.Services.AddSingleton<TrainingExecutor>();
 builder.Services.AddSingleton<TrainingRecipeBuilder>();
 builder.Services.AddSingleton<ITrainingAlgorithmAdapter, PrototypeCalibrationAdapter>();
 builder.Services.AddSingleton<ArtifactSigner>();
+builder.Services.AddSingleton<TrainingAttemptArchive>();
 var app = builder.Build();
 
 var apiKey = Environment.GetEnvironmentVariable("PICER_MODEL_SERVER_API_KEY");
@@ -95,6 +96,7 @@ app.MapPost("/api/face-training/datasets", (DatasetRequest request, ConcurrentDi
     index[datasetId] = request;
     return Results.Ok(new { id = datasetId, snapshotId = request.SnapshotId, sampleCount = request.Samples?.Length ?? 0 });
 });
+app.MapGet("/api/face-training/archive", (TrainingAttemptArchive archive, int? limit) => Results.Ok(archive.ReadRecent(limit ?? 100)));
 app.MapPost("/api/face-training/recipe/preview", (DatasetRequest request, TrainingRecipeBuilder builder) =>
     Results.Ok(new { protocolVersion = request.ProtocolVersion, selections = builder.Build(request) }));
 app.MapPost("/api/face-training/recipe/enrich", (VlEnrichmentRequest request) =>
@@ -114,13 +116,20 @@ app.MapPost("/api/face-training/quality-report", (DatasetRequest request) =>
         passed = leaked.Length == 0 && persons > 0 });
 });
 
-app.MapPost("/api/face-training/jobs", (JobRequest request, ConcurrentDictionary<string, TrainingJob> jobs, TrainingExecutor executor, ConcurrentDictionary<string, object> datasets) =>
+app.MapPost("/api/face-training/jobs", (JobRequest request, ConcurrentDictionary<string, TrainingJob> jobs, TrainingExecutor executor, TrainingAttemptArchive archive, ConcurrentDictionary<string, object> datasets) =>
 {
     var id = "job-" + Guid.NewGuid().ToString("N");
     var job = new TrainingJob(id, "queued", "queued", 0, null, null);
     jobs[id] = job;
     if (datasets.TryGetValue(request.DatasetId, out var datasetObj) && datasetObj is DatasetRequest dataset)
+    {
+        archive.Append(new TrainingAttemptRecord(request.DatasetId, dataset.SnapshotId, id, null, dataset.Attempt,
+            dataset.ModelVersion ?? "sface", dataset.Samples?.Length ?? 0,
+            dataset.Samples?.Select(sample => sample.PersonId).Distinct().Count() ?? 0,
+            "queued", null, null, null, dataset.Attempt > 1 ? "glm-4.6v-flash" : null,
+            dataset.Attempt > 1 ? "face-training-advisor.v1" : null, dataset.TrainingHints, DateTime.UtcNow));
         _ = Task.Run(async () => await executor.RunAsync(id, dataset, jobs));
+    }
     else
         jobs[id] = job with { Status = "failed", Error = $"数据集不存在或格式错误：{request.DatasetId}" };
     return Results.Ok(jobs[id]);
@@ -144,7 +153,8 @@ app.Run();
 
 public record DatasetRequest(string SnapshotId, string? SourceApp = null, string? ModelVersion = null,
     FaceSample[]? Samples = null, string ProtocolVersion = "face-evidence.v1",
-    UserActionEvidence[]? Actions = null, MediaGroupEvidence[]? Groups = null);
+    UserActionEvidence[]? Actions = null, MediaGroupEvidence[]? Groups = null,
+    int Attempt = 1, string? TrainingHints = null);
 public record FaceSample(long FaceId, long PersonId, float[] Embedding, string Split = "train",
     SampleEvidence? Evidence = null, VlAttributes? Attributes = null);
 public record SampleEvidence(string Source, string? ImageHash = null, string? FileName = null,
@@ -170,8 +180,9 @@ public sealed class TrainingExecutor
 {
     private readonly ConcurrentDictionary<string, TrainingArtifact> _artifacts = new();
     private readonly ArtifactSigner _signer;
+    private readonly TrainingAttemptArchive _archive;
 
-    public TrainingExecutor(ArtifactSigner signer) => _signer = signer;
+    public TrainingExecutor(ArtifactSigner signer, TrainingAttemptArchive archive) { _signer = signer; _archive = archive; }
 
     public bool TryGetArtifact(string artifactId, out TrainingArtifact artifact) => _artifacts.TryGetValue(artifactId, out artifact!);
 
@@ -242,7 +253,11 @@ public sealed class TrainingExecutor
                     centroid[i] /= embeddings.Count;
 
                 var similarities = embeddings.Select(e => CosineSimilarity(e, centroid)).ToList();
-                var threshold = similarities.Count > 1 ? similarities.Min() * 0.95 : 0.5;
+                // Later attempts deliberately relax the acceptance threshold. The
+                // client may also provide LLM-generated hints; they are retained
+                // as dataset evidence while the deterministic worker stays safe.
+                var thresholdFactor = Math.Clamp(0.95 + Math.Min(Math.Max(dataset.Attempt - 1, 0), 8) * 0.005, 0.95, 0.99);
+                var threshold = similarities.Count > 1 ? similarities.Min() * thresholdFactor : 0.5;
                 prototypes.Add(new PersonPrototype(personGroup.Key, centroid, Math.Max(0.3, threshold), embeddings.Count));
             }
 
@@ -301,10 +316,20 @@ public sealed class TrainingExecutor
             _artifacts[artifactId] = artifact;
 
             jobs[jobId] = jobs[jobId] with { Status = "completed", Stage = "completed", Progress = 100, ArtifactId = artifactId };
+            _archive.Append(new TrainingAttemptRecord("", "", jobId, artifactId, dataset.Attempt,
+                dataset.ModelVersion ?? "sface", samples.Length, prototypes.Count, "completed",
+                metrics.ValidationAccuracy, metrics.FalseAcceptRate, metrics.FalseRejectRate,
+                dataset.Attempt > 1 ? "glm-4.6v-flash" : null,
+                dataset.Attempt > 1 ? "face-training-advisor.v1" : null, dataset.TrainingHints, DateTime.UtcNow));
         }
         catch (Exception exception)
         {
             jobs[jobId] = jobs[jobId] with { Status = "failed", Error = exception.Message };
+            _archive.Append(new TrainingAttemptRecord("", "", jobId, null, dataset.Attempt,
+                dataset.ModelVersion ?? "sface", dataset.Samples?.Length ?? 0,
+                dataset.Samples?.Select(sample => sample.PersonId).Distinct().Count() ?? 0,
+                "failed", null, null, null, dataset.Attempt > 1 ? "glm-4.6v-flash" : null,
+                dataset.Attempt > 1 ? "face-training-advisor.v1" : null, dataset.TrainingHints, DateTime.UtcNow));
         }
     }
 
