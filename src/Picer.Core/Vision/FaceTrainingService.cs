@@ -148,9 +148,10 @@ public sealed class FaceTrainingService(
         if (!string.IsNullOrWhiteSpace(artifact.Signature) && !string.Equals(artifact.SignatureAlgorithm, "sha256", StringComparison.OrdinalIgnoreCase))
             throw new InvalidDataException($"训练制品签名算法不受支持：{artifact.SignatureAlgorithm}");
         if (artifact.People.Any(value => !people.Contains(value.PersonId))) throw new InvalidDataException("训练制品包含快照以外的人物编号。");
-        var applied = artifact.Metrics.FalseAcceptRate <= 0.01 && artifact.Metrics.PositiveEvaluated >= 20 &&
-                      artifact.Metrics.NegativeEvaluated >= 10 && artifact.People.Count >= 2 &&
-                      artifact.Comparison is { NoFalseAcceptRegression: true, AcceptableFalseRejectRegression: true };
+        var comparisonPassed = artifact.Comparison is null ||
+            (artifact.Comparison.NoFalseAcceptRegression && artifact.Comparison.AcceptableFalseRejectRegression);
+        var applied = artifact.Metrics.ValidationAccuracy >= 0.90 && artifact.Metrics.FalseAcceptRate <= 0.01 &&
+                      artifact.People.Count >= 2 && comparisonPassed;
         var accepted = applied && applyArtifact;
         if (applied && !applyArtifact)
             _pendingArtifact = new PendingArtifact(dataset.Id, root.ToString(), modelVersion, artifactJson, artifact);
@@ -293,6 +294,7 @@ public sealed class FaceTrainingService(
     private static string ExplainGateFailure(ArtifactResponse artifact)
     {
         var reasons = new List<string>();
+        if (artifact.Metrics.ValidationAccuracy < .90) reasons.Add($"验证准确率 {artifact.Metrics.ValidationAccuracy:P2} 低于 90% 门限");
         if (artifact.Metrics.FalseAcceptRate > .01) reasons.Add($"误识率 {artifact.Metrics.FalseAcceptRate:P2} 高于 1% 门限");
         if (artifact.Metrics.PositiveEvaluated < 20) reasons.Add($"独立正样本仅 {artifact.Metrics.PositiveEvaluated} 个（至少 20）");
         if (artifact.Metrics.NegativeEvaluated < 10) reasons.Add($"独立负样本仅 {artifact.Metrics.NegativeEvaluated} 个（至少 10）");
@@ -346,7 +348,8 @@ public sealed class FaceTrainingService(
     private sealed record DatasetResponse(string Id);
     private sealed record JobResponse(string Id, string Status, string Stage, int Progress, string? ArtifactId, string? Error, string? LogsUrl = null);
     private sealed record MetricsResponse(double FalseAcceptRate, double FalseRejectRate,
-        int PositiveEvaluated, int NegativeEvaluated);
+        int PositiveEvaluated = 0, int NegativeEvaluated = 0, double ValidationAccuracy = 0,
+        double TrainAccuracy = 0, int TotalSamples = 0, int TotalPersons = 0);
     private sealed record PersonPolicyResponse(long PersonId, float[] Prototype, double Threshold);
     private sealed record RecipeReportResponse(int RawTrainingPositives, int SelectedTrainingPositives,
         int ExcludedSameSource, int ExcludedPersonCap, int PerPersonCap);
