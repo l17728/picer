@@ -63,4 +63,6 @@ dotnet test tests/Picer.E2E/Picer.E2E.csproj -c Debug --no-build --no-restore --
 
 - 2026-09-15：WebRTC AEC3 原生构建、动态加载、合成回声和运行时哈希门禁通过；FHD 1080P MIC + 默认扬声器实机探测 8 秒、780 帧，AEC 前后能量比 `0.019429`（约 98.1% 抑制）。
 - 2026-09-15：270 项单元/集成测试、35 项 WPF E2E 和 GitHub Actions `34936024643` 全部通过。
+- 2026-09-15：统一模型平台真实模型冒烟通过：Qwen3-VL 返回 `service ready`；Qwen3-ASR-1.7B 对真实 WAV 返回非空英文转写；中文 TTS 生成 61,996 字节 WAV。
+- 2026-09-15：通过 8090 `/picer` 代理提交 4 样本 GPU 训练，任务完成、训练/验证准确率 1.0、FAR/FRR 0、ECDSA 签名与 SHA-256 均存在。
 - 限制：以上实机探测不包含真人插话；FD-006 的连续 10 分钟零误识别和小于 1 秒打断仍需人工完成。
