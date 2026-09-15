@@ -34,6 +34,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
     private CancellationTokenSource? _personLoadCancellation;
     private CancellationTokenSource? _clusterLoadCancellation;
     private CancellationTokenSource? _collectionLoadCancellation;
+    private string? _lastOrganizeFingerprint;
     private bool _isLoaded;
     private bool _suppressPersonSelectionLoad;
     private bool _suppressCollectionSelectionCallbacks;
@@ -108,7 +109,28 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         var summary = await UiWork.RunDatabaseAsync(_repository.GetSummary);
         if (summary.CompletedImages == 0 || IsAnalyzing) return;
         StatusText = "已显示人物分类，正在后台更新自动归类…";
+        var fingerprint = await UiWork.RunDatabaseAsync(GetOrganizeFingerprint);
+        if (string.Equals(fingerprint, _lastOrganizeFingerprint, StringComparison.Ordinal))
+        {
+            StatusText = "人物界面已刷新；自动归类参数和模型没有变化，跳过重复计算";
+            return;
+        }
         await OrganizeFacesAsync();
+        _lastOrganizeFingerprint = await UiWork.RunDatabaseAsync(GetOrganizeFingerprint);
+    }
+
+    private string GetOrganizeFingerprint()
+    {
+        using var command = _database.Command("""
+            SELECT (SELECT COUNT(*) FROM face_assignments WHERE state IN ('confirmed','suggested')),
+                   (SELECT COUNT(*) FROM people),
+                   (SELECT COUNT(*) FROM face_person_prototypes),
+                   (SELECT COALESCE(MAX(updated_utc), '') FROM face_person_prototypes),
+                   (SELECT COALESCE(MAX(id), 0) FROM face_action_log),
+                   (SELECT COUNT(*) FROM face_assignments WHERE state='suggested')
+            """);
+        using var reader = command.ExecuteReader();
+        return reader.Read() ? string.Join('|', Enumerable.Range(0, 6).Select(reader.GetValue)) : "empty";
     }
 
     private async Task RefreshAsync()
