@@ -14,6 +14,8 @@ public partial class VoiceAssistantWindow : Window
     private readonly Func<VoiceAction, Task> _execute;
     private readonly FullDuplexVoiceSession _voice;
     private CancellationTokenSource? _turn;
+    private CancellationTokenSource? _utteranceMerge;
+    private string? _pendingUtterance;
 
     public VoiceAssistantWindow(VoiceCommandAgent agent, Func<IReadOnlyList<string>> locations, Func<IReadOnlyList<string>> people,
         Func<VoiceAction, Task> execute, Uri asrEndpoint, string asrModel, Uri ttsEndpoint)
@@ -30,7 +32,7 @@ public partial class VoiceAssistantWindow : Window
             _turn?.Cancel();
             StatusText.Text = "已检测到插话，正在重新聆听";
         });
-        _voice.UtteranceRecognized += text => Dispatcher.InvokeAsync(() => RunTurnAsync(text)).Task.Unwrap();
+        _voice.UtteranceRecognized += text => Dispatcher.InvokeAsync(() => BufferUtteranceAsync(text)).Task.Unwrap();
         Conversation.Items.Add("助手：可以说“打开目录浏览，看看日本的照片”。目标不明确时我会继续询问。");
     }
 
@@ -38,6 +40,25 @@ public partial class VoiceAssistantWindow : Window
     private async void InputBox_KeyDown(object sender, KeyEventArgs e) { if (e.Key != Key.Enter || Keyboard.Modifiers.HasFlag(ModifierKeys.Shift)) return; e.Handled = true; await RunTurnAsync(InputBox.Text); }
     private void Listen_Checked(object sender, RoutedEventArgs e) { try { _voice.Start(); ListenButton.Content = "停止语音"; StatusText.Text = "正在监听，请对着麦克风说话…"; } catch (Exception exception) { ListenButton.IsChecked = false; StatusText.Text = $"无法启动麦克风：{exception.Message}（请检查系统输入设备权限）"; } }
     private void Listen_Unchecked(object sender, RoutedEventArgs e) { _voice.Stop(); ListenButton.Content = "开始语音"; }
+
+    private async Task BufferUtteranceAsync(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return;
+        _pendingUtterance = string.IsNullOrWhiteSpace(_pendingUtterance) ? text.Trim() : $"{_pendingUtterance}，{text.Trim()}";
+        _utteranceMerge?.Cancel();
+        _utteranceMerge?.Dispose();
+        _utteranceMerge = new CancellationTokenSource();
+        var token = _utteranceMerge.Token;
+        AppLogger.Info($"Voice utterance buffered; textLength={text.Trim().Length}; mergedLength={_pendingUtterance.Length}");
+        try
+        {
+            await Task.Delay(850, token);
+            var merged = _pendingUtterance;
+            _pendingUtterance = null;
+            if (!string.IsNullOrWhiteSpace(merged)) await RunTurnAsync(merged);
+        }
+        catch (OperationCanceledException) { }
+    }
 
     private async Task RunTurnAsync(string input)
     {
@@ -61,5 +82,5 @@ public partial class VoiceAssistantWindow : Window
     }
 
     private void Stop_Click(object sender, RoutedEventArgs e) { _turn?.Cancel(); _voice.CancelPlayback(); }
-    protected override void OnClosed(EventArgs e) { _turn?.Cancel(); _turn?.Dispose(); _voice.Dispose(); base.OnClosed(e); }
+    protected override void OnClosed(EventArgs e) { _utteranceMerge?.Cancel(); _utteranceMerge?.Dispose(); _turn?.Cancel(); _turn?.Dispose(); _voice.Dispose(); base.OnClosed(e); }
 }

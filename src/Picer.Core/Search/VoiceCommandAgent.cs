@@ -20,6 +20,8 @@ public sealed class VoiceCommandAgent(OpenAiCompatibleChatClient chat)
     {
         if (string.IsNullOrWhiteSpace(utterance)) return RememberAndReturn("请告诉我想看什么。", VoiceActionKind.Clarify, utterance);
         var normalized = utterance.Trim();
+        if (TryResolvePendingChild(normalized, locationPaths, out var pendingChild))
+            return RememberAndReturn($"好的，正在打开 {pendingChild.Split('/').Last()} 的照片。", VoiceActionKind.OpenLocation, normalized, pendingChild);
         if (IsConfirmation(normalized) && TryGetPendingLocation(out var pending))
             return RememberAndReturn("好的，继续打开刚才确认的地点。", VoiceActionKind.OpenLocation, normalized, pending);
         if (TryBuildLocationListReply(normalized, locationPaths, out var locationReply, out var locationTarget))
@@ -79,6 +81,25 @@ public sealed class VoiceCommandAgent(OpenAiCompatibleChatClient chat)
     private bool TryGetPendingLocation(out string target)
     {
         lock (_historyGate) { target = _pendingLocationTarget ?? ""; return !string.IsNullOrWhiteSpace(target); }
+    }
+
+    private bool TryResolvePendingChild(string utterance, IReadOnlyList<string> paths, out string target)
+    {
+        target = "";
+        string? parent;
+        lock (_historyGate) parent = _pendingLocationTarget;
+        if (string.IsNullOrWhiteSpace(parent)) return false;
+        var prefix = parent.TrimEnd('/') + "/";
+        var children = paths.Where(path => path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            .Select(path => path[prefix.Length..].Split('/')[0])
+            .Where(name => name.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        if (children.Length == 0) return false;
+        var exact = children.FirstOrDefault(name => string.Equals(name, utterance, StringComparison.OrdinalIgnoreCase));
+        if (exact is not null) { target = prefix + exact; return true; }
+        var candidates = children.Where(name => name.Length == utterance.Length && name[0] == utterance[0]).ToArray();
+        if (candidates.Length != 1) return false;
+        target = prefix + candidates[0];
+        return true;
     }
 
     private void Remember(string user, string reply, string? target)
