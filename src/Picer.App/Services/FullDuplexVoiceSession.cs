@@ -272,6 +272,8 @@ public sealed class FullDuplexVoiceSession : IDisposable
 
     public async Task SpeakAsync(string text, CancellationToken token)
     {
+        text = NormalizeTtsText(text);
+        if (text.Length == 0) return;
         CancelPlayback();
         StateChanged?.Invoke("正在生成语音…");
         using var request = new HttpRequestMessage(HttpMethod.Post, _ttsEndpoint)
@@ -283,6 +285,16 @@ public sealed class FullDuplexVoiceSession : IDisposable
         AppLogger.Info($"Voice TTS request completed; status={(int)response.StatusCode}; bytes={bytes.Length}");
         if (!response.IsSuccessStatusCode) throw new InvalidOperationException($"TTS HTTP {(int)response.StatusCode}: {Encoding.UTF8.GetString(bytes)}");
         await PlayAsync(bytes, token).ConfigureAwait(false);
+    }
+
+    private static string NormalizeTtsText(string text)
+    {
+        // The local sherpa wrapper ultimately passes the input to a command
+        // line. Keep markdown/control characters out of that boundary; they
+        // were the cause of intermittent "positional argument" failures.
+        var value = Regex.Replace(text ?? string.Empty, @"[`*_#>\r\n\t]", "");
+        value = Regex.Replace(value, @"\s+", " ").Trim();
+        return value.Length <= 800 ? value : value[..800];
     }
 
     private Task PlayAsync(byte[] wave, CancellationToken token)
