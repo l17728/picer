@@ -14,4 +14,12 @@ public sealed class FaceTrainingEndpointTests
         var actual = FaceTrainingService.NormalizeEndpoint(new Uri(configured));
         Assert.Equal(expected, actual.ToString());
     }
+
+    [Fact]
+    public void ArtifactVersion_AcceptsBothGatewayFieldNames()
+    {
+        Assert.Equal("sface-v2", FaceTrainingService.ResolveArtifactModelVersion(null, "sface-v2"));
+        Assert.Equal("sface-v2", FaceTrainingService.ResolveArtifactModelVersion("sface-v2", "old-value"));
+        Assert.Null(FaceTrainingService.ResolveArtifactModelVersion(null, null));
+    }
 }

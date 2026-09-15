@@ -4,6 +4,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Picer.Core.Data;
+using Picer.Core.Logging;
 
 namespace Picer.Core.Vision;
 
@@ -128,7 +129,14 @@ public sealed class FaceTrainingService(
             .ConfigureAwait(false);
         var artifact = JsonSerializer.Deserialize<ArtifactResponse>(artifactJson, Json)
                        ?? throw new InvalidDataException("训练制品格式无效。");
-        if (artifact.BaseModelVersion != modelVersion) throw new InvalidDataException("训练制品基础模型版本不匹配。");
+        // ModelServer v1 called this field `modelVersion`; newer gateways use
+        // the explicit `baseModelVersion`. Accept both spellings but retain
+        // an exact version match so embeddings from different model revisions
+        // can never be mixed.
+        var artifactModelVersion = ResolveArtifactModelVersion(artifact.BaseModelVersion, artifact.ModelVersion);
+        AppLogger.Info($"FaceTraining artifact version check: expected={modelVersion}; actual={artifactModelVersion ?? "<missing>"}; artifact={artifact.Id}");
+        if (!string.Equals(artifactModelVersion, modelVersion, StringComparison.Ordinal))
+            throw new InvalidDataException($"训练制品基础模型版本不匹配：提交版本 {modelVersion}，制品版本 {artifactModelVersion ?? "缺失"}。");
         if (!string.IsNullOrWhiteSpace(artifact.Sha256))
         {
             var actualHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(artifactJson))).ToLowerInvariant();
@@ -303,6 +311,9 @@ public sealed class FaceTrainingService(
             return new Uri(value + "/face-training/", UriKind.Absolute);
         return new Uri(value + "/api/face-training/", UriKind.Absolute);
     }
+    /// <summary>Reads both v1 (modelVersion) and v2 (baseModelVersion) artifact contracts.</summary>
+    public static string? ResolveArtifactModelVersion(string? baseModelVersion, string? modelVersion) =>
+        string.IsNullOrWhiteSpace(baseModelVersion) ? modelVersion : baseModelVersion;
     private sealed record Sample(long FaceId, long PersonId, string Label, string LeakageGroup, string Partition,
         double QualityScore, string QualityTier, float[] Embedding);
     private sealed record DatasetResponse(string Id);
@@ -316,7 +327,8 @@ public sealed class FaceTrainingService(
     private sealed record ComparisonResponse(double FalseAcceptRateDelta, double FalseRejectRateDelta,
         bool NoFalseAcceptRegression, bool AcceptableFalseRejectRegression);
     private sealed record PendingArtifact(string DatasetId, string Endpoint, string ModelVersion, string Json, ArtifactResponse Artifact);
-    private sealed record ArtifactResponse(string Id, string BaseModelVersion, List<PersonPolicyResponse> People,
+    private sealed record ArtifactResponse(string Id, string? BaseModelVersion, List<PersonPolicyResponse> People,
         MetricsResponse Metrics, RecipeReportResponse? RecipeReport = null,
-        BaselineMetricsResponse? BaselineMetrics = null, ComparisonResponse? Comparison = null, string? Sha256 = null, string? Signature = null, string? SignatureAlgorithm = null);
+        BaselineMetricsResponse? BaselineMetrics = null, ComparisonResponse? Comparison = null, string? Sha256 = null, string? Signature = null, string? SignatureAlgorithm = null,
+        string? ModelVersion = null);
 }

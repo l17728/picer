@@ -104,8 +104,10 @@ public partial class FaceValidationWindow : Window
             _lastCalibration = result;
             // Applying an unchanged recommendation is a no-op. This covers
             // both an already-applied threshold and repeated calculations.
-            ApplySFaceThreshold.IsEnabled = !sameAsPreviousCalculation &&
-                (applied is null || Math.Abs(applied.Value - result.RecommendedThreshold) > 0.000_001);
+            var sameAsApplied = applied is double appliedThreshold &&
+                Math.Abs(appliedThreshold - result.RecommendedThreshold) <= 0.000_001;
+            var unchanged = sameAsPreviousCalculation || sameAsApplied;
+            ApplySFaceThreshold.IsEnabled = !unchanged;
             var ready = result.QualifiedPeople >= 5 ? "样本人数已达标" : $"还需补足 {5 - result.QualifiedPeople} 位达到 20 张照片的成员";
             SFaceResult.Text = $"模型：{result.ModelVersion}\n" +
                 $"已确认人物：{result.ConfirmedPeople}；达到 20 张：{result.QualifiedPeople}/5（{ready}）\n" +
@@ -116,6 +118,9 @@ public partial class FaceValidationWindow : Window
             Status.Text = "SFace 标定完成";
             SFaceProgress.IsIndeterminate = false;
             SFaceProgress.Value = 100;
+            Status.Text = unchanged
+                ? "SFace 参数与上次计算或当前应用值相同，未发现更新；应用到人物自动匹配已禁用"
+                : "SFace 已计算出新的推荐参数，可以应用到人物自动匹配";
             SFaceProgressText.Text = $"SFace：计算完成（{stopwatch.Elapsed.TotalSeconds:F1} 秒）";
             AppLogger.Info($"SFace 标定完成：faces={result.ConfirmedFaces}; same={result.SamePairs}; different={result.DifferentPairs}; elapsed={stopwatch.ElapsedMilliseconds}ms");
         }
