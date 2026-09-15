@@ -717,7 +717,11 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             Owner = Application.Current.MainWindow
         };
         window.ShowDialog();
-        await RefreshAsync();
+        // Opening/closing the original is read-only. Do not rebuild the face
+        // collection here: that resets virtualization, scroll offset and the
+        // user's current category/position. Mutating face commands perform
+        // their own targeted refresh.
+        AppLogger.Info($"People face preview closed without refresh; face={face.FaceId}; image={face.Record.ImageId}");
     }
 
     public async Task MoveFaceToPersonAsync(UnassignedFaceViewModel face, PersonSummary person)
