@@ -258,7 +258,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             var samples = await UiWork.RunDatabaseAsync(() => ExtractEmbeddings(snapshot.SnapshotId));
 
             var baseUrl = Environment.GetEnvironmentVariable("PICER_MODEL_SERVER_URL")
-                ?.Trim() ?? "http://127.0.0.1:8091";
+                ?.Trim() ?? "http://127.0.0.1:8090/picer";
             if (!Uri.TryCreate(baseUrl, UriKind.Absolute, out var modelServerUri)
                 || (modelServerUri.Scheme != Uri.UriSchemeHttp && modelServerUri.Scheme != Uri.UriSchemeHttps))
             {

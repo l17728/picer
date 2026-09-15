@@ -38,7 +38,10 @@ public sealed class CloudVisionSettings
     public bool UseComplexModel { get; set; }
     public decimal DailyBudgetYuan { get; set; } = 2m;
     public decimal MonthlyBudgetYuan { get; set; } = 20m;
-    public string FaceTrainingEndpoint { get; set; } = "http://127.0.0.1:8090/api/face-training";
+    // The signed Picer ModelServer is exposed by the unified platform under /picer.
+    // Keep the value as an API root because FaceTrainingSubmissionService appends
+    // /api/face-training/* to it.
+    public string FaceTrainingEndpoint { get; set; } = "http://127.0.0.1:8090/picer";
     public List<AiProviderDefinition> Providers { get; set; } = [];
     public Dictionary<string, AiFeatureBinding> Features { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 
@@ -53,6 +56,16 @@ public sealed class CloudVisionSettings
     public void EnsureDefaults()
     {
         Providers ??= []; Features ??= new(StringComparer.OrdinalIgnoreCase);
+        // Migrate the pre-platform local route. That route is an unsigned
+        // manager-side compatibility store and must not be used for applying
+        // training artifacts.
+        if (Uri.TryCreate(FaceTrainingEndpoint, UriKind.Absolute, out var trainingEndpoint)
+            && trainingEndpoint.Host is "127.0.0.1" or "localhost"
+            && trainingEndpoint.Port == 8090
+            && trainingEndpoint.AbsolutePath.Equals("/api/face-training", StringComparison.OrdinalIgnoreCase))
+        {
+            FaceTrainingEndpoint = $"{trainingEndpoint.Scheme}://{trainingEndpoint.Authority}/picer";
+        }
         // All local models are routed through the unified model-platform service.
         var legacyVl = Providers.FirstOrDefault(x => x.Id.Equals(AiProviderIds.LocalQwenVl, StringComparison.OrdinalIgnoreCase));
         if (legacyVl is not null && legacyVl.BaseUrl.Contains(":8000", StringComparison.OrdinalIgnoreCase)) legacyVl.BaseUrl = "http://127.0.0.1:8090/api/vl/chat";
