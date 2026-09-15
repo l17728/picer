@@ -12,7 +12,7 @@ public sealed class FaceTrainingAgent(FaceTrainingSubmissionService submission)
     {
         const double gate = 0.90;
         const int maxAttempts = 9;
-        string? hints = null;
+        string? hints = await submission.GetTrainingMemoryAsync(cancellationToken);
         TrainingArtifactData? last = null;
         for (var attempt = 1; attempt <= maxAttempts; attempt++)
         {
@@ -50,7 +50,8 @@ public sealed class FaceTrainingAgent(FaceTrainingSubmissionService submission)
             }
             if (artifact.Metrics.ValidationAccuracy >= gate)
                 return new(true, attempt, artifact, "准确率门禁通过");
-            hints = advisor is null ? "提高困难负样本覆盖并重新评测" : await advisor(attempt, artifact, cancellationToken);
+            var advice = advisor is null ? "提高困难负样本覆盖并重新评测" : await advisor(attempt, artifact, cancellationToken);
+            hints = string.IsNullOrWhiteSpace(hints) ? advice : $"{hints}\n本轮调整建议：{advice}";
             progress?.Report($"训练 Agent：第 {attempt} 次未达 90%，已生成下一次调整建议");
         }
         return new(false, maxAttempts, last, $"连续 {maxAttempts} 次未达到准确率 90%");

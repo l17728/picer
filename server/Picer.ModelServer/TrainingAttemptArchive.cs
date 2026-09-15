@@ -35,6 +35,18 @@ public sealed class TrainingAttemptArchive
                 .Where(item => item is not null).Cast<TrainingAttemptRecord>().ToArray();
         }
     }
+
+    public string BuildSummary()
+    {
+        var records = ReadRecent(500);
+        if (records.Count == 0) return "暂无历史训练记录";
+        var completed = records.Where(r => r.Status == "completed" && r.ValidationAccuracy is not null).ToArray();
+        var best = completed.OrderByDescending(r => r.ValidationAccuracy).FirstOrDefault();
+        var failures = records.Count(r => r.Status == "failed");
+        var attempts = records.Count;
+        return $"历史尝试 {attempts} 次；失败 {failures} 次；" +
+               (best is null ? "尚无可比较制品" : $"历史最佳准确率 {best.ValidationAccuracy:P2}、误识率 {best.FalseAcceptRate:P2}、拒识率 {best.FalseRejectRate:P2}、模型 {best.ModelVersion}");
+    }
 }
 
 public sealed record TrainingAttemptRecord(

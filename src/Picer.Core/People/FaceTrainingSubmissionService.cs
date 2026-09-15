@@ -139,6 +139,18 @@ public sealed class FaceTrainingSubmissionService : IDisposable
         return verifier.VerifyHash(hash, Convert.FromBase64String(artifact.Signature));
     }
 
+    public async Task<string?> GetTrainingMemoryAsync(CancellationToken ct = default)
+    {
+        try
+        {
+            var response = await _client.GetAsync("api/face-training/archive/summary", ct);
+            if (!response.IsSuccessStatusCode) return null;
+            var json = await response.Content.ReadFromJsonAsync<JsonElement>(Json, ct);
+            return json.TryGetProperty("summary", out var value) ? value.GetString() : null;
+        }
+        catch { return null; }
+    }
+
     public void Dispose() => _client.Dispose();
 
     private static string NormalizeBaseUrl(string value)

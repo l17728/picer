@@ -97,6 +97,7 @@ app.MapPost("/api/face-training/datasets", (DatasetRequest request, ConcurrentDi
     return Results.Ok(new { id = datasetId, snapshotId = request.SnapshotId, sampleCount = request.Samples?.Length ?? 0 });
 });
 app.MapGet("/api/face-training/archive", (TrainingAttemptArchive archive, int? limit) => Results.Ok(archive.ReadRecent(limit ?? 100)));
+app.MapGet("/api/face-training/archive/summary", (TrainingAttemptArchive archive) => Results.Ok(new { summary = archive.BuildSummary() }));
 app.MapPost("/api/face-training/recipe/preview", (DatasetRequest request, TrainingRecipeBuilder builder) =>
     Results.Ok(new { protocolVersion = request.ProtocolVersion, selections = builder.Build(request) }));
 app.MapPost("/api/face-training/recipe/enrich", (VlEnrichmentRequest request) =>
