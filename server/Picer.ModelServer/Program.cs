@@ -4,6 +4,9 @@ using System.Diagnostics;
 using System.Text.Json;
 using Picer.ModelServer;
 
+const string DefaultLanguageModelEndpoint = "https://open.bigmodel.cn/api/paas/v4/chat/completions";
+const string DefaultLanguageModel = "glm-4.6v-flash";
+
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddSingleton<ConcurrentDictionary<string, TrainingJob>>();
 builder.Services.AddSingleton<ConcurrentDictionary<string, object>>();
@@ -85,12 +88,12 @@ app.MapGet("/api/models", () => Results.Ok(new[] {
 }));
 app.MapGet("/api/ai/capabilities", () => Results.Ok(new
 {
-    language = new { enabled = !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("PICER_LANGUAGE_MODEL_ENDPOINT")), model = "glm-4.6v-flash" },
+    language = new { enabled = !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("PICER_LANGUAGE_MODEL_API_KEY")), model = DefaultLanguageModel },
     vision = new { enabled = !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("PICER_VL_MODEL_ENDPOINT")), model = "qwen3-vl-8b-instruct", optionalForTraining = true }
 }));
 app.MapPost("/api/ai/chat/completions", async (HttpRequest request) =>
 {
-    var endpoint = Environment.GetEnvironmentVariable("PICER_LANGUAGE_MODEL_ENDPOINT");
+    var endpoint = Environment.GetEnvironmentVariable("PICER_LANGUAGE_MODEL_ENDPOINT") ?? DefaultLanguageModelEndpoint;
     if (string.IsNullOrWhiteSpace(endpoint)) return Results.Problem("统一模型平台尚未配置语言模型服务端点", statusCode: 503);
     using var client = new HttpClient { Timeout = TimeSpan.FromMinutes(5) };
     using var upstream = new HttpRequestMessage(HttpMethod.Post, endpoint);
