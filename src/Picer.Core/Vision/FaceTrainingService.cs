@@ -288,7 +288,15 @@ public sealed class FaceTrainingService(
     {
         var value = endpoint.ToString().TrimEnd('/');
         if (value.EndsWith("/api/face-training", StringComparison.OrdinalIgnoreCase))
+        {
+            // The local unified platform is mounted below /picer. Older
+            // settings stored the direct /api route; transparently migrate
+            // that loopback endpoint so existing profiles keep working.
+            if (endpoint.IsLoopback && endpoint.Port == 8090 &&
+                !endpoint.AbsolutePath.StartsWith("/picer/", StringComparison.OrdinalIgnoreCase))
+                return new Uri(endpoint.GetLeftPart(UriPartial.Authority) + "/picer/api/face-training/", UriKind.Absolute);
             return new Uri(value + "/", UriKind.Absolute);
+        }
         if (value.EndsWith("/picer", StringComparison.OrdinalIgnoreCase))
             return new Uri(value + "/api/face-training/", UriKind.Absolute);
         if (value.EndsWith("/api", StringComparison.OrdinalIgnoreCase))
