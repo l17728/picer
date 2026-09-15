@@ -79,9 +79,14 @@ setInterval(rf,3000);rf();
 
 app.MapGet("/api/models", () => Results.Ok(new[] {
     new { id = "picer-prototype-calibration", capability = "face-training", status = "ready" },
-    new { id = "qwen3-vl-8b-instruct", capability = "multimodal", status = "configured" },
+    new { id = "qwen3-vl-8b-instruct", capability = "multimodal", status = string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("PICER_VL_MODEL_ENDPOINT")) ? "optional-unconfigured" : "ready" },
     new { id = "qwen3-asr-1.7b", capability = "language", status = "configured" },
     new { id = "sherpa-onnx-vits-zh-ll", capability = "tts", status = "pending" }
+}));
+app.MapGet("/api/ai/capabilities", () => Results.Ok(new
+{
+    language = new { enabled = !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("PICER_LANGUAGE_MODEL_ENDPOINT")), model = "glm-4.6v-flash" },
+    vision = new { enabled = !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("PICER_VL_MODEL_ENDPOINT")), model = "qwen3-vl-8b-instruct", optionalForTraining = true }
 }));
 app.MapPost("/api/ai/chat/completions", async (HttpRequest request) =>
 {
@@ -96,6 +101,19 @@ app.MapPost("/api/ai/chat/completions", async (HttpRequest request) =>
     var response = await client.SendAsync(upstream);
     return Results.Content(await response.Content.ReadAsStringAsync(), "application/json", statusCode: (int)response.StatusCode);
 });
+app.MapPost("/api/ai/vision/completions", async (HttpRequest request) =>
+{
+    var endpoint = Environment.GetEnvironmentVariable("PICER_VL_MODEL_ENDPOINT");
+    if (string.IsNullOrWhiteSpace(endpoint)) return Results.Problem("统一模型平台尚未配置本地 VL 服务端点", statusCode: 503);
+    using var client = new HttpClient { Timeout = TimeSpan.FromMinutes(10) };
+    using var upstream = new HttpRequestMessage(HttpMethod.Post, endpoint);
+    upstream.Content = new StreamContent(request.Body);
+    upstream.Content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/json");
+    var key = Environment.GetEnvironmentVariable("PICER_VL_MODEL_API_KEY");
+    if (!string.IsNullOrWhiteSpace(key)) upstream.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", key);
+    var response = await client.SendAsync(upstream);
+    return Results.Content(await response.Content.ReadAsStringAsync(), "application/json", statusCode: (int)response.StatusCode);
+});
 app.MapGet("/api/face-training/algorithms", (IEnumerable<ITrainingAlgorithmAdapter> adapters) =>
     Results.Ok(adapters.Select(a => new { id = a.Id, modelVersion = a.ModelVersion })));
 app.MapGet("/api/face-training/signing-key", (ArtifactSigner signer) => Results.Ok(signer.GetInfo()));
@@ -106,6 +124,8 @@ app.MapPost("/api/face-training/datasets", (DatasetRequest request, ConcurrentDi
     if (request.Samples?.Any(s => s.Embedding is null || s.Embedding.Length == 0) == true)
         return Results.BadRequest(new { error = "sample embedding is required" });
     var datasetId = "dataset-" + Guid.NewGuid().ToString("N");
+    // VL attributes are optional enrichment. Their absence never blocks the
+    // vector-training path; the recipe builder can continue with embeddings.
     index[datasetId] = request;
     return Results.Ok(new { id = datasetId, snapshotId = request.SnapshotId, sampleCount = request.Samples?.Length ?? 0 });
 });

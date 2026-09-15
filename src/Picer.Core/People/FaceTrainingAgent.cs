@@ -8,7 +8,8 @@ public sealed class FaceTrainingAgent(FaceTrainingSubmissionService submission)
     public async Task<FaceTrainingAgentResult> RunAsync(FaceTrainingSnapshotResult snapshot,
         IReadOnlyList<(long FaceId, long PersonId, float[] Embedding, string Split)> samples,
         Func<int, TrainingArtifactData, CancellationToken, Task<string?>>? advisor = null,
-        IProgress<string>? progress = null, CancellationToken cancellationToken = default)
+        IProgress<string>? progress = null, CancellationToken cancellationToken = default,
+        IReadOnlyDictionary<long, TrainingVisualAttribute>? visualAttributes = null)
     {
         const double gate = 0.90;
         const int maxAttempts = 9;
@@ -17,7 +18,7 @@ public sealed class FaceTrainingAgent(FaceTrainingSubmissionService submission)
         for (var attempt = 1; attempt <= maxAttempts; attempt++)
         {
             progress?.Report($"训练 Agent：第 {attempt}/{maxAttempts} 次提交");
-            var submitted = await submission.SubmitAsync(snapshot, samples, cancellationToken, attempt, hints);
+            var submitted = await submission.SubmitAsync(snapshot, samples, cancellationToken, attempt, hints, visualAttributes);
             if (submitted.Status == "failed")
             {
                 if (attempt == maxAttempts) return new(false, attempt, null, submitted.Error ?? "训练提交失败");

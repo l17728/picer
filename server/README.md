@@ -7,3 +7,6 @@ Picer 客户端通过 HTTPS 读取和更新远程 index，不依赖服务端本�
 当前提交的是可运行的 API 骨架：训练执行器和制品签名需要接入实际 GPU worker 后才会产生真实制品，服务不会伪造训练结果。
 
 部署：开发环境可直接 `dotnet run --project server/Picer.ModelServer`；生产环境使用 HTTPS 反向代理或配置 Kestrel 证书，并设置 `PICER_MODEL_SERVER_API_KEY`。Dockerfile 已提供基础镜像，GPU worker 以独立服务接入，不把 CUDA/模型文件打进 API 镜像。
+## AI 服务路由
+
+`PICER_LANGUAGE_MODEL_ENDPOINT` 配置语言模型服务（训练失败分析使用智谱）；`PICER_VL_MODEL_ENDPOINT` 配置统一平台管理的本地 VL 服务（训练样本视觉筛选为可选增强）。VL 未配置时，向量训练仍可正常提交，不会阻塞任务。可通过 `/api/ai/capabilities` 查看能力状态。
