@@ -1397,7 +1397,7 @@ public partial class UnassignedFaceViewModel(UnassignedFaceRecord record, string
     private string? _faceThumbnailPath = initialThumbnailPath;
 
     [ObservableProperty]
-    private bool _isAutomaticSuggestion = record.SuggestedPersonId is not null;
+    private bool _isAutomaticSuggestion = string.Equals(record.AssignmentState, "suggested", StringComparison.Ordinal);
 }
 
 public partial class CandidateClusterViewModel(FaceCandidateClusterRecord record) : ObservableObject
