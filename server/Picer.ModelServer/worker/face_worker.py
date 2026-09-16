@@ -1,5 +1,5 @@
-"""GPU face prototype worker. Reads one JSON job from stdin and writes one JSON artifact."""
-import json, sys, math, uuid, datetime
+"""Face training worker. Reads one JSON job and writes one artifact."""
+import base64, json, os, sys, uuid, datetime
 import torch
 
 def field(sample, camel, pascal):
@@ -13,11 +13,44 @@ def cosine(a, b):
 def label_of(sample):
     return sample.get("label", sample.get("Label", "positive"))
 
+def enrich_insightface_embeddings(samples, model_version):
+    """Generate model-specific vectors only when the client supplies an aligned
+    112x112 face crop. Paths are intentionally unsupported for privacy."""
+    if not model_version.startswith("insightface"):
+        return samples
+    missing = [s for s in samples if not s.get("embedding") and not s.get("faceImageBase64")]
+    if missing:
+        raise ValueError("InsightFace requires faceImageBase64 for samples without embeddings")
+    import cv2, numpy as np, onnxruntime as ort
+    model_path = os.environ.get("PICER_INSIGHTFACE_MODEL_PATH", r"D:\\VL-models\\models\\insightface\\w600k_r50.onnx")
+    session = ort.InferenceSession(model_path, providers=["CUDAExecutionProvider", "CPUExecutionProvider"])
+    input_name = session.get_inputs()[0].name
+    output = []
+    for sample in samples:
+        if sample.get("embedding"):
+            output.append(sample)
+            continue
+        raw = base64.b64decode(sample["faceImageBase64"])
+        image = cv2.imdecode(np.frombuffer(raw, dtype=np.uint8), cv2.IMREAD_COLOR)
+        if image is None:
+            raise ValueError("invalid faceImageBase64")
+        image = cv2.resize(image, (112, 112), interpolation=cv2.INTER_AREA)
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB).astype(np.float32)
+        image = (image - 127.5) / 127.5
+        vector = session.run(None, {input_name: image.transpose(2, 0, 1)[None, ...]})[0][0]
+        vector = vector / (np.linalg.norm(vector) + 1e-12)
+        enriched = dict(sample)
+        enriched["embedding"] = vector.astype(float).tolist()
+        output.append(enriched)
+    return output
+
 def main():
     request = json.load(sys.stdin)
     samples = request.get("samples", [])
     if len(samples) < 2:
         raise ValueError("at least two samples required")
+    model_version = request.get("modelVersion", "sface")
+    samples = enrich_insightface_embeddings(samples, model_version)
     device = "cuda" if torch.cuda.is_available() else "cpu"
     train = [s for s in samples if s.get("split", s.get("Split")) == "train" and label_of(s) != "negative"]
     if not train:
@@ -65,7 +98,7 @@ def main():
                    "thresholdSweepBestScale": best_scale, "thresholdSweepBestFar": best_metrics[1],
                    "thresholdSweepBestFrr": best_metrics[2], "currentAccuracy": accuracy,
                    "explanation": "阈值可达 90%，优先校准阈值" if action == "calibrate-threshold" else "阈值扫描仍低于 90%，停止重复调阈值并评测更强基模"}
-    return {"artifactId": "artifact-" + uuid.uuid4().hex[:12], "algorithm": "prototype-calibration-gpu", "modelVersion": request.get("modelVersion", "sface"), "createdUtc": datetime.datetime.now(datetime.timezone.utc).isoformat(), "prototypes": prototypes, "diagnostics": diagnostics, "metrics": {"totalSamples": len(samples), "totalPersons": len(prototypes), "trainAccuracy": accuracy, "validationAccuracy": accuracy, "falseAcceptRate": far, "falseRejectRate": frr, "meanSimilaritySame": 0.0, "meanSimilarityDiff": 0.0}}
+    return {"artifactId": "artifact-" + uuid.uuid4().hex[:12], "algorithm": "prototype-calibration-gpu", "modelVersion": model_version, "createdUtc": datetime.datetime.now(datetime.timezone.utc).isoformat(), "prototypes": prototypes, "diagnostics": diagnostics, "metrics": {"totalSamples": len(samples), "totalPersons": len(prototypes), "trainAccuracy": accuracy, "validationAccuracy": accuracy, "falseAcceptRate": far, "falseRejectRate": frr, "meanSimilaritySame": 0.0, "meanSimilarityDiff": 0.0}}
 
 if __name__ == "__main__":
     try: print(json.dumps(main(), ensure_ascii=False))
