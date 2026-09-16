@@ -16,14 +16,24 @@ def label_of(sample):
 def enrich_insightface_embeddings(samples, model_version):
     """Generate model-specific vectors only when the client supplies an aligned
     112x112 face crop. Paths are intentionally unsupported for privacy."""
-    if not model_version.startswith("insightface"):
+    supported = {"insightface-arcface", "arcface", "adaface", "arcface-paddle", "facex-zoo"}
+    if model_version not in supported:
         return samples
     missing = [s for s in samples if not s.get("embedding") and not s.get("Embedding")
                and not s.get("faceImageBase64") and not s.get("FaceImageBase64")]
     if missing:
         raise ValueError("InsightFace requires faceImageBase64 for samples without embeddings")
     import cv2, numpy as np, onnxruntime as ort
-    model_path = os.environ.get("PICER_INSIGHTFACE_MODEL_PATH", r"D:\\VL-models\\models\\insightface\\w600k_r50.onnx")
+    env_name = {
+        "insightface-arcface": "PICER_INSIGHTFACE_MODEL_PATH",
+        "arcface": "PICER_ARCFACE_MODEL_PATH",
+        "adaface": "PICER_ADAFACE_MODEL_PATH",
+        "arcface-paddle": "PICER_ARCFACE_PADDLE_MODEL_PATH",
+        "facex-zoo": "PICER_FACEX_ZOO_MODEL_PATH",
+    }[model_version]
+    model_path = os.environ.get(env_name, "")
+    if not model_path:
+        raise ValueError(f"{model_version} model path is not configured")
     session = ort.InferenceSession(model_path, providers=["CUDAExecutionProvider", "CPUExecutionProvider"])
     input_name = session.get_inputs()[0].name
     output = []

@@ -12,9 +12,39 @@ public sealed record VideoFaceTimelineRecord(double TimestampSeconds, string Key
     public string? EffectivePersonName => AssignedPersonName ?? SuggestedPersonName;
     public bool IsSuggested => AssignmentState is null && SuggestedPersonId is not null;
 }
+public sealed record VideoFaceBackfillSource(long FaceId, long VideoId, long KeyframeId, double TimestampSeconds,
+    string KeyframePath, int Ordinal, NormalizedFaceBox Box, float Confidence);
 
 public sealed class VideoFaceTimelineService(PicerDatabase database, IImageFaceAnalyzer analyzer, VisionAnalysisRepository photoFaces, Picer.Core.People.PeopleService? people = null)
 {
+    public IReadOnlyList<VideoFaceBackfillSource> GetFacesForBackfill(string modelVersion)
+    {
+        using var command=database.Command("""
+            SELECT vf.id,vf.video_id,vf.keyframe_id,vf.timestamp_seconds,k.path,vf.ordinal,vf.box_x,vf.box_y,vf.box_width,vf.box_height,vf.confidence
+            FROM video_detected_faces vf JOIN video_keyframes k ON k.id=vf.keyframe_id
+            WHERE vf.model_version=$model ORDER BY vf.video_id,vf.timestamp_seconds,vf.ordinal
+            """); command.Parameters.AddWithValue("$model",modelVersion); using var reader=command.ExecuteReader();
+        var result=new List<VideoFaceBackfillSource>();
+        while(reader.Read()) result.Add(new(reader.GetInt64(0),reader.GetInt64(1),reader.GetInt64(2),reader.GetDouble(3),reader.GetString(4),reader.GetInt32(5),new(reader.GetFloat(6),reader.GetFloat(7),reader.GetFloat(8),reader.GetFloat(9)),reader.GetFloat(10)));
+        return result;
+    }
+
+    public int SaveBackfilledEmbeddings(string sourceModel, string targetModel, IReadOnlyList<(VideoFaceBackfillSource Source, float[] Embedding)> values)
+    {
+        using var transaction=database.BeginTransaction(); var saved=0;
+        foreach(var value in values){
+            using var insert=database.Command("""
+                INSERT INTO video_detected_faces(video_id,keyframe_id,timestamp_seconds,ordinal,model_version,box_x,box_y,box_width,box_height,confidence,embedding,created_utc)
+                VALUES($video,$frame,$time,$ordinal,$model,$x,$y,$w,$h,$confidence,$embedding,$now)
+                ON CONFLICT(keyframe_id,model_version,ordinal) DO UPDATE SET embedding=excluded.embedding,confidence=excluded.confidence
+                RETURNING id
+                """); insert.Transaction=transaction; insert.Parameters.AddWithValue("$video",value.Source.VideoId);insert.Parameters.AddWithValue("$frame",value.Source.KeyframeId);insert.Parameters.AddWithValue("$time",value.Source.TimestampSeconds);insert.Parameters.AddWithValue("$ordinal",value.Source.Ordinal);insert.Parameters.AddWithValue("$model",targetModel);insert.Parameters.AddWithValue("$x",value.Source.Box.X);insert.Parameters.AddWithValue("$y",value.Source.Box.Y);insert.Parameters.AddWithValue("$w",value.Source.Box.Width);insert.Parameters.AddWithValue("$h",value.Source.Box.Height);insert.Parameters.AddWithValue("$confidence",value.Source.Confidence);insert.Parameters.Add("$embedding",Microsoft.Data.Sqlite.SqliteType.Blob).Value=ToBytes(value.Embedding);insert.Parameters.AddWithValue("$now",DateTime.UtcNow.ToString("o")); var targetId=Convert.ToInt64(insert.ExecuteScalar());
+            using var copy=database.Command("""
+                UPDATE video_detected_faces SET assigned_person_id=(SELECT assigned_person_id FROM video_detected_faces WHERE id=$source), assignment_state=(SELECT assignment_state FROM video_detected_faces WHERE id=$source), updated_utc=$now
+                WHERE id=$target AND NOT EXISTS(SELECT 1 FROM video_detected_faces WHERE id=$target AND assignment_state IS NOT NULL)
+                """); copy.Transaction=transaction;copy.Parameters.AddWithValue("$source",value.Source.FaceId);copy.Parameters.AddWithValue("$target",targetId);copy.Parameters.AddWithValue("$now",DateTime.UtcNow.ToString("o"));copy.ExecuteNonQuery(); saved++; }
+        transaction.Commit(); return saved;
+    }
     public async Task<int> AnalyzeAsync(VideoRecord video,
         IProgress<(int Completed, int Total)>? progress = null, CancellationToken cancellationToken=default)
     {
