@@ -49,7 +49,8 @@ public sealed class InsightFaceAdapter : ITrainingAlgorithmAdapter
     public string Id => "insightface-arcface-prototype-calibration";
     public string ModelVersion => "insightface-arcface";
     public string DisplayName => "InsightFace ArcFace stack";
-    public bool IsAvailable => File.Exists(Environment.GetEnvironmentVariable("PICER_INSIGHTFACE_MODEL_PATH") ?? string.Empty);
+    public bool IsAvailable => File.Exists(Environment.GetEnvironmentVariable("PICER_INSIGHTFACE_MODEL_PATH")
+        ?? @"D:\VL-models\models\insightface\w600k_r50.onnx");
     public bool Supports(string requestedType) => string.Equals(requestedType, Id, StringComparison.OrdinalIgnoreCase);
 }
 
