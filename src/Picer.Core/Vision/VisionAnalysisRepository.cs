@@ -874,6 +874,61 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
         return faces;
     }
 
+    public IReadOnlyList<FaceVectorBackfillSource> GetFaceSources(string modelVersion)
+    {
+        using var command = database.Command("""
+            SELECT f.id,f.image_id,i.path,f.ordinal,f.box_x,f.box_y,f.box_width,f.box_height,f.confidence
+            FROM detected_faces f JOIN images i ON i.id=f.image_id
+            WHERE f.model_version=$model AND i.status='active'
+            ORDER BY f.image_id,f.ordinal
+            """);
+        command.Parameters.AddWithValue("$model", modelVersion);
+        var result = new List<FaceVectorBackfillSource>();
+        using var reader = command.ExecuteReader();
+        while (reader.Read()) result.Add(new FaceVectorBackfillSource(reader.GetInt64(0), reader.GetInt64(1), reader.GetString(2),
+            reader.GetInt32(3), new NormalizedFaceBox(reader.GetFloat(4), reader.GetFloat(5), reader.GetFloat(6), reader.GetFloat(7)), reader.GetFloat(8)));
+        return result;
+    }
+
+    public int SaveBackfilledEmbeddings(string sourceModelVersion, string targetModelVersion,
+        IReadOnlyList<(FaceVectorBackfillSource Source, float[] Embedding)> values)
+    {
+        if (values.Count == 0) return 0;
+        using var transaction = database.BeginTransaction();
+        var saved = 0;
+        foreach (var value in values)
+        {
+            using var insert = database.Command("""
+                INSERT INTO detected_faces(image_id,model_version,ordinal,box_x,box_y,box_width,box_height,confidence,created_utc)
+                VALUES($image,$model,$ordinal,$x,$y,$w,$h,$confidence,$created)
+                ON CONFLICT(image_id,model_version,ordinal) DO UPDATE SET embedding=NULL,box_x=excluded.box_x,box_y=excluded.box_y,
+                    box_width=excluded.box_width,box_height=excluded.box_height,confidence=excluded.confidence
+                """);
+            insert.Transaction = transaction;
+            insert.Parameters.AddWithValue("$image", value.Source.ImageId);
+            insert.Parameters.AddWithValue("$model", targetModelVersion);
+            insert.Parameters.AddWithValue("$ordinal", value.Source.Ordinal);
+            insert.Parameters.AddWithValue("$x", value.Source.Box.X); insert.Parameters.AddWithValue("$y", value.Source.Box.Y);
+            insert.Parameters.AddWithValue("$w", value.Source.Box.Width); insert.Parameters.AddWithValue("$h", value.Source.Box.Height);
+            insert.Parameters.AddWithValue("$confidence", value.Source.Confidence); insert.Parameters.AddWithValue("$created", DateTime.UtcNow.ToString("O"));
+            insert.ExecuteNonQuery();
+            using var update = database.Command("UPDATE detected_faces SET embedding=$embedding WHERE image_id=$image AND model_version=$model AND ordinal=$ordinal");
+            update.Transaction = transaction; update.Parameters.Add("$embedding", Microsoft.Data.Sqlite.SqliteType.Blob).Value = ToBytes(value.Embedding);
+            update.Parameters.AddWithValue("$image", value.Source.ImageId); update.Parameters.AddWithValue("$model", targetModelVersion); update.Parameters.AddWithValue("$ordinal", value.Source.Ordinal); update.ExecuteNonQuery();
+            using var copy = database.Command("""
+                INSERT OR IGNORE INTO face_person_assignments(face_id,person_id,state,confidence,assigned_by,updated_utc)
+                SELECT target.id,a.person_id,a.state,a.confidence,a.assigned_by,a.updated_utc
+                FROM detected_faces source JOIN face_person_assignments a ON a.face_id=source.id
+                JOIN detected_faces target ON target.image_id=source.image_id AND target.ordinal=source.ordinal AND target.model_version=$target
+                WHERE source.id=$source AND source.model_version=$sourceModel
+                """);
+            copy.Transaction = transaction; copy.Parameters.AddWithValue("$target", targetModelVersion); copy.Parameters.AddWithValue("$source", value.Source.FaceId); copy.Parameters.AddWithValue("$sourceModel", sourceModelVersion); copy.ExecuteNonQuery();
+            saved++;
+        }
+        transaction.Commit();
+        return saved;
+    }
+
     private void DeleteFaces(long imageId, string modelVersion, SqliteTransaction transaction)
     {
         using var command = database.Command("DELETE FROM detected_faces WHERE image_id = $image_id AND model_version = $model_version");

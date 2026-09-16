@@ -58,5 +58,7 @@ public sealed record FaceCandidateClusterRecord(long Id, string ModelVersion, IR
 public sealed record SuggestedPersonGroupRecord(long PersonId, string PersonName, IReadOnlyList<UnassignedFaceRecord> Faces);
 public sealed record ImageFaceRecord(long FaceId, int Ordinal, NormalizedFaceBox Box, float Confidence,
     long? PersonId, string? PersonName, string? AssignmentState);
+public sealed record FaceVectorBackfillSource(long FaceId, long ImageId, string ImagePath, int Ordinal,
+    NormalizedFaceBox Box, float Confidence);
 
 public sealed record VisionAnalysisSummary(int TotalImages, int CompletedImages, int FailedImages, int FaceCount);
