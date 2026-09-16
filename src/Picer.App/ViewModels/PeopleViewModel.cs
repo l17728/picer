@@ -262,6 +262,37 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
 
     private bool CanAnalyzeAll() => !IsAnalyzing && _analysisService is not null;
 
+    [RelayCommand]
+    private async Task BackfillInsightFaceAsync()
+    {
+        if (IsAnalyzing) return;
+        var endpoint = Environment.GetEnvironmentVariable("PICER_MODEL_SERVER_URL")?.Trim() ?? "http://127.0.0.1:8090";
+        var key = Environment.GetEnvironmentVariable("PICER_MODEL_SERVER_API_KEY")?.Trim() ?? "";
+        IsAnalyzing = true;
+        try
+        {
+            using var platform = new FaceTrainingSubmissionService(endpoint, key);
+            var available = await platform.GetAvailableAlgorithmsAsync();
+            if (!available.Any(model => model.Available && model.ModelVersion == "insightface-arcface"))
+            {
+                StatusText = "InsightFace 尚未就绪，未启动补齐";
+                return;
+            }
+            var service = new RemoteFaceVectorBackfillService(_repository, platform);
+            var result = await service.RunAsync("sface", "insightface-arcface",
+                new Progress<FaceVectorBackfillProgress>(value => StatusText = $"正在补齐 InsightFace 向量：{value.Completed}/{value.Total}，成功 {value.Analyzed}，失败 {value.Failed}"));
+            StatusText = result.Completed
+                ? $"InsightFace 向量补齐完成：{result.Analyzed}/{result.Total}"
+                : $"InsightFace 向量补齐未完成：成功 {result.Analyzed}，失败 {result.Failed}，可重试";
+        }
+        catch (Exception exception)
+        {
+            StatusText = $"InsightFace 向量补齐失败：{exception.Message}";
+            AppLogger.Error("InsightFace 向量补齐失败", exception);
+        }
+        finally { IsAnalyzing = false; }
+    }
+
     [RelayCommand(CanExecute = nameof(CanCancelAnalysis))]
     private void CancelAnalysis() => _analysisCancellation?.Cancel();
 
