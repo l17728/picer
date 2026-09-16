@@ -890,6 +890,15 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
         return result;
     }
 
+    public IReadOnlyList<string> GetFaceModelVersions()
+    {
+        using var command = database.Command("SELECT DISTINCT model_version FROM detected_faces ORDER BY model_version");
+        using var reader = command.ExecuteReader();
+        var versions = new List<string>();
+        while (reader.Read()) versions.Add(reader.GetString(0));
+        return versions;
+    }
+
     public int SaveBackfilledEmbeddings(string sourceModelVersion, string targetModelVersion,
         IReadOnlyList<(FaceVectorBackfillSource Source, float[] Embedding)> values)
     {

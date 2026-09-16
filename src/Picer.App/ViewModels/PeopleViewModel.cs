@@ -279,7 +279,14 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
                 return;
             }
             var service = new RemoteFaceVectorBackfillService(_repository, platform);
-            var result = await service.RunAsync("sface", "insightface-arcface",
+            var sourceModel = _repository.GetFaceModelVersions().FirstOrDefault(model => model.Contains("sface", StringComparison.OrdinalIgnoreCase))
+                ?? _repository.GetFaceModelVersions().FirstOrDefault();
+            if (string.IsNullOrWhiteSpace(sourceModel))
+            {
+                StatusText = "索引中没有可用于裁剪的人脸向量";
+                return;
+            }
+            var result = await service.RunAsync(sourceModel, "insightface-arcface",
                 new Progress<FaceVectorBackfillProgress>(value => StatusText = $"正在补齐 InsightFace 向量：{value.Completed}/{value.Total}，成功 {value.Analyzed}，失败 {value.Failed}"));
             StatusText = result.Completed
                 ? $"InsightFace 向量补齐完成：{result.Analyzed}/{result.Total}"
