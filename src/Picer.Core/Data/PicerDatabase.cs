@@ -7,7 +7,7 @@ namespace Picer.Core.Data;
 
 public sealed class PicerDatabase : IDisposable
 {
-    public const int CurrentSchemaVersion = 35;
+    public const int CurrentSchemaVersion = 36;
     private readonly SqliteConnection _conn;
     private readonly string _connectionString;
 
@@ -942,6 +942,52 @@ public sealed class PicerDatabase : IDisposable
                 PRAGMA user_version = 35;
                 """;
             evidenceMigration.ExecuteNonQuery();
+        }
+        if (schemaVersion < 36)
+        {
+            using var videoModelMigration = _conn.CreateCommand();
+            videoModelMigration.CommandText = """
+                PRAGMA foreign_keys=OFF;
+                ALTER TABLE video_face_person_rejections RENAME TO video_face_person_rejections_legacy;
+                ALTER TABLE video_detected_faces RENAME TO video_detected_faces_legacy;
+                CREATE TABLE video_detected_faces (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    video_id INTEGER NOT NULL REFERENCES videos(id) ON DELETE CASCADE,
+                    keyframe_id INTEGER NOT NULL REFERENCES video_keyframes(id) ON DELETE CASCADE,
+                    timestamp_seconds REAL NOT NULL,
+                    ordinal INTEGER NOT NULL,
+                    model_version TEXT NOT NULL DEFAULT 'legacy-video',
+                    box_x REAL NOT NULL, box_y REAL NOT NULL, box_width REAL NOT NULL, box_height REAL NOT NULL,
+                    confidence REAL NOT NULL, embedding BLOB,
+                    suggested_person_id INTEGER REFERENCES people(id) ON DELETE SET NULL,
+                    match_confidence REAL,
+                    created_utc TEXT NOT NULL,
+                    assigned_person_id INTEGER REFERENCES people(id) ON DELETE SET NULL,
+                    assignment_state TEXT CHECK(assignment_state IN ('confirmed','ignored')),
+                    updated_utc TEXT,
+                    UNIQUE(keyframe_id,model_version,ordinal)
+                );
+                INSERT INTO video_detected_faces
+                    (id,video_id,keyframe_id,timestamp_seconds,ordinal,box_x,box_y,box_width,box_height,confidence,embedding,
+                     suggested_person_id,match_confidence,created_utc,assigned_person_id,assignment_state,updated_utc)
+                SELECT id,video_id,keyframe_id,timestamp_seconds,ordinal,box_x,box_y,box_width,box_height,confidence,embedding,
+                       suggested_person_id,match_confidence,created_utc,assigned_person_id,assignment_state,updated_utc
+                FROM video_detected_faces_legacy;
+                CREATE TABLE video_face_person_rejections (
+                    video_face_id INTEGER NOT NULL REFERENCES video_detected_faces(id) ON DELETE CASCADE,
+                    person_id INTEGER NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+                    created_utc TEXT NOT NULL,
+                    PRIMARY KEY(video_face_id,person_id)
+                );
+                INSERT INTO video_face_person_rejections SELECT * FROM video_face_person_rejections_legacy;
+                DROP TABLE video_face_person_rejections_legacy;
+                DROP TABLE video_detected_faces_legacy;
+                CREATE INDEX idx_video_faces_timeline ON video_detected_faces(video_id,timestamp_seconds);
+                CREATE INDEX idx_video_faces_assigned_person ON video_detected_faces(assigned_person_id,assignment_state);
+                PRAGMA foreign_keys=ON;
+                PRAGMA user_version = 36;
+                """;
+            videoModelMigration.ExecuteNonQuery();
         }
     }
 
