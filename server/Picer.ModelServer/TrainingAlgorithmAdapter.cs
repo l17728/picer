@@ -52,3 +52,21 @@ public sealed class InsightFaceAdapter : ITrainingAlgorithmAdapter
     public bool IsAvailable => File.Exists(Environment.GetEnvironmentVariable("PICER_INSIGHTFACE_MODEL_PATH") ?? string.Empty);
     public bool Supports(string requestedType) => string.Equals(requestedType, Id, StringComparison.OrdinalIgnoreCase);
 }
+
+public sealed class ArcFacePaddleAdapter : ITrainingAlgorithmAdapter
+{
+    public string Id => "arcface-paddle-prototype-calibration";
+    public string ModelVersion => "arcface-paddle";
+    public string DisplayName => "PaddlePaddle ArcFace";
+    public bool IsAvailable => File.Exists(Environment.GetEnvironmentVariable("PICER_ARCFACE_PADDLE_MODEL_PATH") ?? string.Empty);
+    public bool Supports(string requestedType) => string.Equals(requestedType, Id, StringComparison.OrdinalIgnoreCase);
+}
+
+public sealed class FaceXZooAdapter : ITrainingAlgorithmAdapter
+{
+    public string Id => "facex-zoo-prototype-calibration";
+    public string ModelVersion => "facex-zoo";
+    public string DisplayName => "FaceX-Zoo candidate";
+    public bool IsAvailable => File.Exists(Environment.GetEnvironmentVariable("PICER_FACEX_ZOO_MODEL_PATH") ?? string.Empty);
+    public bool Supports(string requestedType) => string.Equals(requestedType, Id, StringComparison.OrdinalIgnoreCase);
+}

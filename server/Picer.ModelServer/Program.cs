@@ -16,8 +16,11 @@ builder.Services.AddSingleton<ITrainingAlgorithmAdapter, PrototypeCalibrationAda
 builder.Services.AddSingleton<ITrainingAlgorithmAdapter, ArcFaceAdapter>();
 builder.Services.AddSingleton<ITrainingAlgorithmAdapter, AdaFaceAdapter>();
 builder.Services.AddSingleton<ITrainingAlgorithmAdapter, InsightFaceAdapter>();
+builder.Services.AddSingleton<ITrainingAlgorithmAdapter, ArcFacePaddleAdapter>();
+builder.Services.AddSingleton<ITrainingAlgorithmAdapter, FaceXZooAdapter>();
 builder.Services.AddSingleton<ArtifactSigner>();
 builder.Services.AddSingleton<TrainingAttemptArchive>();
+builder.Services.AddSingleton<ModelCandidateRankingStore>();
 var app = builder.Build();
 
 // Restore the observable job list after a server restart. Terminal records are
@@ -137,6 +140,19 @@ app.MapPost("/api/ai/vision/completions", async (HttpRequest request) =>
 app.MapGet("/api/face-training/algorithms", (IEnumerable<ITrainingAlgorithmAdapter> adapters) =>
     Results.Ok(adapters.Select(a => new { id = a.Id, modelVersion = a.ModelVersion, name = a.DisplayName,
         available = a.IsAvailable, embeddingVersion = a.ModelVersion })));
+app.MapGet("/api/face-training/model-rankings", (HttpRequest http, IEnumerable<ITrainingAlgorithmAdapter> adapters, ModelCandidateRankingStore rankings) =>
+{
+    var scenario = http.Query["scenario"].FirstOrDefault();
+    return Results.Ok(new { policy = new { maxRounds = 20, iterationsPerRound = 9, retainedModels = 3,
+        scenarioAware = true }, scenario, candidates = rankings.Rank(adapters, scenario) });
+});
+app.MapGet("/api/face-training/model-ensemble", (HttpRequest http, IEnumerable<ITrainingAlgorithmAdapter> adapters, ModelCandidateRankingStore rankings) =>
+{
+    var scenario = http.Query["scenario"].FirstOrDefault();
+    var ranked = rankings.Rank(adapters, scenario);
+    return Results.Ok(new { scenario, strategy = "weighted-consensus-with-primary",
+        members = ModelEnsemblePolicy.Build(ranked) });
+});
 app.MapGet("/api/face-training/signing-key", (ArtifactSigner signer) => Results.Ok(signer.GetInfo()));
 
 app.MapPost("/api/face-training/datasets", (DatasetRequest request, ConcurrentDictionary<string, object> index) =>
@@ -233,7 +249,7 @@ public record DatasetRequest(string SnapshotId, string? SourceApp = null, string
     UserActionEvidence[]? Actions = null, MediaGroupEvidence[]? Groups = null,
     int Attempt = 1, string? TrainingHints = null, string? RecipeFingerprint = null,
     string? RecipeReason = null, int SelectedSampleCount = 0, int ExcludedSampleCount = 0,
-    string? IdempotencyKey = null);
+    string? IdempotencyKey = null, string? Scenario = null);
 public record FaceSample(long FaceId, long PersonId, float[] Embedding, string Split = "train",
     SampleEvidence? Evidence = null, VlAttributes? Attributes = null, string Label = "positive");
 public record SampleEvidence(string Source, string? ImageHash = null, string? FileName = null,
@@ -264,8 +280,10 @@ public sealed class TrainingExecutor
     private readonly ConcurrentDictionary<string, TrainingArtifact> _artifacts = new();
     private readonly ArtifactSigner _signer;
     private readonly TrainingAttemptArchive _archive;
+    private readonly ModelCandidateRankingStore _rankings;
 
-    public TrainingExecutor(ArtifactSigner signer, TrainingAttemptArchive archive) { _signer = signer; _archive = archive; }
+    public TrainingExecutor(ArtifactSigner signer, TrainingAttemptArchive archive, ModelCandidateRankingStore rankings)
+    { _signer = signer; _archive = archive; _rankings = rankings; }
 
     public bool TryGetArtifact(string artifactId, out TrainingArtifact artifact) => _artifacts.TryGetValue(artifactId, out artifact!);
 
@@ -313,6 +331,10 @@ public sealed class TrainingExecutor
                     gpuArtifact.Metrics.FalseRejectRate, dataset.Attempt > 1 ? "glm-4.6v-flash" : null,
                     dataset.Attempt > 1 ? "face-training-advisor.v1" : null, dataset.TrainingHints, DateTime.UtcNow,
                     dataset.RecipeFingerprint, dataset.RecipeReason, dataset.SelectedSampleCount, dataset.ExcludedSampleCount));
+                _rankings.Append(new ModelCandidateRound(dataset.ModelVersion ?? "sface", "prototype-calibration", dataset.Attempt,
+                    gpuArtifact.Metrics.ValidationAccuracy, gpuArtifact.Metrics.FalseAcceptRate, gpuArtifact.Metrics.FalseRejectRate,
+                    gpuArtifact.Metrics.ValidationAccuracy >= .90 && gpuArtifact.Metrics.FalseAcceptRate <= .01,
+                    gpuArtifact.ArtifactId, DateTime.UtcNow, dataset.Scenario));
                 return;
             }
             jobs[jobId] = jobs[jobId] with { Status = "running", Stage = "extracting", Progress = 5 };
@@ -412,6 +434,10 @@ public sealed class TrainingExecutor
                 dataset.Attempt > 1 ? "glm-4.6v-flash" : null,
                 dataset.Attempt > 1 ? "face-training-advisor.v1" : null, dataset.TrainingHints, DateTime.UtcNow,
                 dataset.RecipeFingerprint, dataset.RecipeReason, dataset.SelectedSampleCount, dataset.ExcludedSampleCount));
+            _rankings.Append(new ModelCandidateRound(dataset.ModelVersion ?? "sface", "prototype-calibration", dataset.Attempt,
+                metrics.ValidationAccuracy, metrics.FalseAcceptRate, metrics.FalseRejectRate,
+                metrics.ValidationAccuracy >= .90 && metrics.FalseAcceptRate <= .01,
+                artifactId, DateTime.UtcNow, dataset.Scenario));
         }
         catch (Exception exception)
         {
