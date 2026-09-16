@@ -164,12 +164,16 @@ app.MapGet("/api/face-training/signing-key", (ArtifactSigner signer) => Results.
 app.MapPost("/api/face-training/datasets", (DatasetRequest request, ConcurrentDictionary<string, object> index) =>
 {
     if (request.ProtocolVersion != "face-evidence.v1") return Results.BadRequest(new { error = "unsupported protocolVersion" });
-    if (request.Samples?.Any(s => s.Embedding is null || s.Embedding.Length == 0) == true)
-        return Results.BadRequest(new { error = "sample embedding is required" });
     var samples = request.Samples ?? [];
     if (samples.Length == 0) return Results.BadRequest(new { error = "at least one sample is required" });
-    var dimensions = samples.Select(s => s.Embedding.Length).Distinct().ToArray();
-    if (dimensions.Length != 1) return Results.BadRequest(new { error = "embedding dimensions must match" });
+    var modelVersion = request.ModelVersion ?? "sface";
+    var imageOnly = string.Equals(modelVersion, "insightface-arcface", StringComparison.OrdinalIgnoreCase);
+    if (samples.Any(s => (s.Embedding is null || s.Embedding.Length == 0) &&
+                         (!imageOnly || string.IsNullOrWhiteSpace(s.FaceImageBase64))))
+        return Results.BadRequest(new { error = imageOnly ? "sample requires embedding or faceImageBase64" : "sample embedding is required" });
+    var dimensions = samples.Where(s => s.Embedding is { Length: > 0 }).Select(s => s.Embedding!.Length).Distinct().ToArray();
+    if (!imageOnly && dimensions.Length != 1) return Results.BadRequest(new { error = "embedding dimensions must match" });
+    if (imageOnly && dimensions.Length > 1) return Results.BadRequest(new { error = "embedding dimensions must match" });
     if (request.SelectedSampleCount > 0 && request.SelectedSampleCount != samples.Length)
         return Results.BadRequest(new { error = "selectedSampleCount does not match samples" });
     var leakage = samples
@@ -256,8 +260,9 @@ public record DatasetRequest(string SnapshotId, string? SourceApp = null, string
     int Attempt = 1, string? TrainingHints = null, string? RecipeFingerprint = null,
     string? RecipeReason = null, int SelectedSampleCount = 0, int ExcludedSampleCount = 0,
     string? IdempotencyKey = null, string? Scenario = null);
-public record FaceSample(long FaceId, long PersonId, float[] Embedding, string Split = "train",
-    SampleEvidence? Evidence = null, VlAttributes? Attributes = null, string Label = "positive");
+public record FaceSample(long FaceId, long PersonId, float[]? Embedding = null, string Split = "train",
+    SampleEvidence? Evidence = null, VlAttributes? Attributes = null, string Label = "positive",
+    string? FaceImageBase64 = null);
 public record SampleEvidence(string Source, string? ImageHash = null, string? FileName = null,
     string? GroupId = null, string? ModelVersion = null, string? SelectionReason = null,
     string? ExclusionReason = null);
@@ -344,6 +349,11 @@ public sealed class TrainingExecutor
                     gpuArtifact.ArtifactId, DateTime.UtcNow, dataset.Scenario));
                 return;
             }
+            if (dataset.Samples?.Any(s => s.Embedding is null || s.Embedding.Length == 0) == true)
+            {
+                jobs[jobId] = jobs[jobId] with { Status = "failed", Error = "当前 CPU 训练路径需要 embedding；请使用 SFace/本地特征或启用 InsightFace GPU worker" };
+                return;
+            }
             jobs[jobId] = jobs[jobId] with { Status = "running", Stage = "extracting", Progress = 5 };
             await Task.Delay(200);
 
@@ -363,7 +373,7 @@ public sealed class TrainingExecutor
             var prototypes = new List<PersonPrototype>();
             foreach (var personGroup in trainSamples.GroupBy(s => s.PersonId))
             {
-                var embeddings = personGroup.Select(s => s.Embedding).ToList();
+                var embeddings = personGroup.Select(s => s.Embedding!).ToList();
                 var centroid = new float[embeddings[0].Length];
                 foreach (var embedding in embeddings)
                     for (var i = 0; i < centroid.Length; i++)
@@ -390,7 +400,7 @@ public sealed class TrainingExecutor
             {
                 total++;
                 var bestProto = prototypes
-                    .Select(p => (Proto: p, Sim: CosineSimilarity(sample.Embedding, p.Centroid)))
+                    .Select(p => (Proto: p, Sim: CosineSimilarity(sample.Embedding!, p.Centroid)))
                     .OrderByDescending(x => x.Sim)
                     .FirstOrDefault();
                 var predicted = bestProto.Sim >= bestProto.Proto.Threshold ? bestProto.Proto.PersonId : 0;
@@ -412,7 +422,7 @@ public sealed class TrainingExecutor
 
             var trainAccuracy = trainSamples.Count > 0 ? (double)trainSamples.Count(s =>
             {
-                var best = prototypes.Select(p => (P: p, S: CosineSimilarity(s.Embedding, p.Centroid))).OrderByDescending(x => x.S).First();
+                var best = prototypes.Select(p => (P: p, S: CosineSimilarity(s.Embedding!, p.Centroid))).OrderByDescending(x => x.S).First();
                 return best.P.PersonId == s.PersonId && best.S >= best.P.Threshold;
             }) / trainSamples.Count : 0;
 

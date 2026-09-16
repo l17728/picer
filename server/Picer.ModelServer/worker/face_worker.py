@@ -18,7 +18,8 @@ def enrich_insightface_embeddings(samples, model_version):
     112x112 face crop. Paths are intentionally unsupported for privacy."""
     if not model_version.startswith("insightface"):
         return samples
-    missing = [s for s in samples if not s.get("embedding") and not s.get("faceImageBase64")]
+    missing = [s for s in samples if not s.get("embedding") and not s.get("Embedding")
+               and not s.get("faceImageBase64") and not s.get("FaceImageBase64")]
     if missing:
         raise ValueError("InsightFace requires faceImageBase64 for samples without embeddings")
     import cv2, numpy as np, onnxruntime as ort
@@ -27,10 +28,11 @@ def enrich_insightface_embeddings(samples, model_version):
     input_name = session.get_inputs()[0].name
     output = []
     for sample in samples:
-        if sample.get("embedding"):
+        if sample.get("embedding") or sample.get("Embedding"):
             output.append(sample)
             continue
-        raw = base64.b64decode(sample["faceImageBase64"])
+        encoded = sample.get("faceImageBase64", sample.get("FaceImageBase64"))
+        raw = base64.b64decode(encoded)
         image = cv2.imdecode(np.frombuffer(raw, dtype=np.uint8), cv2.IMREAD_COLOR)
         if image is None:
             raise ValueError("invalid faceImageBase64")
