@@ -36,6 +36,7 @@ def enrich_insightface_embeddings(samples, model_version):
         raise ValueError(f"{model_version} model path is not configured")
     session = ort.InferenceSession(model_path, providers=["CUDAExecutionProvider", "CPUExecutionProvider"])
     input_name = session.get_inputs()[0].name
+    input_shape = session.get_inputs()[0].shape
     output = []
     for sample in samples:
         if sample.get("embedding") or sample.get("Embedding"):
@@ -49,7 +50,8 @@ def enrich_insightface_embeddings(samples, model_version):
         image = cv2.resize(image, (112, 112), interpolation=cv2.INTER_AREA)
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB).astype(np.float32)
         image = (image - 127.5) / 127.5
-        vector = session.run(None, {input_name: image.transpose(2, 0, 1)[None, ...]})[0][0]
+        tensor = image[None, ...] if input_shape[-1] == 3 else image.transpose(2, 0, 1)[None, ...]
+        vector = session.run(None, {input_name: tensor})[0][0]
         vector = vector / (np.linalg.norm(vector) + 1e-12)
         enriched = dict(sample)
         enriched["embedding"] = vector.astype(float).tolist()

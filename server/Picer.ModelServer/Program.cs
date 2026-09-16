@@ -161,12 +161,13 @@ app.MapPost("/api/face-training/model-ensemble/decide", (ModelEnsembleDecisionRe
 });
 app.MapGet("/api/face-training/signing-key", (ArtifactSigner signer) => Results.Ok(signer.GetInfo()));
 
-app.MapPost("/api/face-training/embeddings", async (EmbeddingRequest request, CancellationToken cancellationToken) =>
+app.MapPost("/api/face-training/embeddings", async (EmbeddingRequest request, IEnumerable<ITrainingAlgorithmAdapter> adapters, CancellationToken cancellationToken) =>
 {
     if (request.Images is null || request.Images.Length == 0)
         return Results.BadRequest(new { error = "at least one face crop is required" });
-    if (!string.Equals(request.ModelVersion, "insightface-arcface", StringComparison.OrdinalIgnoreCase))
-        return Results.BadRequest(new { error = "only deployed insightface-arcface embedding service is available" });
+    var adapter = adapters.FirstOrDefault(value => string.Equals(value.ModelVersion, request.ModelVersion, StringComparison.OrdinalIgnoreCase));
+    if (adapter is null || !adapter.IsAvailable)
+        return Results.BadRequest(new { error = $"model {request.ModelVersion} is not deployed" });
     var python = Environment.GetEnvironmentVariable("PICER_GPU_WORKER_PYTHON");
     var script = Environment.GetEnvironmentVariable("PICER_GPU_WORKER_SCRIPT");
     if (string.IsNullOrWhiteSpace(python) || string.IsNullOrWhiteSpace(script))
