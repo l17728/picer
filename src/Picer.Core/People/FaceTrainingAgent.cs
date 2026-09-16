@@ -4,6 +4,7 @@ using System.Text;
 namespace Picer.Core.People;
 
 public sealed record FaceTrainingAgentResult(bool Passed, int Attempts, TrainingArtifactData? Artifact, string FailureReason);
+public sealed record FaceTrainingModelResult(string ModelVersion, FaceTrainingAgentResult Result);
 
 /// <summary>统一的人脸训练 Agent：最多九轮，自适应配方，失败制品永不应用。</summary>
 public sealed class FaceTrainingAgent(FaceTrainingSubmissionService submission)
@@ -13,12 +14,13 @@ public sealed class FaceTrainingAgent(FaceTrainingSubmissionService submission)
         Func<int, TrainingArtifactData, CancellationToken, Task<string?>>? advisor = null,
         IProgress<string>? progress = null, CancellationToken cancellationToken = default,
         IReadOnlyDictionary<long, TrainingVisualAttribute>? visualAttributes = null,
-        IReadOnlyList<TrainingActionEvidence>? actions = null, string? initialHints = null)
+        IReadOnlyList<TrainingActionEvidence>? actions = null, string? initialHints = null,
+        string modelVersion = "sface")
     {
         const double gate = 0.90;
         const int maxAttempts = 9;
         const string corePrinciples = "核心训练准则：按时间跨度分层抽样，保证同一人物覆盖不同年份/季节/设备；同一原图、连拍组和视频关键帧不得跨分区；连拍或内容哈希高度相似的人脸先去重，避免单一时刻过度代表；优先保留跨时间稳定特征，并用时间变化样本检验泛化能力；先判断阈值可达性，若扫描仍低于90%则停止低频调阈值并升级基模。";
-        string? hints = await submission.GetTrainingMemoryAsync(cancellationToken);
+        string? hints = await submission.GetTrainingMemoryAsync(modelVersion, cancellationToken);
         hints = string.IsNullOrWhiteSpace(hints) ? corePrinciples : $"{corePrinciples}\n历史训练记忆：{hints}";
         if (!string.IsNullOrWhiteSpace(initialHints))
             hints = string.IsNullOrWhiteSpace(hints) ? initialHints : $"{hints}\n用户操作摘要：{initialHints}";
@@ -46,7 +48,7 @@ public sealed class FaceTrainingAgent(FaceTrainingSubmissionService submission)
             var roundHints = string.IsNullOrWhiteSpace(hints) ? recipeHints : $"{hints}\n{recipeHints}";
             progress?.Report($"训练 Agent：第 {attempt}/{maxAttempts} 次：{recipe.Reason}；选中 {recipe.Samples.Count}，排除 {recipe.ExcludedCount}，指纹 {recipe.Fingerprint}");
             var submitted = await submission.SubmitAsync(snapshot, recipe.Samples, cancellationToken, attempt, roundHints,
-                visualAttributes, actions, recipe.Fingerprint, recipe.Reason, recipe.ExcludedCount);
+                visualAttributes, actions, recipe.Fingerprint, recipe.Reason, recipe.ExcludedCount, modelVersion);
             if (submitted.Status == "failed")
             {
                 if (attempt == maxAttempts) return new(false, attempt, null, submitted.Error ?? "训练提交失败");
@@ -89,6 +91,25 @@ public sealed class FaceTrainingAgent(FaceTrainingSubmissionService submission)
             progress?.Report($"训练 Agent：第 {attempt} 次未达 90%，已生成下一轮配方调整建议");
         }
         return new(false, maxAttempts, last, "连续 9 次未达到准确率 90%");
+    }
+
+    /// <summary>每个模型独立运行九轮 Agent；配方、历史记忆和失败不会互相污染。</summary>
+    public async Task<IReadOnlyList<FaceTrainingModelResult>> RunParallelAsync(
+        FaceTrainingSnapshotResult snapshot,
+        IReadOnlyDictionary<string, IReadOnlyList<(long FaceId, long PersonId, float[] Embedding, string Split)>> modelSamples,
+        Func<string, int, TrainingArtifactData, CancellationToken, Task<string?>>? advisor = null,
+        IProgress<string>? progress = null, CancellationToken cancellationToken = default,
+        IReadOnlyDictionary<long, TrainingVisualAttribute>? visualAttributes = null,
+        IReadOnlyList<TrainingActionEvidence>? actions = null)
+    {
+        var tasks = modelSamples.Where(pair => pair.Value.Count > 0).Select(async pair =>
+        {
+            var result = await RunAsync(snapshot, pair.Value,
+                advisor is null ? null : (attempt, artifact, token) => advisor(pair.Key, attempt, artifact, token),
+                progress, cancellationToken, visualAttributes, actions, modelVersion: pair.Key).ConfigureAwait(false);
+            return new FaceTrainingModelResult(pair.Key, result);
+        });
+        return await Task.WhenAll(tasks).ConfigureAwait(false);
     }
 
     private static AttemptRecipe BuildRecipe(

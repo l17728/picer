@@ -8,6 +8,9 @@ namespace Picer.Core.People;
 
 public sealed record TrainingSubmissionResult(string JobId, string Status, string? ArtifactId, string? Error,
     string? Stage = null, int Progress = 0);
+public sealed record TrainingModelAvailability(string Id, string ModelVersion, string Name, bool Available,
+    string EmbeddingVersion);
+public sealed record ParallelTrainingSubmissionResult(string ModelVersion, TrainingSubmissionResult Result);
 
 public sealed record TrainingArtifactData(
     string ArtifactId, string Algorithm, string ModelVersion, DateTime CreatedUtc,
@@ -49,20 +52,58 @@ public sealed class FaceTrainingSubmissionService : IDisposable
             _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", resolvedKey);
     }
 
+    /// <summary>读取平台真实可用模型；不可用模型不会进入并行提交。</summary>
+    public async Task<IReadOnlyList<TrainingModelAvailability>> GetAvailableAlgorithmsAsync(CancellationToken ct = default)
+    {
+        try
+        {
+            var response = await _client.GetAsync("api/face-training/algorithms", ct).ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode) return [];
+            return await response.Content.ReadFromJsonAsync<TrainingModelAvailability[]>(Json, ct).ConfigureAwait(false) ?? [];
+        }
+        catch { return []; }
+    }
+
+    /// <summary>
+    /// 并行提交不同模型的数据集。每个模型独立捕获异常，单模型失败不取消其他任务。
+    /// 调用方必须提供与模型版本匹配的向量或图像裁剪数据。
+    /// </summary>
+    public async Task<IReadOnlyList<ParallelTrainingSubmissionResult>> SubmitParallelAsync(
+        FaceTrainingSnapshotResult snapshot,
+        IReadOnlyDictionary<string, IReadOnlyList<(long FaceId, long PersonId, float[] Embedding, string Split)>> modelSamples,
+        CancellationToken ct = default)
+    {
+        var tasks = modelSamples.Where(pair => pair.Value.Count > 0).Select(async pair =>
+        {
+            try
+            {
+                var result = await SubmitAsync(snapshot, pair.Value, ct, modelVersion: pair.Key).ConfigureAwait(false);
+                return new ParallelTrainingSubmissionResult(pair.Key, result);
+            }
+            catch (Exception ex)
+            {
+                return new ParallelTrainingSubmissionResult(pair.Key,
+                    new TrainingSubmissionResult(string.Empty, "failed", null, ex.Message));
+            }
+        });
+        return await Task.WhenAll(tasks).ConfigureAwait(false);
+    }
+
     public async Task<TrainingSubmissionResult> SubmitAsync(FaceTrainingSnapshotResult snapshot,
         IReadOnlyList<(long FaceId, long PersonId, float[] Embedding, string Split)> samples,
         CancellationToken ct = default, int attempt = 1, string? trainingHints = null,
         IReadOnlyDictionary<long, TrainingVisualAttribute>? visualAttributes = null,
         IReadOnlyList<TrainingActionEvidence>? actions = null,
-        string? recipeFingerprint = null, string? recipeReason = null, int excludedSampleCount = 0)
+        string? recipeFingerprint = null, string? recipeReason = null, int excludedSampleCount = 0,
+        string modelVersion = "sface")
     {
         try
         {
-            var idempotencyKey = ComputeIdempotencyKey(snapshot.SnapshotId, "sface", recipeFingerprint, attempt);
+            var idempotencyKey = ComputeIdempotencyKey(snapshot.SnapshotId, modelVersion, recipeFingerprint, attempt);
             var payload = new
             {
                 snapshotId = snapshot.SnapshotId.ToString(),
-                modelVersion = "sface",
+                modelVersion,
                 attempt,
                 trainingHints,
                 recipeFingerprint,
@@ -79,7 +120,7 @@ public sealed class FaceTrainingSubmissionService : IDisposable
                     evidence = new
                     {
                         source = "user-confirmed",
-                        modelVersion = "sface",
+                        modelVersion,
                         selectionReason = s.Split == "validation" ? "独立验证集" : "用户已确认归类"
                     }
                 })
@@ -166,7 +207,7 @@ public sealed class FaceTrainingSubmissionService : IDisposable
         return verifier.VerifyHash(hash, Convert.FromBase64String(artifact.Signature));
     }
 
-    public async Task<string?> GetTrainingMemoryAsync(CancellationToken ct = default)
+    public async Task<string?> GetTrainingMemoryAsync(string? modelVersion = null, CancellationToken ct = default)
     {
         try
         {
@@ -174,7 +215,11 @@ public sealed class FaceTrainingSubmissionService : IDisposable
             if (!response.IsSuccessStatusCode) return null;
             var records = await response.Content.ReadFromJsonAsync<JsonElement>(Json, ct);
             if (records.ValueKind != JsonValueKind.Array) return null;
-            var lines = records.EnumerateArray().Select(record =>
+            var lines = records.EnumerateArray()
+                .Where(record => string.IsNullOrWhiteSpace(modelVersion)
+                    || !record.TryGetProperty("modelVersion", out var mv)
+                    || string.Equals(mv.GetString(), modelVersion, StringComparison.OrdinalIgnoreCase))
+                .Select(record =>
             {
                 var attempt = record.TryGetProperty("attempt", out var a) ? a.ToString() : "?";
                 var status = record.TryGetProperty("status", out var s) ? s.GetString() : "unknown";

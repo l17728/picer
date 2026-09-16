@@ -286,6 +286,11 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             var endpoint = Environment.GetEnvironmentVariable("PICER_MODEL_SERVER_URL")?.Trim() ?? "http://127.0.0.1:8090";
             string? key = Environment.GetEnvironmentVariable("PICER_MODEL_SERVER_API_KEY")?.Trim();
             using var submission = new FaceTrainingSubmissionService(endpoint, key ?? "");
+            var availableModels = await submission.GetAvailableAlgorithmsAsync();
+            var readyModels = availableModels.Where(model => model.Available).ToArray();
+            StatusText = readyModels.Length == 0
+                ? "训练平台没有可用人脸模型，任务不会阻塞在提交阶段"
+                : $"训练平台已就绪 {readyModels.Length} 个模型：{string.Join("、", readyModels.Select(model => model.ModelVersion))}；当前客户端快照提供 SFace 向量，其他模型需匹配版本向量或人脸裁剪图，不能混用";
             var agent = new FaceTrainingAgent(submission);
             var result = await agent.RunAsync(snapshot, samples,
                 (attempt, artifact, token) => AnalyzeTrainingFailureAsync(attempt, artifact, .90, actionSummary, token),
