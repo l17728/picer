@@ -219,6 +219,24 @@ public sealed class VisionAnalysisTests : IDisposable
     }
 
     [Fact]
+    public async Task FaceVectorBackfill_IsIncrementalAndModelScoped()
+    {
+        var firstRepository = new VisionAnalysisRepository(_database);
+        using (var first = new VisionAnalysisService(firstRepository, new FakeFaceAnalyzer("model-1")))
+            await first.AnalyzeAsync([_image]);
+
+        var backfill = new FaceVectorBackfillService(_database, new FakeFaceAnalyzer("model-2"));
+        var result = await backfill.RunAsync();
+
+        Assert.True(result.Completed);
+        Assert.Equal(1, result.Analyzed);
+        Assert.Equal(0, result.Failed);
+        using var command = _database.Command("SELECT COUNT(DISTINCT model_version) FROM detected_faces WHERE image_id=$image");
+        command.Parameters.AddWithValue("$image", _image.Id);
+        Assert.Equal(2L, (long)command.ExecuteScalar()!);
+    }
+
+    [Fact]
     public async Task AnalyzeAsync_DoesNotModifySourceFile()
     {
         var before = File.ReadAllBytes(_image.Path);
