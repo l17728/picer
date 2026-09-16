@@ -153,6 +153,12 @@ app.MapGet("/api/face-training/model-ensemble", (HttpRequest http, IEnumerable<I
     return Results.Ok(new { scenario, strategy = "weighted-consensus-with-primary",
         members = ModelEnsemblePolicy.Build(ranked) });
 });
+app.MapPost("/api/face-training/model-ensemble/decide", (ModelEnsembleDecisionRequest request) =>
+{
+    var members = request.Members ?? [];
+    var scores = request.Scores ?? [];
+    return Results.Ok(ModelEnsemblePolicy.Decide(scores, members));
+});
 app.MapGet("/api/face-training/signing-key", (ArtifactSigner signer) => Results.Ok(signer.GetInfo()));
 
 app.MapPost("/api/face-training/datasets", (DatasetRequest request, ConcurrentDictionary<string, object> index) =>
@@ -262,6 +268,7 @@ public record VlAttributes(string Pose, string Lighting, string[] Occlusion, str
     double FaceQuality, bool IsUsefulForTraining, string ModelVersion, string PromptVersion);
 public record VlEnrichmentRequest(string ProtocolVersion = "face-evidence.v1", VlAttributes[]? Attributes = null);
 public record JobRequest(string DatasetId, string Type);
+public record ModelEnsembleDecisionRequest(ModelEnsembleMember[]? Members = null, ModelEnsembleScore[]? Scores = null);
 public record TrainingJob(string Id, string Status, string Stage, int Progress, string? ArtifactId, string? Error);
 public record TrainingArtifact(
     string ArtifactId, string Algorithm, string ModelVersion, DateTime CreatedUtc,
