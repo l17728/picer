@@ -161,6 +161,29 @@ app.MapPost("/api/face-training/model-ensemble/decide", (ModelEnsembleDecisionRe
 });
 app.MapGet("/api/face-training/signing-key", (ArtifactSigner signer) => Results.Ok(signer.GetInfo()));
 
+app.MapPost("/api/face-training/embeddings", async (EmbeddingRequest request, CancellationToken cancellationToken) =>
+{
+    if (request.Images is null || request.Images.Length == 0)
+        return Results.BadRequest(new { error = "at least one face crop is required" });
+    if (!string.Equals(request.ModelVersion, "insightface-arcface", StringComparison.OrdinalIgnoreCase))
+        return Results.BadRequest(new { error = "only deployed insightface-arcface embedding service is available" });
+    var python = Environment.GetEnvironmentVariable("PICER_GPU_WORKER_PYTHON");
+    var script = Environment.GetEnvironmentVariable("PICER_GPU_WORKER_SCRIPT");
+    if (string.IsNullOrWhiteSpace(python) || string.IsNullOrWhiteSpace(script))
+        return Results.Problem("GPU worker is not configured", statusCode: 503);
+    var start = new ProcessStartInfo(python, $"\"{script}\"")
+    { RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true };
+    using var process = Process.Start(start);
+    if (process is null) return Results.Problem("GPU worker could not start", statusCode: 503);
+    await process.StandardInput.WriteAsync(JsonSerializer.Serialize(new { operation = "embed", modelVersion = request.ModelVersion, images = request.Images }));
+    process.StandardInput.Close();
+    var output = await process.StandardOutput.ReadToEndAsync(cancellationToken);
+    var error = await process.StandardError.ReadToEndAsync(cancellationToken);
+    await process.WaitForExitAsync(cancellationToken);
+    if (process.ExitCode != 0) return Results.Problem(string.IsNullOrWhiteSpace(error) ? output : error, statusCode: 502);
+    return Results.Content(output, "application/json");
+});
+
 app.MapPost("/api/face-training/datasets", (DatasetRequest request, ConcurrentDictionary<string, object> index) =>
 {
     if (request.ProtocolVersion != "face-evidence.v1") return Results.BadRequest(new { error = "unsupported protocolVersion" });
@@ -260,6 +283,7 @@ public record DatasetRequest(string SnapshotId, string? SourceApp = null, string
     int Attempt = 1, string? TrainingHints = null, string? RecipeFingerprint = null,
     string? RecipeReason = null, int SelectedSampleCount = 0, int ExcludedSampleCount = 0,
     string? IdempotencyKey = null, string? Scenario = null);
+public record EmbeddingRequest(string ModelVersion, string[] Images);
 public record FaceSample(long FaceId, long PersonId, float[]? Embedding = null, string Split = "train",
     SampleEvidence? Evidence = null, VlAttributes? Attributes = null, string Label = "positive",
     string? FaceImageBase64 = null);

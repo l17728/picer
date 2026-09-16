@@ -48,6 +48,11 @@ def enrich_insightface_embeddings(samples, model_version):
 
 def main():
     request = json.load(sys.stdin)
+    if request.get("operation") == "embed":
+        model_version = request.get("modelVersion", "insightface-arcface")
+        samples = [{"faceImageBase64": value} for value in request.get("images", [])]
+        enriched = enrich_insightface_embeddings(samples, model_version)
+        return {"modelVersion": model_version, "embeddings": [s["embedding"] for s in enriched]}
     samples = request.get("samples", [])
     if len(samples) < 2:
         raise ValueError("at least two samples required")

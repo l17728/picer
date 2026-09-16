@@ -64,6 +64,18 @@ public sealed class FaceTrainingSubmissionService : IDisposable
         catch { return []; }
     }
 
+    public async Task<IReadOnlyList<float[]>> GenerateEmbeddingsAsync(string modelVersion,
+        IReadOnlyList<string> faceImageBase64, CancellationToken ct = default)
+    {
+        if (faceImageBase64.Count == 0) return [];
+        var response = await _client.PostAsJsonAsync("api/face-training/embeddings",
+            new { modelVersion, images = faceImageBase64 }, Json, ct).ConfigureAwait(false);
+        if (!response.IsSuccessStatusCode) return [];
+        var payload = await response.Content.ReadFromJsonAsync<JsonElement>(Json, ct).ConfigureAwait(false);
+        if (!payload.TryGetProperty("embeddings", out var embeddings) || embeddings.ValueKind != JsonValueKind.Array) return [];
+        return embeddings.EnumerateArray().Select(item => item.EnumerateArray().Select(value => value.GetSingle()).ToArray()).ToArray();
+    }
+
     /// <summary>
     /// 并行提交不同模型的数据集。每个模型独立捕获异常，单模型失败不取消其他任务。
     /// 调用方必须提供与模型版本匹配的向量或图像裁剪数据。
