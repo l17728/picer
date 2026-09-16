@@ -13,6 +13,8 @@ builder.Services.AddSingleton<ConcurrentDictionary<string, object>>();
 builder.Services.AddSingleton<TrainingExecutor>();
 builder.Services.AddSingleton<TrainingRecipeBuilder>();
 builder.Services.AddSingleton<ITrainingAlgorithmAdapter, PrototypeCalibrationAdapter>();
+builder.Services.AddSingleton<ITrainingAlgorithmAdapter, ArcFaceAdapter>();
+builder.Services.AddSingleton<ITrainingAlgorithmAdapter, AdaFaceAdapter>();
 builder.Services.AddSingleton<ArtifactSigner>();
 builder.Services.AddSingleton<TrainingAttemptArchive>();
 var app = builder.Build();
@@ -132,7 +134,8 @@ app.MapPost("/api/ai/vision/completions", async (HttpRequest request) =>
     return Results.Content(await response.Content.ReadAsStringAsync(), "application/json", statusCode: (int)response.StatusCode);
 });
 app.MapGet("/api/face-training/algorithms", (IEnumerable<ITrainingAlgorithmAdapter> adapters) =>
-    Results.Ok(adapters.Select(a => new { id = a.Id, modelVersion = a.ModelVersion })));
+    Results.Ok(adapters.Select(a => new { id = a.Id, modelVersion = a.ModelVersion, name = a.DisplayName,
+        available = a.IsAvailable, embeddingVersion = a.ModelVersion })));
 app.MapGet("/api/face-training/signing-key", (ArtifactSigner signer) => Results.Ok(signer.GetInfo()));
 
 app.MapPost("/api/face-training/datasets", (DatasetRequest request, ConcurrentDictionary<string, object> index) =>
