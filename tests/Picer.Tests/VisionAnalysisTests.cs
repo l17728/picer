@@ -202,6 +202,23 @@ public sealed class VisionAnalysisTests : IDisposable
     }
 
     [Fact]
+    public async Task AnalyzeAsync_NewModelPreservesPreviousModelEmbeddings()
+    {
+        var repository = new VisionAnalysisRepository(_database);
+        using (var first = new VisionAnalysisService(repository, new FakeFaceAnalyzer("model-1")))
+            await first.AnalyzeAsync([_image]);
+        using (var second = new VisionAnalysisService(repository, new FakeFaceAnalyzer("model-2")))
+            await second.AnalyzeAsync([_image]);
+
+        using var command = _database.Command("SELECT model_version FROM detected_faces WHERE image_id=$image ORDER BY model_version");
+        command.Parameters.AddWithValue("$image", _image.Id);
+        using var reader = command.ExecuteReader();
+        var versions = new List<string>();
+        while (reader.Read()) versions.Add(reader.GetString(0));
+        Assert.Equal(["model-1", "model-2"], versions);
+    }
+
+    [Fact]
     public async Task AnalyzeAsync_DoesNotModifySourceFile()
     {
         var before = File.ReadAllBytes(_image.Path);

@@ -60,7 +60,9 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
     {
         var uniqueFaces = DeduplicateDetections(result.Faces);
         using var transaction = database.BeginTransaction();
-        DeleteFaces(image.Id, transaction);
+        // Model versions are independent. Rebuilding InsightFace must not
+        // remove the existing SFace (or another candidate model) records.
+        DeleteFaces(image.Id, analyzer.ModelVersion, transaction);
 
         for (var ordinal = 0; ordinal < uniqueFaces.Count; ordinal++)
         {
@@ -872,11 +874,12 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
         return faces;
     }
 
-    private void DeleteFaces(long imageId, SqliteTransaction transaction)
+    private void DeleteFaces(long imageId, string modelVersion, SqliteTransaction transaction)
     {
-        using var command = database.Command("DELETE FROM detected_faces WHERE image_id = $image_id");
+        using var command = database.Command("DELETE FROM detected_faces WHERE image_id = $image_id AND model_version = $model_version");
         command.Transaction = transaction;
         command.Parameters.AddWithValue("$image_id", imageId);
+        command.Parameters.AddWithValue("$model_version", modelVersion);
         command.ExecuteNonQuery();
     }
 
