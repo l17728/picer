@@ -40,3 +40,15 @@ public sealed class AdaFaceAdapter : ITrainingAlgorithmAdapter
     public bool IsAvailable => File.Exists(Environment.GetEnvironmentVariable("PICER_ADAFACE_MODEL_PATH") ?? string.Empty);
     public bool Supports(string requestedType) => string.Equals(requestedType, Id, StringComparison.OrdinalIgnoreCase);
 }
+
+/// <summary>InsightFace distribution adapter. It is kept separate from the
+/// generic ArcFace adapter because detector/alignment and embedding versions
+/// must be evaluated as one immutable stack.</summary>
+public sealed class InsightFaceAdapter : ITrainingAlgorithmAdapter
+{
+    public string Id => "insightface-arcface-prototype-calibration";
+    public string ModelVersion => "insightface-arcface";
+    public string DisplayName => "InsightFace ArcFace stack";
+    public bool IsAvailable => File.Exists(Environment.GetEnvironmentVariable("PICER_INSIGHTFACE_MODEL_PATH") ?? string.Empty);
+    public bool Supports(string requestedType) => string.Equals(requestedType, Id, StringComparison.OrdinalIgnoreCase);
+}

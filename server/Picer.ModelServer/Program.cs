@@ -15,6 +15,7 @@ builder.Services.AddSingleton<TrainingRecipeBuilder>();
 builder.Services.AddSingleton<ITrainingAlgorithmAdapter, PrototypeCalibrationAdapter>();
 builder.Services.AddSingleton<ITrainingAlgorithmAdapter, ArcFaceAdapter>();
 builder.Services.AddSingleton<ITrainingAlgorithmAdapter, AdaFaceAdapter>();
+builder.Services.AddSingleton<ITrainingAlgorithmAdapter, InsightFaceAdapter>();
 builder.Services.AddSingleton<ArtifactSigner>();
 builder.Services.AddSingleton<TrainingAttemptArchive>();
 var app = builder.Build();
