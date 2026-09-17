@@ -37,7 +37,9 @@ public sealed class AdaFaceAdapter : ITrainingAlgorithmAdapter
     public string Id => "adaface-prototype-calibration";
     public string ModelVersion => "adaface";
     public string DisplayName => "AdaFace quality-aware candidate";
-    public bool IsAvailable => File.Exists(Environment.GetEnvironmentVariable("PICER_ADAFACE_MODEL_PATH") ?? string.Empty);
+    public bool IsAvailable => File.Exists(string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("PICER_ADAFACE_MODEL_PATH"))
+        ? @"D:\VL-models\models\candidates\adaface_ir_18.onnx"
+        : Environment.GetEnvironmentVariable("PICER_ADAFACE_MODEL_PATH")!);
     public bool Supports(string requestedType) => string.Equals(requestedType, Id, StringComparison.OrdinalIgnoreCase);
 }
 
