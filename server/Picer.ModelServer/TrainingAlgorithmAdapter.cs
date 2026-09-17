@@ -61,7 +61,9 @@ public sealed class ArcFacePaddleAdapter : ITrainingAlgorithmAdapter
     public string Id => "arcface-paddle-prototype-calibration";
     public string ModelVersion => "arcface-paddle";
     public string DisplayName => "PaddlePaddle ArcFace";
-    public bool IsAvailable => File.Exists(Environment.GetEnvironmentVariable("PICER_ARCFACE_PADDLE_MODEL_PATH") ?? string.Empty);
+    public bool IsAvailable => File.Exists(string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("PICER_ARCFACE_PADDLE_MODEL_PATH"))
+        ? @"D:\VL-models\models\candidates\arcface_paddle.onnx"
+        : Environment.GetEnvironmentVariable("PICER_ARCFACE_PADDLE_MODEL_PATH")!);
     public bool Supports(string requestedType) => string.Equals(requestedType, Id, StringComparison.OrdinalIgnoreCase);
 }
 
@@ -70,6 +72,8 @@ public sealed class FaceXZooAdapter : ITrainingAlgorithmAdapter
     public string Id => "facex-zoo-prototype-calibration";
     public string ModelVersion => "facex-zoo";
     public string DisplayName => "FaceX-Zoo candidate";
-    public bool IsAvailable => File.Exists(Environment.GetEnvironmentVariable("PICER_FACEX_ZOO_MODEL_PATH") ?? string.Empty);
+    public bool IsAvailable => File.Exists(string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("PICER_FACEX_ZOO_MODEL_PATH"))
+        ? @"D:\VL-models\models\candidates\facex_zoo.onnx"
+        : Environment.GetEnvironmentVariable("PICER_FACEX_ZOO_MODEL_PATH")!);
     public bool Supports(string requestedType) => string.Equals(requestedType, Id, StringComparison.OrdinalIgnoreCase);
 }

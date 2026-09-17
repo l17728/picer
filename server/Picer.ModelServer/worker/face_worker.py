@@ -47,7 +47,17 @@ def enrich_insightface_embeddings(samples, model_version):
         image = cv2.imdecode(np.frombuffer(raw, dtype=np.uint8), cv2.IMREAD_COLOR)
         if image is None:
             raise ValueError("invalid faceImageBase64")
-        image = cv2.resize(image, (112, 112), interpolation=cv2.INTER_AREA)
+        # Respect the exported model contract. ArcFace variants commonly use
+        # NCHW 112x112 while Paddle/mobile exports may use NHWC or another
+        # spatial size; hard-coding 112 silently produces invalid embeddings.
+        shape = input_shape
+        if shape[-1] == 3:
+            height, width = shape[1], shape[2]
+        else:
+            height, width = shape[-2], shape[-1]
+        height = int(height) if isinstance(height, (int, float)) else 112
+        width = int(width) if isinstance(width, (int, float)) else 112
+        image = cv2.resize(image, (width, height), interpolation=cv2.INTER_AREA)
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB).astype(np.float32)
         image = (image - 127.5) / 127.5
         tensor = image[None, ...] if input_shape[-1] == 3 else image.transpose(2, 0, 1)[None, ...]
