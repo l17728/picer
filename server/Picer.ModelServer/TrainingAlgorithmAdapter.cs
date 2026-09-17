@@ -28,7 +28,9 @@ public sealed class ArcFaceAdapter : ITrainingAlgorithmAdapter
     public string Id => "arcface-prototype-calibration";
     public string ModelVersion => "arcface";
     public string DisplayName => "ArcFace high-accuracy candidate";
-    public bool IsAvailable => File.Exists(Environment.GetEnvironmentVariable("PICER_ARCFACE_MODEL_PATH") ?? string.Empty);
+    public bool IsAvailable => File.Exists(string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("PICER_ARCFACE_MODEL_PATH"))
+        ? @"D:\VL-models\models\candidates\arcface.onnx"
+        : Environment.GetEnvironmentVariable("PICER_ARCFACE_MODEL_PATH")!);
     public bool Supports(string requestedType) => string.Equals(requestedType, Id, StringComparison.OrdinalIgnoreCase);
 }
 
