@@ -21,6 +21,7 @@ builder.Services.AddSingleton<ITrainingAlgorithmAdapter, FaceXZooAdapter>();
 builder.Services.AddSingleton<ArtifactSigner>();
 builder.Services.AddSingleton<TrainingAttemptArchive>();
 builder.Services.AddSingleton<ModelCandidateRankingStore>();
+builder.Services.AddSingleton<EvaluationDatasetStore>();
 var app = builder.Build();
 
 // Restore the observable job list after a server restart. Terminal records are
@@ -84,7 +85,7 @@ app.MapGet("/", () => Results.Text("""
 <h2>制品详情</h2>
 <div class="card" id="art" style="color:#555;font-size:13px">提交训练后在此显示制品指标。</div>
 <h2>Model leaderboard</h2>
-<div class="card"><p style="font-size:12px;color:#666;margin-bottom:8px">多模型基线评估由统一模型平台执行；客户端只负责提交不可变评估快照。无评估轮次的模型显示为“暂无数据”，不会被误认为准确率为 0。</p><button onclick="baseline()">一键运行多模型基线</button><span id="baseline-msg" style="font-size:12px;color:#666;margin-left:8px"></span><table><thead><tr><th>Rank</th><th>Model</th><th>Composite score</th><th>Wins</th><th>Rounds</th><th>Best validation</th><th>Retained</th></tr></thead><tbody id="rankings"><tr><td colspan="7">Loading...</td></tr></tbody></table></div>
+<div class="card"><p style="font-size:12px;color:#666;margin-bottom:8px">多模型基线评估由统一模型平台执行；客户端只负责提交不可变评估快照。无评估轮次的模型显示为“暂无数据”，不会被误认为准确率为 0。</p><div id="evalset" style="font-size:12px;color:#555;margin-bottom:8px">评估集读取中…</div><button onclick="baseline()">一键运行多模型基线</button><span id="baseline-msg" style="font-size:12px;color:#666;margin-left:8px"></span><table><thead><tr><th>Rank</th><th>Model</th><th>Composite score</th><th>Wins</th><th>Rounds</th><th>Best validation</th><th>Retained</th></tr></thead><tbody id="rankings"><tr><td colspan="7">Loading...</td></tr></tbody></table></div>
 <script>
 const A=location.pathname.startsWith('/picer')?'/picer/api/face-training':'/api/face-training';
 async function rf(){try{const h=await fetch('/health').then(r=>r.json());const b=document.getElementById('hp');b.className='badge '+(h.status==='ok'?'ok':'err');b.textContent=h.status==='ok'?'运行中':'异常';}catch(e){const b=document.getElementById('hp');b.className='badge err';b.textContent='连接失败';}
@@ -99,9 +100,11 @@ async function sa(id){const a=await fetch(A+'/artifacts/'+id).then(r=>r.ok?r.jso
 document.getElementById('m-acc').textContent=(a.metrics.validationAccuracy*100).toFixed(1)+'%';
 document.getElementById('m-far').textContent=(a.metrics.falseAcceptRate*100).toFixed(1)+'%';
 document.getElementById('art').innerHTML=`<h3 style="color:#0f3460">${a.artifactId}</h3><p>算法：${a.algorithm} | 创建：${new Date(a.createdUtc).toLocaleString()}</p><table style="margin-top:8px"><tr><th>指标</th><th>值</th><th>指标</th><th>值</th></tr><tr><td>总样本</td><td>${a.metrics.totalSamples}</td><td>人物数</td><td>${a.metrics.totalPersons}</td></tr><tr><td>训练准确率</td><td><b>${(a.metrics.trainAccuracy*100).toFixed(1)}%</b></td><td>验证准确率</td><td><b>${(a.metrics.validationAccuracy*100).toFixed(1)}%</b></td></tr><tr><td>误识率</td><td>${(a.metrics.falseAcceptRate*100).toFixed(2)}%</td><td>拒识率</td><td>${(a.metrics.falseRejectRate*100).toFixed(2)}%</td></tr><tr><td>同类相似度</td><td>${a.metrics.meanSimilaritySame.toFixed(3)}</td><td>异类相似度</td><td>${a.metrics.meanSimilarityDiff.toFixed(3)}</td></tr></table><h3 style="margin-top:12px;font-size:13px">人物原型（${a.prototypes.length}）</h3><table><tr><th>人物ID</th><th>样本数</th><th>阈值</th></tr>${a.prototypes.map(p=>`<tr><td>${p.personId}</td><td>${p.sampleCount}</td><td>${p.threshold.toFixed(3)}</td></tr>`).join('')}</table>`;}
-async function rr(){try{const data=await fetch(A+'/model-rankings').then(r=>r.json());const rows=data.candidates||[];document.getElementById('rankings').innerHTML=rows.map(x=>`<tr><td>${x.rank||'-'}</td><td>${x.modelVersion}</td><td>${x.rounds?((x.compositeScore*100).toFixed(2)+'%'):'暂无数据'}</td><td>${x.rounds?(x.wins||0):'-'}</td><td>${x.rounds||0}</td><td>${x.rounds?((x.bestValidationAccuracy*100).toFixed(1)+'%'):'暂无数据'}</td><td>${x.retained?'yes':'no'}</td></tr>`).join('')||'<tr><td colspan="7">No measured rounds yet</td></tr>';}catch(e){}}
+async function rr(){try{const data=await fetch(A+'/model-rankings?scenario=baseline').then(r=>r.json());const rows=data.candidates||[];document.getElementById('rankings').innerHTML=rows.map(x=>`<tr><td>${x.rank||'-'}</td><td>${x.modelVersion}</td><td>${x.rounds?((x.compositeScore*100).toFixed(2)+'%'):'暂无数据'}</td><td>${x.rounds?(x.wins||0):'-'}</td><td>${x.rounds||0}</td><td>${x.rounds?((x.bestValidationAccuracy*100).toFixed(1)+'%'):'暂无数据'}</td><td>${x.retained?'yes':'no'}</td></tr>`).join('')||'<tr><td colspan="7">No measured baseline yet</td></tr>';}catch(e){}}
 async function baseline(){const m=document.getElementById('baseline-msg');m.textContent='正在查找最新独立评估快照…';try{const r=await fetch(A+'/model-rankings/baseline/one-click',{method:'POST'});const d=await r.json();if(!r.ok){m.textContent='未启动：'+(d.error||r.status);return;}m.textContent='已提交 '+(d.modelCount||0)+' 个模型，评估编号 '+d.evaluationId;rr();}catch(e){m.textContent='请求失败：'+e.message;}}
-setInterval(rf,3000);setInterval(rr,5000);rf();rr();
+async function ed(){try{const r=await fetch(A+'/evaluation-dataset');const e=document.getElementById('evalset');if(!r.ok){e.textContent='尚未提交统一评估集';return;}const d=await r.json();e.innerHTML=`统一评估集：${d.snapshotId} · ${d.sampleCount} 张 · ${d.persons} 人 · Gallery ${d.train} · Query ${d.validation}`+(d.samples?.length?`<details style="margin-top:4px"><summary>查看/移除样本</summary>${d.samples.map(s=>`<span style="display:inline-block;margin:2px 6px 2px 0">face ${s.faceId} / person ${s.personId} / ${s.split} <button class="sm" onclick="delEval(${s.faceId})">移除</button></span>`).join('')}</details>`:'');}catch(e){}}
+async function delEval(id){if(!confirm('从固定评估集移除该样本？'))return;await fetch(A+'/evaluation-dataset/'+id,{method:'DELETE'});ed();}
+setInterval(rf,3000);setInterval(rr,5000);setInterval(ed,5000);rf();rr();ed();
 </script></body></html>
 """, "text/html"));
 
@@ -195,7 +198,7 @@ app.MapPost("/api/face-training/embeddings", async (EmbeddingRequest request, IE
     return Results.Content(output, "application/json");
 });
 
-app.MapPost("/api/face-training/datasets", (DatasetRequest request, ConcurrentDictionary<string, object> index) =>
+app.MapPost("/api/face-training/datasets", (DatasetRequest request, ConcurrentDictionary<string, object> index, EvaluationDatasetStore evaluation) =>
 {
     if (request.ProtocolVersion != "face-evidence.v1") return Results.BadRequest(new { error = "unsupported protocolVersion" });
     var samples = request.Samples ?? [];
@@ -229,13 +232,30 @@ app.MapPost("/api/face-training/datasets", (DatasetRequest request, ConcurrentDi
     // VL attributes are optional enrichment. Their absence never blocks the
     // vector-training path; the recipe builder can continue with embeddings.
     index[datasetId] = request;
+    if (string.Equals(request.Scenario, "baseline", StringComparison.OrdinalIgnoreCase)) evaluation.Replace(request);
     return Results.Ok(new { id = datasetId, snapshotId = request.SnapshotId, sampleCount = request.Samples?.Length ?? 0 });
 });
+app.MapGet("/api/face-training/evaluation-dataset", (EvaluationDatasetStore store) =>
+{
+    var dataset = store.Get();
+    return dataset is null ? Results.NotFound(new { error = "尚未提交统一评估集" }) : Results.Ok(new
+    {
+        snapshotId = dataset.SnapshotId, sampleCount = dataset.Samples?.Length ?? 0,
+        persons = dataset.Samples?.Select(sample => sample.PersonId).Distinct().Count() ?? 0,
+        train = dataset.Samples?.Count(sample => sample.Split is "train" or "gallery") ?? 0,
+        validation = dataset.Samples?.Count(sample => sample.Split is "validation" or "test") ?? 0,
+        samples = dataset.Samples?.Select(sample => new { sample.FaceId, sample.PersonId, sample.Split, groupId = sample.Evidence?.GroupId }).ToArray()
+    });
+});
+app.MapDelete("/api/face-training/evaluation-dataset/{faceId:long}", (long faceId, EvaluationDatasetStore store) =>
+    store.Remove(faceId) ? Results.Ok(new { removed = faceId }) : Results.NotFound(new { error = "评估集样本不存在" }));
 app.MapPost("/api/face-training/model-rankings/baseline/one-click", (
     IEnumerable<ITrainingAlgorithmAdapter> adapters, TrainingExecutor executor,
-    ConcurrentDictionary<string, TrainingJob> jobs, ConcurrentDictionary<string, object> datasets) =>
+    ConcurrentDictionary<string, TrainingJob> jobs, ConcurrentDictionary<string, object> datasets,
+    EvaluationDatasetStore evaluation) =>
 {
-    var source = datasets.Values.OfType<DatasetRequest>()
+    var source = evaluation.Get();
+    source ??= datasets.Values.OfType<DatasetRequest>()
         .Where(value => value.Samples is { Length: > 1 } &&
             value.Samples.Any(sample => !string.IsNullOrWhiteSpace(sample.FaceImageBase64)) &&
             value.Samples.Any(sample => string.Equals(sample.Split, "validation", StringComparison.OrdinalIgnoreCase)) &&
