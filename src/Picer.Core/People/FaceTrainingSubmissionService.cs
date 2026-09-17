@@ -167,6 +167,18 @@ public sealed class FaceTrainingSubmissionService : IDisposable
         catch (Exception exception) { return (false, exception.Message); }
     }
 
+    public async Task<string?> GetPublishedEvaluationSnapshotIdAsync(CancellationToken ct = default)
+    {
+        try
+        {
+            using var response = await _client.GetAsync("api/face-training/evaluation-dataset", ct).ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode) return null;
+            var data = await response.Content.ReadFromJsonAsync<JsonElement>(Json, ct).ConfigureAwait(false);
+            return data.TryGetProperty("snapshotId", out var value) ? value.GetString() : null;
+        }
+        catch { return null; }
+    }
+
     public async Task<BaselineTrainingSubmissionResult> SubmitBaselineAsync(
         Picer.Core.Vision.FaceEvaluationSnapshot snapshot,
         IReadOnlyDictionary<string, IReadOnlyList<(long FaceId, long PersonId, float[] Embedding, string Split, string Group)>> modelSamples,

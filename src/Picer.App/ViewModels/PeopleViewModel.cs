@@ -126,6 +126,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
     private async Task PublishEvaluationSnapshotAsync()
     {
         if (Interlocked.Exchange(ref _baselinePublishStarted, 1) != 0) return;
+        AppLogger.Info("统一基线评估集发布开始");
         try
         {
             var endpoint = Environment.GetEnvironmentVariable("PICER_MODEL_SERVER_URL")?.Trim() ?? "http://127.0.0.1:8090";
@@ -133,6 +134,12 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             using var platform = new FaceTrainingSubmissionService(endpoint, key);
             var snapshot = await UiWork.RunDatabaseAsync(() => new FaceEvaluationSnapshotService(_repository)
                 .CreateSnapshot(dataVersion: "face-baseline-v1", algorithmId: "multi-model-baseline"));
+            var publishedSnapshot = await platform.GetPublishedEvaluationSnapshotIdAsync();
+            if (string.Equals(publishedSnapshot, snapshot.SnapshotId, StringComparison.Ordinal))
+            {
+                AppLogger.Info($"统一基线评估集指纹未变化，跳过重复上传：snapshot={snapshot.SnapshotId}");
+                return;
+            }
             var members = await UiWork.RunDatabaseAsync(() => new FaceEvaluationSnapshotService(_repository).GetMembers(snapshot.SnapshotId));
             var sources = await UiWork.RunDatabaseAsync(() => _repository.GetFaceSources(snapshot.EmbeddingModelVersion));
             var byFace = sources.ToDictionary(source => source.FaceId);
@@ -143,6 +150,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
                 var crop = await Task.Run(() => RemoteFaceVectorBackfillService.EncodeCrop(source, CancellationToken.None));
                 if (!string.IsNullOrWhiteSpace(crop)) samples.Add((member.FaceId.Value, member.PersonId, member.Partition, member.LeakageGroup, crop));
             }
+            AppLogger.Info($"统一基线评估集已生成：snapshot={snapshot.SnapshotId}; samples={samples.Count}");
             var result = await platform.PublishEvaluationDatasetAsync(snapshot.SnapshotId, samples);
             if (!result.Success) AppLogger.Warn($"统一基线评估集上传失败：{result.Error}");
             else AppLogger.Info($"已发布统一基线评估集：snapshot={snapshot.SnapshotId}; samples={samples.Count}");
@@ -153,12 +161,12 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
     private string GetOrganizeFingerprint()
     {
         using var command = _database.Command("""
-            SELECT (SELECT COUNT(*) FROM face_assignments WHERE state IN ('confirmed','suggested')),
+            SELECT (SELECT COUNT(*) FROM face_person_assignments WHERE state IN ('confirmed','suggested')),
                    (SELECT COUNT(*) FROM people),
                    (SELECT COUNT(*) FROM face_person_prototypes),
                    (SELECT COALESCE(MAX(updated_utc), '') FROM face_person_prototypes),
                    (SELECT COALESCE(MAX(id), 0) FROM face_action_log),
-                   (SELECT COUNT(*) FROM face_assignments WHERE state='suggested')
+                   (SELECT COUNT(*) FROM face_person_assignments WHERE state='suggested')
             """);
         using var reader = command.ExecuteReader();
         return reader.Read() ? string.Join('|', Enumerable.Range(0, 6).Select(reader.GetValue)) : "empty";
