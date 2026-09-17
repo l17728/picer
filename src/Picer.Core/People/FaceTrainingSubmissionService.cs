@@ -142,6 +142,52 @@ public sealed class FaceTrainingSubmissionService : IDisposable
         }
     }
 
+    public async Task<BaselineTrainingSubmissionResult> SubmitBaselineAsync(
+        Picer.Core.Vision.FaceEvaluationSnapshot snapshot,
+        IReadOnlyDictionary<string, IReadOnlyList<(long FaceId, long PersonId, float[] Embedding, string Split, string Group)>> modelSamples,
+        CancellationToken ct = default)
+    {
+        var converted = modelSamples.ToDictionary(pair => pair.Key,
+            pair => (IReadOnlyList<(long FaceId, long PersonId, float[] Embedding, string Split)> )pair.Value
+                .Select(sample => (sample.FaceId, sample.PersonId, sample.Embedding, sample.Split)).ToArray());
+        return await SubmitBaselineCoreAsync(snapshot.SnapshotId, converted, ct).ConfigureAwait(false);
+    }
+
+    private async Task<BaselineTrainingSubmissionResult> SubmitBaselineCoreAsync(string snapshotId,
+        IReadOnlyDictionary<string, IReadOnlyList<(long FaceId, long PersonId, float[] Embedding, string Split)>> modelSamples,
+        CancellationToken ct)
+    {
+        if (modelSamples.Count == 0) return new BaselineTrainingSubmissionResult(string.Empty, [], "没有可评估的模型数据");
+        var evaluationId = $"baseline-{snapshotId}-{Guid.NewGuid():N}";
+        var datasets = modelSamples.ToDictionary(pair => pair.Key, pair => pair.Value.Select(sample => new
+        {
+            faceId = sample.FaceId, personId = sample.PersonId, embedding = sample.Embedding,
+            split = sample.Split,
+            evidence = new { source = "evaluation-snapshot", modelVersion = pair.Key,
+                groupId = $"snapshot:{snapshotId}:face:{sample.FaceId}" }
+        }).ToArray());
+        try
+        {
+            using var response = await _client.PostAsJsonAsync("api/face-training/model-rankings/baseline",
+                new { snapshotId, evaluationId, datasets }, Json, ct).ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode)
+                return new BaselineTrainingSubmissionResult(evaluationId, [], $"基线提交失败：{response.StatusCode}");
+            var data = await response.Content.ReadFromJsonAsync<JsonElement>(Json, ct).ConfigureAwait(false);
+            var jobs = data.TryGetProperty("jobs", out var jobArray) && jobArray.ValueKind == JsonValueKind.Array
+                ? jobArray.EnumerateArray().Select(job => new ParallelTrainingSubmissionResult(
+                    job.TryGetProperty("modelVersion", out var model) ? model.GetString() ?? string.Empty : string.Empty,
+                    new TrainingSubmissionResult(job.GetProperty("id").GetString() ?? string.Empty,
+                        job.TryGetProperty("status", out var status) ? status.GetString() ?? "queued" : "queued", null, null)))
+                    .ToArray()
+                : [];
+            return new BaselineTrainingSubmissionResult(evaluationId, jobs);
+        }
+        catch (Exception exception)
+        {
+            return new BaselineTrainingSubmissionResult(evaluationId, [], exception.Message);
+        }
+    }
+
     public async Task<TrainingSubmissionResult> SubmitAsync(FaceTrainingSnapshotResult snapshot,
         IReadOnlyList<(long FaceId, long PersonId, float[] Embedding, string Split)> samples,
         CancellationToken ct = default, int attempt = 1, string? trainingHints = null,

@@ -899,6 +899,35 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
         return versions;
     }
 
+    /// <summary>Reads vectors for an immutable evaluation snapshot from one model version.
+    /// The snapshot member's source face is joined by image and ordinal, so model-specific
+    /// vectors can never be mixed or silently reused across versions.</summary>
+    public IReadOnlyList<FaceSnapshotModelSample> GetSnapshotModelSamples(string snapshotId, string modelVersion)
+    {
+        using var command = database.Command("""
+            SELECT m.face_id,m.person_id,m.partition,m.leakage_group,target.embedding
+            FROM face_dataset_members m
+            JOIN detected_faces source ON source.id=m.face_id
+            JOIN detected_faces target ON target.image_id=source.image_id
+                AND target.ordinal=source.ordinal AND target.model_version=$model
+            WHERE m.snapshot_id=$snapshot AND target.embedding IS NOT NULL
+            ORDER BY m.sample_key
+            """);
+        command.Parameters.AddWithValue("$snapshot", snapshotId);
+        command.Parameters.AddWithValue("$model", modelVersion);
+        using var reader = command.ExecuteReader();
+        var result = new List<FaceSnapshotModelSample>();
+        while (reader.Read())
+        {
+            var bytes = (byte[])reader[4];
+            var embedding = new float[bytes.Length / sizeof(float)];
+            Buffer.BlockCopy(bytes, 0, embedding, 0, bytes.Length);
+            result.Add(new FaceSnapshotModelSample(reader.GetInt64(0), reader.GetInt64(1),
+                reader.GetString(2), reader.GetString(3), embedding));
+        }
+        return result;
+    }
+
     public int SaveBackfilledEmbeddings(string sourceModelVersion, string targetModelVersion,
         IReadOnlyList<(FaceVectorBackfillSource Source, float[] Embedding)> values)
     {

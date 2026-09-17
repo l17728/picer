@@ -353,6 +353,87 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         finally { IsAnalyzing = false; }
     }
 
+    [RelayCommand]
+    private async Task RunBaselineEvaluationAsync()
+    {
+        if (IsAnalyzing) return;
+        IsAnalyzing = true;
+        try
+        {
+            var endpoint = Environment.GetEnvironmentVariable("PICER_MODEL_SERVER_URL")?.Trim() ?? "http://127.0.0.1:8090";
+            var key = Environment.GetEnvironmentVariable("PICER_MODEL_SERVER_API_KEY")?.Trim() ?? "";
+            using var platform = new FaceTrainingSubmissionService(endpoint, key);
+            var available = (await platform.GetAvailableAlgorithmsAsync()).Where(model => model.Available).ToArray();
+            if (available.Length == 0)
+            {
+                StatusText = "基线评估未启动：平台没有可用人脸模型";
+                return;
+            }
+            var sourceModel = await UiWork.RunDatabaseAsync(() => _repository.GetFaceModelVersions()
+                .OrderByDescending(model => model.Contains("sface", StringComparison.OrdinalIgnoreCase))
+                .FirstOrDefault());
+            if (string.IsNullOrWhiteSpace(sourceModel))
+            {
+                StatusText = "基线评估未启动：索引中没有可用于裁剪人脸的模型向量";
+                return;
+            }
+
+            StatusText = $"正在准备真实评估集：以 {sourceModel} 为人脸框来源…";
+            foreach (var model in available.Where(model => !string.Equals(model.ModelVersion, sourceModel, StringComparison.OrdinalIgnoreCase)))
+            {
+                var target = model.ModelVersion;
+                var existing = await UiWork.RunDatabaseAsync(() => _repository.GetFaceModelVersions().Contains(target, StringComparer.OrdinalIgnoreCase));
+                if (!existing)
+                {
+                    StatusText = $"正在为基线补齐 {target} 向量…";
+                    var backfill = new RemoteFaceVectorBackfillService(_repository, platform);
+                    var result = await backfill.RunAsync(sourceModel, target,
+                        new Progress<FaceVectorBackfillProgress>(value => StatusText =
+                            $"正在为基线补齐 {target} 向量：{value.Completed}/{value.Total}，成功 {value.Analyzed}，失败 {value.Failed}"));
+                    if (!result.Completed)
+                    {
+                        StatusText = $"基线评估已阻止：{target} 向量补齐失败 {result.Failed} 条，请先修复后重试";
+                        return;
+                    }
+                }
+            }
+
+            var snapshot = await UiWork.RunDatabaseAsync(() => new FaceEvaluationSnapshotService(_repository)
+                .CreateSnapshot(dataVersion: "face-baseline-v1", algorithmId: "multi-model-baseline"));
+            var members = await UiWork.RunDatabaseAsync(() => new FaceEvaluationSnapshotService(_repository).GetMembers(snapshot.SnapshotId));
+            var expected = members.Count(member => member.FaceId is not null);
+            var datasets = new Dictionary<string, IReadOnlyList<(long FaceId, long PersonId, float[] Embedding, string Split, string Group)>>();
+            foreach (var model in available)
+            {
+                var samples = await UiWork.RunDatabaseAsync(() => _repository.GetSnapshotModelSamples(snapshot.SnapshotId, model.ModelVersion));
+                if (samples.Count != expected)
+                {
+                    StatusText = $"基线评估已阻止：{model.ModelVersion} 向量覆盖 {samples.Count}/{expected}，不能用不完整数据冒充基线";
+                    return;
+                }
+                datasets[model.ModelVersion] = samples.Select(sample =>
+                    (sample.FaceId, sample.PersonId, sample.Embedding, sample.Split, sample.LeakageGroup)).ToArray();
+            }
+
+            StatusText = $"正在提交所有模型基线：{datasets.Count} 个模型、快照 {snapshot.SnapshotId}…";
+            var submission = await platform.SubmitBaselineAsync(snapshot, datasets);
+            if (submission.Jobs.Count == 0)
+            {
+                StatusText = $"基线提交失败：{submission.Error ?? "平台未返回任务"}";
+                return;
+            }
+            TrainingResultText = $"基线评估已提交：{submission.Jobs.Count} 个模型；评估编号 {submission.EvaluationId}";
+            StatusText = $"基线任务已异步启动（{submission.Jobs.Count} 个模型）。完成后在平台排行榜查看：{endpoint.TrimEnd('/')}/picer/";
+            AppLogger.Info($"已提交真实多模型基线：evaluation={submission.EvaluationId}; snapshot={snapshot.SnapshotId}; models={string.Join(',', datasets.Keys)}");
+        }
+        catch (Exception exception)
+        {
+            StatusText = $"基线评估失败：{exception.Message}";
+            AppLogger.Error("提交多模型基线评估失败", exception);
+        }
+        finally { IsAnalyzing = false; }
+    }
+
     private async Task<string?> AnalyzeTrainingFailureAsync(int attempt, TrainingArtifactData artifact, double target, string actionSummary, CancellationToken cancellationToken)
     {
         try

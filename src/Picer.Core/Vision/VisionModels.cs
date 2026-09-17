@@ -60,5 +60,7 @@ public sealed record ImageFaceRecord(long FaceId, int Ordinal, NormalizedFaceBox
     long? PersonId, string? PersonName, string? AssignmentState);
 public sealed record FaceVectorBackfillSource(long FaceId, long ImageId, string ImagePath, int Ordinal,
     NormalizedFaceBox Box, float Confidence);
+public sealed record FaceSnapshotModelSample(long FaceId, long PersonId, string Split,
+    string LeakageGroup, float[] Embedding);
 
 public sealed record VisionAnalysisSummary(int TotalImages, int CompletedImages, int FailedImages, int FaceCount);
