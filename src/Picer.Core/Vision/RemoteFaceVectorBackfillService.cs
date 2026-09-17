@@ -29,7 +29,7 @@ public sealed class RemoteFaceVectorBackfillService(VisionAnalysisRepository rep
         return new(targetModelVersion, sources.Count, saved, 0, failed, 1, failed == 0);
     }
 
-    private static string? EncodeCrop(FaceVectorBackfillSource source, CancellationToken cancellationToken)
+    public static string? EncodeCrop(FaceVectorBackfillSource source, CancellationToken cancellationToken)
     {
         try
         {

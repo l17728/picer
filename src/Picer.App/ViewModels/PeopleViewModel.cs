@@ -38,6 +38,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
     private bool _isLoaded;
     private bool _suppressPersonSelectionLoad;
     private bool _suppressCollectionSelectionCallbacks;
+    private int _baselinePublishStarted;
 
     public PeopleViewModel(PicerDatabase database, PeopleService peopleService,
         VisionAnalysisRepository repository, VisionAnalysisService? analysisService,
@@ -105,6 +106,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         await RefreshAsync();
         _isLoaded = true;
         IsLoading = false;
+        _ = PublishEvaluationSnapshotAsync();
 
         var summary = await UiWork.RunDatabaseAsync(_repository.GetSummary);
         if (summary.CompletedImages == 0 || IsAnalyzing) return;
@@ -117,6 +119,33 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         }
         await OrganizeFacesAsync();
         _lastOrganizeFingerprint = await UiWork.RunDatabaseAsync(GetOrganizeFingerprint);
+    }
+
+    private async Task PublishEvaluationSnapshotAsync()
+    {
+        if (Interlocked.Exchange(ref _baselinePublishStarted, 1) != 0) return;
+        try
+        {
+            var endpoint = Environment.GetEnvironmentVariable("PICER_MODEL_SERVER_URL")?.Trim() ?? "http://127.0.0.1:8090";
+            var key = Environment.GetEnvironmentVariable("PICER_MODEL_SERVER_API_KEY")?.Trim() ?? "";
+            using var platform = new FaceTrainingSubmissionService(endpoint, key);
+            var snapshot = await UiWork.RunDatabaseAsync(() => new FaceEvaluationSnapshotService(_repository)
+                .CreateSnapshot(dataVersion: "face-baseline-v1", algorithmId: "multi-model-baseline"));
+            var members = await UiWork.RunDatabaseAsync(() => new FaceEvaluationSnapshotService(_repository).GetMembers(snapshot.SnapshotId));
+            var sources = await UiWork.RunDatabaseAsync(() => _repository.GetFaceSources(snapshot.EmbeddingModelVersion));
+            var byFace = sources.ToDictionary(source => source.FaceId);
+            var samples = new List<(long FaceId, long PersonId, string Split, string Group, string FaceImageBase64)>();
+            foreach (var member in members.Where(member => member.FaceId is not null))
+            {
+                if (!byFace.TryGetValue(member.FaceId!.Value, out var source)) continue;
+                var crop = await Task.Run(() => RemoteFaceVectorBackfillService.EncodeCrop(source, CancellationToken.None));
+                if (!string.IsNullOrWhiteSpace(crop)) samples.Add((member.FaceId.Value, member.PersonId, member.Partition, member.LeakageGroup, crop));
+            }
+            var result = await platform.PublishEvaluationDatasetAsync(snapshot.SnapshotId, samples);
+            if (!result.Success) AppLogger.Warn($"统一基线评估集上传失败：{result.Error}");
+            else AppLogger.Info($"已发布统一基线评估集：snapshot={snapshot.SnapshotId}; samples={samples.Count}");
+        }
+        catch (Exception exception) { AppLogger.Warn($"准备统一基线评估集失败：{exception.Message}"); }
     }
 
     private string GetOrganizeFingerprint()

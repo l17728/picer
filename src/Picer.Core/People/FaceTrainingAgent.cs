@@ -117,6 +117,7 @@ public sealed class FaceTrainingAgent(FaceTrainingSubmissionService submission)
         int attempt, IReadOnlyDictionary<long, TrainingVisualAttribute>? attributes,
         IReadOnlyList<TrainingActionEvidence>? actions)
     {
+        source = source.Where(s => s.Split is "train" or "validation").ToArray();
         var errorFaces = actions?.Where(a => a.Action is "reject" or "move_out" or "reclassify" or "wrong")
             .Select(a => a.FaceId).ToHashSet() ?? [];
         var fraction = attempt switch { 1 => 1d, 2 => .90d, 3 => .80d, 4 => .85d, _ => .90d };
@@ -140,7 +141,6 @@ public sealed class FaceTrainingAgent(FaceTrainingSubmissionService submission)
                 .GroupBy(s => attributes![s.FaceId].CaptureUtc!.Value.Year).Select(g => g.First());
             chosen.AddRange(dated.Take(count));
             chosen.AddRange(deduplicated.Where(s => !chosen.Contains(s)).Take(Math.Max(0, count - chosen.Count)));
-            foreach (var item in deduplicated.Where(s => s.Split != "train" && !chosen.Contains(s)).Take(1)) chosen.Add(item);
             return chosen;
         }).DistinctBy(s => s.FaceId).OrderBy(s => s.FaceId).ToArray();
         var fingerprintText = string.Join('|', selected.Select(s => $"{s.FaceId}:{s.PersonId}:{s.Split}"));

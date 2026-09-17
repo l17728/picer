@@ -11,11 +11,10 @@ public static class RawFaceBaselineEvaluator
         var gallery = samples.Where(sample => string.Equals(sample.Split, "train", StringComparison.OrdinalIgnoreCase)
                 || string.Equals(sample.Split, "gallery", StringComparison.OrdinalIgnoreCase))
             .Where(sample => sample.Embedding is { Length: > 0 }).ToArray();
-        var queries = samples.Where(sample => string.Equals(sample.Split, "validation", StringComparison.OrdinalIgnoreCase)
-                || string.Equals(sample.Split, "test", StringComparison.OrdinalIgnoreCase))
+        var queries = samples.Where(sample => string.Equals(sample.Split, "test", StringComparison.OrdinalIgnoreCase))
             .Where(sample => sample.Embedding is { Length: > 0 }).ToArray();
         if (gallery.Length == 0 || queries.Length == 0)
-            throw new InvalidOperationException("基线评估需要 gallery(train) 和 validation/test 查询样本");
+            throw new InvalidOperationException("基线评估需要 gallery(train) 和独立 test 查询样本");
         var prototypes = gallery.GroupBy(sample => sample.PersonId).ToDictionary(group => group.Key,
             group => Centroid(group.Select(sample => sample.Embedding!).ToArray()));
         var correct = 0;

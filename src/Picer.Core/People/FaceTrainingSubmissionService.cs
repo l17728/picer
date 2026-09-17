@@ -142,6 +142,31 @@ public sealed class FaceTrainingSubmissionService : IDisposable
         }
     }
 
+    public async Task<(bool Success, string? Error)> PublishEvaluationDatasetAsync(
+        string snapshotId,
+        IReadOnlyList<(long FaceId, long PersonId, string Split, string Group, string FaceImageBase64)> samples,
+        CancellationToken ct = default)
+    {
+        if (samples.Count == 0) return (false, "评估快照没有可上传的人脸");
+        try
+        {
+            var payload = new
+            {
+                snapshotId, scenario = "baseline", protocolVersion = "face-evidence.v1",
+                samples = samples.Select(sample => new
+                {
+                    faceId = sample.FaceId, personId = sample.PersonId, split = sample.Split,
+                    faceImageBase64 = sample.FaceImageBase64,
+                    evidence = new { source = "immutable-evaluation-snapshot", groupId = sample.Group }
+                }).ToArray()
+            };
+            using var response = await _client.PostAsJsonAsync("api/face-training/datasets", payload, Json, ct).ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode) return (false, $"平台返回 {response.StatusCode}");
+            return (true, null);
+        }
+        catch (Exception exception) { return (false, exception.Message); }
+    }
+
     public async Task<BaselineTrainingSubmissionResult> SubmitBaselineAsync(
         Picer.Core.Vision.FaceEvaluationSnapshot snapshot,
         IReadOnlyDictionary<string, IReadOnlyList<(long FaceId, long PersonId, float[] Embedding, string Split, string Group)>> modelSamples,
