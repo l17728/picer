@@ -22,6 +22,7 @@ builder.Services.AddSingleton<ArtifactSigner>();
 builder.Services.AddSingleton<TrainingAttemptArchive>();
 builder.Services.AddSingleton<ModelCandidateRankingStore>();
 builder.Services.AddSingleton<EvaluationDatasetStore>();
+builder.Services.AddSingleton<GpuEmbeddingService>();
 var app = builder.Build();
 
 // Restore the observable job list after a server restart. Terminal records are
@@ -249,46 +250,46 @@ app.MapGet("/api/face-training/evaluation-dataset", (EvaluationDatasetStore stor
 });
 app.MapDelete("/api/face-training/evaluation-dataset/{faceId:long}", (long faceId, EvaluationDatasetStore store) =>
     store.Remove(faceId) ? Results.Ok(new { removed = faceId }) : Results.NotFound(new { error = "评估集样本不存在" }));
-app.MapPost("/api/face-training/model-rankings/baseline/one-click", (
-    IEnumerable<ITrainingAlgorithmAdapter> adapters, TrainingExecutor executor,
-    ConcurrentDictionary<string, TrainingJob> jobs, ConcurrentDictionary<string, object> datasets,
-    EvaluationDatasetStore evaluation) =>
+app.MapPost("/api/face-training/model-rankings/baseline/one-click", async (
+    IEnumerable<ITrainingAlgorithmAdapter> adapters, ConcurrentDictionary<string, object> datasets,
+    EvaluationDatasetStore evaluation, GpuEmbeddingService embeddingService, ModelCandidateRankingStore rankings) =>
 {
     var source = evaluation.Get();
     source ??= datasets.Values.OfType<DatasetRequest>()
         .Where(value => value.Samples is { Length: > 1 } &&
-            value.Samples.Any(sample => !string.IsNullOrWhiteSpace(sample.FaceImageBase64)) &&
+            value.Samples.All(sample => !string.IsNullOrWhiteSpace(sample.FaceImageBase64)) &&
             value.Samples.Any(sample => string.Equals(sample.Split, "validation", StringComparison.OrdinalIgnoreCase)) &&
             value.Samples.Select(sample => sample.PersonId).Distinct().Count() >= 2)
         .LastOrDefault();
     if (source is null)
         return Results.BadRequest(new { error = "平台尚未收到可用于基线的独立评估快照；请先提交含 faceImageBase64 的 train/validation 数据集" });
+    var sourceSamples = source.Samples!;
     var candidates = adapters.Where(adapter => adapter.IsAvailable).ToArray();
     if (candidates.Length == 0) return Results.Problem("no requested face model is available", statusCode: 503);
     var evaluationId = $"baseline-{source.SnapshotId}-{Guid.NewGuid():N}";
-    var submitted = new List<TrainingJob>();
-    foreach (var adapter in candidates)
+    var results = new List<object>();
+    try
     {
-        var modelDataset = source with
+        foreach (var adapter in candidates)
         {
-            ModelVersion = adapter.ModelVersion,
-            EvaluationId = evaluationId,
-            RecipeReason = "one-click leaderboard baseline",
-            Samples = source.Samples!.Select(sample => sample with
+            var images = sourceSamples.Select(sample => sample.FaceImageBase64!).ToArray();
+            var vectors = await embeddingService.GenerateAsync(adapter.ModelVersion, images);
+            if (vectors.Count != sourceSamples.Length) return Results.BadRequest(new { error = $"{adapter.ModelVersion} 向量数量与统一评估集不一致" });
+            var modelSamples = sourceSamples.Select((sample, index) => sample with
             {
-                Embedding = null,
-                Evidence = sample.Evidence is null ? null : sample.Evidence with { ModelVersion = adapter.ModelVersion }
-            }).ToArray()
-        };
-        var datasetId = "dataset-" + Guid.NewGuid().ToString("N");
-        datasets[datasetId] = modelDataset;
-        var jobId = "job-" + Guid.NewGuid().ToString("N");
-        var job = new TrainingJob(jobId, "queued", "queued", 0, null, null);
-        jobs[jobId] = job;
-        submitted.Add(job);
-        _ = Task.Run(async () => await executor.RunAsync(jobId, modelDataset, jobs));
+                Embedding = vectors[index], Evidence = sample.Evidence is null ? null : sample.Evidence with { ModelVersion = adapter.ModelVersion }
+            }).ToArray();
+            var metrics = RawFaceBaselineEvaluator.Evaluate(modelSamples);
+            results.Add(new { modelVersion = adapter.ModelVersion, metrics });
+            rankings.Append(new ModelCandidateRound(adapter.ModelVersion, "raw-baseline", 0, metrics.Accuracy,
+                metrics.FalseAcceptRate, metrics.FalseRejectRate, true, null, DateTime.UtcNow, "baseline", evaluationId));
+        }
     }
-    return Results.Ok(new { evaluationId, modelCount = submitted.Count, jobs = submitted });
+    catch (Exception exception)
+    {
+        return Results.Problem($"基线推理失败：{exception.Message}", statusCode: 502);
+    }
+    return Results.Ok(new { evaluationId, modelCount = results.Count, results, jobs = Array.Empty<object>(), mode = "raw-inference" });
 });
 app.MapPost("/api/face-training/model-rankings/baseline", (BaselineRequest request,
     IEnumerable<ITrainingAlgorithmAdapter> adapters, ConcurrentDictionary<string, TrainingJob> jobs,
