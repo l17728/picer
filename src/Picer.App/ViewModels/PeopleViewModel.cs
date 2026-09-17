@@ -121,6 +121,8 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         _lastOrganizeFingerprint = await UiWork.RunDatabaseAsync(GetOrganizeFingerprint);
     }
 
+    public Task PublishEvaluationSnapshotForPlatformAsync() => PublishEvaluationSnapshotAsync();
+
     private async Task PublishEvaluationSnapshotAsync()
     {
         if (Interlocked.Exchange(ref _baselinePublishStarted, 1) != 0) return;

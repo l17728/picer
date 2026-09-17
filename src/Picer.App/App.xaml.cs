@@ -98,6 +98,7 @@ public partial class App : Application
             var window = new MainWindow(_mainViewModel);
             MainWindow = window;
             window.Show();
+            _ = peopleViewModel.PublishEvaluationSnapshotForPlatformAsync();
             PicerEventSource.Log.StartupStage("shell-visible", Stopwatch.GetElapsedTime(startupTimestamp).TotalMilliseconds);
             LogInfo("MainWindow 已显示");
         }
