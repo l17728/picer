@@ -33,6 +33,14 @@ def enrich_insightface_embeddings(samples, model_version):
     }[model_version]
     model_path = os.environ.get(env_name, "")
     if not model_path:
+        model_path = {
+            "PICER_INSIGHTFACE_MODEL_PATH": r"D:\VL-models\models\insightface\w600k_r50.onnx",
+            "PICER_ARCFACE_MODEL_PATH": r"D:\VL-models\models\candidates\arcface.onnx",
+            "PICER_ADAFACE_MODEL_PATH": r"D:\VL-models\models\candidates\adaface_ir_18.onnx",
+            "PICER_ARCFACE_PADDLE_MODEL_PATH": r"D:\VL-models\models\candidates\arcface_paddle.onnx",
+            "PICER_FACEX_ZOO_MODEL_PATH": r"D:\VL-models\models\candidates\facex_zoo.onnx",
+        }[env_name]
+    if not model_path:
         raise ValueError(f"{model_version} model path is not configured")
     session = ort.InferenceSession(model_path, providers=["CUDAExecutionProvider", "CPUExecutionProvider"])
     input_name = session.get_inputs()[0].name
