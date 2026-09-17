@@ -82,6 +82,8 @@ app.MapGet("/", () => Results.Text("""
 <div class="card"><table><thead><tr><th>ID</th><th>状态</th><th>阶段</th><th>进度</th><th>制品</th><th></th></tr></thead><tbody id="jobs"></tbody></table></div>
 <h2>制品详情</h2>
 <div class="card" id="art" style="color:#555;font-size:13px">提交训练后在此显示制品指标。</div>
+<h2>Model leaderboard</h2>
+<div class="card"><table><thead><tr><th>Rank</th><th>Model</th><th>Composite score</th><th>Wins</th><th>Rounds</th><th>Best validation</th><th>Retained</th></tr></thead><tbody id="rankings"><tr><td colspan="7">Loading...</td></tr></tbody></table></div>
 <script>
 const A='/api/face-training';
 async function rf(){try{const h=await fetch('/health').then(r=>r.json());const b=document.getElementById('hp');b.className='badge '+(h.status==='ok'?'ok':'err');b.textContent=h.status==='ok'?'运行中':'异常';}catch(e){const b=document.getElementById('hp');b.className='badge err';b.textContent='连接失败';}
@@ -96,7 +98,8 @@ async function sa(id){const a=await fetch(A+'/artifacts/'+id).then(r=>r.ok?r.jso
 document.getElementById('m-acc').textContent=(a.metrics.validationAccuracy*100).toFixed(1)+'%';
 document.getElementById('m-far').textContent=(a.metrics.falseAcceptRate*100).toFixed(1)+'%';
 document.getElementById('art').innerHTML=`<h3 style="color:#0f3460">${a.artifactId}</h3><p>算法：${a.algorithm} | 创建：${new Date(a.createdUtc).toLocaleString()}</p><table style="margin-top:8px"><tr><th>指标</th><th>值</th><th>指标</th><th>值</th></tr><tr><td>总样本</td><td>${a.metrics.totalSamples}</td><td>人物数</td><td>${a.metrics.totalPersons}</td></tr><tr><td>训练准确率</td><td><b>${(a.metrics.trainAccuracy*100).toFixed(1)}%</b></td><td>验证准确率</td><td><b>${(a.metrics.validationAccuracy*100).toFixed(1)}%</b></td></tr><tr><td>误识率</td><td>${(a.metrics.falseAcceptRate*100).toFixed(2)}%</td><td>拒识率</td><td>${(a.metrics.falseRejectRate*100).toFixed(2)}%</td></tr><tr><td>同类相似度</td><td>${a.metrics.meanSimilaritySame.toFixed(3)}</td><td>异类相似度</td><td>${a.metrics.meanSimilarityDiff.toFixed(3)}</td></tr></table><h3 style="margin-top:12px;font-size:13px">人物原型（${a.prototypes.length}）</h3><table><tr><th>人物ID</th><th>样本数</th><th>阈值</th></tr>${a.prototypes.map(p=>`<tr><td>${p.personId}</td><td>${p.sampleCount}</td><td>${p.threshold.toFixed(3)}</td></tr>`).join('')}</table>`;}
-setInterval(rf,3000);rf();
+async function rr(){try{const data=await fetch(A+'/model-rankings').then(r=>r.json());const rows=data.candidates||[];document.getElementById('rankings').innerHTML=rows.map(x=>`<tr><td>${x.rank||'-'}</td><td>${x.modelVersion}</td><td>${(x.compositeScore*100).toFixed(2)}%</td><td>${x.wins||0}</td><td>${x.rounds}</td><td>${(x.bestValidationAccuracy*100).toFixed(1)}%</td><td>${x.retained?'yes':'no'}</td></tr>`).join('')||'<tr><td colspan="7">No measured rounds yet</td></tr>';}catch(e){}}
+setInterval(rf,3000);setInterval(rr,5000);rf();rr();
 </script></body></html>
 """, "text/html"));
 
@@ -145,6 +148,11 @@ app.MapGet("/api/face-training/model-rankings", (HttpRequest http, IEnumerable<I
     var scenario = http.Query["scenario"].FirstOrDefault();
     return Results.Ok(new { policy = new { maxRounds = 20, iterationsPerRound = 9, retainedModels = 3,
         scenarioAware = true }, scenario, candidates = rankings.Rank(adapters, scenario) });
+});
+app.MapGet("/api/face-training/model-rankings/rounds", (HttpRequest http, ModelCandidateRankingStore rankings) =>
+{
+    var scenario = http.Query["scenario"].FirstOrDefault();
+    return Results.Ok(new { scenario, rounds = rankings.Rounds(scenario) });
 });
 app.MapGet("/api/face-training/model-ensemble", (HttpRequest http, IEnumerable<ITrainingAlgorithmAdapter> adapters, ModelCandidateRankingStore rankings) =>
 {
@@ -221,6 +229,43 @@ app.MapPost("/api/face-training/datasets", (DatasetRequest request, ConcurrentDi
     index[datasetId] = request;
     return Results.Ok(new { id = datasetId, snapshotId = request.SnapshotId, sampleCount = request.Samples?.Length ?? 0 });
 });
+app.MapPost("/api/face-training/model-rankings/baseline", (BaselineRequest request,
+    IEnumerable<ITrainingAlgorithmAdapter> adapters, ConcurrentDictionary<string, TrainingJob> jobs,
+    TrainingExecutor executor, ConcurrentDictionary<string, object> datasets) =>
+{
+    var source = request.Dataset;
+    var samples = source.Samples ?? [];
+    if (samples.Length < 2 || samples.Any(sample => string.IsNullOrWhiteSpace(sample.FaceImageBase64)))
+        return Results.BadRequest(new { error = "baseline requires at least two faceImageBase64 samples" });
+    var candidates = adapters.Where(adapter => adapter.IsAvailable).ToArray();
+    if (candidates.Length == 0) return Results.Problem("no face model is available", statusCode: 503);
+    var evaluationId = request.EvaluationId ?? $"baseline-{Guid.NewGuid():N}";
+    var submitted = new List<TrainingJob>();
+    foreach (var adapter in candidates)
+    {
+        var modelSamples = samples.Select(sample => sample with
+        {
+            Embedding = null,
+            Evidence = sample.Evidence is null ? null : sample.Evidence with { ModelVersion = adapter.ModelVersion }
+        }).ToArray();
+        var dataset = source with
+        {
+            ModelVersion = adapter.ModelVersion,
+            Samples = modelSamples,
+            IdempotencyKey = null,
+            EvaluationId = evaluationId,
+            RecipeReason = "baseline multi-model comparison"
+        };
+        var datasetId = "dataset-" + Guid.NewGuid().ToString("N");
+        datasets[datasetId] = dataset;
+        var jobId = "job-" + Guid.NewGuid().ToString("N");
+        var job = new TrainingJob(jobId, "queued", "queued", 0, null, null);
+        jobs[jobId] = job;
+        submitted.Add(job);
+        _ = Task.Run(async () => await executor.RunAsync(jobId, dataset, jobs));
+    }
+    return Results.Ok(new { evaluationId, modelCount = candidates.Length, jobs = submitted });
+});
 app.MapGet("/api/face-training/archive", (TrainingAttemptArchive archive, int? limit) => Results.Ok(archive.ReadRecent(limit ?? 100)));
 app.MapGet("/api/face-training/archive/summary", (TrainingAttemptArchive archive) => Results.Ok(new { summary = archive.BuildSummary() }));
 app.MapPost("/api/face-training/recipe/preview", (DatasetRequest request, TrainingRecipeBuilder builder) =>
@@ -283,7 +328,7 @@ public record DatasetRequest(string SnapshotId, string? SourceApp = null, string
     UserActionEvidence[]? Actions = null, MediaGroupEvidence[]? Groups = null,
     int Attempt = 1, string? TrainingHints = null, string? RecipeFingerprint = null,
     string? RecipeReason = null, int SelectedSampleCount = 0, int ExcludedSampleCount = 0,
-    string? IdempotencyKey = null, string? Scenario = null);
+    string? IdempotencyKey = null, string? Scenario = null, string? EvaluationId = null);
 public record EmbeddingRequest(string ModelVersion, string[] Images);
 public record FaceSample(long FaceId, long PersonId, float[]? Embedding = null, string Split = "train",
     SampleEvidence? Evidence = null, VlAttributes? Attributes = null, string Label = "positive",
@@ -298,6 +343,7 @@ public record VlAttributes(string Pose, string Lighting, string[] Occlusion, str
     double FaceQuality, bool IsUsefulForTraining, string ModelVersion, string PromptVersion);
 public record VlEnrichmentRequest(string ProtocolVersion = "face-evidence.v1", VlAttributes[]? Attributes = null);
 public record JobRequest(string DatasetId, string Type);
+public record BaselineRequest(DatasetRequest Dataset, string? EvaluationId = null);
 public record ModelEnsembleDecisionRequest(ModelEnsembleMember[]? Members = null, ModelEnsembleScore[]? Scores = null);
 public record TrainingJob(string Id, string Status, string Stage, int Progress, string? ArtifactId, string? Error);
 public record TrainingArtifact(
@@ -371,7 +417,8 @@ public sealed class TrainingExecutor
                 _rankings.Append(new ModelCandidateRound(dataset.ModelVersion ?? "sface", "prototype-calibration", dataset.Attempt,
                     gpuArtifact.Metrics.ValidationAccuracy, gpuArtifact.Metrics.FalseAcceptRate, gpuArtifact.Metrics.FalseRejectRate,
                     gpuArtifact.Metrics.ValidationAccuracy >= .90 && gpuArtifact.Metrics.FalseAcceptRate <= .01,
-                    gpuArtifact.ArtifactId, DateTime.UtcNow, dataset.Scenario));
+                    gpuArtifact.ArtifactId, DateTime.UtcNow, dataset.Scenario,
+                    dataset.EvaluationId ?? $"{dataset.SnapshotId}:attempt:{dataset.Attempt}"));
                 return;
             }
             if (dataset.Samples?.Any(s => s.Embedding is null || s.Embedding.Length == 0) == true)
@@ -479,7 +526,8 @@ public sealed class TrainingExecutor
             _rankings.Append(new ModelCandidateRound(dataset.ModelVersion ?? "sface", "prototype-calibration", dataset.Attempt,
                 metrics.ValidationAccuracy, metrics.FalseAcceptRate, metrics.FalseRejectRate,
                 metrics.ValidationAccuracy >= .90 && metrics.FalseAcceptRate <= .01,
-                artifactId, DateTime.UtcNow, dataset.Scenario));
+                artifactId, DateTime.UtcNow, dataset.Scenario,
+                dataset.EvaluationId ?? $"{dataset.SnapshotId}:attempt:{dataset.Attempt}"));
         }
         catch (Exception exception)
         {
