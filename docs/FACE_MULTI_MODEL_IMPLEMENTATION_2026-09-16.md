@@ -1,5 +1,9 @@
 # 多模型人脸候选与真实 InsightFace Worker 实施记录
 
+## 2026-09-17 部署收口
+
+ArcFace、AdaFace、ArcFace-Paddle（MobileFace-Paddle 128 维）和 FaceX-Zoo ResNet50-IR 已完成真实权重转换、哈希记录和 ONNX Runtime 验收。统一平台现由 Local Model Console `8090` 代理，Picer ModelServer 后端监听 `8091`；四个模型均已通过 `/picer/api/face-training/embeddings` 端到端请求。Worker 在未显式设置环境变量时使用 D 盘已校验模型路径，避免平台启动脚本与直连脚本产生不同的可用模型集合。
+
 ## 本次完成
 
 - ModelServer 保留算法中立的候选适配器、场景路由、加权共识和 Top 3 排名策略。
