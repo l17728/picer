@@ -84,7 +84,7 @@ app.MapGet("/", () => Results.Text("""
 <h2>制品详情</h2>
 <div class="card" id="art" style="color:#555;font-size:13px">提交训练后在此显示制品指标。</div>
 <h2>Model leaderboard</h2>
-<div class="card"><p style="font-size:12px;color:#666;margin-bottom:8px">多模型基线评估由统一模型平台执行；客户端只负责提交不可变评估快照。无评估轮次的模型显示为“暂无数据”，不会被误认为准确率为 0。</p><table><thead><tr><th>Rank</th><th>Model</th><th>Composite score</th><th>Wins</th><th>Rounds</th><th>Best validation</th><th>Retained</th></tr></thead><tbody id="rankings"><tr><td colspan="7">Loading...</td></tr></tbody></table></div>
+<div class="card"><p style="font-size:12px;color:#666;margin-bottom:8px">多模型基线评估由统一模型平台执行；客户端只负责提交不可变评估快照。无评估轮次的模型显示为“暂无数据”，不会被误认为准确率为 0。</p><button onclick="baseline()">一键运行多模型基线</button><span id="baseline-msg" style="font-size:12px;color:#666;margin-left:8px"></span><table><thead><tr><th>Rank</th><th>Model</th><th>Composite score</th><th>Wins</th><th>Rounds</th><th>Best validation</th><th>Retained</th></tr></thead><tbody id="rankings"><tr><td colspan="7">Loading...</td></tr></tbody></table></div>
 <script>
 const A=location.pathname.startsWith('/picer')?'/picer/api/face-training':'/api/face-training';
 async function rf(){try{const h=await fetch('/health').then(r=>r.json());const b=document.getElementById('hp');b.className='badge '+(h.status==='ok'?'ok':'err');b.textContent=h.status==='ok'?'运行中':'异常';}catch(e){const b=document.getElementById('hp');b.className='badge err';b.textContent='连接失败';}
@@ -100,6 +100,7 @@ document.getElementById('m-acc').textContent=(a.metrics.validationAccuracy*100).
 document.getElementById('m-far').textContent=(a.metrics.falseAcceptRate*100).toFixed(1)+'%';
 document.getElementById('art').innerHTML=`<h3 style="color:#0f3460">${a.artifactId}</h3><p>算法：${a.algorithm} | 创建：${new Date(a.createdUtc).toLocaleString()}</p><table style="margin-top:8px"><tr><th>指标</th><th>值</th><th>指标</th><th>值</th></tr><tr><td>总样本</td><td>${a.metrics.totalSamples}</td><td>人物数</td><td>${a.metrics.totalPersons}</td></tr><tr><td>训练准确率</td><td><b>${(a.metrics.trainAccuracy*100).toFixed(1)}%</b></td><td>验证准确率</td><td><b>${(a.metrics.validationAccuracy*100).toFixed(1)}%</b></td></tr><tr><td>误识率</td><td>${(a.metrics.falseAcceptRate*100).toFixed(2)}%</td><td>拒识率</td><td>${(a.metrics.falseRejectRate*100).toFixed(2)}%</td></tr><tr><td>同类相似度</td><td>${a.metrics.meanSimilaritySame.toFixed(3)}</td><td>异类相似度</td><td>${a.metrics.meanSimilarityDiff.toFixed(3)}</td></tr></table><h3 style="margin-top:12px;font-size:13px">人物原型（${a.prototypes.length}）</h3><table><tr><th>人物ID</th><th>样本数</th><th>阈值</th></tr>${a.prototypes.map(p=>`<tr><td>${p.personId}</td><td>${p.sampleCount}</td><td>${p.threshold.toFixed(3)}</td></tr>`).join('')}</table>`;}
 async function rr(){try{const data=await fetch(A+'/model-rankings').then(r=>r.json());const rows=data.candidates||[];document.getElementById('rankings').innerHTML=rows.map(x=>`<tr><td>${x.rank||'-'}</td><td>${x.modelVersion}</td><td>${x.rounds?((x.compositeScore*100).toFixed(2)+'%'):'暂无数据'}</td><td>${x.rounds?(x.wins||0):'-'}</td><td>${x.rounds||0}</td><td>${x.rounds?((x.bestValidationAccuracy*100).toFixed(1)+'%'):'暂无数据'}</td><td>${x.retained?'yes':'no'}</td></tr>`).join('')||'<tr><td colspan="7">No measured rounds yet</td></tr>';}catch(e){}}
+async function baseline(){const m=document.getElementById('baseline-msg');m.textContent='正在查找最新独立评估快照…';try{const r=await fetch(A+'/model-rankings/baseline/one-click',{method:'POST'});const d=await r.json();if(!r.ok){m.textContent='未启动：'+(d.error||r.status);return;}m.textContent='已提交 '+(d.modelCount||0)+' 个模型，评估编号 '+d.evaluationId;rr();}catch(e){m.textContent='请求失败：'+e.message;}}
 setInterval(rf,3000);setInterval(rr,5000);rf();rr();
 </script></body></html>
 """, "text/html"));
@@ -229,6 +230,45 @@ app.MapPost("/api/face-training/datasets", (DatasetRequest request, ConcurrentDi
     // vector-training path; the recipe builder can continue with embeddings.
     index[datasetId] = request;
     return Results.Ok(new { id = datasetId, snapshotId = request.SnapshotId, sampleCount = request.Samples?.Length ?? 0 });
+});
+app.MapPost("/api/face-training/model-rankings/baseline/one-click", (
+    IEnumerable<ITrainingAlgorithmAdapter> adapters, TrainingExecutor executor,
+    ConcurrentDictionary<string, TrainingJob> jobs, ConcurrentDictionary<string, object> datasets) =>
+{
+    var source = datasets.Values.OfType<DatasetRequest>()
+        .Where(value => value.Samples is { Length: > 1 } &&
+            value.Samples.Any(sample => !string.IsNullOrWhiteSpace(sample.FaceImageBase64)) &&
+            value.Samples.Any(sample => string.Equals(sample.Split, "validation", StringComparison.OrdinalIgnoreCase)) &&
+            value.Samples.Select(sample => sample.PersonId).Distinct().Count() >= 2)
+        .LastOrDefault();
+    if (source is null)
+        return Results.BadRequest(new { error = "平台尚未收到可用于基线的独立评估快照；请先提交含 faceImageBase64 的 train/validation 数据集" });
+    var candidates = adapters.Where(adapter => adapter.IsAvailable).ToArray();
+    if (candidates.Length == 0) return Results.Problem("no requested face model is available", statusCode: 503);
+    var evaluationId = $"baseline-{source.SnapshotId}-{Guid.NewGuid():N}";
+    var submitted = new List<TrainingJob>();
+    foreach (var adapter in candidates)
+    {
+        var modelDataset = source with
+        {
+            ModelVersion = adapter.ModelVersion,
+            EvaluationId = evaluationId,
+            RecipeReason = "one-click leaderboard baseline",
+            Samples = source.Samples!.Select(sample => sample with
+            {
+                Embedding = null,
+                Evidence = sample.Evidence is null ? null : sample.Evidence with { ModelVersion = adapter.ModelVersion }
+            }).ToArray()
+        };
+        var datasetId = "dataset-" + Guid.NewGuid().ToString("N");
+        datasets[datasetId] = modelDataset;
+        var jobId = "job-" + Guid.NewGuid().ToString("N");
+        var job = new TrainingJob(jobId, "queued", "queued", 0, null, null);
+        jobs[jobId] = job;
+        submitted.Add(job);
+        _ = Task.Run(async () => await executor.RunAsync(jobId, modelDataset, jobs));
+    }
+    return Results.Ok(new { evaluationId, modelCount = submitted.Count, jobs = submitted });
 });
 app.MapPost("/api/face-training/model-rankings/baseline", (BaselineRequest request,
     IEnumerable<ITrainingAlgorithmAdapter> adapters, ConcurrentDictionary<string, TrainingJob> jobs,
