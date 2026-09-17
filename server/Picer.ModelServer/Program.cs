@@ -234,28 +234,52 @@ app.MapPost("/api/face-training/model-rankings/baseline", (BaselineRequest reque
     TrainingExecutor executor, ConcurrentDictionary<string, object> datasets) =>
 {
     var source = request.Dataset;
-    var samples = source.Samples ?? [];
-    if (samples.Length < 2 || samples.Any(sample => string.IsNullOrWhiteSpace(sample.FaceImageBase64)))
-        return Results.BadRequest(new { error = "baseline requires at least two faceImageBase64 samples" });
-    var candidates = adapters.Where(adapter => adapter.IsAvailable).ToArray();
-    if (candidates.Length == 0) return Results.Problem("no face model is available", statusCode: 503);
+    var supplied = request.Datasets;
+    var candidates = adapters.Where(adapter => adapter.IsAvailable &&
+        (supplied is null || supplied.ContainsKey(adapter.ModelVersion))).ToArray();
+    if (candidates.Length == 0) return Results.Problem("no requested face model is available", statusCode: 503);
+    var plans = new List<(ITrainingAlgorithmAdapter Adapter, DatasetRequest Dataset)>();
     var evaluationId = request.EvaluationId ?? $"baseline-{Guid.NewGuid():N}";
-    var submitted = new List<TrainingJob>();
-    foreach (var adapter in candidates)
+    if (supplied is not null)
     {
-        var modelSamples = samples.Select(sample => sample with
+        foreach (var adapter in candidates)
         {
-            Embedding = null,
-            Evidence = sample.Evidence is null ? null : sample.Evidence with { ModelVersion = adapter.ModelVersion }
-        }).ToArray();
-        var dataset = source with
+            var modelSamples = supplied[adapter.ModelVersion];
+            if (modelSamples.Length < 2 || modelSamples.Count(sample => sample.Split == "validation") == 0 ||
+                modelSamples.Select(sample => sample.PersonId).Distinct().Count() < 2)
+                return Results.BadRequest(new { error = $"{adapter.ModelVersion} requires train/validation samples from at least two people" });
+            var dimensions = modelSamples.Where(sample => sample.Embedding is { Length: > 0 })
+                .Select(sample => sample.Embedding!.Length).Distinct().ToArray();
+            if (modelSamples.Any(sample => sample.Embedding is null || sample.Embedding.Length == 0) || dimensions.Length != 1)
+                return Results.BadRequest(new { error = $"{adapter.ModelVersion} has missing or inconsistent vectors" });
+            var leaked = modelSamples.Where(sample => sample.Evidence is not null)
+                .GroupBy(sample => sample.Evidence!.GroupId ?? sample.Evidence.ImageHash ?? $"face:{sample.FaceId}", StringComparer.OrdinalIgnoreCase)
+                .Any(group => group.Select(sample => sample.Split).Distinct(StringComparer.OrdinalIgnoreCase).Count() > 1);
+            if (leaked) return Results.BadRequest(new { error = $"{adapter.ModelVersion} evaluation groups cross train/validation splits" });
+            plans.Add((adapter, new DatasetRequest(request.SnapshotId ?? "evaluation", ModelVersion: adapter.ModelVersion,
+                Samples: modelSamples, Attempt: 1, ProtocolVersion: "face-evidence.v1", EvaluationId: evaluationId,
+                RecipeReason: "baseline evaluation snapshot")));
+        }
+    }
+    else
+    {
+        var samples = source?.Samples ?? [];
+        if (samples.Length < 2 || samples.Any(sample => string.IsNullOrWhiteSpace(sample.FaceImageBase64)) ||
+            samples.Count(sample => sample.Split == "validation") == 0 || samples.Select(sample => sample.PersonId).Distinct().Count() < 2)
+            return Results.BadRequest(new { error = "baseline requires an independent validation set with faceImageBase64 samples from at least two people" });
+        foreach (var adapter in candidates)
         {
-            ModelVersion = adapter.ModelVersion,
-            Samples = modelSamples,
-            IdempotencyKey = null,
-            EvaluationId = evaluationId,
-            RecipeReason = "baseline multi-model comparison"
-        };
+            var modelSamples = samples.Select(sample => sample with { Embedding = null,
+                Evidence = sample.Evidence is null ? null : sample.Evidence with { ModelVersion = adapter.ModelVersion } }).ToArray();
+            plans.Add((adapter, source! with { ModelVersion = adapter.ModelVersion, Samples = modelSamples,
+                IdempotencyKey = null, EvaluationId = evaluationId, RecipeReason = "baseline evaluation snapshot" }));
+        }
+    }
+    var submitted = new List<TrainingJob>();
+    foreach (var plan in plans)
+    {
+        var adapter = plan.Adapter;
+        var dataset = plan.Dataset;
         var datasetId = "dataset-" + Guid.NewGuid().ToString("N");
         datasets[datasetId] = dataset;
         var jobId = "job-" + Guid.NewGuid().ToString("N");
@@ -264,7 +288,7 @@ app.MapPost("/api/face-training/model-rankings/baseline", (BaselineRequest reque
         submitted.Add(job);
         _ = Task.Run(async () => await executor.RunAsync(jobId, dataset, jobs));
     }
-    return Results.Ok(new { evaluationId, modelCount = candidates.Length, jobs = submitted });
+    return Results.Ok(new { evaluationId, modelCount = plans.Count, jobs = submitted });
 });
 app.MapGet("/api/face-training/archive", (TrainingAttemptArchive archive, int? limit) => Results.Ok(archive.ReadRecent(limit ?? 100)));
 app.MapGet("/api/face-training/archive/summary", (TrainingAttemptArchive archive) => Results.Ok(new { summary = archive.BuildSummary() }));
@@ -343,7 +367,9 @@ public record VlAttributes(string Pose, string Lighting, string[] Occlusion, str
     double FaceQuality, bool IsUsefulForTraining, string ModelVersion, string PromptVersion);
 public record VlEnrichmentRequest(string ProtocolVersion = "face-evidence.v1", VlAttributes[]? Attributes = null);
 public record JobRequest(string DatasetId, string Type);
-public record BaselineRequest(DatasetRequest Dataset, string? EvaluationId = null);
+public record BaselineRequest(DatasetRequest? Dataset = null,
+    Dictionary<string, FaceSample[]>? Datasets = null, string? SnapshotId = null,
+    string? EvaluationId = null);
 public record ModelEnsembleDecisionRequest(ModelEnsembleMember[]? Members = null, ModelEnsembleScore[]? Scores = null);
 public record TrainingJob(string Id, string Status, string Stage, int Progress, string? ArtifactId, string? Error);
 public record TrainingArtifact(
