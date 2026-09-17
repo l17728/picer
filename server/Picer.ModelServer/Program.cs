@@ -272,7 +272,7 @@ app.MapPost("/api/face-training/model-rankings/baseline/one-click", (
 });
 app.MapPost("/api/face-training/model-rankings/baseline", (BaselineRequest request,
     IEnumerable<ITrainingAlgorithmAdapter> adapters, ConcurrentDictionary<string, TrainingJob> jobs,
-    TrainingExecutor executor, ConcurrentDictionary<string, object> datasets) =>
+    TrainingExecutor executor, ConcurrentDictionary<string, object> datasets, ModelCandidateRankingStore rankings) =>
 {
     var source = request.Dataset;
     var supplied = request.Datasets;
@@ -283,6 +283,7 @@ app.MapPost("/api/face-training/model-rankings/baseline", (BaselineRequest reque
     var evaluationId = request.EvaluationId ?? $"baseline-{Guid.NewGuid():N}";
     if (supplied is not null)
     {
+        var evaluationResults = new List<object>();
         foreach (var adapter in candidates)
         {
             var modelSamples = supplied[adapter.ModelVersion];
@@ -297,10 +298,13 @@ app.MapPost("/api/face-training/model-rankings/baseline", (BaselineRequest reque
                 .GroupBy(sample => sample.Evidence!.GroupId ?? sample.Evidence.ImageHash ?? $"face:{sample.FaceId}", StringComparer.OrdinalIgnoreCase)
                 .Any(group => group.Select(sample => sample.Split).Distinct(StringComparer.OrdinalIgnoreCase).Count() > 1);
             if (leaked) return Results.BadRequest(new { error = $"{adapter.ModelVersion} evaluation groups cross train/validation splits" });
-            plans.Add((adapter, new DatasetRequest(request.SnapshotId ?? "evaluation", ModelVersion: adapter.ModelVersion,
-                Samples: modelSamples, Attempt: 1, ProtocolVersion: "face-evidence.v1", EvaluationId: evaluationId,
-                RecipeReason: "baseline evaluation snapshot")));
+            var metrics = RawFaceBaselineEvaluator.Evaluate(modelSamples);
+            rankings.Append(new ModelCandidateRound(adapter.ModelVersion, "raw-baseline", 0,
+                metrics.Accuracy, metrics.FalseAcceptRate, metrics.FalseRejectRate,
+                true, null, DateTime.UtcNow, "baseline", evaluationId));
+            evaluationResults.Add(new { modelVersion = adapter.ModelVersion, metrics });
         }
+        return Results.Ok(new { evaluationId, modelCount = evaluationResults.Count, results = evaluationResults, jobs = Array.Empty<object>(), mode = "raw-inference" });
     }
     else
     {
