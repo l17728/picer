@@ -44,7 +44,13 @@ def enrich_insightface_embeddings(samples, model_version):
         }[env_name]
     if not model_path:
         raise ValueError(f"{model_version} model path is not configured")
-    session = ort.InferenceSession(model_path, providers=["CUDAExecutionProvider", "CPUExecutionProvider"])
+    # CPU is the deterministic fallback. CUDA is opt-in because an installed
+    # CUDAExecutionProvider can hang on machines whose driver/runtime pair is
+    # incompatible; the platform still reports the same model result.
+    providers = ["CPUExecutionProvider"]
+    if os.environ.get("PICER_GPU_WORKER_USE_CUDA", "").strip().lower() in {"1", "true", "yes"}:
+        providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+    session = ort.InferenceSession(model_path, providers=providers)
     input_name = session.get_inputs()[0].name
     input_shape = session.get_inputs()[0].shape
     output = []
