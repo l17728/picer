@@ -16,8 +16,14 @@ public sealed class GpuEmbeddingService
             ?? throw new InvalidOperationException("GPU worker could not start");
         await process.StandardInput.WriteAsync(JsonSerializer.Serialize(new { operation = "embed", modelVersion, images }));
         process.StandardInput.Close();
-        var output = await process.StandardOutput.ReadToEndAsync(ct);
-        var error = await process.StandardError.ReadToEndAsync(ct);
+        // Drain stdout and stderr concurrently. Reading stdout first can
+        // deadlock when ONNX Runtime fills its stderr pipe with provider
+        // diagnostics while processing a large evaluation snapshot.
+        var outputTask = process.StandardOutput.ReadToEndAsync(ct);
+        var errorTask = process.StandardError.ReadToEndAsync(ct);
+        await Task.WhenAll(outputTask, errorTask);
+        var output = await outputTask;
+        var error = await errorTask;
         await process.WaitForExitAsync(ct);
         if (process.ExitCode != 0) throw new InvalidOperationException(string.IsNullOrWhiteSpace(error) ? output : error);
         using var document = JsonDocument.Parse(output);
