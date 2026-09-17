@@ -49,7 +49,9 @@ public sealed class ModelCandidateRankingStore
                 : [];
             var total = string.IsNullOrWhiteSpace(scenario) ? rounds.Count : rounds.Count(r => string.Equals(r.Scenario, scenario, StringComparison.OrdinalIgnoreCase));
             var retainTopThree = total >= 20;
-            var roundGroups = rounds.GroupBy(RoundKey, StringComparer.OrdinalIgnoreCase)
+            var roundGroups = rounds.Where(r => string.IsNullOrWhiteSpace(scenario) ||
+                    string.Equals(r.Scenario, scenario, StringComparison.OrdinalIgnoreCase))
+                .GroupBy(RoundKey, StringComparer.OrdinalIgnoreCase)
                 .Select(group => group.OrderByDescending(Score).ThenByDescending(r => r.ValidationAccuracy)
                     .ThenBy(r => r.ModelVersion, StringComparer.OrdinalIgnoreCase).ToArray())
                 .ToArray();
