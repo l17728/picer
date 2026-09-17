@@ -353,7 +353,6 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         finally { IsAnalyzing = false; }
     }
 
-    [RelayCommand]
     private async Task RunBaselineEvaluationAsync()
     {
         if (IsAnalyzing) return;
