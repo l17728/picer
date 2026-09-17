@@ -382,8 +382,9 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             foreach (var model in available.Where(model => !string.Equals(model.ModelVersion, sourceModel, StringComparison.OrdinalIgnoreCase)))
             {
                 var target = model.ModelVersion;
-                var existing = await UiWork.RunDatabaseAsync(() => _repository.GetFaceModelVersions().Contains(target, StringComparer.OrdinalIgnoreCase));
-                if (!existing)
+                var coverage = await UiWork.RunDatabaseAsync(() => (Source: _repository.GetFaceEmbeddingCount(sourceModel),
+                    Target: _repository.GetFaceEmbeddingCount(target)));
+                if (coverage.Target < coverage.Source)
                 {
                     StatusText = $"正在为基线补齐 {target} 向量…";
                     var backfill = new RemoteFaceVectorBackfillService(_repository, platform);

@@ -899,6 +899,13 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
         return versions;
     }
 
+    public int GetFaceEmbeddingCount(string modelVersion)
+    {
+        using var command = database.Command("SELECT COUNT(*) FROM detected_faces WHERE model_version=$model AND embedding IS NOT NULL");
+        command.Parameters.AddWithValue("$model", modelVersion);
+        return Convert.ToInt32(command.ExecuteScalar());
+    }
+
     /// <summary>Reads vectors for an immutable evaluation snapshot from one model version.
     /// The snapshot member's source face is joined by image and ordinal, so model-specific
     /// vectors can never be mixed or silently reused across versions.</summary>
