@@ -144,12 +144,22 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             var sources = await UiWork.RunDatabaseAsync(() => _repository.GetFaceSources(snapshot.EmbeddingModelVersion));
             var byFace = sources.ToDictionary(source => source.FaceId);
             var samples = new List<(long FaceId, long PersonId, string Split, string Group, string FaceImageBase64)>();
-            foreach (var member in members.Where(member => member.FaceId is not null))
-            {
-                if (!byFace.TryGetValue(member.FaceId!.Value, out var source)) continue;
-                var crop = await Task.Run(() => RemoteFaceVectorBackfillService.EncodeCrop(source, CancellationToken.None));
-                if (!string.IsNullOrWhiteSpace(crop)) samples.Add((member.FaceId.Value, member.PersonId, member.Partition, member.LeakageGroup, crop));
-            }
+            var membersToEncode = members.Where(member => member.FaceId is not null)
+                .Where(member => byFace.ContainsKey(member.FaceId!.Value)).ToArray();
+            var encoded = new System.Collections.Concurrent.ConcurrentBag<(long FaceId, long PersonId, string Split, string Group, string Crop)>();
+            var completed = 0;
+            await Parallel.ForEachAsync(membersToEncode, new ParallelOptions { MaxDegreeOfParallelism = Math.Max(2, Environment.ProcessorCount / 2) },
+                async (member, cancellationToken) =>
+                {
+                    var source = byFace[member.FaceId!.Value];
+                    var crop = await Task.Run(() => RemoteFaceVectorBackfillService.EncodeCrop(source, cancellationToken), cancellationToken);
+                    if (!string.IsNullOrWhiteSpace(crop))
+                        encoded.Add((member.FaceId.Value, member.PersonId, member.Partition, member.LeakageGroup, crop));
+                    var done = Interlocked.Increment(ref completed);
+                    if (done % 250 == 0 || done == membersToEncode.Length)
+                        AppLogger.Info($"统一基线评估集裁剪进度：{done}/{membersToEncode.Length}");
+                });
+            samples.AddRange(encoded.Select(item => (item.FaceId, item.PersonId, item.Split, item.Group, item.Crop)));
             AppLogger.Info($"统一基线评估集已生成：snapshot={snapshot.SnapshotId}; samples={samples.Count}");
             var result = await platform.PublishEvaluationDatasetAsync(snapshot.SnapshotId, samples);
             if (!result.Success) AppLogger.Warn($"统一基线评估集上传失败：{result.Error}");
