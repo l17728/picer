@@ -41,7 +41,8 @@ var apiKey = Environment.GetEnvironmentVariable("PICER_MODEL_SERVER_API_KEY");
 app.Use(async (context, next) =>
 {
     if (!context.Request.Path.StartsWithSegments("/api") || string.IsNullOrWhiteSpace(apiKey)) { await next(); return; }
-    if (context.Request.Method == "GET" && (context.Request.Path.Value?.EndsWith("/jobs") == true || context.Request.Path.Value?.EndsWith("/models") == true))
+    if (context.Request.Method == "GET" && (context.Request.Path.Value?.EndsWith("/jobs") == true || context.Request.Path.Value?.EndsWith("/models") == true
+        || context.Request.Path.Value?.EndsWith("/model-rankings") == true || context.Request.Path.Value?.EndsWith("/model-rankings/rounds") == true))
     { await next(); return; }
     var header = context.Request.Headers.Authorization.ToString();
     if (!header.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase) || !CryptographicOperations.FixedTimeEquals(System.Text.Encoding.UTF8.GetBytes(header[7..]), System.Text.Encoding.UTF8.GetBytes(apiKey)))
@@ -85,7 +86,7 @@ app.MapGet("/", () => Results.Text("""
 <h2>Model leaderboard</h2>
 <div class="card"><table><thead><tr><th>Rank</th><th>Model</th><th>Composite score</th><th>Wins</th><th>Rounds</th><th>Best validation</th><th>Retained</th></tr></thead><tbody id="rankings"><tr><td colspan="7">Loading...</td></tr></tbody></table></div>
 <script>
-const A='/api/face-training';
+const A=location.pathname.startsWith('/picer')?'/picer/api/face-training':'/api/face-training';
 async function rf(){try{const h=await fetch('/health').then(r=>r.json());const b=document.getElementById('hp');b.className='badge '+(h.status==='ok'?'ok':'err');b.textContent=h.status==='ok'?'运行中':'异常';}catch(e){const b=document.getElementById('hp');b.className='badge err';b.textContent='连接失败';}
 try{const js=await fetch(A+'/jobs').then(r=>r.json());document.getElementById('m-jobs').textContent=js.length;
 document.getElementById('jobs').innerHTML=js.map(j=>`<tr><td title="${j.id}">${j.id.substring(0,14)}…</td><td><span class="badge ${j.status==='completed'?'ok':j.status==='failed'?'err':j.status==='running'?'run':'q'}">${j.status}</span></td><td>${j.stage||''}</td><td><div class="bar"><div class="bar-fill" style="width:${j.progress||0}%"></div></div></td><td>${j.artifactId?`<a href="#" onclick="sa('${j.artifactId}');return false" style="color:#0f3460">${j.artifactId}</a>`:'—'}</td><td>${(j.status==='queued'||j.status==='running')?`<button class="sm" onclick="cj('${j.id}')">取消</button>`:''}</td></tr>`).join('')||'<tr><td colspan="6" style="color:#999;text-align:center">暂无任务</td></tr>';}catch(e){}}
