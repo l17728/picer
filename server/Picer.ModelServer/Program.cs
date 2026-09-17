@@ -8,6 +8,7 @@ const string DefaultLanguageModelEndpoint = "https://open.bigmodel.cn/api/paas/v
 const string DefaultLanguageModel = "glm-4.6v-flash";
 
 var builder = WebApplication.CreateBuilder(args);
+builder.WebHost.ConfigureKestrel(options => options.Limits.MaxRequestBodySize = 512L * 1024 * 1024);
 builder.Services.AddSingleton<ConcurrentDictionary<string, TrainingJob>>();
 builder.Services.AddSingleton<ConcurrentDictionary<string, object>>();
 builder.Services.AddSingleton<TrainingExecutor>();

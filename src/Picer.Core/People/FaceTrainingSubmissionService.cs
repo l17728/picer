@@ -48,7 +48,7 @@ public sealed class FaceTrainingSubmissionService : IDisposable
     {
         var handler = new HttpClientHandler();
         handler.ServerCertificateCustomValidationCallback = (_, _, _, _) => true;
-        _client = new HttpClient(handler) { BaseAddress = new Uri(NormalizeBaseUrl(baseUrl)), Timeout = TimeSpan.FromSeconds(30) };
+        _client = new HttpClient(handler) { BaseAddress = new Uri(NormalizeBaseUrl(baseUrl)), Timeout = TimeSpan.FromMinutes(10) };
         var resolvedKey = string.IsNullOrWhiteSpace(apiKey) ? ModelServerApiKey.Load() : apiKey.Trim();
         if (!string.IsNullOrWhiteSpace(resolvedKey))
             _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", resolvedKey);
