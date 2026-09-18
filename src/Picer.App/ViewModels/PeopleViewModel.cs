@@ -1856,7 +1856,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         if (SelectedDisplayedFace is not null && ids.Contains(SelectedDisplayedFace.FaceId)) SelectedDisplayedFace = null;
         DisplayedFacesTitle = DisplayedCollectionKind switch
         {
-            DisplayedFaceCollectionKind.NamedPerson => $"{SelectedPerson?.DisplayName ?? "人物"} · {DisplayedFaces.Count} 张人脸",
+            DisplayedFaceCollectionKind.NamedPerson => $"{SelectedPerson?.DisplayName ?? "人物"} · {DisplayedFaces.Count} 张人脸 · {CurrentClassificationModelLabel()}",
             DisplayedFaceCollectionKind.CandidateCluster => $"候选人物 · {DisplayedFaces.Count} 张人脸",
             DisplayedFaceCollectionKind.SuggestedGroup => SelectedSuggestedPersonGroup is { } group
                 ? $"推荐为 {group.Record.PersonName}（{DisplayedFaces.Count}）"
