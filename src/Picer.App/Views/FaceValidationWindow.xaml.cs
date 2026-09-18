@@ -280,7 +280,7 @@ public partial class FaceValidationWindow : Window
                                $"其中视频人脸 {plan.VideoSamples}；基础模型 {plan.ModelVersion}\n" +
                                $"提交位置：{location}\n检查：{warning}\n\n" +
                                "只提交脱敏向量和内部编号，不提交姓名或照片。是否启动优化？";
-            if (MessageBox.Show(confirmation, "确认人物识别优化", MessageBoxButton.OKCancel,
+            if (MessageBox.Show(confirmation + "\n\n说明：本任务校准人物原型、阈值和样本配方，不修改基础人脸模型权重。", "确认人物识别校准", MessageBoxButton.OKCancel,
                     MessageBoxImage.Question) != MessageBoxResult.OK)
                 throw new OperationCanceledException();
             AppLogger.Info($"FaceTraining submit confirmed; snapshot={plan.SnapshotId}; endpoint={endpoint.GetLeftPart(UriPartial.Authority)}; samples={plan.Samples}; no image paths or names will be sent");
@@ -334,7 +334,7 @@ public partial class FaceValidationWindow : Window
         finally
         {
             _trainingCancellation?.Dispose(); _trainingCancellation = null;
-            TrainFaceButton.Content = "提交训练任务";
+            TrainFaceButton.Content = "提交人物识别校准任务";
             CancelTrainingButton.IsEnabled = false;
             EndOperation();
         }
