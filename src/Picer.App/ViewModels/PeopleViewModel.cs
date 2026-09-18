@@ -16,9 +16,10 @@ using Picer.App.Security;
 namespace Picer.App.ViewModels;
 
 public sealed record FaceModelOption(string ModelVersion, string DisplayName);
-public sealed record FaceTrainingHistoryOption(string ArtifactId, string ModelVersion, double ValidationAccuracy, DateTime CreatedUtc, string State)
+public sealed record FaceTrainingHistoryOption(string ArtifactId, string ModelVersion, double ValidationAccuracy, DateTime CreatedUtc, string State, bool CanApply = true)
 {
-    public string DisplayName => $"{CreatedUtc:yyyy-MM-dd HH:mm} · {ValidationAccuracy:P1} · {State} · {ArtifactId[..Math.Min(12, ArtifactId.Length)]}";
+    public string DisplayName => $"{CreatedUtc:yyyy-MM-dd HH:mm} · {ValidationAccuracy:P1} · {State} · {ArtifactId[..Math.Min(12, ArtifactId.Length)]}" +
+        (CanApply ? "" : " · 平台历史指标（制品不可用）");
 }
 
 public partial class PeopleViewModel : ObservableObject, IDisposable
@@ -150,7 +151,16 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         if (_isLoaded || IsLoading) return;
         IsLoading = true;
         StatusText = "正在加载人物分类…";
-        var modelVersions = await UiWork.RunDatabaseAsync(_repository.GetFaceModelVersions);
+        var modelVersions = await UiWork.RunDatabaseAsync(() =>
+        {
+            var versions = _repository.GetFaceModelVersions();
+            var sface = versions.Where(value => value.Contains("sface", StringComparison.OrdinalIgnoreCase))
+                .Select(value => (Version: value, Count: _repository.GetFaceSources(value).Count))
+                .OrderByDescending(value => value.Count).ThenBy(value => value.Version)
+                .FirstOrDefault();
+            return versions.Where(value => !value.Contains("sface", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(value, sface.Version, StringComparison.OrdinalIgnoreCase)).ToArray();
+        });
         FaceModelVersions.Clear();
         FaceModelOptions.Clear();
         foreach (var version in modelVersions)
@@ -291,11 +301,27 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
     private async Task LoadTrainingHistoryAsync(string modelVersion)
     {
         var history = await UiWork.RunDatabaseAsync(() => _repository.GetFaceTrainingHistory(modelVersion));
+        IReadOnlyList<RemoteTrainingHistoryData> remote = [];
+        try
+        {
+            var endpoint = Environment.GetEnvironmentVariable("PICER_MODEL_SERVER_URL")?.Trim() ?? "http://127.0.0.1:8090";
+            var key = Environment.GetEnvironmentVariable("PICER_MODEL_SERVER_API_KEY")?.Trim() ?? "";
+            using var platform = new FaceTrainingSubmissionService(endpoint, key);
+            remote = await platform.GetTrainingHistoryAsync(modelVersion).ConfigureAwait(false);
+        }
+        catch (Exception exception) { AppLogger.Warn($"加载平台训练历史失败：{exception.Message}"); }
         await Application.Current.Dispatcher.InvokeAsync(() =>
         {
             TrainingHistoryOptions.Clear();
             foreach (var value in history.Where(value => value.ValidationAccuracy >= .90))
                 TrainingHistoryOptions.Add(new(value.ArtifactId, value.ModelVersion, value.ValidationAccuracy, value.CreatedUtc, value.State));
+            // Small synthetic multi-model baseline probes are not user training
+            // versions and must not appear as selectable history.
+            foreach (var value in remote.Where(value => value.Status.Equals("completed", StringComparison.OrdinalIgnoreCase)
+                         && value.SampleCount >= 10 && value.ValidationAccuracy >= .90 && !string.IsNullOrWhiteSpace(value.ArtifactId))
+                         .Where(value => !TrainingHistoryOptions.Any(item => string.Equals(item.ArtifactId, value.ArtifactId, StringComparison.OrdinalIgnoreCase))))
+                TrainingHistoryOptions.Add(new(value.ArtifactId!, value.ModelVersion, value.ValidationAccuracy!.Value,
+                    value.CreatedUtc, value.Status, CanApply: false));
             SelectedTrainingHistory = TrainingHistoryOptions.FirstOrDefault(value => value.State == "active") ?? TrainingHistoryOptions.FirstOrDefault();
         });
     }
@@ -308,6 +334,11 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         if (!string.Equals(modelVersion, SelectedTrainingHistory.ModelVersion, StringComparison.OrdinalIgnoreCase))
         {
             StatusText = "历史模型与当前模型空间不一致，已阻止应用";
+            return;
+        }
+        if (!SelectedTrainingHistory.CanApply)
+        {
+            StatusText = "该平台历史记录仅保留了评估指标，训练制品已不在当前平台，无法直接应用；请按该配方重新提交训练";
             return;
         }
         IsAnalyzing = true;

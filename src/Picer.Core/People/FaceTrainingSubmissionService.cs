@@ -13,6 +13,9 @@ public sealed record TrainingModelAvailability(string Id, string ModelVersion, s
 public sealed record ParallelTrainingSubmissionResult(string ModelVersion, TrainingSubmissionResult Result);
 public sealed record BaselineTrainingSubmissionResult(string EvaluationId,
     IReadOnlyList<ParallelTrainingSubmissionResult> Jobs, string? Error = null);
+public sealed record RemoteTrainingHistoryData(string? ArtifactId, string ModelVersion, int Attempt,
+    double? ValidationAccuracy, string Status, DateTime CreatedUtc, bool Applied, int SampleCount,
+    int PersonCount, string? RecipeReason);
 
 public sealed record TrainingArtifactData(
     string ArtifactId, string Algorithm, string ModelVersion, DateTime CreatedUtc,
@@ -380,6 +383,41 @@ public sealed class FaceTrainingSubmissionService : IDisposable
         }
         catch { return null; }
     }
+
+    public async Task<IReadOnlyList<RemoteTrainingHistoryData>> GetTrainingHistoryAsync(
+        string? modelVersion = null, CancellationToken ct = default)
+    {
+        try
+        {
+            var response = await _client.GetAsync("api/face-training/archive?limit=1000", ct).ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode) return [];
+            var records = await response.Content.ReadFromJsonAsync<JsonElement>(Json, ct).ConfigureAwait(false);
+            if (records.ValueKind != JsonValueKind.Array) return [];
+            return records.EnumerateArray()
+                .Where(record => record.TryGetProperty("modelVersion", out var mv)
+                    && (string.IsNullOrWhiteSpace(modelVersion) || string.Equals(mv.GetString(), modelVersion, StringComparison.OrdinalIgnoreCase)))
+                .Select(record => new RemoteTrainingHistoryData(
+                    GetString(record, "artifactId"), GetString(record, "modelVersion") ?? modelVersion ?? "unknown",
+                    GetInt(record, "attempt"), GetDouble(record, "validationAccuracy"),
+                    GetString(record, "status") ?? "unknown", GetDate(record, "createdUtc"),
+                    GetBool(record, "applied"), GetInt(record, "sampleCount"), GetInt(record, "personCount"),
+                    GetString(record, "recipeReason")))
+                .Where(value => value.ValidationAccuracy is not null)
+                .ToArray();
+        }
+        catch { return []; }
+    }
+
+    private static string? GetString(JsonElement value, string name) =>
+        value.TryGetProperty(name, out var item) && item.ValueKind != JsonValueKind.Null ? item.GetString() : null;
+    private static int GetInt(JsonElement value, string name) =>
+        value.TryGetProperty(name, out var item) && item.TryGetInt32(out var result) ? result : 0;
+    private static double? GetDouble(JsonElement value, string name) =>
+        value.TryGetProperty(name, out var item) && item.ValueKind == JsonValueKind.Number && item.TryGetDouble(out var result) ? result : null;
+    private static bool GetBool(JsonElement value, string name) =>
+        value.TryGetProperty(name, out var item) && item.ValueKind == JsonValueKind.True;
+    private static DateTime GetDate(JsonElement value, string name) =>
+        value.TryGetProperty(name, out var item) && item.TryGetDateTime(out var result) ? result : DateTime.UtcNow;
 
     public void Dispose() => _client.Dispose();
 
