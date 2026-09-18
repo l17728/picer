@@ -18,6 +18,8 @@ ArcFace、AdaFace、ArcFace-Paddle（MobileFace-Paddle 128 维）和 FaceX-Zoo R
 - `/api/face-training/algorithms` 显示 SFace 与 InsightFace 可用；其余候选只有在配置对应模型文件后才标记可用，不伪造可用状态。
 - 以两个 `faceImageBase64` 样本提交 InsightFace 数据集并创建训练任务，GPU Worker 完成并返回签名 artifact，状态由 `queued → running/gpu-worker → completed`。
 
-## 当前边界
+## 当前边界（2026-09-18 更新）
 
-ArcFace、AdaFace、ArcFace-Paddle、FaceX-Zoo 的适配器已纳入统一候选协议，但未将不兼容的 PyTorch/Paddle 权重强行转换成 ONNX；没有经过哈希校验的权重不会进入可用集合。客户端若要使用 InsightFace 图像推理，应提交已对齐的人脸裁剪图（不提交原图路径）。当前 GUI 快照仍只产生 SFace 向量，因此 InsightFace 在 GUI 端的唯一剩余阻塞是从索引人脸框生成 112×112 裁剪并提交，不是服务端模型或 GPU Worker 阻塞。
+ArcFace、AdaFace、ArcFace-Paddle、FaceX-Zoo、SFace 和 InsightFace 均已进入统一候选协议，并已使用同一份平台评估快照完成基线评估。GUI 快照发布器会从索引人脸框生成受控的 112×112 裁剪图和模型所需输入；不兼容或未通过哈希校验的权重不会进入可用集合。
+
+当前剩余的是训练质量和环境门禁，而不是 GUI 到 Worker 的接口阻塞：排行榜共完成 3 轮，Top 3 为 InsightFace-ArcFace、AdaFace、ArcFace；ArcFace-Paddle、FaceX-Zoo、SFace 暂列备用。基线最佳验证准确率约 64.36%，需要真实标注数据和后续迭代才能判断是否达到 90% 激活门禁。

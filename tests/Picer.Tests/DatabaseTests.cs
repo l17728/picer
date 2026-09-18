@@ -227,7 +227,7 @@ public sealed class DatabaseTests : IDisposable
     }
 
     [Fact]
-    public void Schema_Version34MigratesFaceUserActionEventsTo35()
+    public void Schema_Version34MigratesFaceUserActionEventsToLatest()
     {
         var path = Path.Combine(Path.GetTempPath(), "picer_migration_34_" + Guid.NewGuid().ToString("n") + ".db");
         try
@@ -244,7 +244,7 @@ public sealed class DatabaseTests : IDisposable
             using var check = migrated.Command("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='face_user_action_events'");
             Assert.Equal(1L, (long)check.ExecuteScalar()!);
             using var version = migrated.Command("PRAGMA user_version");
-            Assert.Equal(35L, (long)version.ExecuteScalar()!);
+            Assert.Equal((long)PicerDatabase.CurrentSchemaVersion, (long)version.ExecuteScalar()!);
         }
         finally
         {

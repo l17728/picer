@@ -945,11 +945,20 @@ public sealed class PicerDatabase : IDisposable
         }
         if (schemaVersion < 36)
         {
+            // Older installations (and minimal migration fixtures) may not have
+            // video tables at all.  Do not unconditionally ALTER TABLE in that
+            // case; create the current schema and leave the database usable.
+            var hasLegacyRejections = TableExists("video_face_person_rejections");
+            var hasLegacyFaces = TableExists("video_detected_faces");
             using var videoModelMigration = _conn.CreateCommand();
-            videoModelMigration.CommandText = """
+            var migrationSql = """
                 PRAGMA foreign_keys=OFF;
-                ALTER TABLE video_face_person_rejections RENAME TO video_face_person_rejections_legacy;
-                ALTER TABLE video_detected_faces RENAME TO video_detected_faces_legacy;
+                """;
+            if (hasLegacyRejections)
+                migrationSql += "ALTER TABLE video_face_person_rejections RENAME TO video_face_person_rejections_legacy;\n";
+            if (hasLegacyFaces)
+                migrationSql += "ALTER TABLE video_detected_faces RENAME TO video_detected_faces_legacy;\n";
+            migrationSql += """
                 CREATE TABLE video_detected_faces (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     video_id INTEGER NOT NULL REFERENCES videos(id) ON DELETE CASCADE,
@@ -967,26 +976,35 @@ public sealed class PicerDatabase : IDisposable
                     updated_utc TEXT,
                     UNIQUE(keyframe_id,model_version,ordinal)
                 );
+                """;
+            if (hasLegacyFaces)
+                migrationSql += """
                 INSERT INTO video_detected_faces
                     (id,video_id,keyframe_id,timestamp_seconds,ordinal,box_x,box_y,box_width,box_height,confidence,embedding,
                      suggested_person_id,match_confidence,created_utc,assigned_person_id,assignment_state,updated_utc)
                 SELECT id,video_id,keyframe_id,timestamp_seconds,ordinal,box_x,box_y,box_width,box_height,confidence,embedding,
                        suggested_person_id,match_confidence,created_utc,assigned_person_id,assignment_state,updated_utc
                 FROM video_detected_faces_legacy;
+                """;
+            migrationSql += """
                 CREATE TABLE video_face_person_rejections (
                     video_face_id INTEGER NOT NULL REFERENCES video_detected_faces(id) ON DELETE CASCADE,
                     person_id INTEGER NOT NULL REFERENCES people(id) ON DELETE CASCADE,
                     created_utc TEXT NOT NULL,
                     PRIMARY KEY(video_face_id,person_id)
                 );
-                INSERT INTO video_face_person_rejections SELECT * FROM video_face_person_rejections_legacy;
-                DROP TABLE video_face_person_rejections_legacy;
-                DROP TABLE video_detected_faces_legacy;
+                """;
+            if (hasLegacyRejections)
+                migrationSql += "INSERT INTO video_face_person_rejections SELECT * FROM video_face_person_rejections_legacy;\nDROP TABLE video_face_person_rejections_legacy;\n";
+            if (hasLegacyFaces)
+                migrationSql += "DROP TABLE video_detected_faces_legacy;\n";
+            migrationSql += """
                 CREATE INDEX idx_video_faces_timeline ON video_detected_faces(video_id,timestamp_seconds);
                 CREATE INDEX idx_video_faces_assigned_person ON video_detected_faces(assigned_person_id,assignment_state);
                 PRAGMA foreign_keys=ON;
                 PRAGMA user_version = 36;
                 """;
+            videoModelMigration.CommandText = migrationSql;
             videoModelMigration.ExecuteNonQuery();
         }
     }
@@ -1006,6 +1024,14 @@ public sealed class PicerDatabase : IDisposable
         while (reader.Read())
             if (string.Equals(reader.GetString(1), column, StringComparison.OrdinalIgnoreCase)) return true;
         return false;
+    }
+
+    private bool TableExists(string table)
+    {
+        using var command = _conn.CreateCommand();
+        command.CommandText = "SELECT 1 FROM sqlite_master WHERE type='table' AND name=$name LIMIT 1";
+        command.Parameters.AddWithValue("$name", table);
+        return command.ExecuteScalar() is not null;
     }
 
     private void AddColumnIfMissing(string table, string column, string definition)
