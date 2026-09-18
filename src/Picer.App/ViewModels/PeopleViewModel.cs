@@ -504,6 +504,8 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
     {
         StatusText = "正在同步人物界面…";
         await RefreshAsync();
+        if (!string.IsNullOrWhiteSpace(SelectedFaceModelVersion))
+            await LoadTrainingHistoryAsync(SelectedFaceModelVersion);
         var ignored = await UiWork.RunDatabaseAsync(() => _repository.GetIgnoredFaceCount());
         OnPropertyChanged(nameof(FaceModelSpaceText));
         StatusText = $"UI 已同步：{People.Count} 位人物，{CandidateClusters.Count} 个候选组，" +
