@@ -485,12 +485,28 @@ public record TrainingDiagnostics(string RecommendedAction, double ThresholdSwee
 public sealed class TrainingExecutor
 {
     private readonly ConcurrentDictionary<string, TrainingArtifact> _artifacts = new();
+    private readonly string _artifactRoot;
     private readonly ArtifactSigner _signer;
     private readonly TrainingAttemptArchive _archive;
     private readonly ModelCandidateRankingStore _rankings;
 
     public TrainingExecutor(ArtifactSigner signer, TrainingAttemptArchive archive, ModelCandidateRankingStore rankings)
-    { _signer = signer; _archive = archive; _rankings = rankings; }
+    {
+        _signer = signer; _archive = archive; _rankings = rankings;
+        var root = Environment.GetEnvironmentVariable("PICER_TRAINING_ARCHIVE_ROOT")
+            ?? Path.Combine(AppContext.BaseDirectory, "training-archive");
+        _artifactRoot = Path.Combine(root, "artifacts");
+        Directory.CreateDirectory(_artifactRoot);
+        foreach (var path in Directory.EnumerateFiles(_artifactRoot, "artifact-*.json"))
+        {
+            try
+            {
+                var artifact = JsonSerializer.Deserialize<TrainingArtifact>(File.ReadAllText(path), new JsonSerializerOptions(JsonSerializerDefaults.Web));
+                if (artifact is not null) _artifacts[artifact.ArtifactId] = artifact;
+            }
+            catch { /* ignore one corrupt artifact; other artifacts remain usable */ }
+        }
+    }
 
     public bool TryGetArtifact(string artifactId, out TrainingArtifact artifact) => _artifacts.TryGetValue(artifactId, out artifact!);
 
@@ -529,7 +545,7 @@ public sealed class TrainingExecutor
                 var gpuArtifact = JsonSerializer.Deserialize<TrainingArtifact>(output, new JsonSerializerOptions(JsonSerializerDefaults.Web))
                     ?? throw new InvalidOperationException("GPU worker returned invalid artifact");
                 gpuArtifact = _signer.Sign(gpuArtifact);
-                _artifacts[gpuArtifact.ArtifactId] = gpuArtifact;
+                StoreArtifact(gpuArtifact);
                 jobs[jobId] = jobs[jobId] with { Status = "completed", Stage = "gpu-worker-completed", Progress = 100, ArtifactId = gpuArtifact.ArtifactId };
                 _archive.Append(new TrainingAttemptRecord("", "", jobId, gpuArtifact.ArtifactId, dataset.Attempt,
                     dataset.ModelVersion ?? "sface", dataset.Samples?.Length ?? 0,
@@ -639,7 +655,7 @@ public sealed class TrainingExecutor
 
             var artifactId = "artifact-" + Guid.NewGuid().ToString("N")[..12];
             var artifact = _signer.Sign(new TrainingArtifact(artifactId, "prototype-calibration", dataset.ModelVersion ?? "sface", DateTime.UtcNow, prototypes, metrics));
-            _artifacts[artifactId] = artifact;
+            StoreArtifact(artifact);
 
             jobs[jobId] = jobs[jobId] with { Status = "completed", Stage = "completed", Progress = 100, ArtifactId = artifactId };
             _archive.Append(new TrainingAttemptRecord("", "", jobId, artifactId, dataset.Attempt,
@@ -666,6 +682,15 @@ public sealed class TrainingExecutor
                 dataset.RecipeFingerprint, dataset.RecipeReason, dataset.SelectedSampleCount, dataset.ExcludedSampleCount,
                 false, dataset.Scenario));
         }
+    }
+
+    private void StoreArtifact(TrainingArtifact artifact)
+    {
+        _artifacts[artifact.ArtifactId] = artifact;
+        var path = Path.Combine(_artifactRoot, artifact.ArtifactId + ".json");
+        var temp = path + ".tmp";
+        File.WriteAllText(temp, JsonSerializer.Serialize(artifact, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+        File.Move(temp, path, true);
     }
 
     private static double CosineSimilarity(float[] a, float[] b)

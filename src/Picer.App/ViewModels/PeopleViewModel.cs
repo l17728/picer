@@ -326,6 +326,14 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             remote = await platform.GetTrainingHistoryAsync(modelVersion).ConfigureAwait(false);
         }
         catch (Exception exception) { AppLogger.Warn($"加载平台训练历史失败：{exception.Message}"); }
+        var remoteOptions = new List<FaceTrainingHistoryOption>();
+        foreach (var value in remote.Where(value => value.Status.Equals("completed", StringComparison.OrdinalIgnoreCase)
+                     && value.SampleCount >= 10 && value.ValidationAccuracy >= .90 && !string.IsNullOrWhiteSpace(value.ArtifactId)))
+        {
+            var artifact = await TryGetRemoteArtifactAsync(value.ArtifactId!).ConfigureAwait(false);
+            remoteOptions.Add(new(value.ArtifactId!, value.ModelVersion, value.ValidationAccuracy!.Value,
+                value.CreatedUtc, value.Status, CanApply: artifact is not null));
+        }
         await Application.Current.Dispatcher.InvokeAsync(() =>
         {
             TrainingHistoryOptions.Clear();
@@ -333,11 +341,11 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
                 TrainingHistoryOptions.Add(new(value.ArtifactId, value.ModelVersion, value.ValidationAccuracy, value.CreatedUtc, value.State));
             // Small synthetic multi-model baseline probes are not user training
             // versions and must not appear as selectable history.
-            foreach (var value in remote.Where(value => value.Status.Equals("completed", StringComparison.OrdinalIgnoreCase)
-                         && value.SampleCount >= 10 && value.ValidationAccuracy >= .90 && !string.IsNullOrWhiteSpace(value.ArtifactId))
+            foreach (var value in remoteOptions
                          .Where(value => !TrainingHistoryOptions.Any(item => string.Equals(item.ArtifactId, value.ArtifactId, StringComparison.OrdinalIgnoreCase))))
-                TrainingHistoryOptions.Add(new(value.ArtifactId!, value.ModelVersion, value.ValidationAccuracy!.Value,
-                    value.CreatedUtc, value.Status, CanApply: false));
+            {
+                TrainingHistoryOptions.Add(value);
+            }
             SelectedTrainingHistory = TrainingHistoryOptions.FirstOrDefault(value => value.State == "active") ?? TrainingHistoryOptions.FirstOrDefault();
         });
     }
@@ -352,15 +360,17 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             StatusText = "历史模型与当前模型空间不一致，已阻止应用";
             return;
         }
-        if (!SelectedTrainingHistory.CanApply)
-        {
-            StatusText = "该平台历史记录仅保留了评估指标，训练制品已不在当前平台，无法直接应用；请按该配方重新提交训练";
-            return;
-        }
         IsAnalyzing = true;
         try
         {
             var artifact = await UiWork.RunDatabaseAsync(() => _repository.GetFaceTrainingArtifact(SelectedTrainingHistory.ArtifactId, modelVersion));
+            if (artifact is null && SelectedTrainingHistory.CanApply)
+                artifact = await TryGetRemoteArtifactAsync(SelectedTrainingHistory.ArtifactId);
+            if (artifact is null && !SelectedTrainingHistory.CanApply)
+            {
+                StatusText = "该平台历史记录仅保留了评估指标，训练制品已不在当前平台，无法直接应用；请按该配方重新提交训练";
+                return;
+            }
             if (artifact is null) { StatusText = "历史训练制品不存在，无法应用"; return; }
             await UiWork.RunDatabaseAsync(() => ApplyTrainedPrototypes(artifact));
             TrainingResultText = $"已应用历史模型：{artifact.ModelVersion} · 准确率 {artifact.Metrics.ValidationAccuracy:P1} · 制品 {artifact.ArtifactId}";
@@ -368,6 +378,18 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             await RefreshPageAsync();
         }
         finally { IsAnalyzing = false; }
+    }
+
+    private async Task<TrainingArtifactData?> TryGetRemoteArtifactAsync(string artifactId)
+    {
+        try
+        {
+            var endpoint = Environment.GetEnvironmentVariable("PICER_MODEL_SERVER_URL")?.Trim() ?? "http://127.0.0.1:8090";
+            var key = Environment.GetEnvironmentVariable("PICER_MODEL_SERVER_API_KEY")?.Trim() ?? "";
+            using var platform = new FaceTrainingSubmissionService(endpoint, key);
+            return await platform.GetArtifactAsync(artifactId).ConfigureAwait(false);
+        }
+        catch { return null; }
     }
 
     public Task PublishEvaluationSnapshotForPlatformAsync() => PublishEvaluationSnapshotAsync();

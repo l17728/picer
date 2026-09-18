@@ -7,8 +7,28 @@ public sealed record ArtifactSigningInfo(string Algorithm, string PublicKey, str
 
 public sealed class ArtifactSigner : IDisposable
 {
-    private readonly ECDsa _key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+    private readonly ECDsa _key;
     private readonly JsonSerializerOptions _json = new(JsonSerializerDefaults.Web);
+
+    public ArtifactSigner()
+    {
+        _key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        var root = Environment.GetEnvironmentVariable("PICER_TRAINING_ARCHIVE_ROOT")
+            ?? Path.Combine(AppContext.BaseDirectory, "training-archive");
+        Directory.CreateDirectory(root);
+        var path = Path.Combine(root, "artifact-signing-key.pem");
+        try
+        {
+            if (File.Exists(path)) _key.ImportFromPem(File.ReadAllText(path));
+            else File.WriteAllText(path, _key.ExportPkcs8PrivateKeyPem());
+        }
+        catch
+        {
+            // A malformed key must not prevent the platform from starting;
+            // retain the newly generated key and persist it for future runs.
+            File.WriteAllText(path, _key.ExportPkcs8PrivateKeyPem());
+        }
+    }
 
     public ArtifactSigningInfo GetInfo()
     {
