@@ -31,13 +31,21 @@ public sealed class FaceValidationService(PicerDatabase database, VisionAnalysis
 
     public SFaceCalibrationResult CalibrateSFace(int minimumPhotosPerPerson = 20, int maximumPairsPerClass = 200_000,
         IProgress<(string Stage, int Completed, int Total)>? progress = null)
+        => CalibrateModel(null, minimumPhotosPerPerson, maximumPairsPerClass, progress);
+
+    /// <summary>Calibrates one model's cosine distance without mixing vectors from another model.</summary>
+    public SFaceCalibrationResult CalibrateModel(string? modelVersion, int minimumPhotosPerPerson = 20,
+        int maximumPairsPerClass = 200_000,
+        IProgress<(string Stage, int Completed, int Total)>? progress = null)
     {
         progress?.Report(("加载已确认人脸", 0, 1));
-        var confirmed = repository.GetEmbeddingsForMatching()
+        var confirmed = repository.GetEmbeddingsForMatching(modelVersion)
             .Where(face => face.AssignmentState == "confirmed" && face.PersonId is not null)
             .ToArray();
-        var selectedVersion = confirmed.GroupBy(face => face.ModelVersion)
-            .OrderByDescending(group => group.Count()).Select(group => group.Key).FirstOrDefault() ?? "none";
+        var selectedVersion = string.IsNullOrWhiteSpace(modelVersion)
+            ? confirmed.GroupBy(face => face.ModelVersion).OrderByDescending(group => group.Count()).Select(group => group.Key).FirstOrDefault()
+            : modelVersion;
+        selectedVersion ??= "none";
         var faces = confirmed.Where(face => face.ModelVersion == selectedVersion).ToArray();
         var groups = faces.GroupBy(face => face.PersonId!.Value).ToArray();
         var same = new List<double>();

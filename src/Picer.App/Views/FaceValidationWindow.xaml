@@ -38,6 +38,21 @@
                     </Border>
                 </StackPanel>
             </TabItem>
+            <TabItem Header="InsightFace ArcFace 阈值">
+                <StackPanel Margin="14">
+                    <TextBlock FontSize="20" FontWeight="SemiBold" Text="使用已确认人物标定 InsightFace ArcFace"/>
+                    <TextBlock Margin="0,8,0,12" TextWrapping="Wrap"
+                               Text="InsightFace 使用独立向量和独立阈值；人工确认的人物标签跨模型共享，不会混用 SFace 向量。"/>
+                    <StackPanel Orientation="Horizontal">
+                        <Button x:Name="CalibrateInsightFaceButton" Content="计算推荐阈值与误识率" Click="CalibrateInsightFace_Click" Padding="14,7"/>
+                        <Button x:Name="ApplyInsightFaceThreshold" Content="应用到人物自动匹配" Click="ApplyInsightFaceThreshold_Click"
+                                Padding="14,7" Margin="8,0,0,0" IsEnabled="False"/>
+                    </StackPanel>
+                    <Border Background="#F3F7FC" BorderBrush="#C8D8EA" BorderThickness="1" Padding="12" Margin="0,14,0,0">
+                        <TextBlock x:Name="InsightFaceResult" Text="尚未计算" TextWrapping="Wrap" FontFamily="Consolas"/>
+                    </Border>
+                </StackPanel>
+            </TabItem>
             <TabItem Header="人物学习报告">
                 <Grid Margin="14">
                     <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>

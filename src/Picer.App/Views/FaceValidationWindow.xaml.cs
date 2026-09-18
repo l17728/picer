@@ -24,6 +24,8 @@ public partial class FaceValidationWindow : Window
     // Kept separately from IsEnabled because EndOperation calls SetBusy(false)
     // and must not re-enable an already-applied/unchanged recommendation.
     private bool _sFaceApplyAllowed;
+    private bool _insightFaceApplyAllowed;
+    private SFaceCalibrationResult? _lastInsightFaceCalibration;
     private (string ModelVersion, double Threshold, double Far, double Frr)? _lastCalculatedCalibration;
     private int _operationRunning;
     private CancellationTokenSource? _trainingCancellation;
@@ -200,6 +202,60 @@ public partial class FaceValidationWindow : Window
             ApplySFaceThreshold.Content = "应用到人物自动匹配";
             EndOperation();
         }
+    }
+
+    private async void CalibrateInsightFace_Click(object sender, RoutedEventArgs e)
+    {
+        _insightFaceApplyAllowed = false;
+        if (!TryBeginOperation("正在后台计算 InsightFace ArcFace 阈值，请勿重复点击…")) return;
+        CalibrateInsightFaceButton.Content = "正在计算…";
+        try
+        {
+            var progress = new Progress<(string Stage, int Completed, int Total)>(value =>
+                Status.Text = value.Total > 1
+                    ? $"InsightFace ArcFace：{value.Stage} {value.Completed}/{value.Total}"
+                    : $"InsightFace ArcFace：{value.Stage}");
+            var result = await UiWork.RunDatabaseAsync("FaceValidation.CalibrateInsightFace",
+                () => _validation.CalibrateModel("insightface-arcface", progress: progress));
+            _lastInsightFaceCalibration = result;
+            var applied = await UiWork.RunDatabaseAsync(() => _validation.GetAppliedSFaceThreshold(result.ModelVersion));
+            var unchanged = applied is double threshold && Math.Abs(threshold - result.RecommendedThreshold) <= 0.000_001;
+            _insightFaceApplyAllowed = !unchanged && result.SamePairs > 0 && result.DifferentPairs > 0;
+            ApplyInsightFaceThreshold.IsEnabled = _insightFaceApplyAllowed;
+            InsightFaceResult.Text = $"模型：{result.ModelVersion}\n" +
+                $"已确认人物：{result.ConfirmedPeople}；达到 20 张：{result.QualifiedPeople}\n" +
+                $"已确认人脸：{result.ConfirmedFaces}；同人样本对：{result.SamePairs}；异人样本对：{result.DifferentPairs}\n" +
+                $"推荐余弦阈值：{result.RecommendedThreshold:F3}\n" +
+                $"误识率：{result.FalseAcceptRate:P2}；漏识率：{result.FalseRejectRate:P2}\n" +
+                (unchanged ? "参数与当前应用值相同，应用按钮已禁用" : "检测到新参数，可应用到 InsightFace 自动匹配");
+            Status.Text = unchanged ? "InsightFace 参数无变化，未执行应用" : "InsightFace ArcFace 标定完成";
+        }
+        catch (Exception exception)
+        {
+            Status.Text = $"InsightFace 标定失败：{exception.Message}";
+            InsightFaceResult.Text = $"计算失败：{exception.Message}";
+            AppLogger.Error("InsightFace calibration failed", exception);
+        }
+        finally { CalibrateInsightFaceButton.Content = "计算推荐阈值与误识率"; EndOperation(); }
+    }
+
+    private async void ApplyInsightFaceThreshold_Click(object sender, RoutedEventArgs e)
+    {
+        if (_lastInsightFaceCalibration is null || !_insightFaceApplyAllowed) return;
+        if (!TryBeginOperation("正在应用 InsightFace ArcFace 阈值…")) return;
+        try
+        {
+            await UiWork.RunDatabaseAsync(() => _validation.ApplySFaceThreshold(_lastInsightFaceCalibration));
+            _insightFaceApplyAllowed = false;
+            ApplyInsightFaceThreshold.IsEnabled = false;
+            Status.Text = $"InsightFace ArcFace 阈值 {_lastInsightFaceCalibration.RecommendedThreshold:F3} 已应用";
+        }
+        catch (Exception exception)
+        {
+            Status.Text = $"应用 InsightFace 阈值失败：{exception.Message}";
+            AppLogger.Error("InsightFace threshold apply failed", exception);
+        }
+        finally { EndOperation(); }
     }
 
     private async void TrainFace_Click(object sender, RoutedEventArgs e)
@@ -406,6 +462,7 @@ public partial class FaceValidationWindow : Window
     {
         YuNetGrid.IsEnabled = !busy;
         CalibrateSFaceButton.IsEnabled = !busy;
+        CalibrateInsightFaceButton.IsEnabled = !busy;
         TrainFaceButton.IsEnabled = !busy;
         RollbackTrainingButton.IsEnabled = !busy;
         LoadYuNetButton.IsEnabled = !busy;
@@ -414,6 +471,7 @@ public partial class FaceValidationWindow : Window
         EvaluateYuNetButton.IsEnabled = !busy;
         ApplySFaceThreshold.IsEnabled = !busy && _sFaceApplyAllowed &&
             _lastCalibration is { SamePairs: > 0, DifferentPairs: > 0, ModelVersion: not "none" };
+        ApplyInsightFaceThreshold.IsEnabled = !busy && _insightFaceApplyAllowed;
         WorkProgress.IsIndeterminate = busy;
     }
 

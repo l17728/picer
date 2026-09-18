@@ -424,20 +424,32 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
         return values;
     }
 
-    public IReadOnlyList<FaceEmbeddingRecord> GetEmbeddingsForMatching()
+    public IReadOnlyList<FaceEmbeddingRecord> GetEmbeddingsForMatching(string? modelVersion = null)
     {
         using var command = database.Command("""
-            SELECT f.id, f.image_id, f.model_version, a.person_id, a.state, f.embedding,
+            WITH shared_confirmed AS (
+                SELECT f2.image_id, f2.ordinal, MIN(a2.person_id) AS person_id
+                FROM detected_faces f2
+                JOIN face_person_assignments a2 ON a2.face_id=f2.id AND a2.state='confirmed'
+                GROUP BY f2.image_id, f2.ordinal
+            )
+            SELECT f.id, f.image_id, f.model_version,
+                   COALESCE(a.person_id, shared.person_id) AS person_id,
+                   CASE WHEN a.state='confirmed' OR shared.person_id IS NOT NULL THEN 'confirmed' ELSE a.state END AS state,
+                   f.embedding,
                    i.sha256, i.ahash, i.width, i.height,
                    f.box_x, f.box_y, f.box_width, f.box_height, f.confidence
             FROM detected_faces f
             JOIN images i ON i.id=f.image_id AND i.status='active'
             LEFT JOIN face_person_assignments a ON a.face_id=f.id
+            LEFT JOIN shared_confirmed shared ON shared.image_id=f.image_id AND shared.ordinal=f.ordinal
             LEFT JOIN face_review_states r ON r.face_id=f.id
             WHERE f.embedding IS NOT NULL AND r.face_id IS NULL
-              AND (a.face_id IS NULL OR a.state IN ('suggested','confirmed'))
+              AND ($model IS NULL OR f.model_version=$model)
+              AND (a.face_id IS NULL OR a.state IN ('suggested','confirmed') OR shared.person_id IS NOT NULL)
             ORDER BY f.id
             """);
+        command.Parameters.AddWithValue("$model", (object?)modelVersion ?? DBNull.Value);
         var values = new List<FaceEmbeddingRecord>();
         var deduplicator = new FaceSourceDeduplicator();
         using var reader = command.ExecuteReader();
