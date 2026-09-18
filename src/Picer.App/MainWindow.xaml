@@ -386,6 +386,7 @@
                                     <TextBlock Text="{Binding FaceModelSpaceText}" Margin="8,0,0,0" VerticalAlignment="Center" Foreground="#315B86" FontSize="11"/>
                                     <TextBlock Text=" · 已命名人脸为跨模型共享的人工确认结果" Margin="8,0,0,0" VerticalAlignment="Center" Foreground="#52606D" FontSize="11"/>
                                 </StackPanel>
+                                <TextBlock Text="{Binding FacePartitionSummary}" TextWrapping="Wrap" Foreground="#315B86" FontSize="11" Margin="0,3,0,0"/>
                             </StackPanel>
                         </DockPanel>
                     </Border>
