@@ -41,6 +41,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
     private bool _suppressPersonSelectionLoad;
     private bool _suppressCollectionSelectionCallbacks;
     private int _baselinePublishStarted;
+    private readonly SemaphoreSlim _modelSwitchGate = new(1, 1);
 
     public PeopleViewModel(PicerDatabase database, PeopleService peopleService,
         VisionAnalysisRepository repository, VisionAnalysisService? analysisService,
@@ -99,8 +100,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
     partial void OnSelectedFaceModelVersionChanged(string? value)
     {
         if (!_isLoaded || string.IsNullOrWhiteSpace(value)) return;
-        StatusText = $"正在切换到独立人脸模型空间：{value}…";
-        _ = RefreshAsync();
+        _ = SwitchFaceModelAsync(value);
     }
 
     partial void OnSelectedFaceModelOptionChanged(FaceModelOption? value)
@@ -141,6 +141,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         await RefreshAsync();
         _isLoaded = true;
         IsLoading = false;
+        _ = LoadPlatformModelOptionsAsync();
         _ = PublishEvaluationSnapshotAsync();
 
         var summary = await UiWork.RunDatabaseAsync(_repository.GetSummary);
@@ -169,6 +170,79 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         if (normalized == "arcface-paddle") return "ArcFace Paddle";
         if (normalized == "facex-zoo") return "FaceX-Zoo";
         return version.Replace('_', ' ').Replace('-', ' ');
+    }
+
+    private async Task LoadPlatformModelOptionsAsync()
+    {
+        try
+        {
+            var endpoint = Environment.GetEnvironmentVariable("PICER_MODEL_SERVER_URL")?.Trim() ?? "http://127.0.0.1:8090";
+            var key = Environment.GetEnvironmentVariable("PICER_MODEL_SERVER_API_KEY")?.Trim() ?? "";
+            using var platform = new FaceTrainingSubmissionService(endpoint, key);
+            var models = await platform.GetAvailableAlgorithmsAsync().ConfigureAwait(false);
+            await Application.Current.Dispatcher.InvokeAsync(() =>
+            {
+                foreach (var model in models.Where(value => value.Available && !FaceModelOptions.Any(option =>
+                             string.Equals(option.ModelVersion, value.ModelVersion, StringComparison.OrdinalIgnoreCase))))
+                {
+                    FaceModelOptions.Add(new FaceModelOption(model.ModelVersion, GetFaceModelDisplayName(model.ModelVersion)));
+                }
+            });
+        }
+        catch (Exception exception)
+        {
+            AppLogger.Warn($"读取平台人脸模型列表失败：{exception.Message}");
+        }
+    }
+
+    private async Task SwitchFaceModelAsync(string modelVersion)
+    {
+        if (!await _modelSwitchGate.WaitAsync(0).ConfigureAwait(false)) return;
+        try
+        {
+            StatusText = $"正在检查 {GetFaceModelDisplayName(modelVersion)} 的人脸向量覆盖率…";
+            var (sourceModel, sourceCount, targetCount) = await UiWork.RunDatabaseAsync(() =>
+            {
+                var versions = _repository.GetFaceModelVersions();
+                var source = versions.Where(value => !string.Equals(value, modelVersion, StringComparison.OrdinalIgnoreCase))
+                    .Select(value => (Version: value, Count: _repository.GetFaceSources(value).Count))
+                    .OrderByDescending(value => value.Count).FirstOrDefault();
+                return (source.Version, source.Count, versions.Contains(modelVersion, StringComparer.OrdinalIgnoreCase)
+                    ? _repository.GetFaceEmbeddingCount(modelVersion) : 0);
+            });
+
+            if (string.IsNullOrWhiteSpace(sourceModel) || sourceCount == 0)
+            {
+                StatusText = $"无法切换到 {GetFaceModelDisplayName(modelVersion)}：当前没有可用于裁剪的人脸框";
+                return;
+            }
+
+            if (targetCount < sourceCount)
+            {
+                StatusText = $"正在后台生成 {GetFaceModelDisplayName(modelVersion)} 向量：已有 {targetCount}/{sourceCount}…";
+                var endpoint = Environment.GetEnvironmentVariable("PICER_MODEL_SERVER_URL")?.Trim() ?? "http://127.0.0.1:8090";
+                var key = Environment.GetEnvironmentVariable("PICER_MODEL_SERVER_API_KEY")?.Trim() ?? "";
+                using var platform = new FaceTrainingSubmissionService(endpoint, key);
+                var service = new RemoteFaceVectorBackfillService(_repository, platform);
+                var result = await service.RunAsync(sourceModel, modelVersion,
+                    new Progress<FaceVectorBackfillProgress>(value => StatusText =
+                        $"正在生成 {GetFaceModelDisplayName(modelVersion)} 向量：{value.Completed}/{value.Total}，成功 {value.Analyzed}，失败 {value.Failed}"));
+                if (!result.Completed)
+                {
+                    StatusText = $"{GetFaceModelDisplayName(modelVersion)} 向量生成未完成：失败 {result.Failed} 条，请修复服务后重试";
+                    return;
+                }
+                StatusText = $"{GetFaceModelDisplayName(modelVersion)} 向量已生成 {result.Analyzed} 条，正在加载独立分类…";
+            }
+            await RefreshAsync();
+            StatusText = $"已切换到 {GetFaceModelDisplayName(modelVersion)}；自动归类结果独立显示，已命名/不分类仍共享";
+        }
+        catch (Exception exception)
+        {
+            StatusText = $"切换 {GetFaceModelDisplayName(modelVersion)} 失败：{exception.Message}";
+            AppLogger.Error($"切换人脸模型空间失败：model={modelVersion}", exception);
+        }
+        finally { _modelSwitchGate.Release(); }
     }
 
     public Task PublishEvaluationSnapshotForPlatformAsync() => PublishEvaluationSnapshotAsync();
