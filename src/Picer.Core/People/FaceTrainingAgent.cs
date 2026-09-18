@@ -41,15 +41,12 @@ public sealed class FaceTrainingAgent(FaceTrainingSubmissionService submission)
             if ((hints ?? string.Empty).Contains(recipe.Fingerprint, StringComparison.OrdinalIgnoreCase))
             {
                 progress?.Report($"训练 Agent：历史已存在配方 {recipe.Fingerprint}，跳过重复提交");
-                return new(passedArtifacts.Count > 0, Math.Max(0, attempt - 1), best ?? last,
-                    "训练历史中已存在相同配方，已跳过重复训练", passedArtifacts, BuildExperienceSummary(passedArtifacts));
+                continue;
             }
             if (!fingerprints.Add(recipe.Fingerprint))
             {
                 progress?.Report($"训练 Agent：第 {attempt}/{maxAttempts} 次，数据配方未变化，跳过重复提交（{recipe.Fingerprint}）");
-                return new(passedArtifacts.Count > 0, Math.Max(0, attempt - 1), best ?? last,
-                    "下一轮数据配方与上一轮相同，已跳过重复训练；请补充不同姿态、光照或排他负样本",
-                    passedArtifacts, BuildExperienceSummary(passedArtifacts));
+                continue;
             }
             var recipeHints = $"数据配方={recipe.Fingerprint}；选中={recipe.Samples.Count}；排除={recipe.ExcludedCount}；原因={recipe.Reason}";
             var roundHints = string.IsNullOrWhiteSpace(hints) ? recipeHints : $"{hints}\n{recipeHints}";
@@ -92,8 +89,8 @@ public sealed class FaceTrainingAgent(FaceTrainingSubmissionService submission)
             if (string.Equals(artifact.Diagnostics?.RecommendedAction, "upgrade-model", StringComparison.OrdinalIgnoreCase))
             {
                 progress?.Report($"训练 Agent：第 {attempt} 次诊断为基模能力不足，停止重复调阈值：{artifact.Diagnostics?.Explanation}");
-                return new(passedArtifacts.Count > 0, attempt, best ?? artifact,
-                    "阈值扫描仍无法达到 90%，应切换或并行评测更强人脸基模", passedArtifacts, BuildExperienceSummary(passedArtifacts));
+                hints = $"{roundHints}\n基模诊断：{artifact.Diagnostics?.Explanation}；仍按下一轮配方继续验证，避免单轮误判。";
+                continue;
             }
             if (artifact.Metrics.ValidationAccuracy >= gate)
             {
