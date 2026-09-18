@@ -212,10 +212,11 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
                 var versions = _repository.GetFaceModelVersions();
                 var source = versions.Where(value => !string.Equals(value, modelVersion, StringComparison.OrdinalIgnoreCase))
                     .Select(value => (Version: value, Count: _repository.GetFaceSources(value).Count))
-                    // InsightFace 复用自适应检测框：先选自适应 YuNet 320/640 的完整检测结果，
-                    // 避免切换模型时退回单一分辨率的人脸框。
-                    .OrderByDescending(value => value.Version.StartsWith("adaptive:", StringComparison.OrdinalIgnoreCase))
-                    .ThenByDescending(value => value.Count).FirstOrDefault();
+                    // 必须先选择覆盖率最高的人脸框来源；自适应版本只有在覆盖率
+                    // 相当时才优先，否则会把完整的 8000+ 张脸误缩成少量自适应记录。
+                    .OrderByDescending(value => value.Count)
+                    .ThenByDescending(value => value.Version.StartsWith("adaptive:", StringComparison.OrdinalIgnoreCase))
+                    .FirstOrDefault();
                 return (source.Version, source.Count, versions.Contains(modelVersion, StringComparer.OrdinalIgnoreCase)
                     ? _repository.GetFaceEmbeddingCount(modelVersion) : 0);
             });
@@ -243,6 +244,8 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
                 }
                 StatusText = $"{GetFaceModelDisplayName(modelVersion)} 向量已生成 {result.Analyzed} 条，正在加载独立分类…";
             }
+            // 每个模型空间必须独立生成建议和待命名组，不能沿用其他模型空间的结果。
+            await OrganizeFacesAsync();
             await RefreshAsync();
             StatusText = $"已切换到 {GetFaceModelDisplayName(modelVersion)}；自动归类结果独立显示，已命名/不分类仍共享";
         }
@@ -464,9 +467,12 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
                 return;
             }
             var service = new RemoteFaceVectorBackfillService(_repository, platform);
-            var sourceModel = _repository.GetFaceModelVersions().FirstOrDefault(model => model.StartsWith("adaptive:", StringComparison.OrdinalIgnoreCase))
-                ?? _repository.GetFaceModelVersions().FirstOrDefault(model => model.Contains("sface", StringComparison.OrdinalIgnoreCase))
-                ?? _repository.GetFaceModelVersions().FirstOrDefault();
+            var sourceModel = _repository.GetFaceModelVersions()
+                .Select(model => (Version: model, Count: _repository.GetFaceSources(model).Count))
+                .OrderByDescending(value => value.Count)
+                .ThenByDescending(value => value.Version.StartsWith("adaptive:", StringComparison.OrdinalIgnoreCase))
+                .Select(value => value.Version)
+                .FirstOrDefault();
             if (string.IsNullOrWhiteSpace(sourceModel))
             {
                 StatusText = "索引中没有可用于裁剪的人脸向量";
@@ -555,8 +561,10 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
                 return;
             }
             var sourceModel = await UiWork.RunDatabaseAsync(() => _repository.GetFaceModelVersions()
-                .OrderByDescending(model => model.StartsWith("adaptive:", StringComparison.OrdinalIgnoreCase))
-                .ThenByDescending(model => model.Contains("sface", StringComparison.OrdinalIgnoreCase))
+                .Select(model => (Version: model, Count: _repository.GetFaceSources(model).Count))
+                .OrderByDescending(value => value.Count)
+                .ThenByDescending(value => value.Version.StartsWith("adaptive:", StringComparison.OrdinalIgnoreCase))
+                .Select(value => value.Version)
                 .FirstOrDefault());
             if (string.IsNullOrWhiteSpace(sourceModel))
             {
@@ -909,7 +917,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
     private async Task SuggestMatchesAsync()
     {
         StatusText = "正在匹配已命名人物…";
-        var result = await UiWork.RunDatabaseAsync(() => _suggestionEngine.Suggest());
+        var result = await UiWork.RunDatabaseAsync(() => _suggestionEngine.Suggest(modelVersion: SelectedFaceModelVersion));
         await RefreshAsync();
         StatusText = $"候选匹配完成：检查 {result.Considered} 张，新增建议 {result.Suggested}；" +
                      $"暂缓：基础阈值 {result.BelowThreshold}、低质量 {result.LowQualityDeferred}、人物歧义 {result.AmbiguousDeferred}、负样本冲突 {result.NegativeConflictDeferred}；" +
@@ -943,7 +951,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
                 OrganizeProgressText = StatusText;
             });
             var suggestions = await UiWork.RunDatabaseAsync("People.AutoOrganize.Suggest",
-                () => _suggestionEngine.Suggest(progress: suggestionProgress), cancellationToken);
+                () => _suggestionEngine.Suggest(progress: suggestionProgress, modelVersion: SelectedFaceModelVersion), cancellationToken);
 
             ProgressValue = 35;
             StatusText = $"正在使用最新标准更新自动归类（2/3：重建待命名人物组，35%；已检查 {suggestions.Considered} 张脸）";
@@ -957,7 +965,8 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
                 StatusText = OrganizeProgressText;
             });
             var clusters = await UiWork.RunDatabaseAsync("People.AutoOrganize.Cluster",
-                () => _unknownFaceClusterer.Rebuild(suggestions.AppliedThreshold, progress: clusterProgress), cancellationToken);
+                () => _unknownFaceClusterer.Rebuild(suggestions.AppliedThreshold, progress: clusterProgress,
+                    modelVersion: SelectedFaceModelVersion), cancellationToken);
 
             ProgressValue = 80;
             StatusText = $"正在使用最新标准更新自动归类（3/3：同步界面，80%；共 {clusters.ClusterCount} 个候选组）";

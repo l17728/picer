@@ -6,14 +6,14 @@ public sealed record CandidateClusteringResult(int Considered, int ClusterCount,
 public sealed class UnknownFaceClusterer(VisionAnalysisRepository repository)
 {
     public CandidateClusteringResult Rebuild(double cosineThreshold = 0.62, int maximumFaces = int.MaxValue,
-        IProgress<(string Stage, int Completed, int Total)>? progress = null)
+        IProgress<(string Stage, int Completed, int Total)>? progress = null, string? modelVersion = null)
     {
         if (cosineThreshold is < 0 or > 1) throw new ArgumentOutOfRangeException(nameof(cosineThreshold));
         if (maximumFaces <= 0) throw new ArgumentOutOfRangeException(nameof(maximumFaces));
-        var all = repository.GetEmbeddingsForMatching()
+        var all = repository.GetEmbeddingsForMatching(modelVersion)
             .Where(face => face.AssignmentState is null)
             .ToArray();
-        var selectedVersion = all.GroupBy(face => face.ModelVersion)
+        var selectedVersion = modelVersion ?? all.GroupBy(face => face.ModelVersion)
             .OrderByDescending(group => group.Count()).Select(group => group.Key).FirstOrDefault();
         if (selectedVersion is null)
         {

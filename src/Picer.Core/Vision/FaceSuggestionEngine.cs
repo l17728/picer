@@ -10,11 +10,11 @@ public sealed record FaceSuggestionResult(int Considered, int Suggested, int Bel
 public sealed class FaceSuggestionEngine(VisionAnalysisRepository repository, PeopleService people)
 {
     public FaceSuggestionResult Suggest(double? cosineThreshold = null,
-        IProgress<(int Completed, int Total)>? progress = null)
+        IProgress<(int Completed, int Total)>? progress = null, string? modelVersion = null)
     {
         if (cosineThreshold is < 0 or > 1) throw new ArgumentOutOfRangeException(nameof(cosineThreshold));
-        var embeddings = repository.GetEmbeddingsForMatching();
-        var selectedVersion = embeddings.Where(face => face.AssignmentState == "confirmed")
+        var embeddings = repository.GetEmbeddingsForMatching(modelVersion);
+        var selectedVersion = modelVersion ?? embeddings.Where(face => face.AssignmentState == "confirmed")
             .GroupBy(face => face.ModelVersion).OrderByDescending(group => group.Count())
             .Select(group => group.Key).FirstOrDefault();
         var appliedThreshold = cosineThreshold ?? (selectedVersion is null ? null : repository.GetFaceMatchThreshold(selectedVersion)) ?? 0.55;
@@ -22,8 +22,10 @@ public sealed class FaceSuggestionEngine(VisionAnalysisRepository repository, Pe
         var confirmed = embeddings
             .Where(face => face.AssignmentState == "confirmed" && face.PersonId is not null)
             .Select(face => (PersonId: face.PersonId!.Value, Embedding: ApplyAdapter(face.Embedding, adapter)))
-            .Concat(people.GetConfirmedVideoFaceEmbeddings().Select(face =>
-                (PersonId: face.PersonId, Embedding: ApplyAdapter(face.Embedding, adapter))));
+            .Concat(modelVersion is null
+                ? people.GetConfirmedVideoFaceEmbeddings().Select(face =>
+                    (PersonId: face.PersonId, Embedding: ApplyAdapter(face.Embedding, adapter)))
+                : []);
         var prototypes = confirmed
             .GroupBy(face => face.PersonId)
             .ToDictionary(group => group.Key, group => BuildPrototypes(group.Select(face => face.Embedding)));
