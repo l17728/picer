@@ -94,7 +94,9 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
     [NotifyCanExecuteChangedFor(nameof(OrganizeFacesCommand))]
     private bool _isOrganizing;
     [ObservableProperty] private bool _isLoading;
-    [ObservableProperty] private string? _selectedFaceModelVersion;
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(FaceModelSpaceText))]
+    private string? _selectedFaceModelVersion;
     [ObservableProperty] private FaceModelOption? _selectedFaceModelOption;
 
     partial void OnSelectedFaceModelVersionChanged(string? value)
@@ -107,11 +109,14 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
     {
         if (value is not null && !string.Equals(SelectedFaceModelVersion, value.ModelVersion, StringComparison.Ordinal))
             SelectedFaceModelVersion = value.ModelVersion;
+        // The option may be restored with the same version value; notify the
+        // computed status text explicitly so it cannot remain at “未选择”.
+        OnPropertyChanged(nameof(FaceModelSpaceText));
     }
 
     public string FaceModelSpaceText => string.IsNullOrWhiteSpace(SelectedFaceModelVersion)
         ? "模型空间：未选择"
-        : $"模型空间：{SelectedFaceModelVersion}（自动归类独立；已命名/不分类共享）";
+        : $"模型空间：{GetFaceModelDisplayName(SelectedFaceModelVersion)}（自动归类独立；已命名/不分类共享）";
 
     public string OrganizeButtonText => IsOrganizing ? "自动归类进行中…" : "更新自动归类";
 
