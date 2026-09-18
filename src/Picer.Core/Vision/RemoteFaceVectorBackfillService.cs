@@ -6,7 +6,10 @@ using SixLabors.ImageSharp.Processing;
 
 namespace Picer.Core.Vision;
 
-public sealed class RemoteFaceVectorBackfillService(VisionAnalysisRepository repository, FaceTrainingSubmissionService platform)
+public sealed class RemoteFaceVectorBackfillService(
+    VisionAnalysisRepository repository,
+    FaceTrainingSubmissionService platform,
+    Func<string, string, IReadOnlyList<(FaceVectorBackfillSource Source, float[] Embedding)>, Task<int>>? persist = null)
 {
     public async Task<FaceVectorBackfillResult> RunAsync(string sourceModelVersion, string targetModelVersion,
         IProgress<FaceVectorBackfillProgress>? progress = null, CancellationToken cancellationToken = default)
@@ -21,7 +24,9 @@ public sealed class RemoteFaceVectorBackfillService(VisionAnalysisRepository rep
             var vectors = valid.Length == 0 ? [] : await platform.GenerateEmbeddingsAsync(targetModelVersion,
                 valid.Select(pair => pair.Second!).ToArray(), cancellationToken).ConfigureAwait(false);
             var values = valid.Take(vectors.Count).Zip(vectors).Select(pair => (pair.First.First, pair.Second)).ToArray();
-            saved += repository.SaveBackfilledEmbeddings(sourceModelVersion, targetModelVersion, values);
+            saved += persist is null
+                ? repository.SaveBackfilledEmbeddings(sourceModelVersion, targetModelVersion, values)
+                : await persist(sourceModelVersion, targetModelVersion, values).ConfigureAwait(false);
             completed += batch.Length;
             failed += batch.Length - valid.Length + Math.Max(0, valid.Length - vectors.Count);
             progress?.Report(new FaceVectorBackfillProgress(targetModelVersion, completed, sources.Count, saved, 0, failed, 1));

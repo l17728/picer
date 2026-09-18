@@ -291,7 +291,10 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
                 var endpoint = Environment.GetEnvironmentVariable("PICER_MODEL_SERVER_URL")?.Trim() ?? "http://127.0.0.1:8090";
                 var key = Environment.GetEnvironmentVariable("PICER_MODEL_SERVER_API_KEY")?.Trim() ?? "";
                 using var platform = new FaceTrainingSubmissionService(endpoint, key);
-                var service = new RemoteFaceVectorBackfillService(_repository, platform);
+                var service = new RemoteFaceVectorBackfillService(_repository, platform,
+                    (source, target, values) => UiWork.RunDatabaseAsync(
+                        $"FaceVectorBackfill.Save.{target}",
+                        () => _repository.SaveBackfilledEmbeddings(source, target, values)));
                 var result = await service.RunAsync(sourceModel, modelVersion,
                     new Progress<FaceVectorBackfillProgress>(value => StatusText =
                         $"正在生成 {GetFaceModelDisplayName(modelVersion)} 向量：{value.Completed}/{value.Total}，成功 {value.Analyzed}，失败 {value.Failed}"));
@@ -614,7 +617,10 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
                 StatusText = "InsightFace 尚未就绪，未启动补齐";
                 return;
             }
-            var service = new RemoteFaceVectorBackfillService(_repository, platform);
+            var service = new RemoteFaceVectorBackfillService(_repository, platform,
+                (source, target, values) => UiWork.RunDatabaseAsync(
+                    $"FaceVectorBackfill.Save.{target}",
+                    () => _repository.SaveBackfilledEmbeddings(source, target, values)));
             var sourceModel = _repository.GetFaceModelVersions()
                 .Select(model => (Version: model, Count: _repository.GetFaceSources(model).Count))
                 .OrderByDescending(value => value.Count)
@@ -777,7 +783,10 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
                 if (coverage.Target < coverage.Source)
                 {
                     StatusText = $"正在为基线补齐 {target} 向量…";
-                    var backfill = new RemoteFaceVectorBackfillService(_repository, platform);
+                    var backfill = new RemoteFaceVectorBackfillService(_repository, platform,
+                        (source, targetModel, values) => UiWork.RunDatabaseAsync(
+                            $"FaceVectorBackfill.Save.{targetModel}",
+                            () => _repository.SaveBackfilledEmbeddings(source, targetModel, values)));
                     var result = await backfill.RunAsync(sourceModel, target,
                         new Progress<FaceVectorBackfillProgress>(value => StatusText =
                             $"正在为基线补齐 {target} 向量：{value.Completed}/{value.Total}，成功 {value.Analyzed}，失败 {value.Failed}"));
