@@ -132,13 +132,16 @@ public sealed class FaceTrainingAgent(FaceTrainingSubmissionService submission)
         Func<string, int, TrainingArtifactData, CancellationToken, Task<string?>>? advisor = null,
         IProgress<string>? progress = null, CancellationToken cancellationToken = default,
         IReadOnlyDictionary<long, TrainingVisualAttribute>? visualAttributes = null,
-        IReadOnlyList<TrainingActionEvidence>? actions = null)
+        IReadOnlyList<TrainingActionEvidence>? actions = null,
+        IReadOnlyDictionary<string, IReadOnlyList<TrainingNegativeSample>>? modelNegativeSamples = null)
     {
         var tasks = modelSamples.Where(pair => pair.Value.Count > 0).Select(async pair =>
         {
             var result = await RunAsync(snapshot, pair.Value,
                 advisor is null ? null : (attempt, artifact, token) => advisor(pair.Key, attempt, artifact, token),
-                progress, cancellationToken, visualAttributes, actions, modelVersion: pair.Key).ConfigureAwait(false);
+                progress, cancellationToken, visualAttributes, actions, modelVersion: pair.Key,
+                negativeSamples: modelNegativeSamples is not null && modelNegativeSamples.TryGetValue(pair.Key, out var negatives)
+                    ? negatives : null).ConfigureAwait(false);
             return new FaceTrainingModelResult(pair.Key, result);
         });
         return await Task.WhenAll(tasks).ConfigureAwait(false);
