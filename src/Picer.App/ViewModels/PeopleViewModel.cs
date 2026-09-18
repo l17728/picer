@@ -229,7 +229,8 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             await Application.Current.Dispatcher.InvokeAsync(() =>
             {
                 foreach (var model in models.Where(value => value.Available && !FaceModelOptions.Any(option =>
-                             string.Equals(option.ModelVersion, value.ModelVersion, StringComparison.OrdinalIgnoreCase))))
+                             string.Equals(option.ModelVersion, value.ModelVersion, StringComparison.OrdinalIgnoreCase)
+                             || string.Equals(GetFaceModelDisplayName(option.ModelVersion), GetFaceModelDisplayName(value.ModelVersion), StringComparison.OrdinalIgnoreCase))))
                 {
                     FaceModelOptions.Add(new FaceModelOption(model.ModelVersion, GetFaceModelDisplayName(model.ModelVersion)));
                 }
