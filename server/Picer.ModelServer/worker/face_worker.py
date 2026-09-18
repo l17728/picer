@@ -92,6 +92,7 @@ def main():
         enriched = enrich_insightface_embeddings(samples, model_version)
         return {"modelVersion": model_version, "embeddings": [s["embedding"] for s in enriched]}
     samples = request.get("samples", [])
+    negative_samples = request.get("negativeSamples", []) or []
     if len(samples) < 2:
         raise ValueError("at least two samples required")
     model_version = request.get("modelVersion", "sface")
@@ -127,12 +128,25 @@ def main():
             is_negative = label_of(s) == "negative"
             expected = int(field(s, "personId", "PersonId"))
             if is_negative:
-                if accepted and best["personId"] == expected: false_positive += 1
+                if accepted: false_positive += 1
                 else: correct += 1
             elif expected == best["personId"] and accepted: correct += 1
             elif accepted: false_negative += 1
+        # Explicit exclusive/unknown negatives are never allowed to become a
+        # prototype.  Evaluate them against every prototype and use their own
+        # denominator; this makes FAR meaningful instead of diluting it by the
+        # number of positive validation images.
+        negative_false_accepts = 0
+        for s in negative_samples:
+            v = torch.tensor(field(s, "embedding", "Embedding"), dtype=torch.float32, device=device)
+            best = max(prototypes, key=lambda p: cosine(v, torch.tensor(p["centroid"], device=device)))
+            if cosine(v, torch.tensor(best["centroid"], device=device)) >= best["threshold"] * scale:
+                negative_false_accepts += 1
+        negative_total = len(negative_samples)
         total = len(evals) or 1
-        return correct / total, false_positive / total, false_negative / total
+        far_denominator = negative_total + sum(1 for s in evals if label_of(s) == "negative")
+        far = (false_positive + negative_false_accepts) / (far_denominator or 1)
+        return correct / total, far, false_negative / total
 
     accuracy, far, frr = evaluate(1.0)
     sweep = [(evaluate(scale), scale) for scale in [0.50, 0.60, 0.70, 0.80, 0.90, 1.00, 1.10, 1.20]]
@@ -143,7 +157,7 @@ def main():
                    "thresholdSweepBestScale": best_scale, "thresholdSweepBestFar": best_metrics[1],
                    "thresholdSweepBestFrr": best_metrics[2], "currentAccuracy": accuracy,
                    "explanation": "阈值可达 90%，优先校准阈值" if action == "calibrate-threshold" else "阈值扫描仍低于 90%，停止重复调阈值并评测更强基模"}
-    return {"artifactId": "artifact-" + uuid.uuid4().hex[:12], "algorithm": "prototype-calibration-gpu", "modelVersion": model_version, "createdUtc": datetime.datetime.now(datetime.timezone.utc).isoformat(), "prototypes": prototypes, "diagnostics": diagnostics, "metrics": {"totalSamples": len(samples), "totalPersons": len(prototypes), "trainAccuracy": accuracy, "validationAccuracy": accuracy, "falseAcceptRate": far, "falseRejectRate": frr, "meanSimilaritySame": 0.0, "meanSimilarityDiff": 0.0}}
+    return {"artifactId": "artifact-" + uuid.uuid4().hex[:12], "algorithm": "prototype-calibration-gpu", "modelVersion": model_version, "createdUtc": datetime.datetime.now(datetime.timezone.utc).isoformat(), "prototypes": prototypes, "diagnostics": diagnostics, "metrics": {"totalSamples": len(samples) + len(negative_samples), "totalPersons": len(prototypes), "trainAccuracy": accuracy, "validationAccuracy": accuracy, "falseAcceptRate": far, "falseRejectRate": frr, "meanSimilaritySame": 0.0, "meanSimilarityDiff": 0.0}}
 
 if __name__ == "__main__":
     try: print(json.dumps(main(), ensure_ascii=False))

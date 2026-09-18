@@ -447,7 +447,7 @@ app.Run();
 
 public record DatasetRequest(string SnapshotId, string? SourceApp = null, string? ModelVersion = null,
     FaceSample[]? Samples = null, string ProtocolVersion = "face-evidence.v1",
-    UserActionEvidence[]? Actions = null, MediaGroupEvidence[]? Groups = null,
+    UserActionEvidence[]? Actions = null, MediaGroupEvidence[]? Groups = null, FaceNegativeSample[]? NegativeSamples = null,
     int Attempt = 1, string? TrainingHints = null, string? RecipeFingerprint = null,
     string? RecipeReason = null, int SelectedSampleCount = 0, int ExcludedSampleCount = 0,
     string? IdempotencyKey = null, string? Scenario = null, string? EvaluationId = null);
@@ -455,6 +455,8 @@ public record EmbeddingRequest(string ModelVersion, string[] Images);
 public record FaceSample(long FaceId, long PersonId, float[]? Embedding = null, string Split = "train",
     SampleEvidence? Evidence = null, VlAttributes? Attributes = null, string Label = "positive",
     string? FaceImageBase64 = null);
+public record FaceNegativeSample(long FaceId, long TargetPersonId, float[] Embedding,
+    string Split = "validation", string Kind = "exclusive");
 public record SampleEvidence(string Source, string? ImageHash = null, string? FileName = null,
     string? GroupId = null, string? ModelVersion = null, string? SelectionReason = null,
     string? ExclusionReason = null);
@@ -481,6 +483,13 @@ public record TrainingMetrics(int TotalSamples, int TotalPersons, double TrainAc
 public record TrainingDiagnostics(string RecommendedAction, double ThresholdSweepBestAccuracy,
     double ThresholdSweepBestScale, double ThresholdSweepBestFar, double ThresholdSweepBestFrr,
     double CurrentAccuracy, string Explanation);
+public static class CalibrationGate
+{
+    public static bool Passes(TrainingMetrics metrics) =>
+        metrics.ValidationAccuracy >= 0.90 &&
+        metrics.FalseAcceptRate <= 0.01 &&
+        metrics.FalseRejectRate <= 0.10;
+}
 
 public sealed class TrainingExecutor
 {
@@ -545,7 +554,7 @@ public sealed class TrainingExecutor
                 var gpuArtifact = JsonSerializer.Deserialize<TrainingArtifact>(output, new JsonSerializerOptions(JsonSerializerDefaults.Web))
                     ?? throw new InvalidOperationException("GPU worker returned invalid artifact");
                 gpuArtifact = _signer.Sign(gpuArtifact);
-                StoreArtifact(gpuArtifact, gpuArtifact.Metrics.ValidationAccuracy >= 0.90);
+                StoreArtifact(gpuArtifact, CalibrationGate.Passes(gpuArtifact.Metrics));
                 jobs[jobId] = jobs[jobId] with { Status = "completed", Stage = "gpu-worker-completed", Progress = 100, ArtifactId = gpuArtifact.ArtifactId };
                 _archive.Append(new TrainingAttemptRecord("", "", jobId, gpuArtifact.ArtifactId, dataset.Attempt,
                     dataset.ModelVersion ?? "sface", dataset.Samples?.Length ?? 0,
@@ -557,7 +566,7 @@ public sealed class TrainingExecutor
                     false, dataset.Scenario));
                 _rankings.Append(new ModelCandidateRound(dataset.ModelVersion ?? "sface", "prototype-calibration", dataset.Attempt,
                     gpuArtifact.Metrics.ValidationAccuracy, gpuArtifact.Metrics.FalseAcceptRate, gpuArtifact.Metrics.FalseRejectRate,
-                    gpuArtifact.Metrics.ValidationAccuracy >= .90 && gpuArtifact.Metrics.FalseAcceptRate <= .01,
+                    CalibrationGate.Passes(gpuArtifact.Metrics),
                     gpuArtifact.ArtifactId, DateTime.UtcNow, dataset.Scenario,
                     dataset.EvaluationId ?? $"{dataset.SnapshotId}:attempt:{dataset.Attempt}"));
                 return;
@@ -633,13 +642,26 @@ public sealed class TrainingExecutor
                 }
             }
 
+            // Explicit exclusive/unknown faces are evaluated as negatives;
+            // they never contribute to a person prototype.
+            var negativeSamples = dataset.NegativeSamples ?? [];
+            foreach (var sample in negativeSamples)
+            {
+                var bestProto = prototypes
+                    .Select(p => (Proto: p, Sim: CosineSimilarity(sample.Embedding, p.Centroid)))
+                    .OrderByDescending(x => x.Sim)
+                    .FirstOrDefault();
+                if (bestProto.Proto is not null && bestProto.Sim >= bestProto.Proto.Threshold)
+                    falsePositive++;
+            }
+
             var trainAccuracy = trainSamples.Count > 0 ? (double)trainSamples.Count(s =>
             {
                 var best = prototypes.Select(p => (P: p, S: CosineSimilarity(s.Embedding!, p.Centroid))).OrderByDescending(x => x.S).First();
                 return best.P.PersonId == s.PersonId && best.S >= best.P.Threshold;
             }) / trainSamples.Count : 0;
 
-            var far = total > 0 ? (double)falsePositive / total : 0;
+            var far = total + negativeSamples.Length > 0 ? (double)falsePositive / (total + negativeSamples.Length) : 0;
             var frr = total > 0 ? (double)falseNegative / total : 0;
             var valAccuracy = total > 0 ? (double)correct / total : 0;
 
@@ -647,7 +669,7 @@ public sealed class TrainingExecutor
             await Task.Delay(200);
 
             var metrics = new TrainingMetrics(
-                samples.Length, prototypes.Count,
+                samples.Length + negativeSamples.Length, prototypes.Count,
                 Math.Round(trainAccuracy, 4), Math.Round(valAccuracy, 4),
                 Math.Round(far, 4), Math.Round(frr, 4),
                 Math.Round(countSame > 0 ? sumSame / countSame : 0, 4),
@@ -655,7 +677,7 @@ public sealed class TrainingExecutor
 
             var artifactId = "artifact-" + Guid.NewGuid().ToString("N")[..12];
             var artifact = _signer.Sign(new TrainingArtifact(artifactId, "prototype-calibration", dataset.ModelVersion ?? "sface", DateTime.UtcNow, prototypes, metrics));
-            StoreArtifact(artifact, artifact.Metrics.ValidationAccuracy >= 0.90);
+            StoreArtifact(artifact, CalibrationGate.Passes(artifact.Metrics));
 
             jobs[jobId] = jobs[jobId] with { Status = "completed", Stage = "completed", Progress = 100, ArtifactId = artifactId };
             _archive.Append(new TrainingAttemptRecord("", "", jobId, artifactId, dataset.Attempt,
@@ -667,7 +689,7 @@ public sealed class TrainingExecutor
                 false, dataset.Scenario));
             _rankings.Append(new ModelCandidateRound(dataset.ModelVersion ?? "sface", "prototype-calibration", dataset.Attempt,
                 metrics.ValidationAccuracy, metrics.FalseAcceptRate, metrics.FalseRejectRate,
-                metrics.ValidationAccuracy >= .90 && metrics.FalseAcceptRate <= .01,
+                CalibrationGate.Passes(metrics),
                 artifactId, DateTime.UtcNow, dataset.Scenario,
                 dataset.EvaluationId ?? $"{dataset.SnapshotId}:attempt:{dataset.Attempt}"));
         }

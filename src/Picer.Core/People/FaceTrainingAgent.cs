@@ -16,7 +16,7 @@ public sealed class FaceTrainingAgent(FaceTrainingSubmissionService submission)
         IProgress<string>? progress = null, CancellationToken cancellationToken = default,
         IReadOnlyDictionary<long, TrainingVisualAttribute>? visualAttributes = null,
         IReadOnlyList<TrainingActionEvidence>? actions = null, string? initialHints = null,
-        string modelVersion = "sface")
+        string modelVersion = "sface", IReadOnlyList<TrainingNegativeSample>? negativeSamples = null)
     {
         const double gate = 0.90;
         const int maxAttempts = 9;
@@ -52,7 +52,7 @@ public sealed class FaceTrainingAgent(FaceTrainingSubmissionService submission)
             var roundHints = string.IsNullOrWhiteSpace(hints) ? recipeHints : $"{hints}\n{recipeHints}";
             progress?.Report($"训练 Agent：第 {attempt}/{maxAttempts} 次：{recipe.Reason}；选中 {recipe.Samples.Count}，排除 {recipe.ExcludedCount}，指纹 {recipe.Fingerprint}");
             var submitted = await submission.SubmitAsync(snapshot, recipe.Samples, cancellationToken, attempt, roundHints,
-                visualAttributes, actions, recipe.Fingerprint, recipe.Reason, recipe.ExcludedCount, modelVersion);
+                visualAttributes, actions, recipe.Fingerprint, recipe.Reason, recipe.ExcludedCount, modelVersion, negativeSamples);
             if (submitted.Status == "failed")
             {
                 if (attempt == maxAttempts) return new(passedArtifacts.Count > 0, attempt, best,
@@ -92,18 +92,25 @@ public sealed class FaceTrainingAgent(FaceTrainingSubmissionService submission)
                 hints = $"{roundHints}\n基模诊断：{artifact.Diagnostics?.Explanation}；仍按下一轮配方继续验证，避免单轮误判。";
                 continue;
             }
-            if (artifact.Metrics.ValidationAccuracy >= gate)
+            // A calibration is only useful when it is accurate and does not
+            // accept exclusive/unknown faces.  FAR/FRR are evaluated by the
+            // platform from the same immutable snapshot and are part of the
+            // adoption gate, not merely informational diagnostics.
+            var passedGate = artifact.Metrics.ValidationAccuracy >= gate
+                && artifact.Metrics.FalseAcceptRate <= 0.01
+                && artifact.Metrics.FalseRejectRate <= 0.10;
+            if (passedGate)
             {
                 passedArtifacts.Add(artifact);
                 if (best is null || artifact.Metrics.ValidationAccuracy > best.Metrics.ValidationAccuracy)
                     best = artifact;
                 hints = $"{roundHints}\n通过轮次经验：本轮 {artifact.Metrics.ValidationAccuracy:P1}；截至目前最高 {best.Metrics.ValidationAccuracy:P1}；继续优化人物间样本平衡、时间跨度、姿态/光照覆盖并去除连拍重复。";
-                progress?.Report($"训练 Agent：第 {attempt}/{maxAttempts} 次达到 90%，继续优化；当前最高 {best.Metrics.ValidationAccuracy:P1}");
+                progress?.Report($"训练 Agent：第 {attempt}/{maxAttempts} 次通过门禁（准确率 {artifact.Metrics.ValidationAccuracy:P1} / 误识率 {artifact.Metrics.FalseAcceptRate:P2} / 拒识率 {artifact.Metrics.FalseRejectRate:P2}），继续优化；当前最高 {best.Metrics.ValidationAccuracy:P1}");
                 continue;
             }
             var advice = advisor is null ? "提高困难负样本覆盖并重新评测" : await advisor(attempt, artifact, cancellationToken);
             hints = string.IsNullOrWhiteSpace(roundHints) ? advice : $"{roundHints}\n本轮调整建议：{advice}";
-            progress?.Report($"训练 Agent：第 {attempt} 次未达 90%，已生成下一轮配方调整建议");
+            progress?.Report($"训练 Agent：第 {attempt} 次未通过联合门禁（准确率 {artifact.Metrics.ValidationAccuracy:P1} / 误识率 {artifact.Metrics.FalseAcceptRate:P2} / 拒识率 {artifact.Metrics.FalseRejectRate:P2}），已生成下一轮配方调整建议");
         }
         return new(passedArtifacts.Count > 0, maxAttempts, best ?? last,
             passedArtifacts.Count > 0 ? "9 轮迭代完成，已保留所有达到 90% 的制品" : "连续 9 次未达到准确率 90%",
@@ -114,8 +121,8 @@ public sealed class FaceTrainingAgent(FaceTrainingSubmissionService submission)
     {
         if (artifacts.Count == 0) return null;
         var best = artifacts.OrderByDescending(value => value.Metrics.ValidationAccuracy).First();
-        var scores = string.Join("、", artifacts.Select(value => value.Metrics.ValidationAccuracy.ToString("P1")));
-        return $"通过制品经验：共 {artifacts.Count} 个制品达到 90% 门禁；准确率序列 {scores}；最高 {best.Metrics.ValidationAccuracy:P1}（{best.ArtifactId}）。后续优先参考最高分配方，并保留其困难样本、时间跨度和去重策略。";
+        var scores = string.Join("、", artifacts.Select(value => $"{value.Metrics.ValidationAccuracy:P1}/FAR {value.Metrics.FalseAcceptRate:P2}/FRR {value.Metrics.FalseRejectRate:P2}"));
+        return $"通过制品经验：共 {artifacts.Count} 个制品通过准确率、误识率和拒识率联合门禁；指标序列 {scores}；最高 {best.Metrics.ValidationAccuracy:P1}（{best.ArtifactId}）。后续优先参考最高分配方，并保留其困难正样本、排他负样本、未知拒识样本、时间跨度和去重策略。";
     }
 
     /// <summary>每个模型独立运行九轮 Agent；配方、历史记忆和失败不会互相污染。</summary>

@@ -35,6 +35,7 @@ public sealed record TrainingVisualAttribute(string Pose, string Lighting, IRead
 public sealed record TrainingActionEvidence(long FaceId, long? PersonId, long? SourcePersonId,
     string Action, DateTime OccurredUtc, IReadOnlyList<long> CoClusteredFaceIds,
     IReadOnlyList<long> CoClusteredPersonIds, double? ClusterConfidence, string ModelVersion, string? ErrorType);
+public sealed record TrainingNegativeSample(long FaceId, long TargetPersonId, float[] Embedding, string Split, string Kind);
 
 public sealed record MetricsData(
     int TotalSamples, int TotalPersons,
@@ -234,7 +235,7 @@ public sealed class FaceTrainingSubmissionService : IDisposable
         IReadOnlyDictionary<long, TrainingVisualAttribute>? visualAttributes = null,
         IReadOnlyList<TrainingActionEvidence>? actions = null,
         string? recipeFingerprint = null, string? recipeReason = null, int excludedSampleCount = 0,
-        string modelVersion = "sface")
+        string modelVersion = "sface", IReadOnlyList<TrainingNegativeSample>? negativeSamples = null)
     {
         try
         {
@@ -251,6 +252,7 @@ public sealed class FaceTrainingSubmissionService : IDisposable
                 excludedSampleCount,
                 idempotencyKey,
                 actions,
+                negativeSamples = negativeSamples ?? [],
                 protocolVersion = "face-evidence.v1",
                 samples = samples.Select(s => new
                 {

@@ -651,6 +651,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             var trainingModelVersion = SelectedFaceModelVersion ?? "sface";
             var snapshot = await UiWork.RunDatabaseAsync(() => FaceTrainingSnapshotService.BuildSnapshot(_database));
             var samples = await UiWork.RunDatabaseAsync(() => ExtractEmbeddings(snapshot.SnapshotId, trainingModelVersion));
+            var negativeSamples = await UiWork.RunDatabaseAsync(() => ExtractNegativeEmbeddings(snapshot.SnapshotId, trainingModelVersion));
             if (samples.Count == 0)
             {
                 StatusText = $"{GetFaceModelDisplayName(trainingModelVersion)} 尚无可用于训练的完整向量，请先完成该模型的向量补齐";
@@ -674,7 +675,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             var result = await agent.RunAsync(snapshot, samples,
                 (attempt, artifact, token) => AnalyzeTrainingFailureAsync(attempt, artifact, .90, actionSummary, token),
                 new Progress<string>(text => StatusText = text),
-                actions: actions, initialHints: actionSummary, modelVersion: trainingModelVersion);
+                actions: actions, initialHints: actionSummary, modelVersion: trainingModelVersion, negativeSamples: negativeSamples);
             if (!result.Passed || result.Artifact is null)
             {
                 StatusText = $"训练失败：{result.FailureReason}；制品未应用";
@@ -856,6 +857,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             var trainingModelVersion = SelectedFaceModelVersion ?? "sface";
             var snapshot = await UiWork.RunDatabaseAsync(() => FaceTrainingSnapshotService.BuildSnapshot(_database));
             var samples = await UiWork.RunDatabaseAsync(() => ExtractEmbeddings(snapshot.SnapshotId, trainingModelVersion));
+            var negativeSamples = await UiWork.RunDatabaseAsync(() => ExtractNegativeEmbeddings(snapshot.SnapshotId, trainingModelVersion));
 
             var baseUrl = Environment.GetEnvironmentVariable("PICER_MODEL_SERVER_URL")
                 ?.Trim() ?? "http://127.0.0.1:8090";
@@ -876,7 +878,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
 
             using var submission = new FaceTrainingSubmissionService(modelServerUri.ToString(), apiKey ?? "");
             StatusText = $"正在提交训练任务（{samples.Count} 个样本）…";
-            var result = await submission.SubmitAsync(snapshot, samples);
+            var result = await submission.SubmitAsync(snapshot, samples, negativeSamples: negativeSamples);
             if (result.Status == "failed")
             {
                 StatusText = $"训练提交失败：{result.Error}";
@@ -896,10 +898,11 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
                     if (artifact is not null)
                     {
                         const double minimumTrainingAccuracy = 0.90;
-                        if (artifact.Metrics.ValidationAccuracy < minimumTrainingAccuracy)
+                        if (artifact.Metrics.ValidationAccuracy < minimumTrainingAccuracy ||
+                            artifact.Metrics.FalseAcceptRate > 0.01 || artifact.Metrics.FalseRejectRate > 0.10)
                         {
-                            StatusText = $"训练未通过门禁：准确率 {artifact.Metrics.ValidationAccuracy:P1}，要求至少 90%；制品未应用";
-                            TrainingResultText = $"未应用模型版本：{artifact.ModelVersion}；制品：{artifact.ArtifactId}；评测准确率 {artifact.Metrics.ValidationAccuracy:P1}";
+                            StatusText = $"训练未通过联合门禁：准确率 {artifact.Metrics.ValidationAccuracy:P1} / 误识率 {artifact.Metrics.FalseAcceptRate:P2} / 拒识率 {artifact.Metrics.FalseRejectRate:P2}；制品未应用";
+                            TrainingResultText = $"未应用模型版本：{artifact.ModelVersion}；制品：{artifact.ArtifactId}；评测准确率 {artifact.Metrics.ValidationAccuracy:P1} / 误识率 {artifact.Metrics.FalseAcceptRate:P2} / 拒识率 {artifact.Metrics.FalseRejectRate:P2}";
                             AppLogger.Warn($"人脸训练未通过准确率门禁：accuracy={artifact.Metrics.ValidationAccuracy:F3}; required={minimumTrainingAccuracy:F2}; artifact={artifact.ArtifactId}");
                             break;
                         }
@@ -962,6 +965,31 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             var embedding = new float[blob.Length / 4];
             Buffer.BlockCopy(blob, 0, embedding, 0, blob.Length);
             results.Add((reader.GetInt64(0), reader.GetInt64(1), embedding, reader.GetString(2)));
+        }
+        return results;
+    }
+
+    private List<TrainingNegativeSample> ExtractNegativeEmbeddings(long snapshotId, string modelVersion)
+    {
+        var results = new List<TrainingNegativeSample>();
+        using var cmd = _database.Command("""
+            SELECT r.face_id,r.person_id,r.split,target.embedding
+            FROM face_snapshot_rejections r
+            JOIN detected_faces source ON source.id=r.face_id
+            JOIN detected_faces target ON target.image_id=source.image_id
+                AND target.ordinal=source.ordinal AND target.model_version=$model
+            WHERE r.snapshot_id=$snapshot AND target.embedding IS NOT NULL
+            """);
+        cmd.Parameters.AddWithValue("$snapshot", snapshotId);
+        cmd.Parameters.AddWithValue("$model", modelVersion);
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            var blob = (byte[])reader.GetValue(3);
+            var embedding = new float[blob.Length / sizeof(float)];
+            Buffer.BlockCopy(blob, 0, embedding, 0, blob.Length);
+            results.Add(new TrainingNegativeSample(reader.GetInt64(0), reader.GetInt64(1), embedding,
+                reader.GetString(2), "exclusive"));
         }
         return results;
     }
