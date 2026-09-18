@@ -106,7 +106,8 @@ async function rr(){try{const data=await fetch(A+'/model-rankings?scenario=basel
 async function baseline(){const m=document.getElementById('baseline-msg');m.textContent='正在查找最新独立评估快照…';try{const r=await fetch(A+'/model-rankings/baseline/one-click',{method:'POST'});const d=await r.json();if(!r.ok){m.textContent='未启动：'+(d.error||r.status);return;}m.textContent='已提交 '+(d.modelCount||0)+' 个模型，评估编号 '+d.evaluationId;rr();}catch(e){m.textContent='请求失败：'+e.message;}}
 async function ed(){try{const r=await fetch(A+'/evaluation-dataset');const e=document.getElementById('evalset');if(!r.ok){e.textContent='尚未提交统一评估集';return;}const d=await r.json();e.innerHTML=`统一评估集：${d.snapshotId} · ${d.sampleCount} 张 · ${d.persons} 人 · Gallery ${d.gallery} · Validation ${d.validation} · Test ${d.test}`+(d.samples?.length?`<details style="margin-top:4px"><summary>查看/移除样本</summary>${d.samples.map(s=>`<span style="display:inline-block;margin:2px 6px 2px 0">face ${s.faceId} / person ${s.personId} / ${s.split} <button class="sm" onclick="delEval(${s.faceId})">移除</button></span>`).join('')}</details>`:'');}catch(e){}}
 async function delEval(id){if(!confirm('从固定评估集移除该样本？'))return;await fetch(A+'/evaluation-dataset/'+id,{method:'DELETE'});ed();}
-setInterval(rf,3000);setInterval(rr,5000);setInterval(ed,5000);rf();rr();ed();
+function renderHistory(){fetch(A+'/model-rankings/rounds?scenario=baseline').then(r=>r.json()).then(d=>{let h=document.getElementById('history-card');if(!h){h=document.createElement('div');h.id='history-card';h.className='card';document.getElementById('rankings').closest('table').after(h);}const rows=d.rounds||[];h.innerHTML='<h3>历史排名（每轮）</h3><table><thead><tr><th>评估轮次</th><th>模型</th><th>轮内排名</th><th>综合分</th><th>准确率</th><th>时间</th></tr></thead><tbody>'+(rows.map(x=>`<tr><td title="${x.evaluationId}">${x.evaluationId.substring(0,18)}…</td><td>${x.modelVersion}</td><td>${x.rank}</td><td>${(x.score*100).toFixed(2)}%</td><td>${(x.validationAccuracy*100).toFixed(1)}%</td><td>${new Date(x.createdUtc).toLocaleString()}</td></tr>`).join('')||'<tr><td colspan="6">暂无历史评估</td></tr>')+'</tbody></table>';}).catch(()=>{});}
+setInterval(renderHistory,5000);renderHistory();setInterval(rf,3000);setInterval(rr,5000);setInterval(ed,5000);rf();rr();ed();
 </script></body></html>
 """, "text/html"));
 
@@ -153,8 +154,15 @@ app.MapGet("/api/face-training/algorithms", (IEnumerable<ITrainingAlgorithmAdapt
 app.MapGet("/api/face-training/model-rankings", (HttpRequest http, IEnumerable<ITrainingAlgorithmAdapter> adapters, ModelCandidateRankingStore rankings) =>
 {
     var scenario = http.Query["scenario"].FirstOrDefault();
+    var candidates = rankings.Rank(adapters, scenario);
+    var measuredRounds = candidates.Select(x => x.Rounds).DefaultIfEmpty().Max();
+    var singleModel = measuredRounds >= 20 ? candidates.FirstOrDefault()?.ModelVersion : null;
     return Results.Ok(new { policy = new { maxRounds = 20, iterationsPerRound = 9, retainedModels = 3,
-        scenarioAware = true }, scenario, candidates = rankings.Rank(adapters, scenario) });
+        scenarioAware = true, trainingSelection = "top3", singleModelDecisionAfterRounds = 20 },
+        scenario, totalRounds = measuredRounds, singleModelDecision = singleModel,
+        candidates = candidates.Select(x => new { x.ModelVersion, x.AlgorithmId, x.Available, x.Rounds,
+            x.PassedRounds, x.BestValidationAccuracy, x.BestFar, x.BestFrr, x.Retained, role = x.Retained ? "primary" : "backup",
+            x.LastArtifactId, x.Rank, x.Wins, x.CompositeScore, x.LastRound }) });
 });
 app.MapGet("/api/face-training/model-rankings/rounds", (HttpRequest http, ModelCandidateRankingStore rankings) =>
 {
@@ -200,7 +208,8 @@ app.MapPost("/api/face-training/embeddings", async (EmbeddingRequest request, IE
     return Results.Content(output, "application/json");
 });
 
-app.MapPost("/api/face-training/datasets", (DatasetRequest request, ConcurrentDictionary<string, object> index, EvaluationDatasetStore evaluation) =>
+app.MapPost("/api/face-training/datasets", (DatasetRequest request, ConcurrentDictionary<string, object> index, EvaluationDatasetStore evaluation,
+    IEnumerable<ITrainingAlgorithmAdapter> adapters, ModelCandidateRankingStore rankings) =>
 {
     if (request.ProtocolVersion != "face-evidence.v1") return Results.BadRequest(new { error = "unsupported protocolVersion" });
     var samples = request.Samples ?? [];
@@ -217,6 +226,10 @@ app.MapPost("/api/face-training/datasets", (DatasetRequest request, ConcurrentDi
         return Results.Ok(new { id = "evaluation-" + request.SnapshotId, snapshotId = request.SnapshotId, sampleCount = samples.Length, scenario = "baseline" });
     }
     var modelVersion = request.ModelVersion ?? "sface";
+    var baselineCandidates = rankings.Rank(adapters, "baseline");
+    if (baselineCandidates.Any(candidate => candidate.Rounds > 0) &&
+        !baselineCandidates.Any(candidate => candidate.Retained && string.Equals(candidate.ModelVersion, modelVersion, StringComparison.OrdinalIgnoreCase)))
+        return Results.Conflict(new { error = $"模型 {modelVersion} 当前为备用模型，仅 Top3 主力模型允许提交训练", modelVersion, role = "backup" });
     var imageOnly = string.Equals(modelVersion, "insightface-arcface", StringComparison.OrdinalIgnoreCase);
     if (samples.Any(s => (s.Embedding is null || s.Embedding.Length == 0) &&
                          (!imageOnly || string.IsNullOrWhiteSpace(s.FaceImageBase64))))

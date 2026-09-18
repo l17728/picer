@@ -47,8 +47,6 @@ public sealed class ModelCandidateRankingStore
                 ? File.ReadLines(_path).Select(line => JsonSerializer.Deserialize<ModelCandidateRound>(line, _json))
                     .Where(x => x is not null).Cast<ModelCandidateRound>().ToArray()
                 : [];
-            var total = string.IsNullOrWhiteSpace(scenario) ? rounds.Count : rounds.Count(r => string.Equals(r.Scenario, scenario, StringComparison.OrdinalIgnoreCase));
-            var retainTopThree = total >= 20;
             var roundGroups = rounds.Where(r => string.IsNullOrWhiteSpace(scenario) ||
                     string.Equals(r.Scenario, scenario, StringComparison.OrdinalIgnoreCase))
                 .GroupBy(RoundKey, StringComparer.OrdinalIgnoreCase)
@@ -70,8 +68,12 @@ public sealed class ModelCandidateRankingStore
             }).OrderByDescending(x => Score(x)).ThenByDescending(x => x.Wins)
                 .ThenByDescending(x => x.BestValidationAccuracy).ToList();
             measured = measured.Select((value, index) => value with { Rank = index + 1 }).ToList();
-            var retained = measured.Take(3).Select(x => x.ModelVersion).ToHashSet(StringComparer.OrdinalIgnoreCase);
-            return measured.Select(x => x with { Retained = !retainTopThree || retained.Contains(x.ModelVersion) }).ToArray();
+            var retainedCount = roundGroups.Length >= 20 ? 1 : 3;
+            var retained = measured.Take(retainedCount).Select(x => x.ModelVersion).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            // Keep only the current top three as primary training candidates.
+            // Models ranked 4+ remain visible as backup candidates and are not
+            // selected by subsequent training submissions.
+            return measured.Select(x => x with { Retained = retained.Contains(x.ModelVersion) }).ToArray();
         }
     }
 
