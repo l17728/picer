@@ -277,7 +277,13 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
                 return;
             }
 
-            if (targetCount < sourceCount)
+            // Different detectors legitimately produce different face counts
+            // (InsightFace does not have to match YuNet/SFace's 10k boxes).
+            // Comparing targetCount with the source detector count made every
+            // page entry rebuild the same partial target index forever. Once
+            // the target model has persisted vectors, keep them and do not
+            // rerun an expensive backfill on every navigation.
+            if (targetCount == 0)
             {
                 StatusText = $"正在后台生成 {GetFaceModelDisplayName(modelVersion)} 向量：已有 {targetCount}/{sourceCount}…";
                 var endpoint = Environment.GetEnvironmentVariable("PICER_MODEL_SERVER_URL")?.Trim() ?? "http://127.0.0.1:8090";
