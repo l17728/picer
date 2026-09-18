@@ -512,9 +512,15 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         IsAnalyzing = true;
         try
         {
+            var trainingModelVersion = SelectedFaceModelVersion ?? "sface";
             var snapshot = await UiWork.RunDatabaseAsync(() => FaceTrainingSnapshotService.BuildSnapshot(_database));
-            var samples = await UiWork.RunDatabaseAsync(() => ExtractEmbeddings(snapshot.SnapshotId));
-            var actions = await UiWork.RunDatabaseAsync(() => FaceActionLogService.GetActions(_database, limit: 5000)
+            var samples = await UiWork.RunDatabaseAsync(() => ExtractEmbeddings(snapshot.SnapshotId, trainingModelVersion));
+            if (samples.Count == 0)
+            {
+                StatusText = $"{GetFaceModelDisplayName(trainingModelVersion)} 尚无可用于训练的完整向量，请先完成该模型的向量补齐";
+                return;
+            }
+            var actions = await UiWork.RunDatabaseAsync(() => FaceActionLogService.GetActions(_database, limit: 100_000)
                 .Select(value => new TrainingActionEvidence(value.FaceId, value.PersonId, value.SourcePersonId,
                     value.Action, value.CreatedUtc, value.CoClusteredFaceIds, value.CoClusteredPersonIds,
                     value.ClusterConfidence, value.ModelVersion, value.ErrorType)).ToArray());
@@ -532,7 +538,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             var result = await agent.RunAsync(snapshot, samples,
                 (attempt, artifact, token) => AnalyzeTrainingFailureAsync(attempt, artifact, .90, actionSummary, token),
                 new Progress<string>(text => StatusText = text),
-                actions: actions, initialHints: actionSummary);
+                actions: actions, initialHints: actionSummary, modelVersion: trainingModelVersion);
             if (!result.Passed || result.Artifact is null)
             {
                 StatusText = $"训练失败：{result.FailureReason}；制品未应用";
@@ -670,8 +676,9 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         StatusText = $"正在准备训练数据（{eligibility.PersonCount} 位人物 / {eligibility.PositiveFaceCount} 张已确认人脸）…";
         try
         {
+            var trainingModelVersion = SelectedFaceModelVersion ?? "sface";
             var snapshot = await UiWork.RunDatabaseAsync(() => FaceTrainingSnapshotService.BuildSnapshot(_database));
-            var samples = await UiWork.RunDatabaseAsync(() => ExtractEmbeddings(snapshot.SnapshotId));
+            var samples = await UiWork.RunDatabaseAsync(() => ExtractEmbeddings(snapshot.SnapshotId, trainingModelVersion));
 
             var baseUrl = Environment.GetEnvironmentVariable("PICER_MODEL_SERVER_URL")
                 ?.Trim() ?? "http://127.0.0.1:8090";
@@ -758,16 +765,19 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         }
     }
 
-    private List<(long FaceId, long PersonId, float[] Embedding, string Split)> ExtractEmbeddings(long snapshotId)
+    private List<(long FaceId, long PersonId, float[] Embedding, string Split)> ExtractEmbeddings(long snapshotId, string modelVersion)
     {
         var results = new List<(long, long, float[], string)>();
         using var cmd = _database.Command("""
-            SELECT m.face_id, m.person_id, m.split, f.embedding
+            SELECT DISTINCT target.id, m.person_id, m.split, target.embedding
             FROM face_snapshot_members m
-            JOIN detected_faces f ON f.id = m.face_id
-            WHERE m.snapshot_id = $s AND f.embedding IS NOT NULL
+            JOIN detected_faces source ON source.id = m.face_id
+            JOIN detected_faces target ON target.image_id=source.image_id
+                AND target.ordinal=source.ordinal AND target.model_version=$model
+            WHERE m.snapshot_id = $s AND target.embedding IS NOT NULL
             """);
         cmd.Parameters.AddWithValue("$s", snapshotId);
+        cmd.Parameters.AddWithValue("$model", modelVersion);
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
         {
