@@ -16,6 +16,10 @@ using Picer.App.Security;
 namespace Picer.App.ViewModels;
 
 public sealed record FaceModelOption(string ModelVersion, string DisplayName);
+public sealed record FaceTrainingHistoryOption(string ArtifactId, string ModelVersion, double ValidationAccuracy, DateTime CreatedUtc, string State)
+{
+    public string DisplayName => $"{CreatedUtc:yyyy-MM-dd HH:mm} · {ValidationAccuracy:P1} · {State} · {ArtifactId[..Math.Min(12, ArtifactId.Length)]}";
+}
 
 public partial class PeopleViewModel : ObservableObject, IDisposable
 {
@@ -68,6 +72,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
     public ObservableCollection<VideoFaceItemViewModel> PersonVideoFaces { get; } = [];
     public ObservableCollection<string> FaceModelVersions { get; } = [];
     public ObservableCollection<FaceModelOption> FaceModelOptions { get; } = [];
+    public ObservableCollection<FaceTrainingHistoryOption> TrainingHistoryOptions { get; } = [];
 
     [ObservableProperty] private PersonSummary? _selectedPerson;
     [ObservableProperty] private PersonSummary? _candidateTargetPerson;
@@ -99,6 +104,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
     [NotifyPropertyChangedFor(nameof(FaceModelSpaceText))]
     private string? _selectedFaceModelVersion;
     [ObservableProperty] private FaceModelOption? _selectedFaceModelOption;
+    [ObservableProperty] private FaceTrainingHistoryOption? _selectedTrainingHistory;
 
     partial void OnSelectedFaceModelVersionChanged(string? value)
     {
@@ -115,9 +121,21 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         OnPropertyChanged(nameof(FaceModelSpaceText));
     }
 
+    partial void OnSelectedTrainingHistoryChanged(FaceTrainingHistoryOption? value)
+    {
+        OnPropertyChanged(nameof(TrainingHistoryText));
+        OnPropertyChanged(nameof(FaceModelSpaceText));
+    }
+
+    public string TrainingHistoryText => SelectedTrainingHistory is null
+        ? "未选择历史模型"
+        : $"历史准确率 {SelectedTrainingHistory.ValidationAccuracy:P1} · {SelectedTrainingHistory.ModelVersion}";
+
     public string FaceModelSpaceText => string.IsNullOrWhiteSpace(SelectedFaceModelVersion)
         ? "模型空间：未选择"
-        : $"模型空间：{GetFaceModelDisplayName(SelectedFaceModelVersion)}（自动归类独立；已命名/不分类共享）";
+        : $"模型空间：{GetFaceModelDisplayName(SelectedFaceModelVersion)} · 版本 {SelectedFaceModelVersion} · " +
+          (SelectedTrainingHistory is null ? "暂无已应用训练准确率" : $"准确率 {SelectedTrainingHistory.ValidationAccuracy:P1}") +
+          "（自动归类独立；已命名/不分类共享）";
 
     public string OrganizeButtonText => IsOrganizing ? "自动归类进行中…" : "更新自动归类";
 
@@ -146,6 +164,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         SelectedFaceModelOption = FaceModelOptions.FirstOrDefault(value => value.ModelVersion == selectedVersion);
         await RefreshAsync();
         _isLoaded = true;
+        if (!string.IsNullOrWhiteSpace(selectedVersion)) await LoadTrainingHistoryAsync(selectedVersion);
         IsLoading = false;
         _ = LoadPlatformModelOptionsAsync();
         _ = PublishEvaluationSnapshotAsync();
@@ -177,6 +196,16 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         if (normalized == "arcface-paddle") return "ArcFace Paddle";
         if (normalized == "facex-zoo") return "FaceX-Zoo";
         return version.Replace('_', ' ').Replace('-', ' ');
+    }
+
+    private string CurrentClassificationModelLabel()
+    {
+        var version = SelectedFaceModelVersion;
+        if (string.IsNullOrWhiteSpace(version)) return "模型未选择";
+        var accuracy = SelectedTrainingHistory is { ModelVersion: var selected }
+                       && string.Equals(selected, version, StringComparison.OrdinalIgnoreCase)
+            ? $" · 准确率 {SelectedTrainingHistory.ValidationAccuracy:P1}" : " · 暂无训练准确率";
+        return $"模型 {GetFaceModelDisplayName(version)} ({version}){accuracy}";
     }
 
     private async Task LoadPlatformModelOptionsAsync()
@@ -248,6 +277,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             // 每个模型空间必须独立生成建议和待命名组，不能沿用其他模型空间的结果。
             await OrganizeFacesAsync();
             await RefreshAsync();
+            await LoadTrainingHistoryAsync(modelVersion);
             StatusText = $"已切换到 {GetFaceModelDisplayName(modelVersion)}；自动归类结果独立显示，已命名/不分类仍共享";
         }
         catch (Exception exception)
@@ -256,6 +286,41 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             AppLogger.Error($"切换人脸模型空间失败：model={modelVersion}", exception);
         }
         finally { _modelSwitchGate.Release(); }
+    }
+
+    private async Task LoadTrainingHistoryAsync(string modelVersion)
+    {
+        var history = await UiWork.RunDatabaseAsync(() => _repository.GetFaceTrainingHistory(modelVersion));
+        await Application.Current.Dispatcher.InvokeAsync(() =>
+        {
+            TrainingHistoryOptions.Clear();
+            foreach (var value in history.Where(value => value.ValidationAccuracy >= .90))
+                TrainingHistoryOptions.Add(new(value.ArtifactId, value.ModelVersion, value.ValidationAccuracy, value.CreatedUtc, value.State));
+            SelectedTrainingHistory = TrainingHistoryOptions.FirstOrDefault(value => value.State == "active") ?? TrainingHistoryOptions.FirstOrDefault();
+        });
+    }
+
+    [RelayCommand]
+    private async Task ApplySelectedTrainingAsync()
+    {
+        if (IsAnalyzing || SelectedTrainingHistory is null) return;
+        var modelVersion = SelectedFaceModelVersion ?? "sface";
+        if (!string.Equals(modelVersion, SelectedTrainingHistory.ModelVersion, StringComparison.OrdinalIgnoreCase))
+        {
+            StatusText = "历史模型与当前模型空间不一致，已阻止应用";
+            return;
+        }
+        IsAnalyzing = true;
+        try
+        {
+            var artifact = await UiWork.RunDatabaseAsync(() => _repository.GetFaceTrainingArtifact(SelectedTrainingHistory.ArtifactId, modelVersion));
+            if (artifact is null) { StatusText = "历史训练制品不存在，无法应用"; return; }
+            await UiWork.RunDatabaseAsync(() => ApplyTrainedPrototypes(artifact));
+            TrainingResultText = $"已应用历史模型：{artifact.ModelVersion} · 准确率 {artifact.Metrics.ValidationAccuracy:P1} · 制品 {artifact.ArtifactId}";
+            StatusText = $"已应用 {GetFaceModelDisplayName(modelVersion)} 的历史训练版本，分类结果将按该模型空间刷新";
+            await RefreshPageAsync();
+        }
+        finally { IsAnalyzing = false; }
     }
 
     public Task PublishEvaluationSnapshotForPlatformAsync() => PublishEvaluationSnapshotAsync();
@@ -1625,7 +1690,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         var cancellation = _personLoadCancellation = new CancellationTokenSource();
         SetOtherCollectionSelectionsToNull(clearPerson: false, clearCandidate: true, clearSuggested: true);
         DisplayedCollectionKind = DisplayedFaceCollectionKind.NamedPerson;
-        DisplayedFacesTitle = $"{value.DisplayName} · 正在加载…";
+        DisplayedFacesTitle = $"{value.DisplayName} · {CurrentClassificationModelLabel()} · 正在加载…";
         DisplayedFaces.Clear();
         AppLogger.Info($"People named-person selection: person={value.Id}");
         _ = LoadPersonFacesAsync(value, cancellation.Token);
@@ -1665,7 +1730,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
                     LoadDisplayedFaceThumbnailAsync(item, cancellationToken).Forget();
                 DisplayedFacesTitle = $"{person.DisplayName} · {AssignedFaces.Count} / {items.Count} 项";
                 }, cancellationToken);
-            DisplayedFacesTitle = $"{person.DisplayName} · {AssignedFaces.Count} 张人脸";
+                DisplayedFacesTitle = $"{person.DisplayName} · {AssignedFaces.Count} 张人脸 · {CurrentClassificationModelLabel()}";
             foreach (var record in snapshot.Videos)
             {
                 var item = new VideoFaceItemViewModel(record);

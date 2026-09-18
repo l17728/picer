@@ -40,6 +40,39 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
         return result;
     }
 
+    public IReadOnlyList<FaceTrainingArtifactSummary> GetFaceTrainingHistory(string modelVersion, int limit = 50)
+    {
+        var summaries = GetFaceTrainingHistory(limit * 3)
+            .Where(value => string.Equals(value.ModelVersion, modelVersion, StringComparison.OrdinalIgnoreCase))
+            .Take(limit).ToArray();
+        using var command = database.Command("SELECT artifact_id,artifact_json FROM face_training_artifacts WHERE model_version=$model");
+        command.Parameters.AddWithValue("$model", modelVersion);
+        var accuracy = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+        using var reader = command.ExecuteReader();
+        while (reader.Read() && !reader.IsDBNull(1))
+        {
+            try
+            {
+                using var json = JsonDocument.Parse(reader.GetString(1));
+                if ((json.RootElement.TryGetProperty("metrics", out var metrics) || json.RootElement.TryGetProperty("Metrics", out metrics)) &&
+                    (metrics.TryGetProperty("validationAccuracy", out var value) || metrics.TryGetProperty("ValidationAccuracy", out value)))
+                    accuracy[reader.GetString(0)] = value.GetDouble();
+            }
+            catch (JsonException) { }
+        }
+        return summaries.Select(value => value with { ValidationAccuracy = accuracy.GetValueOrDefault(value.ArtifactId) }).ToArray();
+    }
+
+    public TrainingArtifactData? GetFaceTrainingArtifact(string artifactId, string modelVersion)
+    {
+        using var command = database.Command("SELECT artifact_json FROM face_training_artifacts WHERE artifact_id=$id AND model_version=$model");
+        command.Parameters.AddWithValue("$id", artifactId); command.Parameters.AddWithValue("$model", modelVersion);
+        var json = command.ExecuteScalar() as string;
+        if (string.IsNullOrWhiteSpace(json)) return null;
+        try { return JsonSerializer.Deserialize<TrainingArtifactData>(json); }
+        catch (JsonException) { return null; }
+    }
+
     public double? GetBestFaceTrainingValidationAccuracy(string modelVersion)
     {
         using var command = database.Command("SELECT artifact_json FROM face_training_artifacts WHERE model_version=$model ORDER BY created_utc");
