@@ -30,12 +30,12 @@ public static class FaceActionLogService
 {
     public static void Record(PicerDatabase db, string action, long faceId, long? personId,
         long? sourcePersonId, IReadOnlyList<long> coFaceIds, IReadOnlyList<long> coPersonIds,
-        double? clusterConfidence, string modelVersion)
+        double? clusterConfidence, string modelVersion, string? errorType = null)
     {
         using var cmd = db.Command("""
             INSERT INTO face_action_log (created_utc, action, face_id, person_id, source_person_id,
-                co_clustered_face_ids, co_clustered_person_ids, cluster_confidence, model_version)
-            VALUES ($t, $a, $f, $p, $sp, $cf, $cp, $cc, $mv)
+                co_clustered_face_ids, co_clustered_person_ids, cluster_confidence, model_version, error_type)
+            VALUES ($t, $a, $f, $p, $sp, $cf, $cp, $cc, $mv, $e)
             """);
         cmd.Parameters.AddWithValue("$t", DateTime.UtcNow.ToString("o"));
         cmd.Parameters.AddWithValue("$a", action);
@@ -46,6 +46,7 @@ public static class FaceActionLogService
         cmd.Parameters.AddWithValue("$cp", JsonSerializer.Serialize(coPersonIds));
         cmd.Parameters.AddWithValue("$cc", (object?)clusterConfidence ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$mv", modelVersion);
+        cmd.Parameters.AddWithValue("$e", (object?)errorType ?? DBNull.Value);
         cmd.ExecuteNonQuery();
     }
 
@@ -86,7 +87,7 @@ public static class FaceActionLogService
     public static List<FaceTrainingPair> GetFalseMergePairs(PicerDatabase db)
     {
         var rejections = GetActions(db, "reject");
-        var moves = GetActions(db, "move_out");
+        var moves = GetActions(db, "move_out").Concat(GetActions(db, "reclassify")).ToList();
         var pairs = new List<FaceTrainingPair>();
 
         foreach (var entry in rejections.Concat(moves))

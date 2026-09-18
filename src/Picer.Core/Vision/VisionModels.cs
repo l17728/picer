@@ -52,7 +52,11 @@ public sealed record VideoTrainingFaceRecord(long VideoFaceId, long VideoId, lon
     float[] Embedding, float DetectionConfidence = 1, float RelativeArea = 1);
 public sealed record FaceLearnedPolicy(long PersonId, string ArtifactId, string ModelVersion, float[] Prototype, double MatchThreshold);
 public sealed record FaceTrainingArtifactSummary(string ArtifactId, string DatasetId, string ModelVersion, double FalseAcceptRate, double FalseRejectRate, string State, DateTime CreatedUtc, DateTime? AppliedUtc);
-public sealed record FaceWorkQueueCounts(int Total, int Suggested, int Unassigned);
+public sealed record FaceWorkQueueCounts(int Total, int Suggested, int Unassigned, int Candidate = 0);
+public sealed record FacePartitionCounts(int Total, int Ignored, int Named, int Suggested, int Candidate, int Unassigned)
+{
+    public bool IsConserved => Total == Ignored + Named + Suggested + Candidate + Unassigned;
+}
 public sealed record CandidateClusterDraft(IReadOnlyList<(long FaceId, double Similarity)> Members);
 public sealed record FaceCandidateClusterRecord(long Id, string ModelVersion, IReadOnlyList<UnassignedFaceRecord> Faces);
 public sealed record SuggestedPersonGroupRecord(long PersonId, string PersonName, IReadOnlyList<UnassignedFaceRecord> Faces);

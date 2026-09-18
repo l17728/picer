@@ -22,6 +22,9 @@ public sealed class FaceTrainingAgent(FaceTrainingSubmissionService submission)
         const string corePrinciples = "核心训练准则：按时间跨度分层抽样，保证同一人物覆盖不同年份/季节/设备；同一原图、连拍组和视频关键帧不得跨分区；连拍或内容哈希高度相似的人脸先去重，避免单一时刻过度代表；优先保留跨时间稳定特征，并用时间变化样本检验泛化能力；先判断阈值可达性，若扫描仍低于90%则停止低频调阈值并升级基模。";
         string? hints = await submission.GetTrainingMemoryAsync(modelVersion, cancellationToken);
         hints = string.IsNullOrWhiteSpace(hints) ? corePrinciples : $"{corePrinciples}\n历史训练记忆：{hints}";
+        var actionEvidence = BuildActionEvidenceSummary(actions, modelVersion);
+        if (!string.IsNullOrWhiteSpace(actionEvidence))
+            hints = $"{hints}\n人工纠错困难样本证据：{actionEvidence}";
         if (!string.IsNullOrWhiteSpace(initialHints))
             hints = string.IsNullOrWhiteSpace(hints) ? initialHints : $"{hints}\n用户操作摘要：{initialHints}";
         TrainingArtifactData? last = null;
@@ -149,6 +152,26 @@ public sealed class FaceTrainingAgent(FaceTrainingSubmissionService submission)
             errorFaces.Count > 0 ? "优先纳入用户纠错样本，并按姿态/光照/遮挡质量重新配比" :
             "按 VL 质量与困难姿态重新配比，减少冗余样本";
         return new(selected, source.Count - selected.Length, fingerprint, reason);
+    }
+
+    private static string BuildActionEvidenceSummary(IReadOnlyList<TrainingActionEvidence>? actions, string modelVersion)
+    {
+        if (actions is null) return string.Empty;
+        var relevant = actions.Where(action => string.Equals(action.ModelVersion, modelVersion, StringComparison.OrdinalIgnoreCase)
+            && action.Action is "reject" or "reclassify" or "move_out" or "ignore" or "wrong").ToArray();
+        if (relevant.Length == 0) return string.Empty;
+        var pairs = relevant.Where(action => action.SourcePersonId is not null)
+            .GroupBy(action => (Predicted: action.SourcePersonId!.Value, Actual: action.PersonId ?? 0))
+            .OrderByDescending(group => group.Count())
+            .Take(20)
+            .Select(group => $"预测人物{group.Key.Predicted}→实际{group.Key.Actual} {group.Count()}条（作为预测人物排他负样本、实际人物困难正样本）");
+        var ignored = relevant.Count(action => action.Action == "ignore");
+        var rejected = relevant.Count(action => action.Action is "reject" or "wrong");
+        return string.Join("；", pairs.Concat([
+            $"纠错总数={relevant.Length}",
+            $"拒绝/错误={rejected}",
+            $"不分类={ignored}（作为未知人物拒识样本，不归入任何人物）"
+        ]));
     }
 
     private static double Difficulty((long FaceId, long PersonId, float[] Embedding, string Split) sample,

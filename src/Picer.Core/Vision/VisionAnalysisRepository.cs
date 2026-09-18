@@ -182,6 +182,49 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
         return new VisionAnalysisSummary(reader.GetInt32(0), reader.GetInt32(1), reader.GetInt32(2), reader.GetInt32(3));
     }
 
+    /// <summary>
+    /// Returns a mutually exclusive partition for one model space.  Manual
+    /// identity and ignored states have precedence over suggestions and
+    /// candidate clusters, so the five buckets always conserve the total.
+    /// </summary>
+    public FacePartitionCounts GetFacePartitionCounts(string modelVersion)
+    {
+        if (string.IsNullOrWhiteSpace(modelVersion)) return new(0, 0, 0, 0, 0, 0);
+        using var command = database.Command("""
+            WITH faces AS (
+                SELECT DISTINCT f.image_id, f.ordinal
+                FROM detected_faces f
+                JOIN images i ON i.id=f.image_id AND i.status='active'
+                WHERE f.model_version=$model
+            )
+            SELECT
+                EXISTS(SELECT 1 FROM detected_faces rf JOIN face_review_states rr ON rr.face_id=rf.id
+                       WHERE rf.image_id=faces.image_id AND rf.ordinal=faces.ordinal AND rr.state='ignored'),
+                EXISTS(SELECT 1 FROM detected_faces nf JOIN face_person_assignments na ON na.face_id=nf.id
+                       WHERE nf.image_id=faces.image_id AND nf.ordinal=faces.ordinal AND na.state='confirmed'),
+                EXISTS(SELECT 1 FROM detected_faces sf JOIN face_person_assignments sa ON sa.face_id=sf.id
+                       WHERE sf.image_id=faces.image_id AND sf.ordinal=faces.ordinal AND sa.state='suggested'),
+                EXISTS(SELECT 1 FROM face_candidate_members cm
+                       JOIN face_candidate_clusters cc ON cc.id=cm.cluster_id
+                       JOIN detected_faces cf ON cf.id=cm.face_id
+                       WHERE cc.model_version=$model AND cf.image_id=faces.image_id AND cf.ordinal=faces.ordinal)
+            FROM faces
+            """);
+        command.Parameters.AddWithValue("$model", modelVersion);
+        var ignored = 0; var named = 0; var suggested = 0; var candidate = 0; var unassigned = 0;
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            if (reader.GetBoolean(0)) ignored++;
+            else if (reader.GetBoolean(1)) named++;
+            else if (reader.GetBoolean(2)) suggested++;
+            else if (reader.GetBoolean(3)) candidate++;
+            else unassigned++;
+        }
+        return new(ignored + named + suggested + candidate + unassigned,
+            ignored, named, suggested, candidate, unassigned);
+    }
+
     public IReadOnlyList<UnassignedFaceRecord> GetUnassignedFaces(int limit = 500, string? modelVersion = null)
     {
         using var command = database.Command("""
@@ -190,7 +233,13 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
                     PARTITION BY COALESCE(NULLIF(i.sha256,''), printf('image:%d', i.id)), f.ordinal
                     ORDER BY f.id) AS duplicate_rank
                 FROM detected_faces f JOIN images i ON i.id=f.image_id AND i.status='active'
-                WHERE $model IS NULL OR f.model_version=$model
+                WHERE ($model IS NULL OR f.model_version=$model)
+                  AND NOT EXISTS (
+                      SELECT 1 FROM face_candidate_members cm
+                      JOIN face_candidate_clusters cc ON cc.id=cm.cluster_id
+                      JOIN detected_faces cf ON cf.id=cm.face_id
+                      WHERE cc.model_version=f.model_version
+                        AND cf.image_id=f.image_id AND cf.ordinal=f.ordinal)
             )
             SELECT f.id, f.image_id, i.path, i.thumb_path, f.ordinal,
                    f.box_x, f.box_y, f.box_width, f.box_height, f.confidence,
@@ -205,6 +254,12 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
             LEFT JOIN face_review_states r ON r.face_id=f.id
             WHERE f.duplicate_rank=1 AND (a.face_id IS NULL OR a.state='suggested') AND r.face_id IS NULL
               AND ($model IS NULL OR f.model_version=$model)
+              AND NOT EXISTS (
+                  SELECT 1 FROM face_candidate_members cm
+                  JOIN face_candidate_clusters cc ON cc.id=cm.cluster_id
+                  JOIN detected_faces cf ON cf.id=cm.face_id
+                  WHERE cc.model_version=f.model_version
+                    AND cf.image_id=f.image_id AND cf.ordinal=f.ordinal)
             ORDER BY f.created_utc DESC, f.id DESC
             LIMIT $limit
             """);
@@ -239,6 +294,12 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
             LEFT JOIN face_review_states r ON r.face_id=f.id
             WHERE (a.face_id IS NULL OR a.state='suggested') AND r.face_id IS NULL
               AND ($model IS NULL OR f.model_version=$model)
+              AND NOT EXISTS (
+                  SELECT 1 FROM face_candidate_members cm
+                  JOIN face_candidate_clusters cc ON cc.id=cm.cluster_id
+                  JOIN detected_faces cf ON cf.id=cm.face_id
+                  WHERE cc.model_version=f.model_version
+                    AND cf.image_id=f.image_id AND cf.ordinal=f.ordinal)
             ORDER BY CASE a.state WHEN 'suggested' THEN 0 ELSE 1 END, f.id
             """);
         command.Parameters.AddWithValue("$model", (object?)modelVersion ?? DBNull.Value);
@@ -256,7 +317,34 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
             if (string.Equals(reader.IsDBNull(0) ? null : reader.GetString(0), "suggested", StringComparison.Ordinal)) suggested++;
             else unassigned++;
         }
-        return new FaceWorkQueueCounts(suggested + unassigned, suggested, unassigned);
+        var candidate = 0;
+        using (var candidates = database.Command("""
+            SELECT i.sha256, i.ahash, i.width, i.height,
+                   f.box_x, f.box_y, f.box_width, f.box_height, f.confidence
+            FROM face_candidate_members cm
+            JOIN face_candidate_clusters cc ON cc.id=cm.cluster_id
+            JOIN detected_faces f ON f.id=cm.face_id AND f.model_version=cc.model_version
+            JOIN images i ON i.id=f.image_id AND i.status='active'
+            LEFT JOIN face_person_assignments a ON a.face_id=f.id
+            LEFT JOIN face_review_states r ON r.face_id=f.id
+            WHERE a.face_id IS NULL AND r.face_id IS NULL
+              AND ($model IS NULL OR cc.model_version=$model)
+            """))
+        {
+            candidates.Parameters.AddWithValue("$model", (object?)modelVersion ?? DBNull.Value);
+            var candidateDeduplicator = new FaceSourceDeduplicator();
+            using var candidateReader = candidates.ExecuteReader();
+            while (candidateReader.Read())
+            {
+                var signature = new FaceSourceSignature(
+                    candidateReader.IsDBNull(0) ? null : candidateReader.GetString(0), candidateReader.GetInt64(1),
+                    candidateReader.GetInt32(2), candidateReader.GetInt32(3),
+                    new NormalizedFaceBox(candidateReader.GetFloat(4), candidateReader.GetFloat(5),
+                        candidateReader.GetFloat(6), candidateReader.GetFloat(7)));
+                if (!candidateDeduplicator.IsDuplicateAndAdd(signature)) candidate++;
+            }
+        }
+        return new FaceWorkQueueCounts(suggested + unassigned + candidate, suggested, unassigned, candidate);
     }
 
     public IReadOnlyList<UnassignedFaceRecord> GetConfirmedFaces(long personId, int limit = 500, string? modelVersion = null)
@@ -671,9 +759,10 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
     public void ReplaceCandidateClusters(string modelVersion, IReadOnlyList<CandidateClusterDraft> clusters)
     {
         using var transaction = database.BeginTransaction();
-        using (var clear = database.Command("DELETE FROM face_candidate_clusters"))
+        using (var clear = database.Command("DELETE FROM face_candidate_clusters WHERE model_version=$version"))
         {
             clear.Transaction = transaction;
+            clear.Parameters.AddWithValue("$version", modelVersion);
             clear.ExecuteNonQuery();
         }
         foreach (var cluster in clusters.Where(value => value.Members.Count >= 2))
@@ -715,7 +804,15 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
             LEFT JOIN face_person_assignments a ON a.face_id=f.id
             LEFT JOIN face_review_states r ON r.face_id=f.id
             WHERE a.face_id IS NULL AND r.face_id IS NULL
+              AND f.model_version=c.model_version
               AND ($model IS NULL OR c.model_version=$model)
+              AND NOT EXISTS (
+                  SELECT 1 FROM detected_faces sf
+                  LEFT JOIN face_person_assignments sa ON sa.face_id=sf.id
+                  LEFT JOIN face_review_states sr ON sr.face_id=sf.id
+                  WHERE sf.image_id=f.image_id AND sf.ordinal=f.ordinal
+                    AND sf.model_version=f.model_version
+                    AND (sa.face_id IS NOT NULL OR sr.face_id IS NOT NULL))
             ORDER BY c.id, m.similarity DESC, f.id
             """);
         command.Parameters.AddWithValue("$model", (object?)modelVersion ?? DBNull.Value);

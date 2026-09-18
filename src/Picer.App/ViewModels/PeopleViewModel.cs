@@ -82,6 +82,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
     [ObservableProperty] private string _newPersonName = "";
     [ObservableProperty] private string _statusText = "人物分析尚未开始";
     [ObservableProperty] private string _trainingResultText = "训练制品：尚未应用";
+    [ObservableProperty] private string _facePartitionSummary = "人脸分区：正在校验…";
     [ObservableProperty] private double _progressValue;
     [ObservableProperty] private bool _showOrganizeProgress;
     [ObservableProperty] private string _organizeProgressText = "尚未运行自动归类";
@@ -337,6 +338,9 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             Clusters: _repository.GetCandidateClusters(modelVersion).ToArray(),
             SuggestedGroups: _repository.GetSuggestedPersonGroups(modelVersion).ToArray(),
             WorkQueue: _repository.GetFaceWorkQueueCounts(modelVersion),
+            Partition: string.IsNullOrWhiteSpace(modelVersion)
+                ? new FacePartitionCounts(0, 0, 0, 0, 0, 0)
+                : _repository.GetFacePartitionCounts(modelVersion),
             // “不分类”是用户明确做出的跨模型人工确认，始终共享。
             IgnoredCount: _repository.GetIgnoredFaceCount(),
             Summary: _repository.GetSummary()), cancellation.Token);
@@ -374,7 +378,10 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         }
         SuggestedPersonGroups.Clear();
         foreach (var group in snapshot.SuggestedGroups) SuggestedPersonGroups.Add(new SuggestedPersonGroupViewModel(group));
-        UnassignedSummary = $"待处理人脸 · {snapshot.WorkQueue.Total}（待确认 {snapshot.WorkQueue.Suggested} / 未匹配 {snapshot.WorkQueue.Unassigned}）";
+        UnassignedSummary = $"待处理人脸 · {snapshot.WorkQueue.Total}（待确认 {snapshot.WorkQueue.Suggested} / 待命名 {snapshot.WorkQueue.Candidate} / 待分类 {snapshot.WorkQueue.Unassigned}）";
+        FacePartitionSummary = $"人脸分区 · 总 {snapshot.Partition.Total} = 不分类 {snapshot.Partition.Ignored} + 已命名 {snapshot.Partition.Named} + 待确认 {snapshot.Partition.Suggested} + 待命名 {snapshot.Partition.Candidate} + 待分类 {snapshot.Partition.Unassigned}";
+        if (!snapshot.Partition.IsConserved)
+            AppLogger.Error($"人脸分区数量不守恒：model={modelVersion}; total={snapshot.Partition.Total}; ignored={snapshot.Partition.Ignored}; named={snapshot.Partition.Named}; suggested={snapshot.Partition.Suggested}; candidate={snapshot.Partition.Candidate}; unassigned={snapshot.Partition.Unassigned}");
         var summary = snapshot.Summary;
         StatusText = _unavailableReason ??
             $"已分析 {summary.CompletedImages}/{summary.TotalImages} 张照片，发现 {summary.FaceCount} 张人脸，失败 {summary.FailedImages} 张";
@@ -860,7 +867,10 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
     public async Task CreatePersonWithFacesAsync(string name, IReadOnlyCollection<UnassignedFaceViewModel> faces)
     {
         if (string.IsNullOrWhiteSpace(name)) { StatusText = "请输入人物名称"; return; }
-        var faceIds = ExpandOperationFaces(faces).Select(face => face.FaceId).Distinct().ToArray();
+        var expandedFaces = ExpandOperationFaces(faces).ToArray();
+        var sourceByFace = expandedFaces.GroupBy(face => face.FaceId)
+            .ToDictionary(group => group.Key, group => group.Select(face => face.Record.SuggestedPersonId).FirstOrDefault());
+        var faceIds = expandedFaces.Select(face => face.FaceId).Distinct().ToArray();
         RemoveFacesFromCurrentView(faceIds);
         StatusText = faceIds.Length == 0 ? "正在创建人物…" : $"正在创建人物并归入 {faceIds.Length} 张人脸…";
         try
@@ -870,7 +880,11 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
                 {
                     var created = _peopleService.CreateAndAssignFaces(name, faceIds);
                     foreach (var fid in faceIds)
-                        AuditFaceAction("create_person", fid, created.Id, null);
+                    {
+                        var predicted = sourceByFace.GetValueOrDefault(fid);
+                        AuditFaceAction("create_person", fid, created.Id, predicted,
+                            predicted is not null && predicted != created.Id ? "false_positive" : null);
+                    }
                     return created;
                 });
             await RefreshPeopleDropdownAsync(person.Id);
@@ -1084,7 +1098,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             await UiWork.RunDatabaseAsync("RejectAutomaticSuggestion", () =>
             {
                 _peopleService.MarkNotThisPerson(face.FaceId, personId);
-                AuditFaceAction("reject", face.FaceId, null, personId);
+                AuditFaceAction("reject", face.FaceId, null, personId, "false_positive");
             });
             StatusText = "已标记不是此人；请选择正确人物，或保留在待分类";
         }
@@ -1100,7 +1114,10 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
     {
         var operationId = Interlocked.Increment(ref _faceMoveOperationId);
         var stopwatch = Stopwatch.StartNew();
-        var faceIds = ExpandOperationFaces(faces).Select(face => face.FaceId).Distinct().ToArray();
+        var expandedFaces = ExpandOperationFaces(faces).ToArray();
+        var sourceByFace = expandedFaces.GroupBy(face => face.FaceId)
+            .ToDictionary(group => group.Key, group => group.Select(face => face.Record.SuggestedPersonId).FirstOrDefault());
+        var faceIds = expandedFaces.Select(face => face.FaceId).Distinct().ToArray();
         if (faceIds.Length == 0) return;
         RemoveFacesFromCurrentView(faceIds);
         AppLogger.Info($"FaceMove #{operationId}: UI removed {faceIds.Length} faces in {stopwatch.ElapsedMilliseconds} ms; target={person.Id}");
@@ -1113,7 +1130,8 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             {
                 var value = _peopleService.MoveFaces(faceIds, person.Id);
                 foreach (var fid in faceIds)
-                    AuditFaceAction("move_out", fid, person.Id, null);
+                    AuditFaceAction("reclassify", fid, person.Id, sourceByFace.GetValueOrDefault(fid),
+                        sourceByFace.GetValueOrDefault(fid) is not null ? "false_positive" : null);
                 backgroundCompleted = Stopwatch.GetTimestamp();
                 return value;
             });
@@ -1135,7 +1153,8 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         }
     }
 
-    private void AuditFaceAction(string action, long faceId, long? personId, long? sourcePersonId)
+    private void AuditFaceAction(string action, long faceId, long? personId, long? sourcePersonId,
+        string? errorType = null)
     {
         try
         {
@@ -1158,7 +1177,8 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
                         coPersons.Add(reader.GetInt64(1));
                     }
                 }
-            FaceActionLogService.Record(_database, action, faceId, personId, sourcePersonId, coFaces, coPersons, null, "sface");
+            FaceActionLogService.Record(_database, action, faceId, personId, sourcePersonId, coFaces, coPersons,
+                null, SelectedFaceModelVersion ?? "unknown", errorType);
             EnsureImageDescriptionTag(faceId, personId);
         }
         catch (Exception exception)
@@ -1201,7 +1221,10 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
 
     public async Task MoveFacesToUnassignedAsync(IReadOnlyCollection<UnassignedFaceViewModel> faces)
     {
-        var faceIds = ExpandOperationFaces(faces).Select(face => face.FaceId).Distinct().ToArray();
+        var expandedFaces = ExpandOperationFaces(faces).ToArray();
+        var sourceByFace = expandedFaces.GroupBy(face => face.FaceId)
+            .ToDictionary(group => group.Key, group => group.Select(face => face.Record.SuggestedPersonId).FirstOrDefault());
+        var faceIds = expandedFaces.Select(face => face.FaceId).Distinct().ToArray();
         if (faceIds.Length == 0) return;
         RemoveFacesFromCurrentView(faceIds);
         StatusText = $"正在后台将 {faceIds.Length} 张人脸移到待分类…";
@@ -1210,7 +1233,8 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             foreach (var faceId in faceIds)
             {
                 _peopleService.MoveFaceToUnassigned(faceId);
-                AuditFaceAction("move_to_unassigned", faceId, null, null);
+                    AuditFaceAction("move_to_unassigned", faceId, null, sourceByFace.GetValueOrDefault(faceId),
+                        sourceByFace.GetValueOrDefault(faceId) is not null ? "false_positive" : "manual_unassignment");
             }
         });
         StatusText = $"已将 {faceIds.Length} 张人脸移到待分类";
@@ -1221,7 +1245,10 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
 
     public async Task IgnoreFacesAsync(IReadOnlyCollection<UnassignedFaceViewModel> faces)
     {
-        var faceIds = ExpandOperationFaces(faces).Select(face => face.FaceId).Distinct().ToArray();
+        var expandedFaces = ExpandOperationFaces(faces).ToArray();
+        var sourceByFace = expandedFaces.GroupBy(face => face.FaceId)
+            .ToDictionary(group => group.Key, group => group.Select(face => face.Record.SuggestedPersonId).FirstOrDefault());
+        var faceIds = expandedFaces.Select(face => face.FaceId).Distinct().ToArray();
         if (faceIds.Length == 0) return;
         RemoveFacesFromCurrentView(faceIds);
         StatusText = $"正在将 {faceIds.Length} 张人脸移到不分类…";
@@ -1232,7 +1259,8 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             {
                 var result = _peopleService.IgnoreFaces(faceIds);
                 foreach (var faceId in faceIds)
-                    AuditFaceAction("ignore", faceId, null, null);
+                    AuditFaceAction("ignore", faceId, null, sourceByFace.GetValueOrDefault(faceId),
+                        sourceByFace.GetValueOrDefault(faceId) is not null ? "false_positive" : "unknown_person");
                 return result;
             })).Changed;
             var verified = await UiWork.RunDatabaseAsync(() =>
@@ -1312,7 +1340,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
                 LoadDisplayedFaceThumbnailAsync(item, cancellation.Token).Forget();
                 DisplayedFacesTitle = $"待分类人脸 · {DisplayedFaces.Count}/{items.Count}";
             }, cancellation.Token, batchSize: 30);
-            UnassignedSummary = $"待处理人脸 · {snapshot.Counts.Total}（待确认 {snapshot.Counts.Suggested} / 未匹配 {snapshot.Counts.Unassigned}）";
+            UnassignedSummary = $"待处理人脸 · {snapshot.Counts.Total}（待确认 {snapshot.Counts.Suggested} / 待命名 {snapshot.Counts.Candidate} / 待分类 {snapshot.Counts.Unassigned}）";
             DisplayedFacesTitle = records.Length < snapshot.Counts.Total
                 ? $"待处理人脸（已显示 {records.Length} / 共 {snapshot.Counts.Total}）"
                 : $"待处理人脸（{snapshot.Counts.Total}）";
