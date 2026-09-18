@@ -65,4 +65,4 @@ public sealed record TrainingAttemptRecord(
     double? FalseRejectRate, string? AdvisorModel, string? AdvisorPromptVersion,
     string? TrainingHints, DateTime CreatedUtc, string? RecipeFingerprint = null,
     string? RecipeReason = null, int SelectedSampleCount = 0, int ExcludedSampleCount = 0,
-    bool Applied = false);
+    bool Applied = false, string? Scenario = null);

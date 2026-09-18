@@ -418,7 +418,8 @@ app.MapPost("/api/face-training/jobs", (JobRequest request, ConcurrentDictionary
             dataset.Samples?.Select(sample => sample.PersonId).Distinct().Count() ?? 0,
             "queued", null, null, null, dataset.Attempt > 1 ? "glm-4.6v-flash" : null,
             dataset.Attempt > 1 ? "face-training-advisor.v1" : null, dataset.TrainingHints, DateTime.UtcNow,
-            dataset.RecipeFingerprint, dataset.RecipeReason, dataset.SelectedSampleCount, dataset.ExcludedSampleCount));
+            dataset.RecipeFingerprint, dataset.RecipeReason, dataset.SelectedSampleCount, dataset.ExcludedSampleCount,
+            false, dataset.Scenario));
         _ = Task.Run(async () => await executor.RunAsync(id, dataset, jobs));
     }
     else
@@ -536,7 +537,8 @@ public sealed class TrainingExecutor
                     "completed", gpuArtifact.Metrics.ValidationAccuracy, gpuArtifact.Metrics.FalseAcceptRate,
                     gpuArtifact.Metrics.FalseRejectRate, dataset.Attempt > 1 ? "glm-4.6v-flash" : null,
                     dataset.Attempt > 1 ? "face-training-advisor.v1" : null, dataset.TrainingHints, DateTime.UtcNow,
-                    dataset.RecipeFingerprint, dataset.RecipeReason, dataset.SelectedSampleCount, dataset.ExcludedSampleCount));
+                    dataset.RecipeFingerprint, dataset.RecipeReason, dataset.SelectedSampleCount, dataset.ExcludedSampleCount,
+                    false, dataset.Scenario));
                 _rankings.Append(new ModelCandidateRound(dataset.ModelVersion ?? "sface", "prototype-calibration", dataset.Attempt,
                     gpuArtifact.Metrics.ValidationAccuracy, gpuArtifact.Metrics.FalseAcceptRate, gpuArtifact.Metrics.FalseRejectRate,
                     gpuArtifact.Metrics.ValidationAccuracy >= .90 && gpuArtifact.Metrics.FalseAcceptRate <= .01,
@@ -645,7 +647,8 @@ public sealed class TrainingExecutor
                 metrics.ValidationAccuracy, metrics.FalseAcceptRate, metrics.FalseRejectRate,
                 dataset.Attempt > 1 ? "glm-4.6v-flash" : null,
                 dataset.Attempt > 1 ? "face-training-advisor.v1" : null, dataset.TrainingHints, DateTime.UtcNow,
-                dataset.RecipeFingerprint, dataset.RecipeReason, dataset.SelectedSampleCount, dataset.ExcludedSampleCount));
+                dataset.RecipeFingerprint, dataset.RecipeReason, dataset.SelectedSampleCount, dataset.ExcludedSampleCount,
+                false, dataset.Scenario));
             _rankings.Append(new ModelCandidateRound(dataset.ModelVersion ?? "sface", "prototype-calibration", dataset.Attempt,
                 metrics.ValidationAccuracy, metrics.FalseAcceptRate, metrics.FalseRejectRate,
                 metrics.ValidationAccuracy >= .90 && metrics.FalseAcceptRate <= .01,
@@ -660,7 +663,8 @@ public sealed class TrainingExecutor
                 dataset.Samples?.Select(sample => sample.PersonId).Distinct().Count() ?? 0,
                 "failed", null, null, null, dataset.Attempt > 1 ? "glm-4.6v-flash" : null,
                 dataset.Attempt > 1 ? "face-training-advisor.v1" : null, dataset.TrainingHints, DateTime.UtcNow,
-                dataset.RecipeFingerprint, dataset.RecipeReason, dataset.SelectedSampleCount, dataset.ExcludedSampleCount));
+                dataset.RecipeFingerprint, dataset.RecipeReason, dataset.SelectedSampleCount, dataset.ExcludedSampleCount,
+                false, dataset.Scenario));
         }
     }
 
