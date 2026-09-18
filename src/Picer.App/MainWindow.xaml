@@ -364,6 +364,8 @@
                                         ToolTip="使用最新已应用阈值匹配已命名人物，并重建待命名候选组；保留人工确认与排除结果"/>
                                 <Button Content="人物识别优化（平台训练）" Command="{Binding StartTrainingCommand}" Padding="12,5" Margin="4,0"
                                         ToolTip="使用已确认人物和排他负样本提交统一模型平台异步训练；通过评估门禁后更新人物原型，不改变人工归类"/>
+                                <Button Content="回退上一版训练" Command="{Binding RollbackTrainingCommand}" Padding="12,5" Margin="4,0"
+                                        ToolTip="回退当前模型空间最近一次已应用的历史训练制品；不改变人工标注"/>
                                 <Button Content="补齐 InsightFace 向量" Command="{Binding BackfillInsightFaceCommand}" Padding="12,5" Margin="4,0"
                                         ToolTip="按人脸框增量生成 InsightFace 向量；不覆盖已有模型向量"/>
                                 <Button Content="一致性扫描（修复索引）" Command="{Binding ScanConsistencyCommand}" Padding="12,5" Margin="4,0"

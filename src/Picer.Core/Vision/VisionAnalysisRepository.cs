@@ -2,6 +2,7 @@ using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using Picer.Core.Data;
 using Picer.Core.Models;
+using Picer.Core.People;
 
 namespace Picer.Core.Vision;
 
@@ -37,6 +38,74 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
         using var reader = command.ExecuteReader(); var result = new List<FaceTrainingArtifactSummary>();
         while (reader.Read()) result.Add(new(reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetDouble(3), reader.GetDouble(4), reader.GetString(5), DateTime.Parse(reader.GetString(6)), reader.IsDBNull(7) ? null : DateTime.Parse(reader.GetString(7))));
         return result;
+    }
+
+    public double? GetBestFaceTrainingValidationAccuracy(string modelVersion)
+    {
+        using var command = database.Command("SELECT artifact_json FROM face_training_artifacts WHERE model_version=$model ORDER BY created_utc");
+        command.Parameters.AddWithValue("$model", modelVersion);
+        double? best = null;
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            if (reader.IsDBNull(0)) continue;
+            try
+            {
+                using var json = JsonDocument.Parse(reader.GetString(0));
+                if ((json.RootElement.TryGetProperty("metrics", out var metrics) ||
+                     json.RootElement.TryGetProperty("Metrics", out metrics)) &&
+                    (metrics.TryGetProperty("validationAccuracy", out var accuracy) ||
+                     metrics.TryGetProperty("ValidationAccuracy", out accuracy)))
+                    best = Math.Max(best ?? 0, accuracy.GetDouble());
+            }
+            catch (JsonException) { }
+        }
+        return best;
+    }
+
+    public void RecordAgentTrainingArtifact(TrainingArtifactData artifact, string modelVersion)
+    {
+        var json = JsonSerializer.Serialize(artifact);
+        using var transaction = database.BeginTransaction();
+        using (var supersede = database.Command("UPDATE face_training_artifacts SET state='superseded' WHERE model_version=$model AND state='active'"))
+        {
+            supersede.Transaction = transaction;
+            supersede.Parameters.AddWithValue("$model", modelVersion);
+            supersede.ExecuteNonQuery();
+        }
+        using var insert = database.Command("""
+            INSERT OR REPLACE INTO face_training_artifacts
+                (artifact_id,dataset_id,endpoint,model_version,artifact_json,false_accept_rate,false_reject_rate,state,created_utc,applied_utc)
+            VALUES($id,'agent','modelserver',$model,$json,$far,$frr,'active',$created,$applied)
+            """);
+        insert.Transaction = transaction;
+        insert.Parameters.AddWithValue("$id", artifact.ArtifactId);
+        insert.Parameters.AddWithValue("$model", modelVersion);
+        insert.Parameters.AddWithValue("$json", json);
+        insert.Parameters.AddWithValue("$far", artifact.Metrics.FalseAcceptRate);
+        insert.Parameters.AddWithValue("$frr", artifact.Metrics.FalseRejectRate);
+        insert.Parameters.AddWithValue("$created", artifact.CreatedUtc.ToString("O"));
+        insert.Parameters.AddWithValue("$applied", DateTime.UtcNow.ToString("O"));
+        insert.ExecuteNonQuery();
+        transaction.Commit();
+    }
+
+    /// <summary>Returns the most recently superseded Agent artifact for a model.
+    /// This is deliberately separate from the active artifact so a rejected
+    /// attempt can never become a rollback target.</summary>
+    public TrainingArtifactData? GetPreviousAgentTrainingArtifact(string modelVersion)
+    {
+        using var command = database.Command("""
+            SELECT artifact_json FROM face_training_artifacts
+            WHERE model_version=$model AND state='superseded' AND dataset_id='agent'
+            ORDER BY COALESCE(applied_utc, created_utc) DESC
+            LIMIT 1
+            """);
+        command.Parameters.AddWithValue("$model", modelVersion);
+        var json = command.ExecuteScalar() as string;
+        if (string.IsNullOrWhiteSpace(json)) return null;
+        try { return JsonSerializer.Deserialize<TrainingArtifactData>(json); }
+        catch (JsonException) { return null; }
     }
     public bool IsCurrent(ImageRecord image, string analyzer, string modelVersion)
     {
@@ -203,7 +272,7 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
                 EXISTS(SELECT 1 FROM detected_faces nf JOIN face_person_assignments na ON na.face_id=nf.id
                        WHERE nf.image_id=faces.image_id AND nf.ordinal=faces.ordinal AND na.state='confirmed'),
                 EXISTS(SELECT 1 FROM detected_faces sf JOIN face_person_assignments sa ON sa.face_id=sf.id
-                       WHERE sf.image_id=faces.image_id AND sf.ordinal=faces.ordinal AND sa.state='suggested'),
+                       WHERE sf.model_version=$model AND sf.image_id=faces.image_id AND sf.ordinal=faces.ordinal AND sa.state='suggested'),
                 EXISTS(SELECT 1 FROM face_candidate_members cm
                        JOIN face_candidate_clusters cc ON cc.id=cm.cluster_id
                        JOIN detected_faces cf ON cf.id=cm.face_id

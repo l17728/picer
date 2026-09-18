@@ -160,8 +160,10 @@ public sealed class FaceTrainingService(
         if (artifact.People.Any(value => !people.Contains(value.PersonId))) throw new InvalidDataException("训练制品包含快照以外的人物编号。");
         var comparisonPassed = artifact.Comparison is null ||
             (artifact.Comparison.NoFalseAcceptRegression && artifact.Comparison.AcceptableFalseRejectRegression);
+        var historicalBest = repository.GetBestFaceTrainingValidationAccuracy(modelVersion);
+        var improvesHistoricalBest = historicalBest is null || artifact.Metrics.ValidationAccuracy > historicalBest.Value + 1e-9;
         var applied = artifact.Metrics.ValidationAccuracy >= 0.90 && artifact.Metrics.FalseAcceptRate <= 0.01 &&
-                      artifact.People.Count >= 2 && comparisonPassed;
+                      artifact.People.Count >= 2 && comparisonPassed && improvesHistoricalBest;
         var accepted = applied && applyArtifact;
         if (applied && !applyArtifact)
             _pendingArtifact = new PendingArtifact(dataset.Id, root.ToString(), modelVersion, artifactJson, artifact);
@@ -176,7 +178,7 @@ public sealed class FaceTrainingService(
             applied ? "评估门禁通过，增强策略已应用" : "误识率未通过门禁，制品未应用"));
         return new(dataset.Id, job.Id, artifact.Id, samples.Length, artifact.People.Count,
             artifact.Metrics.FalseAcceptRate, artifact.Metrics.FalseRejectRate, accepted,
-            applied ? "训练完成并已应用；人工分类未改变。" : ExplainGateFailure(artifact),
+            applied ? "训练完成并已应用；人工分类未改变。" : ExplainGateFailure(artifact, historicalBest),
             artifact.RecipeReport?.SelectedTrainingPositives ?? 0,
             artifact.RecipeReport?.ExcludedSameSource ?? 0, artifact.RecipeReport?.ExcludedPersonCap ?? 0,
             artifact.BaselineMetrics?.FalseAcceptRate, artifact.BaselineMetrics?.FalseRejectRate, applied,
@@ -309,10 +311,12 @@ public sealed class FaceTrainingService(
         return "picer-" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(fingerprintText)))[..20].ToLowerInvariant();
     }
 
-    private static string ExplainGateFailure(ArtifactResponse artifact)
+    private static string ExplainGateFailure(ArtifactResponse artifact, double? historicalBest = null)
     {
         var reasons = new List<string>();
         if (artifact.Metrics.ValidationAccuracy < .90) reasons.Add($"验证准确率 {artifact.Metrics.ValidationAccuracy:P2} 低于 90% 门限");
+        if (historicalBest is double best && artifact.Metrics.ValidationAccuracy <= best + 1e-9)
+            reasons.Add($"验证准确率 {artifact.Metrics.ValidationAccuracy:P2} 未超过历史最佳 {best:P2}");
         if (artifact.Metrics.FalseAcceptRate > .01) reasons.Add($"误识率 {artifact.Metrics.FalseAcceptRate:P2} 高于 1% 门限");
         if (artifact.Metrics.PositiveEvaluated < 20) reasons.Add($"独立正样本仅 {artifact.Metrics.PositiveEvaluated} 个（至少 20）");
         if (artifact.Metrics.NegativeEvaluated < 10) reasons.Add($"独立负样本仅 {artifact.Metrics.NegativeEvaluated} 个（至少 10）");

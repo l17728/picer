@@ -533,7 +533,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             var readyModels = availableModels.Where(model => model.Available).ToArray();
             StatusText = readyModels.Length == 0
                 ? "训练平台没有可用人脸模型，任务不会阻塞在提交阶段"
-                : $"训练平台已就绪 {readyModels.Length} 个模型：{string.Join("、", readyModels.Select(model => model.ModelVersion))}；当前客户端快照提供 SFace 向量，其他模型需匹配版本向量或人脸裁剪图，不能混用";
+                : $"训练平台已就绪 {readyModels.Length} 个模型：{string.Join("、", readyModels.Select(model => model.ModelVersion))}；本次仅训练当前模型空间 {GetFaceModelDisplayName(trainingModelVersion)}，不会自动训练其他模型，向量版本不能混用";
             var agent = new FaceTrainingAgent(submission);
             var result = await agent.RunAsync(snapshot, samples,
                 (attempt, artifact, token) => AnalyzeTrainingFailureAsync(attempt, artifact, .90, actionSummary, token),
@@ -546,7 +546,19 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
                 return;
             }
             var artifact = result.Artifact;
+            var historicalBest = await UiWork.RunDatabaseAsync(() =>
+                _repository.GetBestFaceTrainingValidationAccuracy(trainingModelVersion));
+            if (artifact.Metrics.ValidationAccuracy < 0.90 ||
+                (historicalBest is double best && artifact.Metrics.ValidationAccuracy <= best + 1e-9))
+            {
+                var bestText = historicalBest is double value ? $"历史最佳 {value:P1}" : "暂无历史最佳";
+                StatusText = $"训练未采用：准确率 {artifact.Metrics.ValidationAccuracy:P1}，{bestText}；必须达到 90% 且严格超过历史最佳";
+                TrainingResultText = $"未采用制品：{artifact.ArtifactId}；准确率 {artifact.Metrics.ValidationAccuracy:P1}；当前模型保持历史最佳";
+                AppLogger.Warn($"训练制品未采用：model={trainingModelVersion}; artifact={artifact.ArtifactId}; accuracy={artifact.Metrics.ValidationAccuracy:F4}; best={historicalBest?.ToString("F4") ?? "none"}");
+                return;
+            }
             await UiWork.RunDatabaseAsync(() => ApplyTrainedPrototypes(artifact));
+            await submission.MarkArtifactAppliedAsync(artifact.ArtifactId);
             StatusText = $"训练通过并已应用（第 {result.Attempts} 次）：准确率 {artifact.Metrics.ValidationAccuracy:P1}";
             TrainingResultText = $"已应用模型版本：{artifact.ModelVersion}；制品：{artifact.ArtifactId}；评测：准确率 {artifact.Metrics.ValidationAccuracy:P1} / 误识率 {artifact.Metrics.FalseAcceptRate:P2} / 拒识率 {artifact.Metrics.FalseRejectRate:P2}";
         }
@@ -554,6 +566,34 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         {
             StatusText = $"训练失败：{exception.Message}";
             AppLogger.Error("训练 Agent 执行失败", exception);
+        }
+        finally { IsAnalyzing = false; }
+    }
+
+    [RelayCommand]
+    private async Task RollbackTrainingAsync()
+    {
+        if (IsAnalyzing) return;
+        var modelVersion = SelectedFaceModelVersion ?? "sface";
+        IsAnalyzing = true;
+        try
+        {
+            var artifact = await UiWork.RunDatabaseAsync(() =>
+                _repository.GetPreviousAgentTrainingArtifact(modelVersion));
+            if (artifact is null)
+            {
+                StatusText = $"{GetFaceModelDisplayName(modelVersion)} 没有可回退的历史训练版本";
+                return;
+            }
+            await UiWork.RunDatabaseAsync(() => ApplyTrainedPrototypes(artifact));
+            TrainingResultText = $"已回退到历史制品：{artifact.ArtifactId}；准确率 {artifact.Metrics.ValidationAccuracy:P1}";
+            StatusText = $"已回退 {GetFaceModelDisplayName(modelVersion)} 的上一版训练结果，当前模型未改变人工标注";
+            await RefreshPageAsync();
+        }
+        catch (Exception exception)
+        {
+            StatusText = $"回退训练结果失败：{exception.Message}";
+            AppLogger.Error("回退人物训练制品失败", exception);
         }
         finally { IsAnalyzing = false; }
     }
@@ -813,6 +853,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             cmd.ExecuteNonQuery();
         }
         tx.Commit();
+        _repository.RecordAgentTrainingArtifact(artifact, artifact.ModelVersion);
         AppLogger.Info($"已应用 {artifact.Prototypes.Count} 个训练原型（{artifact.ArtifactId}）");
     }
 

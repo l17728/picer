@@ -328,6 +328,17 @@ public sealed class FaceTrainingSubmissionService : IDisposable
         }
     }
 
+    public async Task<bool> MarkArtifactAppliedAsync(string artifactId, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(artifactId)) return false;
+        try
+        {
+            using var response = await _client.PostAsync($"api/face-training/artifacts/{Uri.EscapeDataString(artifactId)}/applied", null, ct).ConfigureAwait(false);
+            return response.IsSuccessStatusCode;
+        }
+        catch (HttpRequestException) { return false; }
+    }
+
     public async Task<bool> VerifyArtifactAsync(TrainingArtifactData artifact, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(artifact.Sha256) || string.IsNullOrWhiteSpace(artifact.Signature)

@@ -47,6 +47,15 @@ public sealed class TrainingAttemptArchive
         return $"历史尝试 {attempts} 次；失败 {failures} 次；" +
                (best is null ? "尚无可比较制品" : $"历史最佳准确率 {best.ValidationAccuracy:P2}、误识率 {best.FalseAcceptRate:P2}、拒识率 {best.FalseRejectRate:P2}、模型 {best.ModelVersion}");
     }
+
+    public bool MarkApplied(string artifactId)
+    {
+        var record = ReadRecent(1000).FirstOrDefault(value =>
+            string.Equals(value.ArtifactId, artifactId, StringComparison.Ordinal));
+        if (record is null) return false;
+        Append(record with { Status = "applied", Applied = true, CreatedUtc = DateTime.UtcNow });
+        return true;
+    }
 }
 
 public sealed record TrainingAttemptRecord(
@@ -55,4 +64,5 @@ public sealed record TrainingAttemptRecord(
     string Status, double? ValidationAccuracy, double? FalseAcceptRate,
     double? FalseRejectRate, string? AdvisorModel, string? AdvisorPromptVersion,
     string? TrainingHints, DateTime CreatedUtc, string? RecipeFingerprint = null,
-    string? RecipeReason = null, int SelectedSampleCount = 0, int ExcludedSampleCount = 0);
+    string? RecipeReason = null, int SelectedSampleCount = 0, int ExcludedSampleCount = 0,
+    bool Applied = false);

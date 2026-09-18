@@ -84,6 +84,8 @@ app.MapGet("/", () => Results.Text("""
 </div>
 <h2>训练任务</h2>
 <div class="card"><table><thead><tr><th>ID</th><th>状态</th><th>阶段</th><th>进度</th><th>制品</th><th></th></tr></thead><tbody id="jobs"></tbody></table></div>
+<h2>人物训练历史</h2>
+<div class="card"><table><thead><tr><th>提交时间</th><th>模型</th><th>第几次</th><th>验证准确率</th><th>状态</th><th>是否采用</th></tr></thead><tbody id="attempts"><tr><td colspan="6">读取中…</td></tr></tbody></table></div>
 <h2>制品详情</h2>
 <div class="card" id="art" style="color:#555;font-size:13px">提交训练后在此显示制品指标。</div>
 <h2>Model leaderboard</h2>
@@ -98,6 +100,7 @@ try{const s=JSON.parse(t);const d=await fetch(A+'/datasets',{method:'POST',heade
 const j=await fetch(A+'/jobs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({datasetId:d.id,type:'prototype-calibration'})}).then(r=>r.json());
 document.getElementById('msg').textContent='已提交：'+j.id;setTimeout(rf,500);}catch(e){document.getElementById('msg').textContent='失败：'+e.message;}}
 async function cj(id){await fetch(A+'/jobs/'+id+'/cancel',{method:'POST'});rf();}
+async function rh(){try{const hs=await fetch(A+'/archive?limit=1000').then(r=>r.json());const by=new Map();hs.forEach(x=>{const key=x.jobId||x.artifactId||`${x.modelVersion||'unknown'}:${x.attempt||0}:${x.createdUtc}`;const old=by.get(key);if(!old||x.createdUtc>old.createdUtc)by.set(key,x);});document.getElementById('attempts').innerHTML=[...by.values()].sort((a,b)=>b.createdUtc.localeCompare(a.createdUtc)).map(x=>`<tr><td>${new Date(x.createdUtc).toLocaleString()}</td><td>${x.modelVersion||'—'}</td><td>${x.attempt||'—'}</td><td>${x.validationAccuracy==null?'—':(x.validationAccuracy*100).toFixed(1)+'%'}</td><td>${x.status||'—'}</td><td>${x.applied?'是':'否'}</td></tr>`).join('')||'<tr><td colspan="6">暂无训练历史</td></tr>';}catch(e){}}
 async function sa(id){const a=await fetch(A+'/artifacts/'+id).then(r=>r.ok?r.json():null);if(!a){alert('制品不存在');return;}
 document.getElementById('m-acc').textContent=(a.metrics.validationAccuracy*100).toFixed(1)+'%';
 document.getElementById('m-far').textContent=(a.metrics.falseAcceptRate*100).toFixed(1)+'%';
@@ -107,7 +110,7 @@ async function baseline(){const m=document.getElementById('baseline-msg');m.text
 async function ed(){try{const r=await fetch(A+'/evaluation-dataset');const e=document.getElementById('evalset');if(!r.ok){e.textContent='尚未提交统一评估集';return;}const d=await r.json();e.innerHTML=`统一评估集：${d.snapshotId} · ${d.sampleCount} 张 · ${d.persons} 人 · Gallery ${d.gallery} · Validation ${d.validation} · Test ${d.test}`+(d.samples?.length?`<details style="margin-top:4px"><summary>查看/移除样本</summary>${d.samples.map(s=>`<span style="display:inline-block;margin:2px 6px 2px 0">face ${s.faceId} / person ${s.personId} / ${s.split} <button class="sm" onclick="delEval(${s.faceId})">移除</button></span>`).join('')}</details>`:'');}catch(e){}}
 async function delEval(id){if(!confirm('从固定评估集移除该样本？'))return;await fetch(A+'/evaluation-dataset/'+id,{method:'DELETE'});ed();}
 function renderHistory(){fetch(A+'/model-rankings/rounds?scenario=baseline').then(r=>r.json()).then(d=>{let h=document.getElementById('history-card');if(!h){h=document.createElement('div');h.id='history-card';h.className='card';document.getElementById('rankings').closest('table').after(h);}const rows=d.rounds||[];h.innerHTML='<h3>历史排名（每轮）</h3><table><thead><tr><th>评估轮次</th><th>模型</th><th>轮内排名</th><th>综合分</th><th>准确率</th><th>时间</th></tr></thead><tbody>'+(rows.map(x=>`<tr><td title="${x.evaluationId}">${x.evaluationId.substring(0,18)}…</td><td>${x.modelVersion}</td><td>${x.rank}</td><td>${(x.score*100).toFixed(2)}%</td><td>${(x.validationAccuracy*100).toFixed(1)}%</td><td>${new Date(x.createdUtc).toLocaleString()}</td></tr>`).join('')||'<tr><td colspan="6">暂无历史评估</td></tr>')+'</tbody></table>';}).catch(()=>{});}
-setInterval(renderHistory,5000);renderHistory();setInterval(rf,3000);setInterval(rr,5000);setInterval(ed,5000);rf();rr();ed();
+setInterval(renderHistory,5000);renderHistory();setInterval(rf,3000);setInterval(rr,5000);setInterval(ed,5000);setInterval(rh,5000);rf();rr();ed();rh();
 </script></body></html>
 """, "text/html"));
 
@@ -436,6 +439,8 @@ app.MapPost("/api/face-training/jobs/{id}/cancel", (string id, ConcurrentDiction
 
 app.MapGet("/api/face-training/artifacts/{id}", (string id, TrainingExecutor executor) =>
     executor.TryGetArtifact(id, out var artifact) ? Results.Ok(artifact) : Results.NotFound());
+app.MapPost("/api/face-training/artifacts/{id}/applied", (string id, TrainingAttemptArchive archive) =>
+    archive.MarkApplied(id) ? Results.Ok(new { artifactId = id, applied = true }) : Results.NotFound());
 
 app.Run();
 

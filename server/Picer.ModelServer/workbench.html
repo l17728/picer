@@ -40,6 +40,8 @@ input{padding:8px;border:1px solid #ddd;border-radius:6px;font-size:13px}
 <div class="card">
 <table><thead><tr><th>ID</th><th>状态</th><th>阶段</th><th>进度</th><th>制品</th><th></th></tr></thead><tbody id="jobs"></tbody></table>
 </div>
+<h2>人物训练历史</h2>
+<div class="card"><table><thead><tr><th>提交时间</th><th>模型</th><th>第几次</th><th>验证准确率</th><th>状态</th><th>是否采用</th></tr></thead><tbody id="attempts"><tr><td colspan="6">读取中…</td></tr></tbody></table></div>
 
 <h2>制品详情</h2>
 <div class="card" id="art" style="color:#555;font-size:13px">提交训练后在此显示制品指标。</div>
@@ -59,7 +61,8 @@ document.getElementById('jobs').innerHTML=js.map(j=>`<tr>
 <td><div class="bar"><div class="bar-fill" style="width:${j.progress||0}%"></div></div></td>
 <td>${j.artifactId?`<a href="#" onclick="showArt('${j.artifactId}');return false" style="color:#0f3460">${j.artifactId}</a>`:'&mdash;'}</td>
 <td>${(j.status==='queued'||j.status==='running')?`<button class="sm" onclick="cancel('${j.id}')">取消</button>`:''}</td>
-</tr>`).join('')||'<tr><td colspan="6" style="color:#999;text-align:center">暂无任务</td></tr>';}catch(e){}}
+</tr>`).join('')||'<tr><td colspan="6" style="color:#999;text-align:center">暂无任务</td></tr>';}catch(e){}
+try{const hs=await fetch(API+'/archive?limit=1000').then(r=>r.json());const by=new Map();hs.forEach(x=>{const key=x.jobId||x.artifactId||`${x.modelVersion||'unknown'}:${x.attempt||0}:${x.createdUtc}`;const old=by.get(key);if(!old||x.createdUtc>old.createdUtc)by.set(key,x);});document.getElementById('attempts').innerHTML=[...by.values()].sort((a,b)=>b.createdUtc.localeCompare(a.createdUtc)).map(x=>`<tr><td>${new Date(x.createdUtc).toLocaleString()}</td><td>${x.modelVersion||'—'}</td><td>${x.attempt||'—'}</td><td>${x.validationAccuracy==null?'—':(x.validationAccuracy*100).toFixed(1)+'%'}</td><td>${x.status||'—'}</td><td>${x.applied?'是':'否'}</td></tr>`).join('')||'<tr><td colspan="6">暂无训练历史</td></tr>';}catch(e){}}
 async function submitTraining(){
 const t=document.getElementById('samples').value.trim();
 if(!t){document.getElementById('msg').textContent='请输入样本 JSON';return;}
