@@ -26,25 +26,25 @@ input{padding:8px;border:1px solid #ddd;border-radius:6px;font-size:13px}
 <div class="metric"><div class="val"><span class="badge ok" id="hp">检查中</span></div><div class="lbl">服务状态</div></div>
 </div></div>
 
-<h2>提交训练</h2>
+<h2>提交人物识别校准任务</h2>
 <div class="card">
 <textarea id="samples" placeholder='[{"faceId":1,"personId":1,"embedding":[0.1,0.2,...],"split":"train"},{"faceId":2,"personId":1,"embedding":[...],"split":"train"},{"faceId":3,"personId":2,"embedding":[...],"split":"validation"}]'></textarea>
 <div style="margin-top:8px;display:flex;gap:8px;align-items:center">
 <input id="name" placeholder="数据集名称" style="flex:1"/>
-<button onclick="submitTraining()">&#9654; 开始训练</button>
+<button onclick="submitTraining()">&#9654; 开始校准</button>
 </div>
 <div id="msg"></div>
 </div>
 
-<h2>训练任务</h2>
+<h2>校准任务</h2>
 <div class="card">
 <table><thead><tr><th>ID</th><th>状态</th><th>阶段</th><th>进度</th><th>制品</th><th></th></tr></thead><tbody id="jobs"></tbody></table>
 </div>
-<h2>人物训练历史</h2>
+<h2>人物识别校准历史</h2>
 <div class="card"><table><thead><tr><th>提交时间</th><th>模型</th><th>第几次</th><th>验证准确率</th><th>状态</th><th>是否采用</th></tr></thead><tbody id="attempts"><tr><td colspan="6">读取中…</td></tr></tbody></table></div>
 
 <h2>制品详情</h2>
-<div class="card" id="art" style="color:#555;font-size:13px">提交训练后在此显示制品指标。</div>
+<div class="card" id="art" style="color:#555;font-size:13px">提交校准任务后在此显示制品指标。</div>
 
 <script>
 const API='/api/face-training';

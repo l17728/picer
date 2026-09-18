@@ -76,18 +76,18 @@ app.MapGet("/", () => Results.Text("""
 <div class="metric"><div class="val" id="m-far">-</div><div class="lbl">误识率</div></div>
 <div class="metric"><div class="val"><span class="badge ok" id="hp">检查中</span></div><div class="lbl">服务状态</div></div>
 </div></div>
-<h2>提交训练</h2>
+<h2>提交人物识别校准任务</h2>
 <div class="card">
 <textarea id="samples" placeholder='[{"faceId":1,"personId":1,"embedding":[0.1,0.2,...],"split":"train"}]'></textarea>
 <div style="margin-top:8px;display:flex;gap:8px"><input id="name" placeholder="数据集名称" style="flex:1"/><button onclick="go()">&#9654; 开始训练</button></div>
 <div id="msg"></div>
 </div>
-<h2>训练任务</h2>
+<h2>校准任务</h2>
 <div class="card"><table><thead><tr><th>ID</th><th>状态</th><th>阶段</th><th>进度</th><th>制品</th><th></th></tr></thead><tbody id="jobs"></tbody></table></div>
-<h2>人物训练历史</h2>
+<h2>人物识别校准历史</h2>
 <div class="card"><table><thead><tr><th>提交时间</th><th>模型</th><th>第几次</th><th>验证准确率</th><th>状态</th><th>是否采用</th></tr></thead><tbody id="attempts"><tr><td colspan="6">读取中…</td></tr></tbody></table></div>
 <h2>制品详情</h2>
-<div class="card" id="art" style="color:#555;font-size:13px">提交训练后在此显示制品指标。</div>
+<div class="card" id="art" style="color:#555;font-size:13px">提交校准任务后在此显示制品指标。</div>
 <h2>Model leaderboard</h2>
 <div class="card"><p style="font-size:12px;color:#666;margin-bottom:8px">多模型基线评估由统一模型平台执行；客户端只负责提交不可变评估快照。无评估轮次的模型显示为“暂无数据”，不会被误认为准确率为 0。</p><div id="evalset" style="font-size:12px;color:#555;margin-bottom:8px">评估集读取中…</div><button onclick="baseline()">一键运行多模型基线</button><span id="baseline-msg" style="font-size:12px;color:#666;margin-left:8px"></span><table><thead><tr><th>Rank</th><th>Model</th><th>Composite score</th><th>Wins</th><th>Rounds</th><th>Best validation</th><th>Retained</th></tr></thead><tbody id="rankings"><tr><td colspan="7">Loading...</td></tr></tbody></table></div>
 <script>

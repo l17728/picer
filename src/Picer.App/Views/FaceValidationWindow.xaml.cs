@@ -262,7 +262,7 @@ public partial class FaceValidationWindow : Window
     {
         if (!TryBeginOperation("正在准备训练数据快照…")) return;
         _trainingCancellation = new CancellationTokenSource();
-        TrainFaceButton.Content = "训练进行中…";
+        TrainFaceButton.Content = "校准任务进行中…";
         CancelTrainingButton.IsEnabled = true;
         SFaceProgressPanel.Visibility = Visibility.Visible;
         try
@@ -279,7 +279,7 @@ public partial class FaceValidationWindow : Window
                                $"来源隔离组 {plan.LeakageGroups}；训练/验证/测试 {plan.TrainSamples}/{plan.ValidationSamples}/{plan.TestSamples}\n" +
                                $"其中视频人脸 {plan.VideoSamples}；基础模型 {plan.ModelVersion}\n" +
                                $"提交位置：{location}\n检查：{warning}\n\n" +
-                               "只提交脱敏向量和内部编号，不提交姓名或照片。是否启动优化？";
+                               "只提交脱敏向量和内部编号，不提交姓名或照片。是否启动人物识别校准？";
             if (MessageBox.Show(confirmation + "\n\n说明：本任务校准人物原型、阈值和样本配方，不修改基础人脸模型权重。", "确认人物识别校准", MessageBoxButton.OKCancel,
                     MessageBoxImage.Question) != MessageBoxResult.OK)
                 throw new OperationCanceledException();
