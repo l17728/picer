@@ -153,6 +153,19 @@ public static class FaceTrainingSnapshotService
         using (var reader = cmd.ExecuteReader())
             while (reader.Read())
                 negativePairs.Add((reader.GetInt64(0), reader.GetInt64(1), reader.GetInt64(2)));
+        // An explicit “不分类” decision is an unknown-person negative. Keep
+        // it in the immutable snapshot with person_id=0 so the platform can
+        // measure rejection without assigning it to any named person.
+        using (var cmd = db.Command("""
+            SELECT rs.face_id, 0, f.image_id
+            FROM face_review_states rs
+            JOIN detected_faces f ON f.id = rs.face_id
+            WHERE rs.state = 'ignored'
+              AND NOT EXISTS (SELECT 1 FROM face_person_rejections fr WHERE fr.face_id = rs.face_id)
+            """))
+        using (var reader = cmd.ExecuteReader())
+            while (reader.Read())
+                negativePairs.Add((reader.GetInt64(0), 0, reader.GetInt64(2)));
         return (positives, negativePairs);
     }
 
