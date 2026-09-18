@@ -156,16 +156,20 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         _lastOrganizeFingerprint = await UiWork.RunDatabaseAsync(GetOrganizeFingerprint);
     }
 
-    private static string GetFaceModelDisplayName(string version) => version.ToLowerInvariant() switch
+    private static string GetFaceModelDisplayName(string version)
     {
-        "sface" => "SFace",
-        "insightface-arcface" => "InsightFace ArcFace",
-        "arcface" => "ArcFace",
-        "adaface" => "AdaFace",
-        "arcface-paddle" => "ArcFace Paddle",
-        "facex-zoo" => "FaceX-Zoo",
-        _ => version.Replace('_', ' ').Replace('-', ' ')
-    };
+        var normalized = version.Trim().ToLowerInvariant();
+        if (normalized.StartsWith("adaptive:", StringComparison.Ordinal))
+            return "自适应 YuNet + SFace";
+        if (normalized.Contains("sface", StringComparison.Ordinal))
+            return "SFace";
+        if (normalized is "insightface-arcface" or "insightface") return "InsightFace ArcFace";
+        if (normalized == "arcface") return "ArcFace";
+        if (normalized == "adaface") return "AdaFace";
+        if (normalized == "arcface-paddle") return "ArcFace Paddle";
+        if (normalized == "facex-zoo") return "FaceX-Zoo";
+        return version.Replace('_', ' ').Replace('-', ' ');
+    }
 
     public Task PublishEvaluationSnapshotForPlatformAsync() => PublishEvaluationSnapshotAsync();
 
