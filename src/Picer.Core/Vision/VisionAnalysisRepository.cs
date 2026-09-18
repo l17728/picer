@@ -1135,6 +1135,21 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
         return Convert.ToInt32(command.ExecuteScalar());
     }
 
+    public int GetMissingFaceEmbeddingCount(string sourceModelVersion, string targetModelVersion)
+    {
+        using var command = database.Command("""
+            SELECT COUNT(*)
+            FROM detected_faces source
+            JOIN images i ON i.id=source.image_id AND i.status='active'
+            LEFT JOIN detected_faces target ON target.image_id=source.image_id
+                AND target.ordinal=source.ordinal AND target.model_version=$target
+            WHERE source.model_version=$source AND target.embedding IS NULL
+            """);
+        command.Parameters.AddWithValue("$source", sourceModelVersion);
+        command.Parameters.AddWithValue("$target", targetModelVersion);
+        return Convert.ToInt32(command.ExecuteScalar());
+    }
+
     /// <summary>Reads vectors for an immutable evaluation snapshot from one model version.
     /// The snapshot member's source face is joined by image and ordinal, so model-specific
     /// vectors can never be mixed or silently reused across versions.</summary>
