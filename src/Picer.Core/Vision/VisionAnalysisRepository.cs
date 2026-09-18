@@ -182,7 +182,7 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
         return new VisionAnalysisSummary(reader.GetInt32(0), reader.GetInt32(1), reader.GetInt32(2), reader.GetInt32(3));
     }
 
-    public IReadOnlyList<UnassignedFaceRecord> GetUnassignedFaces(int limit = 500)
+    public IReadOnlyList<UnassignedFaceRecord> GetUnassignedFaces(int limit = 500, string? modelVersion = null)
     {
         using var command = database.Command("""
             WITH ranked_faces AS (
@@ -190,6 +190,7 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
                     PARTITION BY COALESCE(NULLIF(i.sha256,''), printf('image:%d', i.id)), f.ordinal
                     ORDER BY f.id) AS duplicate_rank
                 FROM detected_faces f JOIN images i ON i.id=f.image_id AND i.status='active'
+                WHERE $model IS NULL OR f.model_version=$model
             )
             SELECT f.id, f.image_id, i.path, i.thumb_path, f.ordinal,
                    f.box_x, f.box_y, f.box_width, f.box_height, f.confidence,
@@ -203,11 +204,13 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
             LEFT JOIN people p ON p.id=a.person_id
             LEFT JOIN face_review_states r ON r.face_id=f.id
             WHERE f.duplicate_rank=1 AND (a.face_id IS NULL OR a.state='suggested') AND r.face_id IS NULL
+              AND ($model IS NULL OR f.model_version=$model)
             ORDER BY f.created_utc DESC, f.id DESC
             LIMIT $limit
             """);
         var requestedLimit = Math.Clamp(limit, 1, 5000);
         command.Parameters.AddWithValue("$limit", Math.Min(20000, requestedLimit * 4));
+        command.Parameters.AddWithValue("$model", (object?)modelVersion ?? DBNull.Value);
         var values = new List<UnassignedFaceRecord>();
         var deduplicator = new FaceSourceDeduplicator();
         using var reader = command.ExecuteReader();
@@ -225,7 +228,7 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
         return values;
     }
 
-    public FaceWorkQueueCounts GetFaceWorkQueueCounts()
+    public FaceWorkQueueCounts GetFaceWorkQueueCounts(string? modelVersion = null)
     {
         using var command = database.Command("""
             SELECT a.state, i.sha256, i.ahash, i.width, i.height,
@@ -235,8 +238,10 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
             LEFT JOIN face_person_assignments a ON a.face_id=f.id
             LEFT JOIN face_review_states r ON r.face_id=f.id
             WHERE (a.face_id IS NULL OR a.state='suggested') AND r.face_id IS NULL
+              AND ($model IS NULL OR f.model_version=$model)
             ORDER BY CASE a.state WHEN 'suggested' THEN 0 ELSE 1 END, f.id
             """);
+        command.Parameters.AddWithValue("$model", (object?)modelVersion ?? DBNull.Value);
         var deduplicator = new FaceSourceDeduplicator();
         var suggested = 0;
         var unassigned = 0;
@@ -254,7 +259,7 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
         return new FaceWorkQueueCounts(suggested + unassigned, suggested, unassigned);
     }
 
-    public IReadOnlyList<UnassignedFaceRecord> GetConfirmedFaces(long personId, int limit = 500)
+    public IReadOnlyList<UnassignedFaceRecord> GetConfirmedFaces(long personId, int limit = 500, string? modelVersion = null)
     {
         using var command = database.Command("""
             WITH ranked_faces AS (
@@ -262,6 +267,7 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
                     PARTITION BY COALESCE(NULLIF(i.sha256,''), printf('image:%d', i.id)), f.ordinal
                     ORDER BY f.id) AS duplicate_rank
                 FROM detected_faces f JOIN images i ON i.id=f.image_id AND i.status='active'
+                WHERE $model IS NULL OR f.model_version=$model
             )
             SELECT f.id, f.image_id, i.path, i.thumb_path, f.ordinal,
                    f.box_x, f.box_y, f.box_width, f.box_height, f.confidence,
@@ -270,10 +276,12 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
             JOIN ranked_faces f ON f.id=a.face_id AND f.duplicate_rank=1
             JOIN images i ON i.id=f.image_id AND i.status='active'
             WHERE a.person_id=$person AND a.state='confirmed'
+              AND ($model IS NULL OR f.model_version=$model)
             ORDER BY f.created_utc DESC, f.id DESC
             LIMIT $limit
             """);
         command.Parameters.AddWithValue("$person", personId);
+        command.Parameters.AddWithValue("$model", (object?)modelVersion ?? DBNull.Value);
         var requestedLimit = Math.Clamp(limit, 1, 5000);
         command.Parameters.AddWithValue("$limit", Math.Min(20000, requestedLimit * 4));
         var values = new List<UnassignedFaceRecord>();
@@ -291,7 +299,7 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
         return values;
     }
 
-    public IReadOnlyList<SuggestedPersonGroupRecord> GetSuggestedPersonGroups()
+    public IReadOnlyList<SuggestedPersonGroupRecord> GetSuggestedPersonGroups(string? modelVersion = null)
     {
         using var command = database.Command("""
             SELECT p.id, p.display_name, f.id, f.image_id, i.path, i.thumb_path, f.ordinal,
@@ -303,8 +311,10 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
             JOIN images i ON i.id=f.image_id AND i.status='active'
             LEFT JOIN face_review_states r ON r.face_id=f.id
             WHERE a.state='suggested' AND r.face_id IS NULL
+              AND ($model IS NULL OR f.model_version=$model)
             ORDER BY p.display_name, f.created_utc DESC, f.id DESC
             """);
+        command.Parameters.AddWithValue("$model", (object?)modelVersion ?? DBNull.Value);
         var groups = new Dictionary<long, (string Name, List<UnassignedFaceRecord> Faces, FaceSourceDeduplicator Deduplicator)>();
         using var reader = command.ExecuteReader();
         while (reader.Read())
@@ -330,7 +340,7 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
             .Where(group => group.Faces.Count > 0).OrderByDescending(group => group.Faces.Count).ToArray();
     }
 
-    public IReadOnlyList<UnassignedFaceRecord> GetPersonFaces(long personId, int limit = 500)
+    public IReadOnlyList<UnassignedFaceRecord> GetPersonFaces(long personId, int limit = 500, string? modelVersion = null)
     {
         using var command = database.Command("""
             WITH ranked_faces AS (
@@ -338,6 +348,7 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
                     PARTITION BY COALESCE(NULLIF(i.sha256,''), printf('image:%d', i.id)), f.ordinal
                     ORDER BY f.id) AS duplicate_rank
                 FROM detected_faces f JOIN images i ON i.id=f.image_id AND i.status='active'
+                WHERE $model IS NULL OR f.model_version=$model
             )
             SELECT f.id, f.image_id, i.path, i.thumb_path, f.ordinal,
                    f.box_x, f.box_y, f.box_width, f.box_height, f.confidence,
@@ -350,10 +361,12 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
             JOIN images i ON i.id=f.image_id AND i.status='active'
             JOIN people p ON p.id=a.person_id
             WHERE a.person_id=$person AND a.state IN ('confirmed','suggested')
+              AND ($model IS NULL OR f.model_version=$model)
             ORDER BY CASE a.state WHEN 'suggested' THEN 0 ELSE 1 END, f.created_utc DESC, f.id DESC
             LIMIT $limit
             """);
         command.Parameters.AddWithValue("$person", personId);
+        command.Parameters.AddWithValue("$model", (object?)modelVersion ?? DBNull.Value);
         var requestedLimit = Math.Clamp(limit, 1, 5000);
         command.Parameters.AddWithValue("$limit", Math.Min(20000, requestedLimit * 4));
         var values = new List<UnassignedFaceRecord>();
@@ -373,7 +386,7 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
         return values;
     }
 
-    public IReadOnlyList<UnassignedFaceRecord> GetIgnoredFaces(int limit = 500)
+    public IReadOnlyList<UnassignedFaceRecord> GetIgnoredFaces(int limit = 500, string? modelVersion = null)
     {
         using var command = database.Command("""
             WITH ranked_faces AS (
@@ -381,6 +394,7 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
                     PARTITION BY COALESCE(NULLIF(i.sha256,''), printf('image:%d', i.id)), f.ordinal
                     ORDER BY f.id) AS duplicate_rank
                 FROM detected_faces f JOIN images i ON i.id=f.image_id AND i.status='active'
+                WHERE $model IS NULL OR f.model_version=$model
             )
             SELECT f.id, f.image_id, i.path, i.thumb_path, f.ordinal,
                    f.box_x, f.box_y, f.box_width, f.box_height, f.confidence,
@@ -388,12 +402,13 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
             FROM face_review_states r
             JOIN ranked_faces f ON f.id=r.face_id AND f.duplicate_rank=1
             JOIN images i ON i.id=f.image_id AND i.status='active'
-            WHERE r.state='ignored'
+            WHERE r.state='ignored' AND ($model IS NULL OR f.model_version=$model)
             ORDER BY r.updated_utc DESC, f.id DESC
             LIMIT $limit
             """);
         var requestedLimit = Math.Clamp(limit, 1, 5000);
         command.Parameters.AddWithValue("$limit", Math.Min(20000, requestedLimit * 4));
+        command.Parameters.AddWithValue("$model", (object?)modelVersion ?? DBNull.Value);
         var values = new List<UnassignedFaceRecord>();
         var deduplicator = new FaceSourceDeduplicator();
         using var reader = command.ExecuteReader();
@@ -675,7 +690,7 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
         transaction.Commit();
     }
 
-    public IReadOnlyList<FaceCandidateClusterRecord> GetCandidateClusters()
+    public IReadOnlyList<FaceCandidateClusterRecord> GetCandidateClusters(string? modelVersion = null)
     {
         using var command = database.Command("""
             SELECT c.id, c.model_version, f.id, f.image_id, i.path, i.thumb_path, f.ordinal,
@@ -688,8 +703,10 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
             LEFT JOIN face_person_assignments a ON a.face_id=f.id
             LEFT JOIN face_review_states r ON r.face_id=f.id
             WHERE a.face_id IS NULL AND r.face_id IS NULL
+              AND ($model IS NULL OR c.model_version=$model)
             ORDER BY c.id, m.similarity DESC, f.id
             """);
+        command.Parameters.AddWithValue("$model", (object?)modelVersion ?? DBNull.Value);
         var groups = new Dictionary<long, (string Version, List<UnassignedFaceRecord> Faces)>();
         var deduplicators = new Dictionary<long, FaceSourceDeduplicator>();
         using var reader = command.ExecuteReader();
@@ -833,14 +850,15 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
         return length == 0 || leftNorm <= 0 || rightNorm <= 0 ? -1 : dot / Math.Sqrt(leftNorm * rightNorm);
     }
 
-    public int GetIgnoredFaceCount()
+    public int GetIgnoredFaceCount(string? modelVersion = null)
     {
         using var command = database.Command("""
             SELECT COUNT(*) FROM face_review_states r
             JOIN detected_faces f ON f.id=r.face_id
             JOIN images i ON i.id=f.image_id AND i.status='active'
-            WHERE r.state='ignored'
+            WHERE r.state='ignored' AND ($model IS NULL OR f.model_version=$model)
             """);
+        command.Parameters.AddWithValue("$model", (object?)modelVersion ?? DBNull.Value);
         return Convert.ToInt32(command.ExecuteScalar());
     }
 
