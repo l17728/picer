@@ -377,7 +377,8 @@ public sealed class FaceTrainingSubmissionService : IDisposable
                 var fingerprint = record.TryGetProperty("recipeFingerprint", out var f) ? f.GetString() : null;
                 var reason = record.TryGetProperty("recipeReason", out var r) ? r.GetString() : null;
                 var excluded = record.TryGetProperty("excludedSampleCount", out var e) ? e.ToString() : "0";
-                return $"attempt={attempt};status={status};validation={accuracy};recipe={fingerprint ?? "unknown"};excluded={excluded};reason={reason ?? "unknown"}";
+                var memory = record.TryGetProperty("trainingHints", out var h) ? h.GetString() : null;
+                return $"attempt={attempt};status={status};validation={accuracy};recipe={fingerprint ?? "unknown"};excluded={excluded};reason={reason ?? "unknown"};memory={memory ?? ""}";
             });
             return string.Join("\n", lines);
         }

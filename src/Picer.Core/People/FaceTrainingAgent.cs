@@ -3,7 +3,8 @@ using System.Text;
 
 namespace Picer.Core.People;
 
-public sealed record FaceTrainingAgentResult(bool Passed, int Attempts, TrainingArtifactData? Artifact, string FailureReason);
+public sealed record FaceTrainingAgentResult(bool Passed, int Attempts, TrainingArtifactData? Artifact, string FailureReason,
+    IReadOnlyList<TrainingArtifactData>? PassedArtifacts = null, string? ExperienceSummary = null);
 public sealed record FaceTrainingModelResult(string ModelVersion, FaceTrainingAgentResult Result);
 
 /// <summary>统一的人脸训练 Agent：最多九轮，自适应配方，失败制品永不应用。</summary>
@@ -28,6 +29,8 @@ public sealed class FaceTrainingAgent(FaceTrainingSubmissionService submission)
         if (!string.IsNullOrWhiteSpace(initialHints))
             hints = string.IsNullOrWhiteSpace(hints) ? initialHints : $"{hints}\n用户操作摘要：{initialHints}";
         TrainingArtifactData? last = null;
+        TrainingArtifactData? best = null;
+        var passedArtifacts = new List<TrainingArtifactData>();
         var fingerprints = new HashSet<string>(StringComparer.Ordinal);
         for (var attempt = 1; attempt <= maxAttempts; attempt++)
         {
@@ -38,14 +41,15 @@ public sealed class FaceTrainingAgent(FaceTrainingSubmissionService submission)
             if ((hints ?? string.Empty).Contains(recipe.Fingerprint, StringComparison.OrdinalIgnoreCase))
             {
                 progress?.Report($"训练 Agent：历史已存在配方 {recipe.Fingerprint}，跳过重复提交");
-                return new(false, Math.Max(0, attempt - 1), last,
-                    "训练历史中已存在相同配方，已跳过重复训练");
+                return new(passedArtifacts.Count > 0, Math.Max(0, attempt - 1), best ?? last,
+                    "训练历史中已存在相同配方，已跳过重复训练", passedArtifacts, BuildExperienceSummary(passedArtifacts));
             }
             if (!fingerprints.Add(recipe.Fingerprint))
             {
                 progress?.Report($"训练 Agent：第 {attempt}/{maxAttempts} 次，数据配方未变化，跳过重复提交（{recipe.Fingerprint}）");
-                return new(false, Math.Max(0, attempt - 1), last,
-                    "下一轮数据配方与上一轮相同，已跳过重复训练；请补充不同姿态、光照或排他负样本");
+                return new(passedArtifacts.Count > 0, Math.Max(0, attempt - 1), best ?? last,
+                    "下一轮数据配方与上一轮相同，已跳过重复训练；请补充不同姿态、光照或排他负样本",
+                    passedArtifacts, BuildExperienceSummary(passedArtifacts));
             }
             var recipeHints = $"数据配方={recipe.Fingerprint}；选中={recipe.Samples.Count}；排除={recipe.ExcludedCount}；原因={recipe.Reason}";
             var roundHints = string.IsNullOrWhiteSpace(hints) ? recipeHints : $"{hints}\n{recipeHints}";
@@ -54,7 +58,8 @@ public sealed class FaceTrainingAgent(FaceTrainingSubmissionService submission)
                 visualAttributes, actions, recipe.Fingerprint, recipe.Reason, recipe.ExcludedCount, modelVersion);
             if (submitted.Status == "failed")
             {
-                if (attempt == maxAttempts) return new(false, attempt, null, submitted.Error ?? "训练提交失败");
+                if (attempt == maxAttempts) return new(passedArtifacts.Count > 0, attempt, best,
+                    submitted.Error ?? "训练提交失败", passedArtifacts, BuildExperienceSummary(passedArtifacts));
                 continue;
             }
             TrainingArtifactData? artifact = null;
@@ -73,27 +78,47 @@ public sealed class FaceTrainingAgent(FaceTrainingSubmissionService submission)
             }
             if (artifact is null)
             {
-                if (attempt == maxAttempts) return new(false, attempt, null, "训练任务未生成制品");
+                if (attempt == maxAttempts) return new(passedArtifacts.Count > 0, attempt, best,
+                    "训练任务未生成制品", passedArtifacts, BuildExperienceSummary(passedArtifacts));
                 continue;
             }
             last = artifact;
             if (!await submission.VerifyArtifactAsync(artifact, cancellationToken))
             {
-                if (attempt == maxAttempts) return new(false, attempt, artifact, "制品签名校验失败");
+                if (attempt == maxAttempts) return new(passedArtifacts.Count > 0, attempt, best ?? artifact,
+                    "制品签名校验失败", passedArtifacts, BuildExperienceSummary(passedArtifacts));
                 continue;
             }
             if (string.Equals(artifact.Diagnostics?.RecommendedAction, "upgrade-model", StringComparison.OrdinalIgnoreCase))
             {
                 progress?.Report($"训练 Agent：第 {attempt} 次诊断为基模能力不足，停止重复调阈值：{artifact.Diagnostics?.Explanation}");
-                return new(false, attempt, artifact, "阈值扫描仍无法达到 90%，应切换或并行评测更强人脸基模");
+                return new(passedArtifacts.Count > 0, attempt, best ?? artifact,
+                    "阈值扫描仍无法达到 90%，应切换或并行评测更强人脸基模", passedArtifacts, BuildExperienceSummary(passedArtifacts));
             }
             if (artifact.Metrics.ValidationAccuracy >= gate)
-                return new(true, attempt, artifact, "准确率门禁通过");
+            {
+                passedArtifacts.Add(artifact);
+                if (best is null || artifact.Metrics.ValidationAccuracy > best.Metrics.ValidationAccuracy)
+                    best = artifact;
+                hints = $"{roundHints}\n通过轮次经验：本轮 {artifact.Metrics.ValidationAccuracy:P1}；截至目前最高 {best.Metrics.ValidationAccuracy:P1}；继续优化人物间样本平衡、时间跨度、姿态/光照覆盖并去除连拍重复。";
+                progress?.Report($"训练 Agent：第 {attempt}/{maxAttempts} 次达到 90%，继续优化；当前最高 {best.Metrics.ValidationAccuracy:P1}");
+                continue;
+            }
             var advice = advisor is null ? "提高困难负样本覆盖并重新评测" : await advisor(attempt, artifact, cancellationToken);
             hints = string.IsNullOrWhiteSpace(roundHints) ? advice : $"{roundHints}\n本轮调整建议：{advice}";
             progress?.Report($"训练 Agent：第 {attempt} 次未达 90%，已生成下一轮配方调整建议");
         }
-        return new(false, maxAttempts, last, "连续 9 次未达到准确率 90%");
+        return new(passedArtifacts.Count > 0, maxAttempts, best ?? last,
+            passedArtifacts.Count > 0 ? "9 轮迭代完成，已保留所有达到 90% 的制品" : "连续 9 次未达到准确率 90%",
+            passedArtifacts, BuildExperienceSummary(passedArtifacts));
+    }
+
+    private static string? BuildExperienceSummary(IReadOnlyList<TrainingArtifactData> artifacts)
+    {
+        if (artifacts.Count == 0) return null;
+        var best = artifacts.OrderByDescending(value => value.Metrics.ValidationAccuracy).First();
+        var scores = string.Join("、", artifacts.Select(value => value.Metrics.ValidationAccuracy.ToString("P1")));
+        return $"通过制品经验：共 {artifacts.Count} 个制品达到 90% 门禁；准确率序列 {scores}；最高 {best.Metrics.ValidationAccuracy:P1}（{best.ArtifactId}）。后续优先参考最高分配方，并保留其困难样本、时间跨度和去重策略。";
     }
 
     /// <summary>每个模型独立运行九轮 Agent；配方、历史记忆和失败不会互相污染。</summary>

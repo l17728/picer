@@ -545,7 +545,7 @@ public sealed class TrainingExecutor
                 var gpuArtifact = JsonSerializer.Deserialize<TrainingArtifact>(output, new JsonSerializerOptions(JsonSerializerDefaults.Web))
                     ?? throw new InvalidOperationException("GPU worker returned invalid artifact");
                 gpuArtifact = _signer.Sign(gpuArtifact);
-                StoreArtifact(gpuArtifact);
+                StoreArtifact(gpuArtifact, gpuArtifact.Metrics.ValidationAccuracy >= 0.90);
                 jobs[jobId] = jobs[jobId] with { Status = "completed", Stage = "gpu-worker-completed", Progress = 100, ArtifactId = gpuArtifact.ArtifactId };
                 _archive.Append(new TrainingAttemptRecord("", "", jobId, gpuArtifact.ArtifactId, dataset.Attempt,
                     dataset.ModelVersion ?? "sface", dataset.Samples?.Length ?? 0,
@@ -655,7 +655,7 @@ public sealed class TrainingExecutor
 
             var artifactId = "artifact-" + Guid.NewGuid().ToString("N")[..12];
             var artifact = _signer.Sign(new TrainingArtifact(artifactId, "prototype-calibration", dataset.ModelVersion ?? "sface", DateTime.UtcNow, prototypes, metrics));
-            StoreArtifact(artifact);
+            StoreArtifact(artifact, artifact.Metrics.ValidationAccuracy >= 0.90);
 
             jobs[jobId] = jobs[jobId] with { Status = "completed", Stage = "completed", Progress = 100, ArtifactId = artifactId };
             _archive.Append(new TrainingAttemptRecord("", "", jobId, artifactId, dataset.Attempt,
@@ -684,9 +684,10 @@ public sealed class TrainingExecutor
         }
     }
 
-    private void StoreArtifact(TrainingArtifact artifact)
+    private void StoreArtifact(TrainingArtifact artifact, bool persist)
     {
         _artifacts[artifact.ArtifactId] = artifact;
+        if (!persist) return;
         var path = Path.Combine(_artifactRoot, artifact.ArtifactId + ".json");
         var temp = path + ".tmp";
         File.WriteAllText(temp, JsonSerializer.Serialize(artifact, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
