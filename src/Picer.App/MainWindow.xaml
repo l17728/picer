@@ -404,7 +404,7 @@
                         </Grid>
                     </Border>
 
-                    <GroupBox Grid.Row="2" Header="人物分类" Margin="4" Padding="8">
+                    <GroupBox Grid.Row="2" Header="{Binding PeoplePaneTitle}" Margin="4" Padding="8">
                         <DockPanel>
                             <StackPanel DockPanel.Dock="Top">
                                 <Button Content="{Binding UnassignedSummary}" AutomationProperties.Name="待处理人脸" Command="{Binding ShowUnassignedFacesCommand}" HorizontalContentAlignment="Left" Padding="10,7" Margin="0,0,0,3"

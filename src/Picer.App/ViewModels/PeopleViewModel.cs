@@ -103,6 +103,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
     [ObservableProperty] private bool _isLoading;
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(FaceModelSpaceText))]
+    [NotifyPropertyChangedFor(nameof(PeoplePaneTitle))]
     private string? _selectedFaceModelVersion;
     [ObservableProperty] private FaceModelOption? _selectedFaceModelOption;
     [ObservableProperty] private FaceTrainingHistoryOption? _selectedTrainingHistory;
@@ -120,12 +121,14 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         // The option may be restored with the same version value; notify the
         // computed status text explicitly so it cannot remain at “未选择”.
         OnPropertyChanged(nameof(FaceModelSpaceText));
+        OnPropertyChanged(nameof(PeoplePaneTitle));
     }
 
     partial void OnSelectedTrainingHistoryChanged(FaceTrainingHistoryOption? value)
     {
         OnPropertyChanged(nameof(TrainingHistoryText));
         OnPropertyChanged(nameof(FaceModelSpaceText));
+        OnPropertyChanged(nameof(PeoplePaneTitle));
     }
 
     public string TrainingHistoryText => SelectedTrainingHistory is null
@@ -137,6 +140,8 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         : $"模型空间：{GetFaceModelDisplayName(SelectedFaceModelVersion)} · 版本 {SelectedFaceModelVersion} · " +
           (SelectedTrainingHistory is null ? "暂无已应用训练准确率" : $"准确率 {SelectedTrainingHistory.ValidationAccuracy:P1}") +
           "（自动归类独立；已命名/不分类共享）";
+
+    public string PeoplePaneTitle => $"人物分类 · {CurrentClassificationModelLabel()}";
 
     public string OrganizeButtonText => IsOrganizing ? "自动归类进行中…" : "更新自动归类";
 
