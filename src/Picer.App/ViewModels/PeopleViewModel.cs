@@ -253,6 +253,10 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         try
         {
             StatusText = $"正在检查 {GetFaceModelDisplayName(modelVersion)} 的人脸向量覆盖率…";
+            // History is independent from local vector coverage. Load it first
+            // so the user can see the available 91%/93% versions while the
+            // potentially long backfill continues in the background.
+            await LoadTrainingHistoryAsync(modelVersion);
             var (sourceModel, sourceCount, targetCount) = await UiWork.RunDatabaseAsync(() =>
             {
                 var versions = _repository.GetFaceModelVersions();

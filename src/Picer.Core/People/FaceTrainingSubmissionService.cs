@@ -394,8 +394,8 @@ public sealed class FaceTrainingSubmissionService : IDisposable
             var records = await response.Content.ReadFromJsonAsync<JsonElement>(Json, ct).ConfigureAwait(false);
             if (records.ValueKind != JsonValueKind.Array) return [];
             return records.EnumerateArray()
-                .Where(record => record.TryGetProperty("modelVersion", out var mv)
-                    && (string.IsNullOrWhiteSpace(modelVersion) || string.Equals(mv.GetString(), modelVersion, StringComparison.OrdinalIgnoreCase)))
+                .Where(record => GetString(record, "modelVersion") is { } mv
+                    && (string.IsNullOrWhiteSpace(modelVersion) || string.Equals(mv, modelVersion, StringComparison.OrdinalIgnoreCase)))
                 .Select(record => new RemoteTrainingHistoryData(
                     GetString(record, "artifactId"), GetString(record, "modelVersion") ?? modelVersion ?? "unknown",
                     GetInt(record, "attempt"), GetDouble(record, "validationAccuracy"),
@@ -409,15 +409,24 @@ public sealed class FaceTrainingSubmissionService : IDisposable
     }
 
     private static string? GetString(JsonElement value, string name) =>
-        value.TryGetProperty(name, out var item) && item.ValueKind != JsonValueKind.Null ? item.GetString() : null;
+        TryGetProperty(value, name, out var item) && item.ValueKind != JsonValueKind.Null ? item.GetString() : null;
     private static int GetInt(JsonElement value, string name) =>
-        value.TryGetProperty(name, out var item) && item.TryGetInt32(out var result) ? result : 0;
+        TryGetProperty(value, name, out var item) && item.TryGetInt32(out var result) ? result : 0;
     private static double? GetDouble(JsonElement value, string name) =>
-        value.TryGetProperty(name, out var item) && item.ValueKind == JsonValueKind.Number && item.TryGetDouble(out var result) ? result : null;
+        TryGetProperty(value, name, out var item) && item.ValueKind == JsonValueKind.Number && item.TryGetDouble(out var result) ? result : null;
     private static bool GetBool(JsonElement value, string name) =>
-        value.TryGetProperty(name, out var item) && item.ValueKind == JsonValueKind.True;
+        TryGetProperty(value, name, out var item) && item.ValueKind == JsonValueKind.True;
     private static DateTime GetDate(JsonElement value, string name) =>
-        value.TryGetProperty(name, out var item) && item.TryGetDateTime(out var result) ? result : DateTime.UtcNow;
+        TryGetProperty(value, name, out var item) && item.TryGetDateTime(out var result) ? result : DateTime.UtcNow;
+
+    private static bool TryGetProperty(JsonElement value, string name, out JsonElement item)
+    {
+        if (value.TryGetProperty(name, out item)) return true;
+        foreach (var property in value.EnumerateObject())
+            if (string.Equals(property.Name, name, StringComparison.OrdinalIgnoreCase)) { item = property.Value; return true; }
+        item = default;
+        return false;
+    }
 
     public void Dispose() => _client.Dispose();
 
