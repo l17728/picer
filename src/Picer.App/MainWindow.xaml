@@ -378,8 +378,9 @@
                                 <TextBlock Text="{Binding TrainingResultText}" TextWrapping="Wrap" Foreground="#315B86" FontSize="11" Margin="0,3,0,0"/>
                                 <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
                                     <TextBlock Text="人脸模型空间：" VerticalAlignment="Center" FontWeight="SemiBold"/>
-                                    <ComboBox Width="220" ItemsSource="{Binding FaceModelVersions}"
-                                              SelectedItem="{Binding SelectedFaceModelVersion, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                    <ComboBox Width="220" ItemsSource="{Binding FaceModelOptions}"
+                                              DisplayMemberPath="DisplayName"
+                                              SelectedItem="{Binding SelectedFaceModelOption, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                                               AutomationProperties.Name="人脸模型空间下拉列表"
                                               ToolTip="切换独立模型空间；不同模型的向量、原型、候选组和归类互不交叉"/>
                                     <TextBlock Text="{Binding FaceModelSpaceText}" Margin="8,0,0,0" VerticalAlignment="Center" Foreground="#315B86" FontSize="11"/>
