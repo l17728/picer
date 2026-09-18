@@ -164,7 +164,8 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             return "自适应 YuNet + SFace";
         if (normalized.Contains("sface", StringComparison.Ordinal))
             return "SFace";
-        if (normalized is "insightface-arcface" or "insightface") return "InsightFace ArcFace";
+        if (normalized is "insightface-arcface" or "insightface")
+            return "自适应 InsightFace（YuNet 320/640 + ArcFace）";
         if (normalized == "arcface") return "ArcFace";
         if (normalized == "adaface") return "AdaFace";
         if (normalized == "arcface-paddle") return "ArcFace Paddle";
@@ -206,7 +207,10 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
                 var versions = _repository.GetFaceModelVersions();
                 var source = versions.Where(value => !string.Equals(value, modelVersion, StringComparison.OrdinalIgnoreCase))
                     .Select(value => (Version: value, Count: _repository.GetFaceSources(value).Count))
-                    .OrderByDescending(value => value.Count).FirstOrDefault();
+                    // InsightFace 复用自适应检测框：先选自适应 YuNet 320/640 的完整检测结果，
+                    // 避免切换模型时退回单一分辨率的人脸框。
+                    .OrderByDescending(value => value.Version.StartsWith("adaptive:", StringComparison.OrdinalIgnoreCase))
+                    .ThenByDescending(value => value.Count).FirstOrDefault();
                 return (source.Version, source.Count, versions.Contains(modelVersion, StringComparer.OrdinalIgnoreCase)
                     ? _repository.GetFaceEmbeddingCount(modelVersion) : 0);
             });
@@ -455,7 +459,8 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
                 return;
             }
             var service = new RemoteFaceVectorBackfillService(_repository, platform);
-            var sourceModel = _repository.GetFaceModelVersions().FirstOrDefault(model => model.Contains("sface", StringComparison.OrdinalIgnoreCase))
+            var sourceModel = _repository.GetFaceModelVersions().FirstOrDefault(model => model.StartsWith("adaptive:", StringComparison.OrdinalIgnoreCase))
+                ?? _repository.GetFaceModelVersions().FirstOrDefault(model => model.Contains("sface", StringComparison.OrdinalIgnoreCase))
                 ?? _repository.GetFaceModelVersions().FirstOrDefault();
             if (string.IsNullOrWhiteSpace(sourceModel))
             {
@@ -545,7 +550,8 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
                 return;
             }
             var sourceModel = await UiWork.RunDatabaseAsync(() => _repository.GetFaceModelVersions()
-                .OrderByDescending(model => model.Contains("sface", StringComparison.OrdinalIgnoreCase))
+                .OrderByDescending(model => model.StartsWith("adaptive:", StringComparison.OrdinalIgnoreCase))
+                .ThenByDescending(model => model.Contains("sface", StringComparison.OrdinalIgnoreCase))
                 .FirstOrDefault());
             if (string.IsNullOrWhiteSpace(sourceModel))
             {
