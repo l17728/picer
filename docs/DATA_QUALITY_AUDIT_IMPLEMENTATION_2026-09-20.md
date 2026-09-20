@@ -12,3 +12,5 @@ ModelServer 的 `POST /api/face-training/quality-report` 现在对同一份提�
 该接口不修改原图、索引或数据集；客户端可在异步训练提交前展示警告，平台仍以不可变评测快照和签名制品作为最终门禁。属性字段缺失时只报告覆盖不足，不会伪造时间或质量信息。
 
 验证：`dotnet build server/Picer.ModelServer/Picer.ModelServer.csproj -c Debug --no-restore --warnaserror` 通过（0 警告、0 错误）。完整单元测试本轮启动后超过既定等待窗口无输出，已中止，需单独定位挂起用例。
+
+同时新增 `tools/verify-platform-services.ps1`，可在 Windows PowerShell 5.1 下检查 ModelServer 和 HTTPS IndexService，支持 IndexService 尚未部署时的 opt-in 允许模式，并输出 JSON 报告。
