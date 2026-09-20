@@ -147,6 +147,7 @@ try
             INSERT INTO images_fts(rowid, filename, camera, gps, width, height, file_size)
             VALUES (new.id, new.path, new.camera, new.gps, new.width, new.height, new.file_size);
         END;
+        ANALYZE;
         """).ExecuteNonQuery();
     generation.Stop();
 

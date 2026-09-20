@@ -1007,6 +1007,20 @@ public sealed class PicerDatabase : IDisposable
             videoModelMigration.CommandText = migrationSql;
             videoModelMigration.ExecuteNonQuery();
         }
+        if (schemaVersion < 37)
+        {
+            // The effective-time index used to start with `status`.  That is
+            // optimal for the normal active-only view, but broad searches
+            // (IncludeMissing=true) could not use it and sorted the whole
+            // library. Keep the existing index and add an all-status variant.
+            using var searchPerformanceMigration = _conn.CreateCommand();
+            searchPerformanceMigration.CommandText = """
+                CREATE INDEX IF NOT EXISTS idx_images_effective_time_all
+                    ON images(COALESCE(taken_utc,file_created_utc,modified_utc),id);
+                PRAGMA user_version = 37;
+                """;
+            searchPerformanceMigration.ExecuteNonQuery();
+        }
     }
 
     public SqliteCommand Command(string sql)

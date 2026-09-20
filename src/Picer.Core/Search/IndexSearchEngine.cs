@@ -63,7 +63,7 @@ public static class IndexSearchEngine
             cancellationToken.ThrowIfCancellationRequested();
             var conditions = new List<string>();
             var parameters = new List<(string Name, object Value)>();
-            AddFilterConditions(filters, conditions, parameters);
+            AddFilterConditions(filters, conditions, parameters, HasAuxiliaryText(connection));
 
         var orderCol = SortColumn(filters.SortBy);
         var direction = filters.SortDir == SortDirection.Ascending ? "ASC" : "DESC";
@@ -111,9 +111,7 @@ public static class IndexSearchEngine
 
         // Text search on path filename, camera, gps
         if (!string.IsNullOrWhiteSpace(filters.Query))
-        {
-            AddTextCondition(filters.Query, conditions, parameters);
-        }
+            AddTextCondition(filters.Query, conditions, parameters, includeAuxiliary: true);
         AddGeoConditions(filters, conditions, parameters);
 
         // Source filter
@@ -222,9 +220,7 @@ public static class IndexSearchEngine
         var parameters = new List<(string Name, object Value)>();
 
         if (!string.IsNullOrWhiteSpace(filters.Query))
-        {
-            AddTextCondition(filters.Query, conditions, parameters);
-        }
+            AddTextCondition(filters.Query, conditions, parameters, HasAuxiliaryText(connection));
         AddGeoConditions(filters, conditions, parameters);
         if (filters.SourceId.HasValue && filters.SourceId.Value > 0)
         {
@@ -273,11 +269,11 @@ public static class IndexSearchEngine
         return (int)(long)cmd.ExecuteScalar()!;
     }
 
-    private static void AddFilterConditions(SearchFilters filters, List<string> conditions, List<(string Name, object Value)> parameters)
+    private static void AddFilterConditions(SearchFilters filters, List<string> conditions, List<(string Name, object Value)> parameters, bool includeAuxiliaryText)
     {
         if (!string.IsNullOrWhiteSpace(filters.Query))
         {
-            AddTextCondition(filters.Query, conditions, parameters);
+            AddTextCondition(filters.Query, conditions, parameters, includeAuxiliaryText);
         }
         AddGeoConditions(filters, conditions, parameters);
         if (filters.SourceId is > 0) { conditions.Add("t.source_id = $sourceId"); parameters.Add(("sourceId", filters.SourceId.Value)); }
@@ -334,26 +330,43 @@ public static class IndexSearchEngine
 
     private static string FromClause(SearchFilters filters) => "images t";
 
-    private static void AddTextCondition(string query, List<string> conditions, List<(string Name, object Value)> parameters)
+    private static void AddTextCondition(string query, List<string> conditions, List<(string Name, object Value)> parameters, bool includeAuxiliary)
     {
-        conditions.Add("""
-            (t.id IN (SELECT rowid FROM images_fts WHERE images_fts MATCH $ftsQuery)
-             OR EXISTS (SELECT 1 FROM cloud_vision_analyses cv
-                        WHERE cv.image_id=t.id AND cv.status='completed'
-                          AND (cv.summary LIKE $cloudQuery OR cv.result_json LIKE $cloudQuery))
-             OR EXISTS (SELECT 1 FROM florence_image_results fr
-                        WHERE fr.image_id=t.id AND fr.state='accepted' AND fr.result_text LIKE $cloudQuery)
-             OR EXISTS (SELECT 1 FROM image_locations il
-                        WHERE il.image_id=t.id AND il.search_text LIKE $cloudQuery)
-             OR EXISTS (SELECT 1 FROM image_tags it JOIN tags tag ON tag.id=it.tag_id
-                        WHERE it.image_id=t.id AND tag.name LIKE $cloudQuery)
-             OR EXISTS (SELECT 1 FROM scene_group_descriptions sg, json_each(sg.image_ids_json) member
-                        WHERE member.value=t.id AND sg.state='accepted'
-                          AND (sg.scene_name LIKE $cloudQuery OR sg.summary LIKE $cloudQuery OR sg.search_terms_json LIKE $cloudQuery))
-             OR t.id IN (SELECT rowid FROM media_text_fts WHERE media_text_fts MATCH $ftsQuery))
-            """);
+        if (!includeAuxiliary)
+            conditions.Add("t.id IN (SELECT rowid FROM images_fts WHERE images_fts MATCH $ftsQuery)");
+        else
+            conditions.Add("""
+                (t.id IN (SELECT rowid FROM images_fts WHERE images_fts MATCH $ftsQuery)
+                 OR EXISTS (SELECT 1 FROM cloud_vision_analyses cv
+                            WHERE cv.image_id=t.id AND cv.status='completed'
+                              AND (cv.summary LIKE $cloudQuery OR cv.result_json LIKE $cloudQuery))
+                 OR EXISTS (SELECT 1 FROM florence_image_results fr
+                            WHERE fr.image_id=t.id AND fr.state='accepted' AND fr.result_text LIKE $cloudQuery)
+                 OR EXISTS (SELECT 1 FROM image_locations il
+                            WHERE il.image_id=t.id AND il.search_text LIKE $cloudQuery)
+                 OR EXISTS (SELECT 1 FROM image_tags it JOIN tags tag ON tag.id=it.tag_id
+                            WHERE it.image_id=t.id AND tag.name LIKE $cloudQuery)
+                 OR EXISTS (SELECT 1 FROM scene_group_descriptions sg, json_each(sg.image_ids_json) member
+                            WHERE member.value=t.id AND sg.state='accepted'
+                              AND (sg.scene_name LIKE $cloudQuery OR sg.summary LIKE $cloudQuery OR sg.search_terms_json LIKE $cloudQuery))
+                 OR t.id IN (SELECT rowid FROM media_text_fts WHERE media_text_fts MATCH $ftsQuery))
+                """);
         parameters.Add(("ftsQuery", BuildFtsQuery(query)));
-        parameters.Add(("cloudQuery", "%" + query.Trim() + "%"));
+        if (includeAuxiliary) parameters.Add(("cloudQuery", "%" + query.Trim() + "%"));
+    }
+
+    private static bool HasAuxiliaryText(Microsoft.Data.Sqlite.SqliteConnection connection)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT EXISTS(SELECT 1 FROM cloud_vision_analyses WHERE status='completed')
+                OR EXISTS(SELECT 1 FROM florence_image_results WHERE state='accepted')
+                OR EXISTS(SELECT 1 FROM image_locations WHERE search_text IS NOT NULL AND search_text <> '')
+                OR EXISTS(SELECT 1 FROM image_tags)
+                OR EXISTS(SELECT 1 FROM scene_group_descriptions WHERE state='accepted')
+                OR EXISTS(SELECT 1 FROM media_text_fts)
+            """;
+        return Convert.ToInt32(command.ExecuteScalar()) != 0;
     }
 
     private static string SortColumn(SortField field) => field switch
