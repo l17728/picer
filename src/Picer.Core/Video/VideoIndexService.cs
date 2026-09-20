@@ -18,6 +18,22 @@ public static class VideoFormats
 public sealed class VideoRepository(PicerDatabase database)
 {
     private readonly MediaTextIndexRepository _textIndex = new(database);
+    public void UpsertRemote(VideoRecord video, long sourceId)
+    {
+        using var command = database.Command("""
+            INSERT INTO videos(source_id,path,file_size,modified_utc,duration_seconds,width,height,taken_utc,gps,status,indexed_utc)
+            VALUES($source,$path,$size,$modified,$duration,$width,$height,$taken,$gps,$status,$now)
+            ON CONFLICT(path) DO UPDATE SET source_id=excluded.source_id,file_size=excluded.file_size,
+              modified_utc=excluded.modified_utc,duration_seconds=excluded.duration_seconds,width=excluded.width,
+              height=excluded.height,taken_utc=excluded.taken_utc,gps=excluded.gps,status=excluded.status,indexed_utc=excluded.indexed_utc
+            """);
+        command.Parameters.AddWithValue("$source", sourceId); command.Parameters.AddWithValue("$path", video.Path);
+        command.Parameters.AddWithValue("$size", video.FileSize); command.Parameters.AddWithValue("$modified", video.ModifiedUtc.ToUniversalTime().ToString("o"));
+        command.Parameters.AddWithValue("$duration", (object?)video.DurationSeconds ?? DBNull.Value); command.Parameters.AddWithValue("$width", video.Width);
+        command.Parameters.AddWithValue("$height", video.Height); command.Parameters.AddWithValue("$taken", (object?)video.TakenUtc?.ToUniversalTime().ToString("o") ?? DBNull.Value);
+        command.Parameters.AddWithValue("$gps", (object?)video.Gps ?? DBNull.Value); command.Parameters.AddWithValue("$status", video.Status);
+        command.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("o")); command.ExecuteNonQuery();
+    }
     public VideoRecord Upsert(long sourceId, string path)
     {
         var info = new FileInfo(path);

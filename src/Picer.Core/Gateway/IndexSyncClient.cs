@@ -5,6 +5,7 @@ using System.Security.Cryptography.X509Certificates;
 using System.Text.Json;
 using Picer.Core.Data;
 using Picer.Core.Models;
+using Picer.Core.Video;
 
 namespace Picer.Core.Gateway;
 
@@ -43,6 +44,25 @@ public sealed class IndexSyncClient(HttpClient client)
                 response.EnsureSuccessStatusCode();
                 done += batch.Length;
                 progress?.Report((done, total));
+            }
+        }
+        return done;
+    }
+
+    public async Task<int> PushVideosAsync(PicerDatabase database, IProgress<(int done, int total)>? progress = null, CancellationToken cancellationToken = default)
+    {
+        var repository = new VideoRepository(database);
+        var sources = database.GetSources();
+        var done = 0;
+        foreach (var source in sources)
+        {
+            var videos = repository.GetAll().Where(video => video.SourceId == source.Id).ToArray();
+            foreach (var batch in videos.Chunk(100))
+            {
+                using var response = await client.PostAsJsonAsync("api/sync/v1/videos", new { sourcePath = source.Path, videos = batch }, Json, cancellationToken);
+                response.EnsureSuccessStatusCode();
+                done += batch.Length;
+                progress?.Report((done, videos.Length));
             }
         }
         return done;

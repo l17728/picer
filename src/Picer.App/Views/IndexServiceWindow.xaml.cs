@@ -70,7 +70,8 @@ public partial class IndexServiceWindow : Window
             var client = Picer.Core.Gateway.IndexSyncClient.Create($"https://{ip}:8445", token);
             var progress = new Progress<(int done, int total)>(value => HealthText.Text = $"正在同步索引：{value.done}/{value.total}…");
             var count = await client.PushImagesAsync(AppServices.Db, progress);
-            HealthText.Text = $"索引同步完成：{count} 张图片记录已发送。代理可按需提供原图。";
+            var videoCount = await client.PushVideosAsync(AppServices.Db, progress);
+            HealthText.Text = $"索引同步完成：{count} 张图片、{videoCount} 个视频记录已发送。代理可按需提供原图。";
         }
         catch (Exception exception) { HealthText.Text = $"索引同步失败：{exception.Message}"; }
         finally { SyncButton.IsEnabled = true; }

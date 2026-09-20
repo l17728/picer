@@ -20,6 +20,7 @@ namespace Picer.IndexService;
 
 public sealed record GatewaySearchRequest(SearchFilters? Filters, int PageSize, string? Cursor);
 public sealed record SyncImagesRequest(string SourcePath, IReadOnlyList<ImageRecord> Images);
+public sealed record SyncVideosRequest(string SourcePath, IReadOnlyList<VideoRecord> Videos);
 
 public sealed class IndexApiHandlers(PicerDatabase db, ThumbnailService thumbnails, VideoRepository videos)
 {
@@ -213,6 +214,13 @@ public static class IndexServiceHost
                 accepted++;
             }
             return Results.Json(new { accepted, sourceId = source.Id });
+        });
+        app.MapPost("/api/sync/v1/videos", (SyncVideosRequest request) =>
+        {
+            if (string.IsNullOrWhiteSpace(request.SourcePath)) return Results.BadRequest(new { error = "sourcePath_required" });
+            var source = db.AddSource(request.SourcePath);
+            foreach (var video in request.Videos) videoRepository.UpsertRemote(video, source.Id);
+            return Results.Json(new { accepted = request.Videos.Count, sourceId = source.Id });
         });
         app.MapGet("/api/gateway/v1/assets/images/{id:long}", async (long id, string? agentId, CancellationToken cancellationToken) =>
         {
