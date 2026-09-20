@@ -24,6 +24,7 @@ builder.Services.AddSingleton<TrainingAttemptArchive>();
 builder.Services.AddSingleton<ModelCandidateRankingStore>();
 builder.Services.AddSingleton<EvaluationDatasetStore>();
 builder.Services.AddSingleton<GpuEmbeddingService>();
+builder.Services.AddSingleton<GpuTrainingWorkerHost>();
 var app = builder.Build();
 
 // Restore the observable job list after a server restart. Terminal records are
@@ -527,10 +528,11 @@ public sealed class TrainingExecutor
     private readonly ArtifactSigner _signer;
     private readonly TrainingAttemptArchive _archive;
     private readonly ModelCandidateRankingStore _rankings;
+    private readonly GpuTrainingWorkerHost _gpuWorker;
 
-    public TrainingExecutor(ArtifactSigner signer, TrainingAttemptArchive archive, ModelCandidateRankingStore rankings)
+    public TrainingExecutor(ArtifactSigner signer, TrainingAttemptArchive archive, ModelCandidateRankingStore rankings, GpuTrainingWorkerHost gpuWorker)
     {
-        _signer = signer; _archive = archive; _rankings = rankings;
+        _signer = signer; _archive = archive; _rankings = rankings; _gpuWorker = gpuWorker;
         var root = Environment.GetEnvironmentVariable("PICER_TRAINING_ARCHIVE_ROOT")
             ?? Path.Combine(AppContext.BaseDirectory, "training-archive");
         _artifactRoot = Path.Combine(root, "artifacts");
@@ -558,26 +560,9 @@ public sealed class TrainingExecutor
             {
                 jobs[jobId] = jobs[jobId] with { Status = "running", Stage = "gpu-worker", Progress = 5 };
                 var payload = JsonSerializer.Serialize(new { modelVersion = dataset.ModelVersion ?? "sface", samples = dataset.Samples ?? [] });
-                var start = new ProcessStartInfo(workerPython, $"\"{workerScript}\"") { RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true };
-                using var process = Process.Start(start) ?? throw new InvalidOperationException("GPU worker process could not start");
-                await process.StandardInput.WriteAsync(payload); process.StandardInput.Close();
-                var outputTask = process.StandardOutput.ReadToEndAsync();
-                var errorTask = process.StandardError.ReadToEndAsync();
                 var timeoutSeconds = int.TryParse(Environment.GetEnvironmentVariable("PICER_GPU_WORKER_TIMEOUT_SECONDS"), out var configured)
                     ? Math.Clamp(configured, 30, 86400) : 1800;
-                using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds));
-                try { await process.WaitForExitAsync(timeout.Token); }
-                catch (OperationCanceledException)
-                {
-                    try { process.Kill(entireProcessTree: true); } catch { /* process may have exited */ }
-                    throw new TimeoutException($"GPU worker timed out after {timeoutSeconds}s");
-                }
-                var output = await outputTask; var error = await errorTask;
-                if (process.ExitCode != 0)
-                {
-                    var detail = string.IsNullOrWhiteSpace(error) ? output : error;
-                    throw new InvalidOperationException($"GPU worker failed: {detail.Trim()}");
-                }
+                var output = await _gpuWorker.ExecuteAsync(payload, TimeSpan.FromSeconds(timeoutSeconds));
                 using var parsed = JsonDocument.Parse(output);
                 if (parsed.RootElement.TryGetProperty("error", out var workerError)) throw new InvalidOperationException(workerError.GetString());
                 var gpuArtifact = JsonSerializer.Deserialize<TrainingArtifact>(output, new JsonSerializerOptions(JsonSerializerDefaults.Web))
