@@ -1,5 +1,7 @@
 using System.Net.WebSockets;
 using System.IO;
+using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.Json;
 using System.Windows.Forms;
@@ -24,6 +26,7 @@ internal sealed class AgentApplication : IDisposable
     private readonly CancellationTokenSource _stop = new();
     private readonly string _serviceIp = Environment.GetEnvironmentVariable("PICER_INDEX_SERVICE_IP")?.Trim() ?? "";
     private readonly string _token = Environment.GetEnvironmentVariable("PICER_INDEX_SERVICE_TOKEN")?.Trim() ?? "";
+    private readonly byte[]? _spkiPin = ReadSpkiPin();
     private readonly string[] _roots;
     private readonly SemaphoreSlim _sendLock = new(1, 1);
     private Task? _loop;
@@ -46,6 +49,12 @@ internal sealed class AgentApplication : IDisposable
             .Select(Path.GetFullPath).Where(Directory.Exists).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
     }
 
+    private static byte[]? ReadSpkiPin()
+    {
+        var value = Environment.GetEnvironmentVariable("PICER_INDEX_SERVICE_SPKI_PIN")?.Trim();
+        return string.IsNullOrWhiteSpace(value) ? null : Convert.FromBase64String(value);
+    }
+
     private async Task RunAsync(CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(_serviceIp)) { _icon.Text = "Picer 原图代理（未配置服务 IP）"; return; }
@@ -54,6 +63,13 @@ internal sealed class AgentApplication : IDisposable
             try
             {
                 using var socket = new ClientWebSocket();
+                socket.Options.RemoteCertificateValidationCallback = (_, certificate, _, _) =>
+                {
+                    if (certificate is null) return false;
+                    if (_spkiPin is null) return true;
+                    var actual = new X509Certificate2(certificate).PublicKey.ExportSubjectPublicKeyInfo();
+                    return CryptographicOperations.FixedTimeEquals(actual, _spkiPin);
+                };
                 if (!string.IsNullOrWhiteSpace(_token)) socket.Options.SetRequestHeader("Authorization", "Bearer " + _token);
                 await socket.ConnectAsync(new Uri($"wss://{_serviceIp}:8445/api/agent/v1/connect"), cancellationToken);
                 _icon.Text = "Picer 原图代理（已连接）";
