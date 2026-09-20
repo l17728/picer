@@ -103,9 +103,16 @@ public static class IndexServiceHost
         var token = bearerToken ?? ServiceSecurity.ResolveToken(dataRoot);
 
         var builder = WebApplication.CreateBuilder();
+        // Keep the secure loopback default for local deployments.  Cross-
+        // machine LAN deployments explicitly opt in with
+        // PICER_INDEX_SERVICE_BIND=0.0.0.0 (or a specific interface).
+        var bindAddress = Environment.GetEnvironmentVariable("PICER_INDEX_SERVICE_BIND");
+        if (string.IsNullOrWhiteSpace(bindAddress)) bindAddress = IPAddress.Loopback.ToString();
+        if (!IPAddress.TryParse(bindAddress, out var parsedBindAddress))
+            throw new InvalidOperationException($"PICER_INDEX_SERVICE_BIND 不是有效的 IP 地址：{bindAddress}");
         builder.WebHost.UseUrls();
         builder.WebHost.ConfigureKestrel(options =>
-            options.Listen(IPAddress.Loopback, port, listenOptions => listenOptions.UseHttps(certificate)));
+            options.Listen(parsedBindAddress, port, listenOptions => listenOptions.UseHttps(certificate)));
 
         var handlers = new IndexApiHandlers(db, thumbnails);
         var engine = new IndexEngine(db, new LocalStorageProvider(), thumbnails);

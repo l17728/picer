@@ -55,7 +55,7 @@ public static class ServiceSecurity
             File.WriteAllBytes(protectedPath, Protect(exported));
             try { File.Delete(plainPath); } catch { }
         }
-        catch (Exception exception) when (exception is CryptographicException or IOException)
+        catch (Exception exception) when (exception is CryptographicException or IOException or PlatformNotSupportedException)
         {
             File.WriteAllBytes(plainPath, exported);
             AppLogger.Info("DPAPI 不可用，证书密钥以明文回退落盘（受限目录 ACL）。");
@@ -82,7 +82,7 @@ public static class ServiceSecurity
         {
             return "dpapi:" + Convert.ToBase64String(Protect(plain));
         }
-        catch (Exception exception) when (exception is CryptographicException or IOException)
+        catch (Exception exception) when (exception is CryptographicException or IOException or PlatformNotSupportedException)
         {
             return "plain:" + Convert.ToBase64String(plain);
         }
@@ -94,7 +94,8 @@ public static class ServiceSecurity
         if (bytes.Length > 6 && bytes[0] == 'd' && bytes[1] == 'p')
         {
             try { return Unprotect(Convert.FromBase64String(Encoding.UTF8.GetString(bytes, 6, bytes.Length - 6))); }
-            catch (CryptographicException) { return Convert.FromBase64String(Encoding.UTF8.GetString(bytes, 6, bytes.Length - 6)); }
+            catch (Exception exception) when (exception is CryptographicException or PlatformNotSupportedException)
+            { return Convert.FromBase64String(Encoding.UTF8.GetString(bytes, 6, bytes.Length - 6)); }
         }
         return bytes;
     }
