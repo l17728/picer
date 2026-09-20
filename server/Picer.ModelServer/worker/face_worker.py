@@ -2,6 +2,8 @@
 import base64, json, os, sys, uuid, datetime
 import torch
 
+_SESSION_CACHE = {}
+
 def field(sample, camel, pascal):
     if camel in sample:
         return sample[camel]
@@ -50,13 +52,18 @@ def enrich_insightface_embeddings(samples, model_version):
     providers = ["CPUExecutionProvider"]
     if os.environ.get("PICER_GPU_WORKER_USE_CUDA", "").strip().lower() in {"1", "true", "yes"}:
         providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
-    session = ort.InferenceSession(model_path, providers=providers)
+    cache_key = (model_version, model_path, tuple(providers))
+    session = _SESSION_CACHE.get(cache_key)
+    if session is None:
+        session = ort.InferenceSession(model_path, providers=providers)
+        _SESSION_CACHE[cache_key] = session
     input_name = session.get_inputs()[0].name
     input_shape = session.get_inputs()[0].shape
-    output = []
-    for sample in samples:
+    output = list(samples)
+    pending = []
+    tensors = []
+    for index, sample in enumerate(samples):
         if sample.get("embedding") or sample.get("Embedding"):
-            output.append(sample)
             continue
         encoded = sample.get("faceImageBase64", sample.get("FaceImageBase64"))
         raw = base64.b64decode(encoded)
@@ -77,15 +84,19 @@ def enrich_insightface_embeddings(samples, model_version):
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB).astype(np.float32)
         image = (image - 127.5) / 127.5
         tensor = image[None, ...] if input_shape[-1] == 3 else image.transpose(2, 0, 1)[None, ...]
-        vector = session.run(None, {input_name: tensor})[0][0]
-        vector = vector / (np.linalg.norm(vector) + 1e-12)
-        enriched = dict(sample)
-        enriched["embedding"] = vector.astype(float).tolist()
-        output.append(enriched)
+        pending.append(index)
+        tensors.append(tensor)
+    if tensors:
+        batch = np.concatenate(tensors, axis=0)
+        vectors = session.run(None, {input_name: batch})[0]
+        for index, vector in zip(pending, vectors):
+            vector = vector / (np.linalg.norm(vector) + 1e-12)
+            enriched = dict(samples[index])
+            enriched["embedding"] = vector.astype(float).tolist()
+            output[index] = enriched
     return output
 
-def main():
-    request = json.load(sys.stdin)
+def process(request):
     if request.get("operation") == "embed":
         model_version = request.get("modelVersion", "insightface-arcface")
         samples = [{"faceImageBase64": value} for value in request.get("images", [])]
@@ -158,6 +169,18 @@ def main():
                    "thresholdSweepBestFrr": best_metrics[2], "currentAccuracy": accuracy,
                    "explanation": "阈值可达 90%，优先校准阈值" if action == "calibrate-threshold" else "阈值扫描仍低于 90%，停止重复调阈值并评测更强基模"}
     return {"artifactId": "artifact-" + uuid.uuid4().hex[:12], "algorithm": "prototype-calibration-gpu", "modelVersion": model_version, "createdUtc": datetime.datetime.now(datetime.timezone.utc).isoformat(), "prototypes": prototypes, "diagnostics": diagnostics, "metrics": {"totalSamples": len(samples) + len(negative_samples), "totalPersons": len(prototypes), "trainAccuracy": accuracy, "validationAccuracy": accuracy, "falseAcceptRate": far, "falseRejectRate": frr, "meanSimilaritySame": 0.0, "meanSimilarityDiff": 0.0}}
+
+def main():
+    if "--server" in sys.argv:
+        for line in sys.stdin:
+            if not line.strip():
+                continue
+            try:
+                print(json.dumps(process(json.loads(line)), ensure_ascii=False), flush=True)
+            except Exception as exc:
+                print(json.dumps({"error": str(exc)}, ensure_ascii=False), flush=True)
+        return
+    return process(json.load(sys.stdin))
 
 if __name__ == "__main__":
     try: print(json.dumps(main(), ensure_ascii=False))

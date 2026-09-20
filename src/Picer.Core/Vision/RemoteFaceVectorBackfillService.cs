@@ -15,11 +15,22 @@ public sealed class RemoteFaceVectorBackfillService(
         IProgress<FaceVectorBackfillProgress>? progress = null, CancellationToken cancellationToken = default)
     {
         var sources = repository.GetFaceSources(sourceModelVersion);
+        var batchSize = int.TryParse(Environment.GetEnvironmentVariable("PICER_FACE_VECTOR_BATCH_SIZE"), out var configuredBatch)
+            ? Math.Clamp(configuredBatch, 16, 128) : 64;
+        var cropParallelism = int.TryParse(Environment.GetEnvironmentVariable("PICER_FACE_CROP_PARALLELISM"), out var configuredParallelism)
+            ? Math.Clamp(configuredParallelism, 1, Environment.ProcessorCount) : Math.Max(1, Math.Min(4, Environment.ProcessorCount));
         var completed = 0; var failed = 0; var saved = 0;
-        foreach (var batch in sources.Chunk(16))
+        foreach (var batch in sources.Chunk(batchSize))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var encoded = batch.Select(source => EncodeCrop(source, cancellationToken)).ToArray();
+            // A burst often contains several faces from the same original
+            // image. Read each source file once per batch, while keeping the
+            // cache bounded to the current batch.
+            var imageBytes = batch.Select(source => source.ImagePath).Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(path => path, path => TryRead(path), StringComparer.OrdinalIgnoreCase);
+            var encoded = new string?[batch.Length];
+            Parallel.For(0, batch.Length, new ParallelOptions { MaxDegreeOfParallelism = cropParallelism, CancellationToken = cancellationToken },
+                index => encoded[index] = EncodeCrop(batch[index], imageBytes[batch[index].ImagePath], cancellationToken));
             var valid = batch.Zip(encoded).Where(pair => pair.Second is not null).ToArray();
             var vectors = valid.Length == 0 ? [] : await platform.GenerateEmbeddingsAsync(targetModelVersion,
                 valid.Select(pair => pair.Second!).ToArray(), cancellationToken).ConfigureAwait(false);
@@ -35,11 +46,20 @@ public sealed class RemoteFaceVectorBackfillService(
     }
 
     public static string? EncodeCrop(FaceVectorBackfillSource source, CancellationToken cancellationToken)
+        => EncodeCrop(source, TryRead(source.ImagePath), cancellationToken);
+
+    private static byte[]? TryRead(string path)
+    {
+        try { return File.ReadAllBytes(path); } catch { return null; }
+    }
+
+    private static string? EncodeCrop(FaceVectorBackfillSource source, byte[]? bytes, CancellationToken cancellationToken)
     {
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
-            using var image = Image.Load(source.ImagePath);
+            if (bytes is null || bytes.Length == 0) return null;
+            using var image = Image.Load(bytes);
             var paddingX = source.Box.Width * .25f; var paddingY = source.Box.Height * .25f;
             var left = Math.Clamp(source.Box.X - paddingX, 0, 1); var top = Math.Clamp(source.Box.Y - paddingY, 0, 1);
             var right = Math.Clamp(source.Box.X + source.Box.Width + paddingX, 0, 1); var bottom = Math.Clamp(source.Box.Y + source.Box.Height + paddingY, 0, 1);
