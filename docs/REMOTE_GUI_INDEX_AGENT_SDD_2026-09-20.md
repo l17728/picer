@@ -103,7 +103,7 @@ GET  /api/sync/v1/sources
 
 要求：
 
-- 以 `(sourceId, relativePath, contentSha256)` 做幂等键；
+- 以 `recordId + recordVersion + batchId` 做同步幂等键；`sourceId/relativePath/contentSha256` 只用于内容和路径一致性校验；
 - 每个 source 独立 cursor；
 - push 可重复提交，不产生重复记录；
 - 删除采用 tombstone，保留一段时间防止旧客户端复活记录；
@@ -265,7 +265,9 @@ asset.cancel
 
 每个资源请求携带 `requestId`、`sessionId`、`sourceId`、`recordId`、`contentSha256`、Range、过期时间和 nonce。IndexService 只向已注册且在线的 source 绑定 Agent 发出请求；Agent 不接受 GUI 直接提交的路径或哈希。
 
-资源会话短期有效，并绑定 GUI 设备、Agent、source 和允许的 Range。客户端断开会传播取消；Agent 重启后旧会话失效，GUI 可重新申请。
+资源会话（`AssetSessionId`）短期有效，并绑定 GUI 设备、Agent、source 和允许的 Range。客户端断开会传播取消；Agent 重启后旧会话失效，GUI 可重新申请。GUI 模式切换使用独立的 `GatewaySessionId`，两者不得混用。
+
+首版 MediaAgent 传输固定使用 HTTPS WebSocket：控制消息为 JSON envelope，数据消息为带 `requestId`、`offset`、`length` 和序号的二进制 frame。一个连接可复用多个并发请求，由 Agent 按最大并发数调度；重连后旧资源会话全部失效，只接收新请求。每个 chunk 必须按 session、序号、偏移、长度和过期时间校验，IndexService 向 GUI 传播取消。
 
 ### 12.4 路径和 TOCTOU 防护
 
@@ -294,6 +296,18 @@ editMetadata, classifyFace, deleteFile, runAnalysis
 
 首期只启用 `browse/search/originalRead/videoRead`。不可用功能在 GUI 中禁用并显示原因，不能点击后无响应。
 
+服务端必须强制执行 scope，而不是只依赖 GUI 隐藏按钮：
+
+| 路由/操作 | 必需 scope |
+|---|---|
+| `/api/gateway/*` 查询和搜索 | `index.read` |
+| `/api/assets/*` 缩略图/原图会话 | `asset.read` |
+| Agent WebSocket 注册和心跳 | `agent.connect` |
+| `/api/sync/*` 索引同步 | `index.sync` |
+| 编辑、删除、分析、训练 | 本阶段不签发 |
+
+`AssetSessionId + requestId + nonce` 只能消费一次；IndexService 保存已消费标识，重复、过期、取消、完成或失败后的请求一律拒绝。客户端不能自行延长有效期或扩大允许的 Range。远程模式下 IndexService 绝不调用 `ThumbnailService.GetOrCreate(record.Path, ...)`，也不使用同步数据中的本地绝对路径生成缩略图或原图；缺失缩略图必须通过已授权 Agent 获取后按 `thumbSha256` 缓存。
+
 远程缓存增加当前用户 ACL、临时文件清理、LRU 文件数和字节双上限、磁盘不足保护、一键清理入口。IndexService 的临时资源缓存有明确最大时长和空间上限；缓存目录不记录本地绝对路径。
 
 ### 12.7 视频和并发
@@ -315,3 +329,24 @@ editMetadata, classifyFace, deleteFile, runAnalysis
 - Linux IndexService 完全不存在 Windows 原图路径时仍可通过 Agent 正常读取。
 
 评审结论：架构方向通过；补齐本节约束后进入第一阶段编码。首阶段只实现统一 GUI 模式切换、远程只读索引/搜索和同步协议，不开放远程删除、编辑和 AI 分析。
+
+### 12.9 Remote MainWindow API 映射
+
+| UI 功能 | 本地实现 | 远程首期实现 | 远程 API |
+|---|---|---|---|
+| 目录树 | SQLite | Gateway | `sources`、`images` |
+| 照片网格 | SQLite/ThumbnailService | Gateway + 内容哈希缓存 | `images`、`thumbnails` |
+| 搜索 | 本地 FTS | IndexService | `search` |
+| 原图 | 本地路径 | AssetSession + MediaAgent | `asset session` |
+| 人物/标签/场景 | 本地 Repository | 只读 Gateway | `people/tags/scenes` |
+| 添加目录/扫描 | IndexEngine | 禁用 | 暂不提供 |
+| 编辑/分类/删除 | 本地写操作 | 禁用 | 暂不提供 |
+
+远程模式启动 `MainWindow` 时不得构造依赖本地 `PicerDatabase` 的服务；未实现的 RemoteRepository 只能使对应能力禁用，不能导致整个窗口启动失败。
+
+### 12.10 实现一致性约束
+
+- E2E 测试的远程 IP 必须通过测试配置注入，文档中的 `124.156.193.122` 只是部署示例；
+- Windows Agent 必须使用 reparse-point 安全的打开方式，在同一只读句柄上完成根目录校验、哈希校验和传输；
+- Linux IndexService 永远不依赖 Windows 绝对路径；
+- 远程缩略图、原图和视频资源都必须经过 scope、AssetSessionId、Range 和哈希校验。
