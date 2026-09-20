@@ -34,3 +34,7 @@
 
 `DATA-QUALITY → AGENT-STATE → EVAL/LEADERBOARD → BENCHMARK/REGRESSION → SERVICE-E2E → AI-AUDIO-E2E → DOCS`。
 
+## 2026-09-20 状态刷新
+
+- `EVAL/LEADERBOARD`：代码完成，排行榜历史和 20 轮单模型门禁已可查询；仍需真实数据继续积累轮次。
+- `BENCHMARK/REGRESSION`：10k 基准通过；100k p95 为 234.7ms，未达到 150ms，保留为性能优化阻塞项；取消路径和针对性回归已覆盖。
