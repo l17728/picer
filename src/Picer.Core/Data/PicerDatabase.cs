@@ -1014,11 +1014,15 @@ public sealed class PicerDatabase : IDisposable
             // (IncludeMissing=true) could not use it and sorted the whole
             // library. Keep the existing index and add an all-status variant.
             using var searchPerformanceMigration = _conn.CreateCommand();
-            searchPerformanceMigration.CommandText = """
+            var searchIndexSql = "";
+            if (!ColumnExists("images", "file_created_utc"))
+                searchIndexSql += "ALTER TABLE images ADD COLUMN file_created_utc TEXT;\n";
+            searchIndexSql += """
                 CREATE INDEX IF NOT EXISTS idx_images_effective_time_all
                     ON images(COALESCE(taken_utc,file_created_utc,modified_utc),id);
                 PRAGMA user_version = 37;
                 """;
+            searchPerformanceMigration.CommandText = searchIndexSql;
             searchPerformanceMigration.ExecuteNonQuery();
         }
     }
