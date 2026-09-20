@@ -312,7 +312,11 @@ editMetadata, classifyFace, deleteFile, runAnalysis
 
 ### 12.7 视频和并发
 
-视频原文件、首帧缩略图、关键帧和视频元数据分别使用独立内容哈希和缓存键；视频原文件支持 Range。IndexService/Agent 设置单设备并发数、单 Range 上限、单文件大小、空闲超时、全局带宽和队列限制。多台远程 GUI 可并发读取同一资源，但服务端必须限制重复上游读取和句柄数量。
+视频和照片使用同一套远程浏览与资源代理逻辑。远程 GUI 的目录树、时间线、搜索和媒体类型筛选不切换到另一套视频页面；选择“视频”时显示视频记录和首帧，选择“全部”时图片和视频共用同一时间序列布局。
+
+视频原文件、首帧缩略图、关键帧和视频元数据分别使用独立内容哈希和缓存键；视频原文件支持 Range。远程 GUI 首次浏览只请求首帧/关键帧，双击查看或播放时才按需请求视频原文件；下载的分片写入 `.part`，完整文件或可播放缓存段通过哈希/Range 校验后才可使用。视频的转写、人物时间线和摘要作为索引元数据同步，远程首期只读展示。
+
+IndexService/Agent 设置单设备并发数、单 Range 上限、单文件大小、空闲超时、全局带宽和队列限制。多台远程 GUI 可并发读取同一视频，但服务端必须限制重复上游读取和句柄数量。视频资源协议错误应区分 `video_not_found`、`keyframe_unavailable`、`range_invalid`、`asset_changed` 和 `agent_offline`。
 
 ### 12.8 补充回归用例
 
@@ -338,6 +342,9 @@ editMetadata, classifyFace, deleteFile, runAnalysis
 | 照片网格 | SQLite/ThumbnailService | Gateway + 内容哈希缓存 | `images`、`thumbnails` |
 | 搜索 | 本地 FTS | IndexService | `search` |
 | 原图 | 本地路径 | AssetSession + MediaAgent | `asset session` |
+| 视频首帧/关键帧 | 本地缩略图和关键帧缓存 | IndexService + 内容哈希缓存 | `video thumbnails/keyframes` |
+| 视频原文件/播放 | 本地文件 | Range + MediaAgent + 本地缓存 | `video asset session` |
+| 视频转写/人物/摘要 | 本地视频索引表 | 远程只读元数据 | `videos/transcripts/faces/summaries` |
 | 人物/标签/场景 | 本地 Repository | 只读 Gateway | `people/tags/scenes` |
 | 添加目录/扫描 | IndexEngine | 禁用 | 暂不提供 |
 | 编辑/分类/删除 | 本地写操作 | 禁用 | 暂不提供 |
