@@ -9,7 +9,7 @@
     <IsTestProject>true</IsTestProject>
     <!-- xunit 2.5.3 的 NETStandard.Library 1.6.1 传递链携带版本化 RID 资产，FrameworkReference 启用后触发 NETSDK1206；
          仓库仅支持 Windows x64，无需解析这些 RID -->
-    <NoWarn>$(NoWarn);NETSDK1206</NoWarn>
+    <NoWarn>$(NoWarn);NETSDK1206;CA1416</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
