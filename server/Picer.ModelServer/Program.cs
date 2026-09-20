@@ -34,8 +34,8 @@ var restoredJobs = app.Services.GetRequiredService<ConcurrentDictionary<string, 
 foreach (var record in restoredArchive.ReadRecent(1000).GroupBy(r => r.JobId).Select(g => g.First()))
 {
     if (string.IsNullOrWhiteSpace(record.JobId)) continue;
-    var status = record.Status is "completed" or "failed" or "canceled" ? record.Status : "failed";
-    var error = status == "failed" && record.Status is not "failed" ? "ModelServer 重启后任务未完成，可安全重试" : null;
+    var status = record.Status is "completed" or "failed" or "canceled" ? record.Status : "recoverable";
+    var error = status == "recoverable" ? "ModelServer 重启后任务未完成，可安全重试" : null;
     restoredJobs.TryAdd(record.JobId, new TrainingJob(record.JobId, status, status, status == "completed" ? 100 : 0,
         record.ArtifactId, error));
 }
@@ -399,11 +399,40 @@ app.MapPost("/api/face-training/quality-report", (DatasetRequest request) =>
         .ToArray();
     var leaked = groups.Where(g => g.Select(s => s.Split).Distinct(StringComparer.OrdinalIgnoreCase).Count() > 1)
         .Select(g => g.Key).ToArray();
+    var duplicateHashes = samples.Where(s => !string.IsNullOrWhiteSpace(s.Evidence?.ImageHash))
+        .GroupBy(s => s.Evidence!.ImageHash!, StringComparer.OrdinalIgnoreCase)
+        .Where(g => g.Select(s => s.FaceId).Distinct().Count() > 1)
+        .Select(g => new { hash = g.Key, faceIds = g.Select(s => s.FaceId).Distinct().ToArray(), count = g.Count() })
+        .ToArray();
+    var missingEmbeddings = samples.Where(s => s.Embedding is null || s.Embedding.Length == 0)
+        .Select(s => s.FaceId).Distinct().ToArray();
     var persons = samples.Select(s => s.PersonId).Distinct().Count();
+    var positive = samples.Where(s => string.Equals(s.Label, "positive", StringComparison.OrdinalIgnoreCase)).ToArray();
+    var negative = samples.Where(s => string.Equals(s.Label, "negative", StringComparison.OrdinalIgnoreCase)).ToArray();
+    var warnings = new List<string>();
+    if (persons < 2) warnings.Add("至少需要两个已标注人物");
+    if (samples.Count(s => s.Split.Equals("validation", StringComparison.OrdinalIgnoreCase)) == 0)
+        warnings.Add("缺少 validation 分区");
+    if (samples.Count(s => s.Split.Equals("test", StringComparison.OrdinalIgnoreCase)) == 0)
+        warnings.Add("缺少独立 test 分区");
+    if (missingEmbeddings.Length > 0) warnings.Add($"存在 {missingEmbeddings.Length} 条缺失向量");
+    if (leaked.Length > 0) warnings.Add($"存在 {leaked.Length} 个跨分区泄漏组");
+    if (negative.Length == 0 && (request.NegativeSamples?.Length ?? 0) == 0)
+        warnings.Add("缺少排他/未知人物负样本");
+    foreach (var person in positive.GroupBy(s => s.PersonId))
+        if (person.Count() < 2) warnings.Add($"人物 {person.Key} 正样本不足 2 条");
+    var dated = samples.Select(s => s.Attributes).Where(a => a is not null).Select(a => a!).ToArray();
+    var attributeVariants = dated.Select(a => $"{a.Pose}|{a.Lighting}|{a.Expression}").Distinct(StringComparer.OrdinalIgnoreCase).Count();
+    if (dated.Length > 0 && attributeVariants < 2) warnings.Add("姿态/光照属性覆盖不足，无法证明困难样本泛化");
+    var passed = warnings.Count == 0;
     return Results.Ok(new { protocolVersion = request.ProtocolVersion, totalSamples = samples.Length,
         totalPersons = persons, trainSamples = samples.Count(s => s.Split == "train"),
-        validationSamples = samples.Count(s => s.Split == "validation"), leakageGroups = leaked,
-        passed = leaked.Length == 0 && persons > 0 });
+        validationSamples = samples.Count(s => s.Split == "validation"),
+        testSamples = samples.Count(s => s.Split == "test"), positiveSamples = positive.Length,
+        negativeSamples = negative.Length + (request.NegativeSamples?.Length ?? 0),
+        leakageGroups = leaked, duplicateImageHashes = duplicateHashes,
+        missingEmbeddingFaceIds = missingEmbeddings, attributeCoverage = dated.Length,
+        attributeVariantCount = attributeVariants, warnings, passed });
 });
 
 app.MapPost("/api/face-training/jobs", (JobRequest request, ConcurrentDictionary<string, TrainingJob> jobs, TrainingExecutor executor, TrainingAttemptArchive archive, ConcurrentDictionary<string, object> datasets) =>
