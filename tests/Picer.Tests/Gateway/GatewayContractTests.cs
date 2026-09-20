@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.WebSockets;
+using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
 using Microsoft.AspNetCore.Builder;
@@ -230,6 +231,21 @@ public sealed class GatewayContractTests(GatewayServiceFixture fixture) : IClass
         var actual = await response.Content.ReadAsByteArrayAsync();
         Assert.Equal(await File.ReadAllBytesAsync(image.Path), actual);
         await responseTask;
+    }
+
+    [Fact]
+    public async Task SyncImages_UpsertsBatchAndReturnsAcceptedCount()
+    {
+        using var handler = new HttpClientHandler { ServerCertificateCustomValidationCallback = (_, _, _, _) => true };
+        using var client = new HttpClient(handler) { BaseAddress = new Uri(fixture.BaseUrl) };
+        client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", "picer-test-token");
+        var source = fixture.Db.GetSources().Single();
+        var image = fixture.Db.GetImages(fixture.SourceId).First();
+        using var response = await client.PostAsJsonAsync("api/sync/v1/images", new { sourcePath = source.Path, images = new[] { image } });
+        response.EnsureSuccessStatusCode();
+        var payload = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(1, payload.GetProperty("accepted").GetInt32());
+        Assert.True(payload.GetProperty("sourceId").GetInt64() > 0);
     }
 
     private static async Task SendWsAsync(ClientWebSocket socket, object value)

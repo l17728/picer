@@ -13,6 +13,7 @@ public partial class IndexServiceWindow : Window
             ? "客户端只读连接 IndexService；扫描、索引、缩略图和搜索由服务端完成。"
             : "当前为本地模式：索引在 Picer 进程内构建。";
         BrowseButton.Visibility = AppServices.ServiceMode ? Visibility.Visible : Visibility.Collapsed;
+        SyncButton.Visibility = AppServices.ServiceMode ? Visibility.Collapsed : Visibility.Visible;
         AgentBox.Visibility = AppServices.ServiceMode ? Visibility.Collapsed : Visibility.Visible;
         var settings = MediaAgentController.Load();
         AgentEnabledBox.IsChecked = settings.Enabled;
@@ -51,6 +52,28 @@ public partial class IndexServiceWindow : Window
         MediaAgentController.Save(new MediaAgentController.Settings(AgentEnabledBox.IsChecked == true, ip));
         AgentStatusText.Text = "原图代理已启动，等待 IndexService 连接。";
         AgentButton.Content = "重新启动代理";
+    }
+
+    private async void Sync_Click(object sender, RoutedEventArgs e)
+    {
+        if (AppServices.ServiceMode || AppServices.Db is null) { HealthText.Text = "当前不是本地索引，不能从此窗口推送本地索引。"; return; }
+        var ip = AgentIpBox.Text.Trim();
+        var token = Environment.GetEnvironmentVariable("PICER_INDEX_SERVICE_TOKEN") ?? "";
+        if (!System.Net.IPAddress.TryParse(ip, out _) || string.IsNullOrWhiteSpace(token))
+        {
+            HealthText.Text = "请先填写有效的 IndexService IP，并配置 PICER_INDEX_SERVICE_TOKEN。";
+            return;
+        }
+        SyncButton.IsEnabled = false;
+        try
+        {
+            var client = Picer.Core.Gateway.IndexSyncClient.Create($"https://{ip}:8445", token);
+            var progress = new Progress<(int done, int total)>(value => HealthText.Text = $"正在同步索引：{value.done}/{value.total}…");
+            var count = await client.PushImagesAsync(AppServices.Db, progress);
+            HealthText.Text = $"索引同步完成：{count} 张图片记录已发送。代理可按需提供原图。";
+        }
+        catch (Exception exception) { HealthText.Text = $"索引同步失败：{exception.Message}"; }
+        finally { SyncButton.IsEnabled = true; }
     }
 
     private void Close_Click(object sender, RoutedEventArgs e) => Close();

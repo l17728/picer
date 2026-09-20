@@ -19,6 +19,7 @@ using Picer.Core.Video;
 namespace Picer.IndexService;
 
 public sealed record GatewaySearchRequest(SearchFilters? Filters, int PageSize, string? Cursor);
+public sealed record SyncImagesRequest(string SourcePath, IReadOnlyList<ImageRecord> Images);
 
 public sealed class IndexApiHandlers(PicerDatabase db, ThumbnailService thumbnails, VideoRepository videos)
 {
@@ -199,6 +200,19 @@ public static class IndexServiceHost
         {
             var stream = await handlers.OpenThumbnailAsync(id, cancellationToken);
             return stream is null ? Results.NotFound() : Results.Stream(stream, "image/jpeg");
+        });
+        app.MapPost("/api/sync/v1/images", (SyncImagesRequest request) =>
+        {
+            if (string.IsNullOrWhiteSpace(request.SourcePath)) return Results.BadRequest(new { error = "sourcePath_required" });
+            var source = db.AddSource(request.SourcePath);
+            var accepted = 0;
+            foreach (var image in request.Images)
+            {
+                image.SourceId = source.Id;
+                db.UpsertImage(image);
+                accepted++;
+            }
+            return Results.Json(new { accepted, sourceId = source.Id });
         });
         app.MapGet("/api/gateway/v1/assets/images/{id:long}", async (long id, string? agentId, CancellationToken cancellationToken) =>
         {
