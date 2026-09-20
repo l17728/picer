@@ -57,6 +57,15 @@ public sealed class IndexBackendConfigTests : IDisposable
     }
 
     [Fact]
+    public void ServiceMode_IndexServiceIp_ComposesFixedHttpsEndpoint()
+    {
+        File.WriteAllText(BackendPath, """{"mode":"service","indexServiceIp":"124.156.193.122"}""");
+        File.WriteAllText(EndpointPath, """{"url":"https://127.0.0.1:8445","spkiPin":"AAEC","tokenCipher":"AAEC","pipeName":"picer-x"}""");
+        var options = IndexBackendConfig.Load(BackendPath, EndpointPath, static cipher => cipher);
+        Assert.Equal("https://124.156.193.122:8445", options.BaseUrl);
+    }
+
+    [Fact]
     public void EnvironmentVariable_OverridesCipherToken()
     {
         File.WriteAllText(BackendPath, """{"mode":"service"}""");

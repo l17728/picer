@@ -10,7 +10,7 @@ public static class IndexBackendConfig
     public const string LocalMode = "local";
     public const string ServiceMode = "service";
 
-    private sealed record BackendFile(string? Mode, string? BaseUrl);
+    private sealed record BackendFile(string? Mode, string? BaseUrl, string? IndexServiceIp);
     private sealed record EndpointFile(string Url, string SpkiPin, string TokenCipher, string? PipeName);
 
     private static readonly JsonSerializerOptions Json = new() { PropertyNameCaseInsensitive = true };
@@ -25,7 +25,9 @@ public static class IndexBackendConfig
             {
                 var backend = JsonSerializer.Deserialize<BackendFile>(File.ReadAllText(backendJsonPath), Json);
                 mode = backend?.Mode;
-                baseUrlOverride = backend?.BaseUrl;
+                baseUrlOverride = string.IsNullOrWhiteSpace(backend?.IndexServiceIp)
+                    ? backend?.BaseUrl
+                    : BuildIndexServiceUrl(backend.IndexServiceIp);
             }
         }
         catch
@@ -62,5 +64,15 @@ public static class IndexBackendConfig
 
         var baseUrl = string.IsNullOrWhiteSpace(baseUrlOverride) ? endpoint.Url : baseUrlOverride;
         return new IndexBackendOptions(ServiceMode, baseUrl, Convert.FromBase64String(endpoint.SpkiPin), token, endpoint.PipeName);
+    }
+
+    private static string BuildIndexServiceUrl(string ip)
+    {
+        var host = ip.Trim();
+        if (host.Length == 0 || host.Contains('/', StringComparison.Ordinal) || host.Contains(':', StringComparison.Ordinal))
+            throw new InvalidOperationException("indexServiceIp 必须是 IPv4 地址；端口和 API 路径由程序固定组装。");
+        if (!System.Net.IPAddress.TryParse(host, out var address) || address.AddressFamily != System.Net.Sockets.AddressFamily.InterNetwork)
+            throw new InvalidOperationException("indexServiceIp 不是有效的 IPv4 地址。");
+        return $"https://{host}:8445";
     }
 }
