@@ -11,6 +11,7 @@ namespace Picer.IndexService;
 
 internal sealed record PipeListRequest(long? SourceId = null, bool IncludeMissing = false, int PageSize = 200, string? Cursor = null);
 internal sealed record PipeImageRequest(long Id = 0);
+internal sealed record PipeVideoListRequest(long? SourceId = null, int PageSize = 200, string? Cursor = null);
 internal sealed record PipeSearchRequest(SearchFilters? Filters = null, int PageSize = 200, string? Cursor = null);
 internal sealed record PipeSourceRequest(string Path = "");
 internal sealed record PipeIdRequest(long Id = 0);
@@ -87,6 +88,7 @@ public sealed class NamedPipeIndexServer : IDisposable
                 : (JsonElement?)null;
             var listRequest = payload is null ? new PipeListRequest() : payload.Value.Deserialize<PipeListRequest>(Json) ?? new PipeListRequest();
             var imageRequest = payload is null ? new PipeImageRequest() : payload.Value.Deserialize<PipeImageRequest>(Json) ?? new PipeImageRequest();
+            var videoListRequest = payload is null ? new PipeVideoListRequest() : payload.Value.Deserialize<PipeVideoListRequest>(Json) ?? new PipeVideoListRequest();
             var searchRequest = payload is null ? new PipeSearchRequest() : payload.Value.Deserialize<PipeSearchRequest>(Json) ?? new PipeSearchRequest();
             var scanRequest = payload is null ? new PipeScanRequest() : payload.Value.Deserialize<PipeScanRequest>(Json) ?? new PipeScanRequest();
             var sourceRequest = payload is null ? new PipeSourceRequest() : payload.Value.Deserialize<PipeSourceRequest>(Json) ?? new PipeSourceRequest();
@@ -104,6 +106,8 @@ public sealed class NamedPipeIndexServer : IDisposable
                 "health" => JsonSerializer.SerializeToElement(_handlers.Health()),
                 "list" => JsonSerializer.SerializeToElement(await _handlers.ListAsync(listRequest.SourceId, listRequest.IncludeMissing, listRequest.PageSize, listRequest.Cursor, cancellationToken)),
                 "image" => JsonSerializer.SerializeToElement(await _handlers.GetAsync(imageRequest.Id, cancellationToken)),
+                "videos" => JsonSerializer.SerializeToElement(await _handlers.ListVideosAsync(videoListRequest.SourceId, videoListRequest.PageSize, videoListRequest.Cursor, cancellationToken)),
+                "video" => JsonSerializer.SerializeToElement(await _handlers.GetVideoAsync(imageRequest.Id, cancellationToken)),
                 "thumb" => await ThumbnailElementAsync(imageRequest.Id, cancellationToken),
                 "search" => JsonSerializer.SerializeToElement(await _handlers.SearchAsync(new GatewaySearchRequest(searchRequest.Filters, searchRequest.PageSize, searchRequest.Cursor), cancellationToken)),
                 "sources" => JsonSerializer.SerializeToElement(_handlers.ListSources()),

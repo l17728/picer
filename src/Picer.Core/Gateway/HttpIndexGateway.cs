@@ -6,6 +6,7 @@ using System.Security.Cryptography.X509Certificates;
 using System.Text.Json;
 using Picer.Core.Models;
 using Picer.Core.Search;
+using Picer.Core.Video;
 
 namespace Picer.Core.Gateway;
 
@@ -82,6 +83,25 @@ public sealed class HttpIndexGateway : IIndexGateway, IDisposable
         }
         response.EnsureSuccessStatusCode();
         return await response.Content.ReadAsStreamAsync(cancellationToken);
+    }
+
+    public async Task<GatewayVideoPage> ListVideosAsync(long? sourceId = null, int pageSize = 200, string? cursor = null, CancellationToken cancellationToken = default)
+    {
+        var query = new List<string> { $"pageSize={Math.Clamp(pageSize, 1, 500)}" };
+        if (sourceId is not null) query.Add($"sourceId={sourceId}");
+        if (!string.IsNullOrWhiteSpace(cursor)) query.Add($"cursor={Uri.EscapeDataString(cursor)}");
+        using var response = await SendWithRetryAsync(token => _client.GetAsync($"api/gateway/v1/videos?{string.Join("&", query)}", token), cancellationToken);
+        await EnsureSuccessAsync(response, cancellationToken);
+        return await response.Content.ReadFromJsonAsync<GatewayVideoPage>(Json, cancellationToken)
+            ?? throw new InvalidOperationException("Empty video page payload.");
+    }
+
+    public async Task<VideoRecord?> GetVideoAsync(long id, CancellationToken cancellationToken = default)
+    {
+        using var response = await _client.GetAsync($"api/gateway/v1/videos/{id}", cancellationToken);
+        if (response.StatusCode == HttpStatusCode.NotFound) return null;
+        await EnsureSuccessAsync(response, cancellationToken);
+        return await response.Content.ReadFromJsonAsync<VideoRecord>(Json, cancellationToken);
     }
 
     public async Task<GatewayPage> SearchAsync(SearchFilters filters, int pageSize = 200, string? cursor = null, CancellationToken cancellationToken = default)

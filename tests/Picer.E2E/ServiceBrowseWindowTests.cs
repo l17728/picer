@@ -6,6 +6,7 @@ using Picer.App.Views;
 using Picer.Core.Gateway;
 using Picer.Core.Models;
 using Picer.Core.Search;
+using Picer.Core.Video;
 
 namespace Picer.E2E;
 
@@ -35,6 +36,12 @@ public sealed class ServiceBrowseWindowTests
 
         public Task<Stream?> OpenThumbnailAsync(long imageId, CancellationToken cancellationToken = default) =>
             Task.FromResult<Stream?>(null);
+
+        public Task<GatewayVideoPage> ListVideosAsync(long? sourceId = null, int pageSize = 200, string? cursor = null, CancellationToken cancellationToken = default) =>
+            Task.FromResult(new GatewayVideoPage(Array.Empty<VideoRecord>(), null, 0));
+
+        public Task<VideoRecord?> GetVideoAsync(long id, CancellationToken cancellationToken = default) =>
+            Task.FromResult<VideoRecord?>(null);
 
         public async Task<GatewayPage> SearchAsync(SearchFilters filters, int pageSize = 200, string? cursor = null, CancellationToken cancellationToken = default)
         {

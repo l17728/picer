@@ -3,6 +3,7 @@ using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text.Json;
 using Picer.Core.Models;
+using Picer.Core.Video;
 using Picer.Core.Search;
 
 namespace Picer.Core.Gateway;
@@ -40,6 +41,13 @@ public sealed class PipeIndexGateway : IIndexGateway, IDisposable
         if (body is null || !body.Found || body.DataBase64 is null) return null;
         return new MemoryStream(Convert.FromBase64String(body.DataBase64), writable: false);
     }
+
+    public async Task<GatewayVideoPage> ListVideosAsync(long? sourceId = null, int pageSize = 200, string? cursor = null, CancellationToken cancellationToken = default) =>
+        await CallAsync<GatewayVideoPage>("videos", new { sourceId, pageSize = Math.Clamp(pageSize, 1, 500), cursor }, cancellationToken) ??
+        throw new InvalidOperationException("Empty video page payload.");
+
+    public Task<VideoRecord?> GetVideoAsync(long id, CancellationToken cancellationToken = default) =>
+        CallAsync<VideoRecord>("video", new { id }, cancellationToken);
 
     public async Task<GatewayPage> SearchAsync(SearchFilters filters, int pageSize = 200, string? cursor = null, CancellationToken cancellationToken = default) =>
         await CallAsync<GatewayPage>("search", new { filters, pageSize = Math.Clamp(pageSize, 1, 500), cursor }, cancellationToken)

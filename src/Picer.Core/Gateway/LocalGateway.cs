@@ -3,12 +3,14 @@ using Picer.Core.Indexing;
 using Picer.Core.Models;
 using Picer.Core.Search;
 using Picer.Core.Thumbnails;
+using Picer.Core.Video;
 
 namespace Picer.Core.Gateway;
 
 public sealed class LocalGateway(PicerDatabase db, ThumbnailService thumbnails, IndexEngine? engine = null) : IIndexGateway
 {
     private ScanJobManager? _jobs;
+    private readonly VideoRepository _videos = new(db);
 
     public void Dispose() { }
     public Task<GatewayHealth> GetHealthAsync(CancellationToken cancellationToken = default) =>
@@ -38,6 +40,19 @@ public sealed class LocalGateway(PicerDatabase db, ThumbnailService thumbnails, 
             return Task.FromResult<Stream?>(null);
         }
     }
+
+    public Task<GatewayVideoPage> ListVideosAsync(long? sourceId = null, int pageSize = 200, string? cursor = null, CancellationToken cancellationToken = default)
+    {
+        var all = _videos.GetAll().Where(video => sourceId is null || video.SourceId == sourceId).ToArray();
+        var offset = int.TryParse(cursor, out var parsed) ? Math.Max(0, parsed) : 0;
+        var size = Math.Clamp(pageSize, 1, 500);
+        var items = all.Skip(offset).Take(size).ToArray();
+        var next = offset + items.Length < all.Length ? (offset + items.Length).ToString() : null;
+        return Task.FromResult(new GatewayVideoPage(items, next, all.Length));
+    }
+
+    public Task<VideoRecord?> GetVideoAsync(long id, CancellationToken cancellationToken = default) =>
+        Task.FromResult(_videos.GetAll().FirstOrDefault(video => video.Id == id));
 
     public async Task<GatewayPage> SearchAsync(SearchFilters filters, int pageSize = 200, string? cursor = null, CancellationToken cancellationToken = default)
     {

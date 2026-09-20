@@ -12,12 +12,13 @@ using Picer.Core.Models;
 using Picer.Core.Search;
 using Picer.Core.Storage;
 using Picer.Core.Thumbnails;
+using Picer.Core.Video;
 
 namespace Picer.IndexService;
 
 public sealed record GatewaySearchRequest(SearchFilters? Filters, int PageSize, string? Cursor);
 
-public sealed class IndexApiHandlers(PicerDatabase db, ThumbnailService thumbnails)
+public sealed class IndexApiHandlers(PicerDatabase db, ThumbnailService thumbnails, VideoRepository videos)
 {
     public GatewayHealth Health() => new("ok", PicerDatabase.CurrentSchemaVersion, "1.0",
         typeof(IndexApiHandlers).Assembly.GetName().Version?.ToString() ?? "unknown");
@@ -26,6 +27,19 @@ public sealed class IndexApiHandlers(PicerDatabase db, ThumbnailService thumbnai
         SearchCoreAsync(new SearchFilters { SourceId = sourceId, IncludeMissing = includeMissing }, pageSize, cursor, cancellationToken);
 
     public Task<ImageRecord?> GetAsync(long id, CancellationToken cancellationToken) => Task.FromResult(db.GetImage(id));
+
+    public Task<GatewayVideoPage> ListVideosAsync(long? sourceId, int pageSize, string? cursor, CancellationToken cancellationToken)
+    {
+        var all = videos.GetAll().Where(video => sourceId is null || video.SourceId == sourceId).ToArray();
+        var offset = int.TryParse(cursor, out var parsed) ? Math.Max(0, parsed) : 0;
+        var size = Math.Clamp(pageSize, 1, 500);
+        var items = all.Skip(offset).Take(size).ToArray();
+        var next = offset + items.Length < all.Length ? (offset + items.Length).ToString() : null;
+        return Task.FromResult(new GatewayVideoPage(items, next, all.Length));
+    }
+
+    public Task<VideoRecord?> GetVideoAsync(long id, CancellationToken cancellationToken) =>
+        Task.FromResult(videos.GetAll().FirstOrDefault(video => video.Id == id));
 
     public Task<Stream?> OpenThumbnailAsync(long id, CancellationToken cancellationToken)
     {
@@ -114,7 +128,8 @@ public static class IndexServiceHost
         builder.WebHost.ConfigureKestrel(options =>
             options.Listen(parsedBindAddress, port, listenOptions => listenOptions.UseHttps(certificate)));
 
-        var handlers = new IndexApiHandlers(db, thumbnails);
+        var videoRepository = new VideoRepository(db);
+        var handlers = new IndexApiHandlers(db, thumbnails, videoRepository);
         var engine = new IndexEngine(db, new LocalStorageProvider(), thumbnails);
         var jobs = new ScanJobManager();
         var app = builder.Build();
@@ -151,6 +166,13 @@ public static class IndexServiceHost
         app.MapGet("/api/gateway/v1/images/{id:long}", async (long id, CancellationToken cancellationToken) =>
         {
             var record = await handlers.GetAsync(id, cancellationToken);
+            return record is null ? Results.NotFound() : Results.Json(record);
+        });
+        app.MapGet("/api/gateway/v1/videos", async (long? sourceId = null, int pageSize = 200, string? cursor = null, CancellationToken cancellationToken = default) =>
+            Results.Json(await handlers.ListVideosAsync(sourceId, pageSize, cursor, cancellationToken)));
+        app.MapGet("/api/gateway/v1/videos/{id:long}", async (long id, CancellationToken cancellationToken) =>
+        {
+            var record = await handlers.GetVideoAsync(id, cancellationToken);
             return record is null ? Results.NotFound() : Results.Json(record);
         });
         app.MapGet("/api/gateway/v1/thumbs/{id:long}", async (long id, CancellationToken cancellationToken) =>
