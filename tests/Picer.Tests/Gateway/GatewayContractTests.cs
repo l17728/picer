@@ -248,6 +248,24 @@ public sealed class GatewayContractTests(GatewayServiceFixture fixture) : IClass
         Assert.True(payload.GetProperty("sourceId").GetInt64() > 0);
     }
 
+    [Fact]
+    public async Task SyncVideos_UpsertsMetadataAndListsThroughGateway()
+    {
+        using var handler = new HttpClientHandler { ServerCertificateCustomValidationCallback = (_, _, _, _) => true };
+        using var client = new HttpClient(handler) { BaseAddress = new Uri(fixture.BaseUrl) };
+        client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", "picer-test-token");
+        var source = fixture.Db.GetSources().Single();
+        var path = Path.Combine(source.Path, "remote-video.mp4");
+        var video = new Picer.Core.Video.VideoRecord(0, fixture.SourceId, path, 1234, DateTime.UtcNow, 4.5, 1920, 1080, DateTime.UtcNow, "31,121", "active");
+        using var response = await client.PostAsJsonAsync("api/sync/v1/videos", new { sourcePath = source.Path, videos = new[] { video } });
+        response.EnsureSuccessStatusCode();
+        using var gateway = fixture.CreateHttpGateway();
+        var page = await gateway.ListVideosAsync(fixture.SourceId, 20);
+        var actual = Assert.Single(page.Items, item => item.Path == path);
+        Assert.Equal(4.5, actual.DurationSeconds);
+        Assert.Equal(1920, actual.Width);
+    }
+
     private static async Task SendWsAsync(ClientWebSocket socket, object value)
     {
         var bytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(value));
