@@ -102,3 +102,6 @@ JSON/CSV 报告默认只包含组件状态、数据库状态、数量、存储�
 - `Esc`：搜索框有焦点时清空搜索。
 - `Enter`：打开网格中选中的图片。
 - 方向键与 `Ctrl/Shift`：导航和多选。
+## 服务验收与故障恢复
+
+管理员可运行 `tools/verify-platform-services.ps1` 检查本机 ModelServer 和 HTTPS IndexService。远端 IndexService 不可用时，客户端仅对健康、列表和搜索请求进行有限重试；训练任务重启后显示为“可恢复”，用户可以重新提交，写操作不会自动重复。

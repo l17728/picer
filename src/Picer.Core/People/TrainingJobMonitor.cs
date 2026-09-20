@@ -17,11 +17,16 @@ public sealed class TrainingJobMonitor
         timeoutSource.CancelAfter(timeout ?? TimeSpan.FromHours(1));
         var token = timeoutSource.Token;
         var elapsed = TimeSpan.Zero;
+        var previousStatus = "queued";
         while (true)
         {
             await Task.Delay(TimeSpan.FromSeconds(1), token).ConfigureAwait(false);
             elapsed += TimeSpan.FromSeconds(1);
             var result = await _submission.PollAsync(jobId, token).ConfigureAwait(false);
+            var currentStatus = TrainingJobStateMachine.Normalize(result.Status);
+            if (!TrainingJobStateMachine.CanTransition(previousStatus, currentStatus))
+                throw new InvalidOperationException($"训练任务状态非法跃迁：{previousStatus} -> {currentStatus}");
+            previousStatus = currentStatus;
             progress?.Report(new TrainingJobProgress(jobId, result.Status, elapsed));
             if (result.Status is "completed" or "failed" or "canceled") return result;
         }

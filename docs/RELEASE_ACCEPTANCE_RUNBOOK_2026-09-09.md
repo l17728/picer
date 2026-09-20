@@ -66,3 +66,12 @@ dotnet test tests/Picer.E2E/Picer.E2E.csproj -c Debug --no-build --no-restore --
 - 2026-09-15：统一模型平台真实模型冒烟通过：Qwen3-VL 返回 `service ready`；Qwen3-ASR-1.7B 对真实 WAV 返回非空英文转写；中文 TTS 生成 61,996 字节 WAV。
 - 2026-09-15：通过 8090 `/picer` 代理提交 4 样本 GPU 训练，任务完成、训练/验证准确率 1.0、FAR/FRR 0、ECDSA 签名与 SHA-256 均存在。
 - 限制：以上实机探测不包含真人插话；FD-006 的连续 10 分钟零误识别和小于 1 秒打断仍需人工完成。
+## 2026-09-20 增量门禁
+
+发布前执行：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools/verify-platform-services.ps1 -OutputPath artifacts/platform-service-check.json
+```
+
+确认 ModelServer 健康、IndexService HTTPS 鉴权/SPKI、训练任务可恢复；真实 GPU、Qwen3 与 AEC3 仍需设备验收记录，不得以模拟测试替代。

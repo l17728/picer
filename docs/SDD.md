@@ -677,3 +677,8 @@ LLM 先输出受约束的结构化计划或调用 `search_media` 工具，完成
 ### 16.2 Face training Agent tooling
 
 The three-layer boundary, evaluation split, leakage constraints, temporal/burst deduplication, tool permissions, idempotency, recovery, and artifact-application authorization for face training are specified in [FACE_TRAINING_AGENT_TOOLS_SDD_2026-09-15.md](FACE_TRAINING_AGENT_TOOLS_SDD_2026-09-15.md). This is the normative supplement to this SDD; immutable snapshots, server-side validation, and user approval before applying artifacts take precedence over legacy flows.
+### 2026-09-20 实现增量
+
+- 训练任务状态统一为 `queued -> running -> recoverable/completed/failed/canceled`；客户端拒绝非法跃迁，并保留可审计的状态转换记录。
+- 远程 IndexGateway 对健康、分页和搜索请求支持有限次数指数退避；仅对网络异常和 5xx 重试，写操作不自动重复提交。
+- 发布前必须运行 `tools/verify-platform-services.ps1`，检查 ModelServer、HTTPS IndexService、令牌和证书固定状态。

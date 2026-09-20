@@ -49,7 +49,7 @@ public sealed class HttpIndexGateway : IIndexGateway, IDisposable
 
     public async Task<GatewayHealth> GetHealthAsync(CancellationToken cancellationToken = default)
     {
-        using var response = await _client.GetAsync("health", cancellationToken);
+        using var response = await SendWithRetryAsync(token => _client.GetAsync("health", token), cancellationToken);
         response.EnsureSuccessStatusCode();
         return await response.Content.ReadFromJsonAsync<GatewayHealth>(Json, cancellationToken)
             ?? throw new InvalidOperationException("Empty health payload.");
@@ -60,7 +60,7 @@ public sealed class HttpIndexGateway : IIndexGateway, IDisposable
         var query = new List<string> { $"pageSize={Math.Clamp(pageSize, 1, 500)}", $"includeMissing={includeMissing}" };
         if (sourceId is not null) query.Add($"sourceId={sourceId}");
         if (!string.IsNullOrEmpty(cursor)) query.Add($"cursor={Uri.EscapeDataString(cursor)}");
-        using var response = await _client.GetAsync($"api/gateway/v1/images?{string.Join("&", query)}", cancellationToken);
+        using var response = await SendWithRetryAsync(token => _client.GetAsync($"api/gateway/v1/images?{string.Join("&", query)}", token), cancellationToken);
         return await ReadPageAsync(response, cancellationToken);
     }
 
@@ -87,7 +87,7 @@ public sealed class HttpIndexGateway : IIndexGateway, IDisposable
     public async Task<GatewayPage> SearchAsync(SearchFilters filters, int pageSize = 200, string? cursor = null, CancellationToken cancellationToken = default)
     {
         var payload = new { filters, pageSize = Math.Clamp(pageSize, 1, 500), cursor };
-        using var response = await _client.PostAsJsonAsync("api/gateway/v1/search", payload, Json, cancellationToken);
+        using var response = await SendWithRetryAsync(token => _client.PostAsJsonAsync("api/gateway/v1/search", payload, Json, token), cancellationToken);
         return await ReadPageAsync(response, cancellationToken);
     }
 
@@ -103,6 +103,29 @@ public sealed class HttpIndexGateway : IIndexGateway, IDisposable
         if (response.IsSuccessStatusCode) return;
         var body = await response.Content.ReadAsStringAsync(cancellationToken);
         throw new HttpRequestException($"Gateway returned {(int)response.StatusCode} {response.StatusCode}: {body}");
+    }
+
+    private static async Task<HttpResponseMessage> SendWithRetryAsync(
+        Func<CancellationToken, Task<HttpResponseMessage>> send,
+        CancellationToken cancellationToken)
+    {
+        Exception? last = null;
+        for (var attempt = 0; attempt < 3; attempt++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                var response = await send(cancellationToken).ConfigureAwait(false);
+                if ((int)response.StatusCode < 500 || attempt == 2) return response;
+                response.Dispose();
+            }
+            catch (HttpRequestException exception) when (attempt < 2)
+            {
+                last = exception;
+            }
+            await Task.Delay(TimeSpan.FromMilliseconds(200 * (attempt + 1)), cancellationToken).ConfigureAwait(false);
+        }
+        throw new HttpRequestException("远程索引服务重试失败", last);
     }
 
     public async Task<IReadOnlyList<SourceFolder>> ListSourcesAsync(CancellationToken cancellationToken = default)
