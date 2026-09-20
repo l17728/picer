@@ -1013,16 +1013,20 @@ public sealed class PicerDatabase : IDisposable
             // optimal for the normal active-only view, but broad searches
             // (IncludeMissing=true) could not use it and sorted the whole
             // library. Keep the existing index and add an all-status variant.
+            // Keep the ALTER separate from the expression index creation. A
+            // number of legacy fixtures set user_version directly (without
+            // replaying the v11 migration), so the column may still be
+            // absent even though schemaVersion is already greater than 11.
+            // SQLite can prepare a multi-statement command as a unit and
+            // resolve the index expression before the preceding ALTER takes
+            // effect, producing "no such column" during migration.
+            AddColumnIfMissing("images", "file_created_utc", "TEXT");
             using var searchPerformanceMigration = _conn.CreateCommand();
-            var searchIndexSql = "";
-            if (!ColumnExists("images", "file_created_utc"))
-                searchIndexSql += "ALTER TABLE images ADD COLUMN file_created_utc TEXT;\n";
-            searchIndexSql += """
+            searchPerformanceMigration.CommandText = """
                 CREATE INDEX IF NOT EXISTS idx_images_effective_time_all
                     ON images(COALESCE(taken_utc,file_created_utc,modified_utc),id);
                 PRAGMA user_version = 37;
                 """;
-            searchPerformanceMigration.CommandText = searchIndexSql;
             searchPerformanceMigration.ExecuteNonQuery();
         }
     }

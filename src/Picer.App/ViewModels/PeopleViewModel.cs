@@ -707,6 +707,11 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             }
             await UiWork.RunDatabaseAsync(() => ApplyTrainedPrototypes(artifact));
             await submission.MarkArtifactAppliedAsync(artifact.ArtifactId);
+            // Adoption updates the repository asynchronously; refresh the
+            // model-scoped history and current people page immediately so
+            // the active artifact/version is visible without page navigation.
+            await LoadTrainingHistoryAsync(trainingModelVersion);
+            await RefreshPageAsync();
             StatusText = $"训练通过并已应用（第 {result.Attempts} 次）：准确率 {artifact.Metrics.ValidationAccuracy:P1}";
             TrainingResultText = $"已应用模型版本：{artifact.ModelVersion}；制品：{artifact.ArtifactId}；评测：准确率 {artifact.Metrics.ValidationAccuracy:P1} / 误识率 {artifact.Metrics.FalseAcceptRate:P2} / 拒识率 {artifact.Metrics.FalseRejectRate:P2}；本轮达到90%的制品 {result.PassedArtifacts?.Count ?? 1} 个" +
                 (string.IsNullOrWhiteSpace(result.ExperienceSummary) ? "" : $"；经验总结：{result.ExperienceSummary}");
