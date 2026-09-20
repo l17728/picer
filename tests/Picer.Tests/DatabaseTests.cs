@@ -359,6 +359,12 @@ public sealed class DatabaseTests : IDisposable
     }
 }
 
+[CollectionDefinition("LoggerTests", DisableParallelization = true)]
+public sealed class LoggerTestsCollection
+{
+}
+
+[Collection("LoggerTests")]
 public sealed class LoggerTests : IDisposable
 {
     private readonly string _logDir;

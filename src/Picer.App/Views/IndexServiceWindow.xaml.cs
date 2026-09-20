@@ -67,6 +67,22 @@ public partial class IndexServiceWindow : Window
         SyncButton.IsEnabled = false;
         try
         {
+            // 同步前确保常驻代理已启动；这样服务端收到索引后即可立即回源读取原图/原视频。
+            var settings = new MediaAgentController.Settings(AgentEnabledBox.IsChecked == true, ip);
+            MediaAgentController.Save(settings);
+            if (settings.Enabled)
+            {
+                var roots = AppServices.Db.GetSources().Select(source => source.Path);
+                if (!MediaAgentController.Start(ip, token,
+                        Environment.GetEnvironmentVariable("PICER_INDEX_SERVICE_SPKI_PIN"), roots))
+                {
+                    AgentStatusText.Text = "无法启动原图代理，索引仍会继续同步；请检查 media-agent 发布文件。";
+                }
+                else
+                {
+                    AgentStatusText.Text = "原图代理已启动，正在同步索引。";
+                }
+            }
             var client = Picer.Core.Gateway.IndexSyncClient.Create($"https://{ip}:8445", token);
             var progress = new Progress<(int done, int total)>(value => HealthText.Text = $"正在同步索引：{value.done}/{value.total}…");
             var count = await client.PushImagesAsync(AppServices.Db, progress);
