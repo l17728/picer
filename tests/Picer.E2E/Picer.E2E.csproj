@@ -26,6 +26,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\Picer.App\Picer.App.csproj" />
     <ProjectReference Include="..\..\server\Picer.IndexService\Picer.IndexService.csproj" />
+    <ProjectReference Include="..\..\server\Picer.ModelServer\Picer.ModelServer.csproj" />
   </ItemGroup>
 
 </Project>
