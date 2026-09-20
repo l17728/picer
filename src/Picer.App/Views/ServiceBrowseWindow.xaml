@@ -28,6 +28,9 @@
             <ListBox.ItemTemplate>
                 <DataTemplate>
                     <StackPanel Width="180" Margin="6">
+                        <StackPanel.InputBindings>
+                            <MouseBinding MouseAction="LeftDoubleClick" Command="{Binding DataContext.OpenOriginalCommand, RelativeSource={RelativeSource AncestorType=ListBox}}" CommandParameter="{Binding}"/>
+                        </StackPanel.InputBindings>
                         <Image Height="135" Source="{Binding Thumbnail}" Stretch="Uniform"/>
                         <TextBlock Text="{Binding Path}" TextTrimming="CharacterEllipsis" ToolTip="{Binding Path}" Foreground="#555"/>
                     </StackPanel>

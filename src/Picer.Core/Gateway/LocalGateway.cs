@@ -7,7 +7,7 @@ using Picer.Core.Video;
 
 namespace Picer.Core.Gateway;
 
-public sealed class LocalGateway(PicerDatabase db, ThumbnailService thumbnails, IndexEngine? engine = null) : IIndexGateway
+public sealed class LocalGateway(PicerDatabase db, ThumbnailService thumbnails, IndexEngine? engine = null) : IIndexGateway, IMediaAssetGateway
 {
     private ScanJobManager? _jobs;
     private readonly VideoRepository _videos = new(db);
@@ -39,6 +39,18 @@ public sealed class LocalGateway(PicerDatabase db, ThumbnailService thumbnails, 
         {
             return Task.FromResult<Stream?>(null);
         }
+    }
+
+    public Task<Stream?> OpenOriginalImageAsync(long imageId, string? agentId = null, CancellationToken cancellationToken = default)
+    {
+        var path = db.GetImage(imageId)?.Path;
+        return Task.FromResult<Stream?>(path is not null && File.Exists(path) ? File.OpenRead(path) : null);
+    }
+
+    public Task<Stream?> OpenOriginalVideoAsync(long videoId, string? agentId = null, CancellationToken cancellationToken = default)
+    {
+        var path = _videos.GetAll().FirstOrDefault(video => video.Id == videoId)?.Path;
+        return Task.FromResult<Stream?>(path is not null && File.Exists(path) ? File.OpenRead(path) : null);
     }
 
     public Task<GatewayVideoPage> ListVideosAsync(long? sourceId = null, int pageSize = 200, string? cursor = null, CancellationToken cancellationToken = default)

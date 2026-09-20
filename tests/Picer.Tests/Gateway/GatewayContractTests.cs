@@ -1,4 +1,7 @@
 using System.Net;
+using System.Net.WebSockets;
+using System.Text;
+using System.Text.Json;
 using Microsoft.AspNetCore.Builder;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.PixelFormats;
@@ -191,6 +194,55 @@ public sealed class GatewayContractTests(GatewayServiceFixture fixture) : IClass
         Assert.True(bytes.Length > 0);
         var image = Image.Load(bytes.ToArray());
         Assert.True(image.Width > 0);
+    }
+
+    [Fact]
+    public async Task RemoteAgent_ProxiesOriginalImageThroughIndexService()
+    {
+        var image = fixture.Db.GetImages(fixture.SourceId).First();
+        var agentId = "test-agent-" + Guid.NewGuid().ToString("N");
+        using var agent = new ClientWebSocket();
+        agent.Options.RemoteCertificateValidationCallback = (_, _, _, _) => true;
+        agent.Options.SetRequestHeader("Authorization", "Bearer picer-test-token");
+        var serviceUri = new UriBuilder(new Uri(fixture.BaseUrl)) { Scheme = "wss" }.Uri;
+        await agent.ConnectAsync(new Uri(serviceUri, "api/agent/v1/connect"), CancellationToken.None);
+        await SendWsAsync(agent, new { type = "agent.register", agentId });
+        var registered = await ReceiveWsAsync(agent);
+        Assert.Contains("agent.registered", registered, StringComparison.Ordinal);
+        var responseTask = Task.Run(async () =>
+        {
+            var request = JsonDocument.Parse(await ReceiveWsAsync(agent)).RootElement;
+            var requestId = request.GetProperty("requestId").GetString();
+            await SendWsAsync(agent, new
+            {
+                type = "asset.response",
+                requestId,
+                contentType = "image/png",
+                contentBase64 = Convert.ToBase64String(await File.ReadAllBytesAsync(image.Path))
+            });
+        });
+
+        using var handler = new HttpClientHandler { ServerCertificateCustomValidationCallback = (_, _, _, _) => true };
+        using var client = new HttpClient(handler) { BaseAddress = new Uri(fixture.BaseUrl) };
+        client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", "picer-test-token");
+        using var response = await client.GetAsync($"api/gateway/v1/assets/images/{image.Id}?agentId={Uri.EscapeDataString(agentId)}");
+        if (!response.IsSuccessStatusCode) throw new InvalidOperationException($"asset proxy failed: {(int)response.StatusCode} {await response.Content.ReadAsStringAsync()}");
+        var actual = await response.Content.ReadAsByteArrayAsync();
+        Assert.Equal(await File.ReadAllBytesAsync(image.Path), actual);
+        await responseTask;
+    }
+
+    private static async Task SendWsAsync(ClientWebSocket socket, object value)
+    {
+        var bytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(value));
+        await socket.SendAsync(bytes, WebSocketMessageType.Text, true, CancellationToken.None);
+    }
+
+    private static async Task<string> ReceiveWsAsync(ClientWebSocket socket)
+    {
+        var buffer = new byte[4096];
+        var result = await socket.ReceiveAsync(buffer, CancellationToken.None);
+        return Encoding.UTF8.GetString(buffer, 0, result.Count);
     }
 
     [Theory]

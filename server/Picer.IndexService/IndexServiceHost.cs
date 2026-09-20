@@ -1,7 +1,9 @@
 using System.Net;
+using System.Net.WebSockets;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
+using System.Text.Json;
 using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
 using Picer.Core.Data;
@@ -132,7 +134,9 @@ public static class IndexServiceHost
         var handlers = new IndexApiHandlers(db, thumbnails, videoRepository);
         var engine = new IndexEngine(db, new LocalStorageProvider(), thumbnails);
         var jobs = new ScanJobManager();
+        var agents = new AgentConnectionRegistry();
         var app = builder.Build();
+        app.UseWebSockets();
         app.MapGet("/health", () => Results.Json(handlers.Health()));
         app.Use(async (context, next) =>
         {
@@ -161,6 +165,22 @@ public static class IndexServiceHost
             await next();
         });
 
+        app.Use(async (context, next) =>
+        {
+            if (!context.Request.Path.StartsWithSegments("/api/agent/v1/connect"))
+            {
+                await next();
+                return;
+            }
+            if (!context.WebSockets.IsWebSocketRequest)
+            {
+                context.Response.StatusCode = StatusCodes.Status400BadRequest;
+                return;
+            }
+
+            await agents.HandleAsync(context);
+        });
+
         app.MapGet("/api/gateway/v1/images", async (long? sourceId = null, bool includeMissing = false, int pageSize = 200, string? cursor = null, CancellationToken cancellationToken = default) =>
             Results.Json(await handlers.ListAsync(sourceId, includeMissing, pageSize, cursor, cancellationToken)));
         app.MapGet("/api/gateway/v1/images/{id:long}", async (long id, CancellationToken cancellationToken) =>
@@ -179,6 +199,22 @@ public static class IndexServiceHost
         {
             var stream = await handlers.OpenThumbnailAsync(id, cancellationToken);
             return stream is null ? Results.NotFound() : Results.Stream(stream, "image/jpeg");
+        });
+        app.MapGet("/api/gateway/v1/assets/images/{id:long}", async (long id, string? agentId, CancellationToken cancellationToken) =>
+        {
+            if (string.IsNullOrWhiteSpace(agentId)) return Results.BadRequest(new { error = "agentId_required" });
+            var record = await handlers.GetAsync(id, cancellationToken);
+            if (record is null) return Results.NotFound();
+            var asset = await agents.RequestAsync(agentId, record.Path, cancellationToken);
+            return asset is null ? Results.StatusCode(StatusCodes.Status503ServiceUnavailable) : Results.File(asset.Value.Content, asset.Value.ContentType, enableRangeProcessing: true);
+        });
+        app.MapGet("/api/gateway/v1/assets/videos/{id:long}", async (long id, string? agentId, CancellationToken cancellationToken) =>
+        {
+            if (string.IsNullOrWhiteSpace(agentId)) return Results.BadRequest(new { error = "agentId_required" });
+            var record = await handlers.GetVideoAsync(id, cancellationToken);
+            if (record is null) return Results.NotFound();
+            var asset = await agents.RequestAsync(agentId, record.Path, cancellationToken);
+            return asset is null ? Results.StatusCode(StatusCodes.Status503ServiceUnavailable) : Results.File(asset.Value.Content, "video/mp4", enableRangeProcessing: true);
         });
         app.MapPost("/api/gateway/v1/search", async (GatewaySearchRequest request, CancellationToken cancellationToken) =>
             Results.Json(await handlers.SearchAsync(request, cancellationToken)));

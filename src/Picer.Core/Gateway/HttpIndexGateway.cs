@@ -10,7 +10,7 @@ using Picer.Core.Video;
 
 namespace Picer.Core.Gateway;
 
-public sealed class HttpIndexGateway : IIndexGateway, IDisposable
+public sealed class HttpIndexGateway : IIndexGateway, IMediaAssetGateway, IDisposable
 {
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
     private readonly HttpClient _client;
@@ -82,6 +82,24 @@ public sealed class HttpIndexGateway : IIndexGateway, IDisposable
             return null;
         }
         response.EnsureSuccessStatusCode();
+        return await response.Content.ReadAsStreamAsync(cancellationToken);
+    }
+
+    public async Task<Stream?> OpenOriginalImageAsync(long imageId, string? agentId = null, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(agentId)) throw new ArgumentException("Remote original media requires an agent id.", nameof(agentId));
+        var response = await _client.GetAsync($"api/gateway/v1/assets/images/{imageId}?agentId={Uri.EscapeDataString(agentId)}", cancellationToken);
+        if (response.StatusCode == HttpStatusCode.NotFound) { response.Dispose(); return null; }
+        await EnsureSuccessAsync(response, cancellationToken);
+        return await response.Content.ReadAsStreamAsync(cancellationToken);
+    }
+
+    public async Task<Stream?> OpenOriginalVideoAsync(long videoId, string? agentId = null, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(agentId)) throw new ArgumentException("Remote original media requires an agent id.", nameof(agentId));
+        var response = await _client.GetAsync($"api/gateway/v1/assets/videos/{videoId}?agentId={Uri.EscapeDataString(agentId)}", cancellationToken);
+        if (response.StatusCode == HttpStatusCode.NotFound) { response.Dispose(); return null; }
+        await EnsureSuccessAsync(response, cancellationToken);
         return await response.Content.ReadAsStreamAsync(cancellationToken);
     }
 
