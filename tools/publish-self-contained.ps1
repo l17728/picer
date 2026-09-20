@@ -68,6 +68,11 @@ Assert-Runtime $runtimeSource
 New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
 dotnet publish (Join-Path $repoRoot 'src\Picer.App\Picer.App.csproj') -c Release -r win-x64 --self-contained true -o $OutputDirectory
 if ($LASTEXITCODE -ne 0) { throw 'Self-contained publish failed.' }
+$agentOutput = Join-Path $OutputDirectory 'media-agent'
+New-Item -ItemType Directory -Force -Path $agentOutput | Out-Null
+dotnet publish (Join-Path $repoRoot 'src\Picer.MediaAgent\Picer.MediaAgent.csproj') -c Release -r win-x64 --self-contained true -o $agentOutput
+if ($LASTEXITCODE -ne 0) { throw 'Self-contained media agent publish failed.' }
+if (-not (Test-Path -LiteralPath (Join-Path $agentOutput 'Picer.MediaAgent.exe'))) { throw 'Published media agent executable is missing.' }
 Assert-Runtime (Join-Path $OutputDirectory 'runtime')
 if (-not (Test-Path -LiteralPath (Join-Path $OutputDirectory 'Picer.App.exe'))) { throw 'Published application executable is missing.' }
 $native = @(
