@@ -22,6 +22,8 @@
 | 服务重启后恢复 | 通过，重新返回 HTTP 200，schema v37 |
 | 本地 GUI | 已启动并进入“索引服务状态”窗口，进程响应正常 |
 
+另外使用客户端真实 `HttpIndexGateway` 代码路径完成 pin 校验、health、sources 和 search 调用，结果为 `health=ok; schema=37; sources=0; searchTotal=0`。
+
 ## 兼容性修复
 
 IndexService 原先仅使用 Windows DPAPI 保存证书和令牌，在 Ubuntu 上会抛出 `PlatformNotSupportedException` 并进入重启循环。现已增加跨平台安全降级：Linux 使用受限数据目录中的明文文件权限保护，Windows 继续使用 DPAPI；服务令牌仍不写入日志。服务默认仍只监听 loopback，只有设置 `PICER_INDEX_SERVICE_BIND` 才允许跨机绑定。
@@ -29,4 +31,3 @@ IndexService 原先仅使用 Windows DPAPI 保存证书和令牌，在 Ubuntu �
 ## 限制
 
 本次远端索引库是新建空库，因此远程列表/搜索返回空结果是预期的。要展示实际照片，需要在远端注册其可访问的照片目录并执行扫描；客户端本地文件路径不会自动成为远端机器可见路径。
-
