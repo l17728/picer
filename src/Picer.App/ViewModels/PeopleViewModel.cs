@@ -932,6 +932,13 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
                             break;
                         }
                         await UiWork.RunDatabaseAsync(() => ApplyTrainedPrototypes(artifact));
+                        // Keep platform adoption and the local model-scoped
+                        // history synchronized for this direct submission path.
+                        await submission.MarkArtifactAppliedAsync(artifact.ArtifactId);
+                        await LoadTrainingHistoryAsync(artifact.ModelVersion);
+                        SelectedTrainingHistory = TrainingHistoryOptions.FirstOrDefault(value =>
+                            string.Equals(value.ArtifactId, artifact.ArtifactId, StringComparison.OrdinalIgnoreCase));
+                        await RefreshPageAsync();
                         StatusText = $"训练完成并已自动应用：准确率 {(artifact.Metrics.ValidationAccuracy * 100):F1}%，" +
                                      $"误识率 {(artifact.Metrics.FalseAcceptRate * 100):F2}%，" +
                                      $"拒识率 {(artifact.Metrics.FalseRejectRate * 100):F2}%，" +
