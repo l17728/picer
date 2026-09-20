@@ -200,7 +200,7 @@ public static class IndexServiceHost
         app.MapGet("/api/gateway/v1/thumbs/{id:long}", async (long id, string? agentId, CancellationToken cancellationToken) =>
         {
             var stream = await handlers.OpenThumbnailAsync(id, cancellationToken);
-            if (stream is null && !string.IsNullOrWhiteSpace(agentId))
+            if (stream is null)
             {
                 var image = await handlers.GetAsync(id, cancellationToken);
                 if (image is not null && await agents.RequestAsync(agentId, image.Path, cancellationToken) is { } asset)

@@ -266,6 +266,40 @@ public sealed class GatewayContractTests(GatewayServiceFixture fixture) : IClass
         Assert.Equal(1920, actual.Width);
     }
 
+    [Fact]
+    public async Task RemoteAgent_ProvidesThumbnailWhenServiceCannotReadOriginalPath()
+    {
+        var image = fixture.Db.GetImages(fixture.SourceId).First();
+        var bytes = await File.ReadAllBytesAsync(image.Path);
+        var originalPath = image.Path;
+        var hiddenPath = originalPath + ".agent-only";
+        File.Move(originalPath, hiddenPath);
+        try
+        {
+            using var agent = new ClientWebSocket();
+            agent.Options.RemoteCertificateValidationCallback = (_, _, _, _) => true;
+            agent.Options.SetRequestHeader("Authorization", "Bearer picer-test-token");
+            var serviceUri = new UriBuilder(new Uri(fixture.BaseUrl)) { Scheme = "wss" }.Uri;
+            await agent.ConnectAsync(new Uri(serviceUri, "api/agent/v1/connect"), CancellationToken.None);
+            var agentId = "thumb-agent-" + Guid.NewGuid().ToString("N");
+            await SendWsAsync(agent, new { type = "agent.register", agentId });
+            _ = await ReceiveWsAsync(agent);
+            var responseTask = Task.Run(async () =>
+            {
+                var request = JsonDocument.Parse(await ReceiveWsAsync(agent)).RootElement;
+                await SendWsAsync(agent, new { type = "asset.response", requestId = request.GetProperty("requestId").GetString(), contentType = "image/png", contentBase64 = Convert.ToBase64String(bytes) });
+            });
+            using var handler = new HttpClientHandler { ServerCertificateCustomValidationCallback = (_, _, _, _) => true };
+            using var client = new HttpClient(handler) { BaseAddress = new Uri(fixture.BaseUrl) };
+            client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", "picer-test-token");
+            using var response = await client.GetAsync($"api/gateway/v1/thumbs/{image.Id}");
+            response.EnsureSuccessStatusCode();
+            Assert.NotEmpty(await response.Content.ReadAsByteArrayAsync());
+            await responseTask;
+        }
+        finally { File.Move(hiddenPath, originalPath); }
+    }
+
     private static async Task SendWsAsync(ClientWebSocket socket, object value)
     {
         var bytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(value));
