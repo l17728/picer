@@ -23,3 +23,6 @@ Worker、ECDSA 制品签名、VL/ASR/TTS 探针和 AEC3 实机探针均已有记
 全双工真实房间验收和跨机 HTTPS 联调四类环境门禁。
 
 详见 [平台收尾报告](PLATFORM_CLOSEOUT_2026-09-15.md)。
+## 2026-09-20 状态修订
+
+代码已具备服务探针、重试、训练恢复和性能门禁；发布仍处于“代码就绪，环境待验收”，真实 GPU、Qwen3、跨机 HTTPS 和 AEC3 证据尚未齐全。统一状态见 `docs/STATUS_REFRESH_2026-09-20.md`。

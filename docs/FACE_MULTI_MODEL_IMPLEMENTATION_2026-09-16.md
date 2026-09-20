@@ -23,3 +23,6 @@ ArcFace、AdaFace、ArcFace-Paddle（MobileFace-Paddle 128 维）和 FaceX-Zoo R
 ArcFace、AdaFace、ArcFace-Paddle、FaceX-Zoo、SFace 和 InsightFace 均已进入统一候选协议，并已使用同一份平台评估快照完成基线评估。GUI 快照发布器会从索引人脸框生成受控的 112×112 裁剪图和模型所需输入；不兼容或未通过哈希校验的权重不会进入可用集合。
 
 当前剩余的是训练质量和环境门禁，而不是 GUI 到 Worker 的接口阻塞：排行榜共完成 3 轮，Top 3 为 InsightFace-ArcFace、AdaFace、ArcFace；ArcFace-Paddle、FaceX-Zoo、SFace 暂列备用。基线最佳验证准确率约 64.36%，需要真实标注数据和后续迭代才能判断是否达到 90% 激活门禁。
+## 2026-09-20 状态修订
+
+多模型评测、排行榜历史和 Top 3 策略已完成代码实现；当前约 3 轮真实训练，最佳真实基线约 64%，尚未达到 20 轮单模型决策和 90% 应用门禁。
