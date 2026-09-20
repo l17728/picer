@@ -65,9 +65,12 @@ internal sealed class AgentConnectionRegistry
         }
     }
 
-    public async Task<(string ContentType, byte[] Content)?> RequestAsync(string agentId, string path, CancellationToken cancellationToken)
+    public async Task<(string ContentType, byte[] Content)?> RequestAsync(string? agentId, string path, CancellationToken cancellationToken)
     {
-        if (!_sessions.TryGetValue(agentId, out var session)) return null;
+        var session = !string.IsNullOrWhiteSpace(agentId)
+            ? _sessions.GetValueOrDefault(agentId)
+            : _sessions.Values.SingleOrDefault();
+        if (session is null) return null;
         return await session.RequestAsync(path, cancellationToken);
     }
 

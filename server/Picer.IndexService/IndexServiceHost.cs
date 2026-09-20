@@ -197,9 +197,15 @@ public static class IndexServiceHost
             var record = await handlers.GetVideoAsync(id, cancellationToken);
             return record is null ? Results.NotFound() : Results.Json(record);
         });
-        app.MapGet("/api/gateway/v1/thumbs/{id:long}", async (long id, CancellationToken cancellationToken) =>
+        app.MapGet("/api/gateway/v1/thumbs/{id:long}", async (long id, string? agentId, CancellationToken cancellationToken) =>
         {
             var stream = await handlers.OpenThumbnailAsync(id, cancellationToken);
+            if (stream is null && !string.IsNullOrWhiteSpace(agentId))
+            {
+                var image = await handlers.GetAsync(id, cancellationToken);
+                if (image is not null && await agents.RequestAsync(agentId, image.Path, cancellationToken) is { } asset)
+                    stream = thumbnails.GetOrCreate(new MemoryStream(asset.Content), id) is { } cached && File.Exists(cached) ? File.OpenRead(cached) : null;
+            }
             return stream is null ? Results.NotFound() : Results.Stream(stream, "image/jpeg");
         });
         app.MapPost("/api/sync/v1/images", (SyncImagesRequest request) =>
