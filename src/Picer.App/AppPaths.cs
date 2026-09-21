@@ -5,7 +5,9 @@ namespace Picer.App;
 
 public static class AppPaths
 {
-    private static string BootstrapDirectory => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Picer", "bootstrap");
+    private static string BootstrapDirectory => Environment.GetEnvironmentVariable("PICER_BOOTSTRAP_ROOT") is { Length: > 0 } bootstrapRoot
+        ? Path.GetFullPath(bootstrapRoot)
+        : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Picer", "bootstrap");
     private static string DataLocationPath => Path.Combine(BootstrapDirectory, "data-location.json");
     public static string BackendConfigPath => Path.Combine(BootstrapDirectory, "backend.json");
     public static string ServiceEndpointPath => Path.Combine(BootstrapDirectory, "service-endpoint.json");
