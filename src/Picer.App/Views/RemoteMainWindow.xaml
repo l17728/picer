@@ -1,0 +1,28 @@
+<Window x:Class="Picer.App.Views.RemoteMainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Picer - 图片管理（远程）" Icon="../Assets/Picer.ico" Width="1200" Height="760" MinWidth="900" MinHeight="560" WindowStartupLocation="CenterScreen" Loaded="Window_Loaded">
+    <DockPanel>
+        <Menu DockPanel.Dock="Top" AutomationProperties.Name="主菜单">
+            <MenuItem Header="文件(_F)">
+                <MenuItem Header="浏览远程图库" Click="Browse_Click"/>
+                <MenuItem Header="索引服务状态" Click="ServiceStatus_Click"/>
+                <MenuItem Header="切换本地/远程模式…" Click="BackendSettings_Click"/>
+                <Separator/>
+                <MenuItem Header="退出" Click="Close_Click"/>
+            </MenuItem>
+            <MenuItem Header="远程功能">
+                <MenuItem Header="浏览图片与视频" Click="Browse_Click"/>
+                <MenuItem Header="清理并刷新远程缓存" Click="RefreshCache_Click"/>
+            </MenuItem>
+        </Menu>
+        <Border Margin="28" Padding="28" Background="#F4F8FC" BorderBrush="#C8D8EA" BorderThickness="1" CornerRadius="8">
+            <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Width="620">
+                <TextBlock Text="Picer 远程图库" FontSize="30" FontWeight="SemiBold" HorizontalAlignment="Center"/>
+                <TextBlock Text="当前 GUI 已连接 IndexService。缩略图、搜索、原图和视频均通过远程索引与本地 MediaAgent 按需访问。" TextWrapping="Wrap" TextAlignment="Center" Foreground="#555" Margin="0,14,0,22"/>
+                <Button Content="打开远程图库" Click="Browse_Click" Padding="22,10" FontSize="16" HorizontalAlignment="Center"/>
+                <TextBlock x:Name="StatusText" Text="正在检查 IndexService…" HorizontalAlignment="Center" Foreground="#555" Margin="0,18,0,0"/>
+            </StackPanel>
+        </Border>
+    </DockPanel>
+</Window>
