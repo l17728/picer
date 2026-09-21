@@ -22,6 +22,15 @@ public partial class ServicePhotoItem : ObservableObject
     private System.Windows.Media.Imaging.BitmapImage? _thumbnail;
 }
 
+public sealed class RemoteDirectoryNode
+{
+    public string Name { get; init; } = "";
+    public string FullPath { get; init; } = "";
+    public int ImageCount { get; set; }
+    public bool IsSource { get; init; }
+    public ObservableCollection<RemoteDirectoryNode> Children { get; } = [];
+}
+
 public partial class ServiceBrowseViewModel : ObservableObject
 {
     private readonly IIndexGateway _gateway;
@@ -32,6 +41,7 @@ public partial class ServiceBrowseViewModel : ObservableObject
 
     public ObservableCollection<ServicePhotoItem> Items { get; } = [];
     public ObservableCollection<SourceFolder> Sources { get; } = [];
+    public ObservableCollection<RemoteDirectoryNode> DirectoryTree { get; } = [];
 
     [ObservableProperty]
     private SourceFolder? _selectedSource;
@@ -49,6 +59,9 @@ public partial class ServiceBrowseViewModel : ObservableObject
     private bool _isBusy;
     private bool _sourcesLoaded;
 
+    [ObservableProperty]
+    private RemoteDirectoryNode? _selectedDirectory;
+
     public ServiceBrowseViewModel(IIndexGateway gateway) => _gateway = gateway;
 
     [RelayCommand]
@@ -60,6 +73,7 @@ public partial class ServiceBrowseViewModel : ObservableObject
             {
                 Sources.Clear();
                 foreach (var source in await _gateway.ListSourcesAsync()) Sources.Add(source);
+                await BuildDirectoryTreeAsync();
                 _sourcesLoaded = true;
             }
             catch (Exception exception) { StatusText = $"目录加载失败：{exception.Message}"; }
@@ -80,7 +94,9 @@ public partial class ServiceBrowseViewModel : ObservableObject
         try
         {
             var filters = new SearchFilters { IncludeMissing = false, Query = SearchText, SourceId = SelectedSource?.Id };
-            var page = await _gateway.SearchAsync(filters, 200, _cursor, cts.Token);
+            var page = SelectedDirectory is null
+                ? await _gateway.SearchAsync(filters, 200, _cursor, cts.Token)
+                : await SearchDirectoryAsync(filters, SelectedDirectory.FullPath, cts.Token);
             _cursor = page.NextCursor;
             TotalCount = page.TotalCount;
             foreach (var record in page.Items)
@@ -110,6 +126,84 @@ public partial class ServiceBrowseViewModel : ObservableObject
     {
         SelectedSource = source;
         return SearchAsync();
+    }
+
+    public async Task SelectDirectoryAsync(RemoteDirectoryNode? directory)
+    {
+        SelectedDirectory = directory;
+        SelectedSource = directory is null
+            ? null
+            : Sources.FirstOrDefault(source => string.Equals(
+                Path.GetFullPath(directory.FullPath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+                Path.GetFullPath(source.Path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+                StringComparison.OrdinalIgnoreCase) ||
+                directory.FullPath.StartsWith(Path.GetFullPath(source.Path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase));
+        await SearchAsync();
+    }
+
+    private async Task BuildDirectoryTreeAsync()
+    {
+        DirectoryTree.Clear();
+        foreach (var source in Sources)
+        {
+            var rootPath = Path.GetFullPath(source.Path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            var all = new List<ImageRecord>();
+            string? cursor = null;
+            do
+            {
+                var page = await _gateway.ListImagesAsync(source.Id, false, 500, cursor);
+                all.AddRange(page.Items);
+                cursor = page.NextCursor;
+            } while (cursor is not null);
+
+            var root = new RemoteDirectoryNode { Name = Path.GetFileName(rootPath), FullPath = rootPath, ImageCount = all.Count, IsSource = true };
+            var nodes = new Dictionary<string, RemoteDirectoryNode>(StringComparer.OrdinalIgnoreCase) { [rootPath] = root };
+            foreach (var record in all)
+            {
+                var directory = Path.GetDirectoryName(Path.GetFullPath(record.Path));
+                if (string.IsNullOrWhiteSpace(directory) || !directory.StartsWith(rootPath, StringComparison.OrdinalIgnoreCase)) continue;
+                var relative = Path.GetRelativePath(rootPath, directory);
+                if (relative == ".") continue;
+                var current = rootPath;
+                RemoteDirectoryNode? leaf = null;
+                foreach (var part in relative.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries))
+                {
+                    current = Path.Combine(current, part);
+                    if (!nodes.TryGetValue(current, out var node))
+                    {
+                        node = new RemoteDirectoryNode { Name = part, FullPath = current, ImageCount = 0 };
+                        nodes[current] = node;
+                        var parentPath = Path.GetDirectoryName(current) ?? rootPath;
+                        nodes[parentPath].Children.Add(node);
+                    }
+                    leaf = node;
+                }
+                if (leaf is not null) leaf.ImageCount++;
+            }
+            DirectoryTree.Add(root);
+        }
+    }
+
+    private async Task<GatewayPage> SearchDirectoryAsync(SearchFilters filters, string directory, CancellationToken cancellationToken)
+    {
+        var items = new List<ImageRecord>();
+        string? cursor = null;
+        do
+        {
+            var page = await _gateway.SearchAsync(filters, 500, cursor, cancellationToken);
+            items.AddRange(page.Items.Where(record => IsUnderDirectory(record.Path, directory)));
+            cursor = page.NextCursor;
+        } while (cursor is not null);
+        if (!string.IsNullOrWhiteSpace(filters.Query))
+            items = items.Where(record => record.Path.Contains(filters.Query, StringComparison.CurrentCultureIgnoreCase)).ToList();
+        return new GatewayPage(items, null, items.Count);
+    }
+
+    private static bool IsUnderDirectory(string path, string directory)
+    {
+        var normalizedPath = Path.GetFullPath(path);
+        var normalizedDirectory = Path.GetFullPath(directory).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        return string.Equals(Path.GetDirectoryName(normalizedPath)?.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar), normalizedDirectory, StringComparison.OrdinalIgnoreCase);
     }
 
     [RelayCommand]
