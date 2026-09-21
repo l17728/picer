@@ -231,6 +231,25 @@ public sealed class GatewayContractTests(GatewayServiceFixture fixture) : IClass
         var actual = await response.Content.ReadAsByteArrayAsync();
         Assert.Equal(await File.ReadAllBytesAsync(image.Path), actual);
         await responseTask;
+
+        // A remote GUI may not know the source host's agent id.  With one
+        // online agent the service must safely select that session.
+        var fallbackTask = Task.Run(async () =>
+        {
+            var request = JsonDocument.Parse(await ReceiveWsAsync(agent)).RootElement;
+            var requestId = request.GetProperty("requestId").GetString();
+            await SendWsAsync(agent, new
+            {
+                type = "asset.response",
+                requestId,
+                contentType = "image/png",
+                contentBase64 = Convert.ToBase64String(await File.ReadAllBytesAsync(image.Path))
+            });
+        });
+        using var fallbackResponse = await client.GetAsync($"api/gateway/v1/assets/images/{image.Id}");
+        fallbackResponse.EnsureSuccessStatusCode();
+        Assert.Equal(await File.ReadAllBytesAsync(image.Path), await fallbackResponse.Content.ReadAsByteArrayAsync());
+        await fallbackTask;
     }
 
     [Fact]

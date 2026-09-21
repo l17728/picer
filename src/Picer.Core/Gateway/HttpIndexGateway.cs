@@ -87,8 +87,8 @@ public sealed class HttpIndexGateway : IIndexGateway, IMediaAssetGateway, IDispo
 
     public async Task<Stream?> OpenOriginalImageAsync(long imageId, string? agentId = null, CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrWhiteSpace(agentId)) throw new ArgumentException("Remote original media requires an agent id.", nameof(agentId));
-        var response = await _client.GetAsync($"api/gateway/v1/assets/images/{imageId}?agentId={Uri.EscapeDataString(agentId)}", cancellationToken);
+        var query = string.IsNullOrWhiteSpace(agentId) ? "" : $"?agentId={Uri.EscapeDataString(agentId)}";
+        var response = await _client.GetAsync($"api/gateway/v1/assets/images/{imageId}{query}", cancellationToken);
         if (response.StatusCode == HttpStatusCode.NotFound) { response.Dispose(); return null; }
         await EnsureSuccessAsync(response, cancellationToken);
         return await response.Content.ReadAsStreamAsync(cancellationToken);
@@ -96,8 +96,8 @@ public sealed class HttpIndexGateway : IIndexGateway, IMediaAssetGateway, IDispo
 
     public async Task<Stream?> OpenOriginalVideoAsync(long videoId, string? agentId = null, CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrWhiteSpace(agentId)) throw new ArgumentException("Remote original media requires an agent id.", nameof(agentId));
-        var response = await _client.GetAsync($"api/gateway/v1/assets/videos/{videoId}?agentId={Uri.EscapeDataString(agentId)}", cancellationToken);
+        var query = string.IsNullOrWhiteSpace(agentId) ? "" : $"?agentId={Uri.EscapeDataString(agentId)}";
+        var response = await _client.GetAsync($"api/gateway/v1/assets/videos/{videoId}{query}", cancellationToken);
         if (response.StatusCode == HttpStatusCode.NotFound) { response.Dispose(); return null; }
         await EnsureSuccessAsync(response, cancellationToken);
         return await response.Content.ReadAsStreamAsync(cancellationToken);

@@ -230,19 +230,21 @@ public static class IndexServiceHost
         });
         app.MapGet("/api/gateway/v1/assets/images/{id:long}", async (long id, string? agentId, CancellationToken cancellationToken) =>
         {
-            if (string.IsNullOrWhiteSpace(agentId)) return Results.BadRequest(new { error = "agentId_required" });
             var record = await handlers.GetAsync(id, cancellationToken);
             if (record is null) return Results.NotFound();
             var asset = await agents.RequestAsync(agentId, record.Path, cancellationToken);
-            return asset is null ? Results.StatusCode(StatusCodes.Status503ServiceUnavailable) : Results.File(asset.Value.Content, asset.Value.ContentType, enableRangeProcessing: true);
+            return asset is null
+                ? Results.Json(new { error = "media_agent_offline", detail = "没有在线的原图代理" }, statusCode: StatusCodes.Status503ServiceUnavailable)
+                : Results.File(asset.Value.Content, asset.Value.ContentType, enableRangeProcessing: true);
         });
         app.MapGet("/api/gateway/v1/assets/videos/{id:long}", async (long id, string? agentId, CancellationToken cancellationToken) =>
         {
-            if (string.IsNullOrWhiteSpace(agentId)) return Results.BadRequest(new { error = "agentId_required" });
             var record = await handlers.GetVideoAsync(id, cancellationToken);
             if (record is null) return Results.NotFound();
             var asset = await agents.RequestAsync(agentId, record.Path, cancellationToken);
-            return asset is null ? Results.StatusCode(StatusCodes.Status503ServiceUnavailable) : Results.File(asset.Value.Content, "video/mp4", enableRangeProcessing: true);
+            return asset is null
+                ? Results.Json(new { error = "media_agent_offline", detail = "没有在线的原图代理" }, statusCode: StatusCodes.Status503ServiceUnavailable)
+                : Results.File(asset.Value.Content, "video/mp4", enableRangeProcessing: true);
         });
         app.MapPost("/api/gateway/v1/search", async (GatewaySearchRequest request, CancellationToken cancellationToken) =>
             Results.Json(await handlers.SearchAsync(request, cancellationToken)));

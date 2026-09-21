@@ -96,7 +96,10 @@ public partial class ServiceBrowseViewModel : ObservableObject
         if (item is null || _gateway is not IMediaAssetGateway media) return;
         try
         {
-            await using var stream = await media.OpenOriginalImageAsync(item.Id, Environment.MachineName);
+            // The index service selects the sole online MediaAgent in the
+            // single-tenant deployment.  Do not send the remote GUI machine
+            // name as if it were the source agent id.
+            await using var stream = await media.OpenOriginalImageAsync(item.Id);
             if (stream is null) { StatusText = "原图代理未找到文件"; return; }
             var bytes = await ReadAllAsync(stream);
             var hash = item.Sha256;

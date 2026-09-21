@@ -70,6 +70,12 @@ internal sealed class AgentConnectionRegistry
         var session = !string.IsNullOrWhiteSpace(agentId)
             ? _sessions.GetValueOrDefault(agentId)
             : _sessions.Values.SingleOrDefault();
+        // A remote GUI does not necessarily know the source machine's agent id
+        // (and a reconnect may replace the registered id).  This is a single-
+        // tenant service, so safely fall back only when exactly one agent is
+        // online; never guess when multiple source agents are connected.
+        if (session is null && _sessions.Count == 1)
+            session = _sessions.Values.Single();
         if (session is null) return null;
         return await session.RequestAsync(path, cancellationToken);
     }
