@@ -15,6 +15,16 @@ public partial class MainWindow : Window
     private HashSet<object> _faceSelectionBeforeDrag = [];
     private readonly MainViewModel _mainVm;
     private bool _initialized;
+    private readonly bool _remoteMode;
+
+    public MainWindow()
+    {
+        InitializeComponent();
+        _mainVm = null!;
+        _remoteMode = true;
+        Title = "Picer - 图片管理（远程）";
+        DataContext = null;
+    }
 
     public MainWindow(MainViewModel mainVm)
     {
@@ -28,6 +38,12 @@ public partial class MainWindow : Window
     {
         if (_initialized) return;
         _initialized = true;
+        if (_remoteMode)
+        {
+            var browse = new Views.ServiceBrowseWindow { Owner = this };
+            browse.Show();
+            return;
+        }
         await _mainVm.InitializeAsync();
         var missing = new RuntimeComponentService(AppPaths.RuntimeRoot).GetMissingComponentNames();
         if (missing.Count > 0)

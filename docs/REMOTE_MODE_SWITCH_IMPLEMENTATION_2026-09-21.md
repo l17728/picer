@@ -6,6 +6,7 @@
 - 远程模式：仅填写 IndexService IPv4，程序组装 `https://IP:8445`，读取已有的
   `service-endpoint.json` 完成令牌和 SPKI 校验。
 - 保存后程序以 `--wait-for-pid` 安全重启，避免旧进程锁定数据库或继续使用旧 Gateway。
+- 远程模式启动与本地相同的 `MainWindow.xaml` 原始主界面；远程图库窗口作为其远程内容入口。
 - 远程模式仍禁止访问本机 SQLite；缩略图、搜索和原图通过 Gateway/MediaAgent，原图
   使用本地内容哈希缓存。
 - 索引服务状态窗口也提供同一切换入口。

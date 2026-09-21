@@ -80,11 +80,11 @@ public partial class App : Application
             LogInfo("正在创建 ViewModel...");
             if (AppServices.ServiceMode)
             {
-                var serviceWindow = new Views.RemoteMainWindow();
+                var serviceWindow = new MainWindow();
                 MainWindow = serviceWindow;
                 serviceWindow.Show();
                 PicerEventSource.Log.StartupStage("shell-visible", Stopwatch.GetElapsedTime(startupTimestamp).TotalMilliseconds);
-                LogInfo("service 模式：统一远程主窗口已显示");
+                LogInfo("service 模式：原始 MainWindow 已显示");
                 return;
             }
             var peopleViewModel = new PeopleViewModel(
