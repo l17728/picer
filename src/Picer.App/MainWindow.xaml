@@ -674,6 +674,7 @@
                 </Grid>
             </TabItem>
         </TabControl>
+            <ContentControl x:Name="RemoteContent" Visibility="Collapsed" Margin="0"/>
             <Border Background="#F7F7F7" BorderBrush="#DDD" BorderThickness="1" Padding="32"
                     HorizontalAlignment="Center" VerticalAlignment="Center">
                 <Border.Style>

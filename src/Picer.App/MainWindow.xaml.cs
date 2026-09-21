@@ -16,6 +16,7 @@ public partial class MainWindow : Window
     private readonly MainViewModel _mainVm;
     private bool _initialized;
     private readonly bool _remoteMode;
+    private ServiceBrowseViewModel? _remoteBrowseViewModel;
 
     public MainWindow()
     {
@@ -40,8 +41,16 @@ public partial class MainWindow : Window
         _initialized = true;
         if (_remoteMode)
         {
-            var browse = new Views.ServiceBrowseWindow { Owner = this };
-            browse.Show();
+            var browse = new Views.ServiceBrowseWindow(AppServices.Gateway, autoLoad: false);
+            _remoteBrowseViewModel = browse.ViewModel;
+            if (browse.Content is FrameworkElement content)
+            {
+                content.DataContext = _remoteBrowseViewModel;
+                RemoteContent.Content = content;
+                RemoteContent.Visibility = Visibility.Visible;
+                MainTabs.Visibility = Visibility.Collapsed;
+            }
+            await _remoteBrowseViewModel.SearchAsync();
             return;
         }
         await _mainVm.InitializeAsync();
