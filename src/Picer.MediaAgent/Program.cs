@@ -30,6 +30,7 @@ internal sealed class AgentApplication : IDisposable
     private readonly string[] _roots;
     private readonly SemaphoreSlim _sendLock = new(1, 1);
     private Task? _loop;
+    private static readonly string LogPath = Path.Combine(Path.GetTempPath(), "picer-media-agent.log");
 
     public AgentApplication()
     {
@@ -57,11 +58,12 @@ internal sealed class AgentApplication : IDisposable
 
     private async Task RunAsync(CancellationToken cancellationToken)
     {
-        if (string.IsNullOrWhiteSpace(_serviceIp)) { _icon.Text = "Picer 原图代理（未配置服务 IP）"; return; }
+        if (string.IsNullOrWhiteSpace(_serviceIp)) { _icon.Text = "Picer 原图代理（未配置服务 IP）"; Log("missing service ip"); return; }
         while (!cancellationToken.IsCancellationRequested)
         {
             try
             {
+                Log($"connecting ip={_serviceIp}, roots={string.Join(';', _roots)}");
                 using var socket = new ClientWebSocket();
                 socket.Options.RemoteCertificateValidationCallback = (_, certificate, _, _) =>
                 {
@@ -72,6 +74,7 @@ internal sealed class AgentApplication : IDisposable
                 };
                 if (!string.IsNullOrWhiteSpace(_token)) socket.Options.SetRequestHeader("Authorization", "Bearer " + _token);
                 await socket.ConnectAsync(new Uri($"wss://{_serviceIp}:8445/api/agent/v1/connect"), cancellationToken);
+                Log("connected");
                 _icon.Text = "Picer 原图代理（已连接）";
                 await SendAsync(socket, new { type = "agent.register", agentId = Environment.MachineName, capabilities = new[] { "originalRead", "videoRead", "range" } }, cancellationToken);
                 var receive = ReceiveAsync(socket, cancellationToken);
@@ -80,12 +83,18 @@ internal sealed class AgentApplication : IDisposable
                 socket.Abort();
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { break; }
-            catch
+            catch (Exception exception)
             {
+                Log($"connection failed: {exception.GetType().Name}: {exception.Message}");
                 _icon.Text = "Picer 原图代理（未连接）";
                 try { await Task.Delay(TimeSpan.FromSeconds(5), cancellationToken); } catch (OperationCanceledException) { break; }
             }
         }
+    }
+
+    private static void Log(string message)
+    {
+        try { File.AppendAllText(LogPath, $"{DateTime.UtcNow:O} {message}{Environment.NewLine}"); } catch { }
     }
 
     private async Task HeartbeatAsync(ClientWebSocket socket, CancellationToken cancellationToken)
