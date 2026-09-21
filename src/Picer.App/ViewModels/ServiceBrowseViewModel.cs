@@ -14,9 +14,12 @@ namespace Picer.App.ViewModels;
 public partial class ServicePhotoItem : ObservableObject
 {
     public long Id { get; init; }
+    public long MediaId { get; init; }
+    public bool IsVideo { get; init; }
     public string Path { get; init; } = "";
     public long FileSize { get; init; }
     public string? Sha256 { get; init; }
+    public string MediaBadge => IsVideo ? "视频" : "图片";
 
     [ObservableProperty]
     private System.Windows.Media.Imaging.BitmapImage? _thumbnail;
@@ -60,6 +63,9 @@ public partial class ServiceBrowseViewModel : ObservableObject
     private bool _sourcesLoaded;
 
     [ObservableProperty]
+    private int _mediaFilterIndex;
+
+    [ObservableProperty]
     private RemoteDirectoryNode? _selectedDirectory;
 
     public ServiceBrowseViewModel(IIndexGateway gateway) => _gateway = gateway;
@@ -94,14 +100,20 @@ public partial class ServiceBrowseViewModel : ObservableObject
         try
         {
             var filters = new SearchFilters { IncludeMissing = false, Query = SearchText, SourceId = SelectedSource?.Id };
-            var page = SelectedDirectory is null
-                ? await _gateway.SearchAsync(filters, 200, _cursor, cts.Token)
-                : await SearchDirectoryAsync(filters, SelectedDirectory.FullPath, cts.Token);
+            var page = MediaFilterIndex == 1
+                ? await SearchVideosAsync(filters, cts.Token)
+                : MediaFilterIndex == 2
+                    ? await SearchAllAsync(filters, cts.Token)
+                    : SelectedDirectory is null
+                        ? await _gateway.SearchAsync(filters, 200, _cursor, cts.Token)
+                        : await SearchDirectoryAsync(filters, SelectedDirectory.FullPath, cts.Token);
             _cursor = page.NextCursor;
             TotalCount = page.TotalCount;
             foreach (var record in page.Items)
             {
-                var item = new ServicePhotoItem { Id = record.Id, Path = record.Path, FileSize = record.FileSize, Sha256 = record.ContentSha256 ?? record.Sha256 };
+                var isVideo = record.Id < 0;
+                var mediaId = isVideo ? -record.Id : record.Id;
+                var item = new ServicePhotoItem { Id = record.Id, MediaId = mediaId, IsVideo = isVideo, Path = record.Path, FileSize = record.FileSize, Sha256 = record.ContentSha256 ?? record.Sha256 };
                 Items.Add(item);
                 _ = LoadThumbnailAsync(item, cts.Token);
             }
@@ -120,6 +132,39 @@ public partial class ServiceBrowseViewModel : ObservableObject
         {
             IsBusy = false;
         }
+    }
+
+    public Task SetMediaFilterAsync(int index)
+    {
+        MediaFilterIndex = Math.Clamp(index, 0, 2);
+        return SearchAsync();
+    }
+
+    private async Task<GatewayPage> SearchVideosAsync(SearchFilters filters, CancellationToken cancellationToken)
+    {
+        var videos = new List<Picer.Core.Video.VideoRecord>();
+        string? cursor = null;
+        do
+        {
+            var page = await _gateway.ListVideosAsync(filters.SourceId, 500, cursor, cancellationToken);
+            videos.AddRange(page.Items);
+            cursor = page.NextCursor;
+        } while (cursor is not null);
+        var directory = SelectedDirectory?.FullPath;
+        var selected = videos.Where(video => directory is null || IsUnderDirectory(video.Path, directory))
+            .Where(video => string.IsNullOrWhiteSpace(filters.Query) || video.Path.Contains(filters.Query, StringComparison.CurrentCultureIgnoreCase))
+            .Select(video => new ImageRecord { Id = -video.Id, SourceId = video.SourceId, Path = video.Path, FileSize = video.FileSize, ModifiedUtc = video.ModifiedUtc, TakenUtc = video.TakenUtc, Width = video.Width, Height = video.Height })
+            .ToArray();
+        return new GatewayPage(selected, null, selected.Length);
+    }
+
+    private async Task<GatewayPage> SearchAllAsync(SearchFilters filters, CancellationToken cancellationToken)
+    {
+        var images = SelectedDirectory is null
+            ? await _gateway.SearchAsync(filters, 200, null, cancellationToken)
+            : await SearchDirectoryAsync(filters, SelectedDirectory.FullPath, cancellationToken);
+        var videos = await SearchVideosAsync(filters, cancellationToken);
+        return new GatewayPage(images.Items.Concat(videos.Items).ToArray(), null, images.TotalCount + videos.TotalCount);
     }
 
     public Task SelectSourceAsync(SourceFolder? source)
@@ -228,7 +273,9 @@ public partial class ServiceBrowseViewModel : ObservableObject
             // The index service selects the sole online MediaAgent in the
             // single-tenant deployment.  Do not send the remote GUI machine
             // name as if it were the source agent id.
-            await using var stream = await media.OpenOriginalImageAsync(item.Id);
+            await using var stream = item.IsVideo
+                ? await media.OpenOriginalVideoAsync(item.MediaId)
+                : await media.OpenOriginalImageAsync(item.MediaId);
             if (stream is null) { StatusText = "原图代理未找到文件"; return; }
             var bytes = await ReadAllAsync(stream);
             var hash = item.Sha256;
@@ -259,6 +306,7 @@ public partial class ServiceBrowseViewModel : ObservableObject
 
     private async Task LoadThumbnailAsync(ServicePhotoItem item, CancellationToken cancellationToken)
     {
+        if (item.IsVideo) return;
         try
         {
             await _thumbnailGate.WaitAsync(cancellationToken);

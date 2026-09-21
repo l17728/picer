@@ -55,4 +55,10 @@ public partial class ServiceBrowseWindow : Window
         if (e.NewValue is RemoteDirectoryNode directory)
             await ViewModel.SelectDirectoryAsync(directory);
     }
+
+    private async void MediaFilter_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (!IsLoaded || sender is not ComboBox box || box.SelectedIndex < 0) return;
+        await ViewModel.SetMediaFilterAsync(box.SelectedIndex);
+    }
 }
