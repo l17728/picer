@@ -12,11 +12,14 @@
 - 缩略图仍由 `IIndexGateway.OpenThumbnailAsync` 异步加载；原图继续由 MediaAgent 代理并使用本地内容哈希缓存。
 - 目录切换沿用取消旧查询、清空旧结果和渐进加载机制，避免切换后旧任务回写 UI。
 - 远程目录增加图片/视频/全部媒体过滤；视频使用远程视频资产代理打开，并在网格中显示“视频”标识，避免与图片混淆。
+- service 模式现在初始化与本地模式相同的 `MainViewModel`，启动后在后台同步只读元数据镜像；镜像完成后自动刷新目录树和首屏，避免网络慢时阻塞主窗口。
+- 远程缩略图在本地镜像没有文件时由 `IIndexGateway` 异步加载，原始文件仍只通过 MediaAgent 获取。
 
 ## 验证
 
 - `dotnet build picer.sln -c Debug --no-restore --warnaserror`：通过，0 警告、0 错误。
 - `GatewayContractTests`：47/47 通过。
+- 真实远程启动烟测：原始窗口标题为 `Picer - 图片管理`，后台镜像同步完成，进程保持响应。
 - 完整非 RuntimeComponent 测试仍存在测试宿主长时间无输出的问题；该问题与本次远程目录改动无关，已单独记录，不能将超时误报为通过。
 
 ## 已知边界
