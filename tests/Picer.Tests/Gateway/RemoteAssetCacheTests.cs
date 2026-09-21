@@ -20,6 +20,8 @@ public sealed class RemoteAssetCacheTests : IDisposable
         Assert.Equal(first, second);
         Assert.Equal(1, opens);
         Assert.Equal(bytes, await File.ReadAllBytesAsync(first));
+        Assert.Equal(first, cache.TryGetCached(hash));
+        Assert.Null(cache.TryGetCached(new string('f', 64)));
     }
 
     [Fact]

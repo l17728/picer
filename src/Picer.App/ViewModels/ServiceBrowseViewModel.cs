@@ -94,6 +94,18 @@ public partial class ServiceBrowseViewModel : ObservableObject
     private async Task OpenOriginalAsync(ServicePhotoItem? item)
     {
         if (item is null || _gateway is not IMediaAssetGateway media) return;
+        if (item.Sha256 is { Length: 64 } cachedHash && _assetCache.TryGetCached(cachedHash) is { } cachedPath)
+        {
+            var extension = Path.GetExtension(item.Path);
+            var openPath = string.IsNullOrWhiteSpace(extension) || string.Equals(Path.GetExtension(cachedPath), extension, StringComparison.OrdinalIgnoreCase)
+                ? cachedPath
+                : cachedPath + extension;
+            if (!string.Equals(openPath, cachedPath, StringComparison.OrdinalIgnoreCase) && !File.Exists(openPath))
+                File.Copy(cachedPath, openPath);
+            Process.Start(new ProcessStartInfo(openPath) { UseShellExecute = true });
+            StatusText = "鍘熷浘宸叉墦寮€锛堟湰鍦扮紦瀛樺懡涓級";
+            return;
+        }
         try
         {
             // The index service selects the sole online MediaAgent in the

@@ -53,6 +53,15 @@ public sealed class RemoteAssetCache
         finally { _gate.Release(); }
     }
 
+    /// <summary>Returns a cached content-addressed file without contacting the remote service.</summary>
+    public string? TryGetCached(string sha256)
+    {
+        var destination = Path.Combine(_root, NormalizeHash(sha256));
+        if (!File.Exists(destination)) return null;
+        Touch(destination);
+        return destination;
+    }
+
     public void Clear() { foreach (var file in Directory.EnumerateFiles(_root, "*", SearchOption.TopDirectoryOnly)) TryDelete(file); }
 
     private void EnsureCapacity(long incoming)
