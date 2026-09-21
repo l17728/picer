@@ -203,7 +203,8 @@ public partial class ServiceBrowseViewModel : ObservableObject
     {
         var normalizedPath = Path.GetFullPath(path);
         var normalizedDirectory = Path.GetFullPath(directory).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        return string.Equals(Path.GetDirectoryName(normalizedPath)?.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar), normalizedDirectory, StringComparison.OrdinalIgnoreCase);
+        var prefix = normalizedDirectory + Path.DirectorySeparatorChar;
+        return normalizedPath.StartsWith(prefix, StringComparison.OrdinalIgnoreCase);
     }
 
     [RelayCommand]
