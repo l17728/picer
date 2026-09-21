@@ -1,4 +1,5 @@
 using System.IO;
+using System.Net.Http;
 using Microsoft.ML.OnnxRuntime;
 using Picer.App.FileOperations;
 using Picer.App.Security;
@@ -200,12 +201,36 @@ public static class AppServices
     {
         if (!ServiceMode) return;
         var sources = await Gateway.ListSourcesAsync(cancellationToken).ConfigureAwait(false);
-        foreach (var tag in await Gateway.ListTagsAsync(cancellationToken).ConfigureAwait(false))
-            Db.UpsertMirroredTag(tag);
-        foreach (var album in await Gateway.ListAlbumsAsync(cancellationToken).ConfigureAwait(false))
-            Db.UpsertMirroredAlbum(album);
-        foreach (var person in await Gateway.ListPeopleAsync(cancellationToken).ConfigureAwait(false))
-            Db.UpsertMirroredPerson(person);
+        // Metadata routes were added after the initial index-service deployment. Keep
+        // image/video mirroring compatible with an older service while it is being
+        // upgraded; each collection is optional and can be retried on the next sync.
+        try
+        {
+            foreach (var tag in await Gateway.ListTagsAsync(cancellationToken).ConfigureAwait(false))
+                Db.UpsertMirroredTag(tag);
+        }
+        catch (Exception ex) when (ex is HttpRequestException or InvalidOperationException)
+        {
+            AppLogger.Warn("Remote tag metadata is unavailable; continuing media sync: " + ex.Message);
+        }
+        try
+        {
+            foreach (var album in await Gateway.ListAlbumsAsync(cancellationToken).ConfigureAwait(false))
+                Db.UpsertMirroredAlbum(album);
+        }
+        catch (Exception ex) when (ex is HttpRequestException or InvalidOperationException)
+        {
+            AppLogger.Warn("Remote album metadata is unavailable; continuing media sync: " + ex.Message);
+        }
+        try
+        {
+            foreach (var person in await Gateway.ListPeopleAsync(cancellationToken).ConfigureAwait(false))
+                Db.UpsertMirroredPerson(person);
+        }
+        catch (Exception ex) when (ex is HttpRequestException or InvalidOperationException)
+        {
+            AppLogger.Warn("Remote people metadata is unavailable; continuing media sync: " + ex.Message);
+        }
         foreach (var source in sources)
         {
             var localSource = Db.AddSource(source.Path);
