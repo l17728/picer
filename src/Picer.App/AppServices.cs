@@ -214,6 +214,15 @@ public static class AppServices
                 }
                 cursor = page.NextCursor;
             } while (cursor is not null);
+
+            cursor = null;
+            do
+            {
+                var page = await Gateway.ListVideosAsync(source.Id, 500, cursor, cancellationToken).ConfigureAwait(false);
+                foreach (var video in page.Items)
+                    Videos.UpsertMirrored(video, localSource.Id);
+                cursor = page.NextCursor;
+            } while (cursor is not null);
         }
     }
 
