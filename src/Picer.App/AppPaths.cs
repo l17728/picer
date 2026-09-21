@@ -14,6 +14,20 @@ public static class AppPaths
     public static Picer.Core.Gateway.IndexBackendOptions LoadIndexBackend() =>
         Picer.Core.Gateway.IndexBackendConfig.Load(BackendConfigPath, ServiceEndpointPath,
             static cipher => System.Security.Cryptography.ProtectedData.Unprotect(cipher, null, System.Security.Cryptography.DataProtectionScope.CurrentUser));
+
+    public static void SaveIndexBackendLocal()
+    {
+        Directory.CreateDirectory(BootstrapDirectory);
+        File.WriteAllText(BackendConfigPath, "{\"mode\":\"local\"}");
+    }
+
+    public static void SaveIndexBackendService(string ip)
+    {
+        if (!System.Net.IPAddress.TryParse(ip.Trim(), out var address) || address.AddressFamily != System.Net.Sockets.AddressFamily.InterNetwork)
+            throw new ArgumentException("请输入有效的 IPv4 地址。", nameof(ip));
+        Directory.CreateDirectory(BootstrapDirectory);
+        File.WriteAllText(BackendConfigPath, JsonSerializer.Serialize(new { mode = "service", indexServiceIp = ip.Trim() }));
+    }
     public static string RuntimeRoot => Path.Combine(AppContext.BaseDirectory, "runtime");
 
     public static string DataRoot

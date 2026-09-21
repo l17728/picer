@@ -94,4 +94,9 @@ public partial class IndexServiceWindow : Window
     }
 
     private void Close_Click(object sender, RoutedEventArgs e) => Close();
+
+    private void SwitchMode_Click(object sender, RoutedEventArgs e)
+    {
+        new BackendSettingsWindow { Owner = this }.ShowDialog();
+    }
 }
