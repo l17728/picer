@@ -459,7 +459,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             Sources.Add(new SourceNodeViewModel
             {
                 SourceId = s.Id,
-                DisplayName = Path.GetFileName(s.Path),
+                DisplayName = AppServices.ServiceMode ? $"远程 · {Path.GetFileName(s.Path)}" : Path.GetFileName(s.Path),
                 FullPath = s.Path,
                 ImageCount = s.ImageCount
             });
@@ -476,7 +476,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         foreach (var source in snapshot.Sources)
             Sources.Add(new SourceNodeViewModel
             {
-                SourceId = source.Id, DisplayName = Path.GetFileName(source.Path), FullPath = source.Path, ImageCount = source.ImageCount
+                SourceId = source.Id, DisplayName = AppServices.ServiceMode ? $"远程 · {Path.GetFileName(source.Path)}" : Path.GetFileName(source.Path), FullPath = source.Path, ImageCount = source.ImageCount
             });
         SelectedSource = Sources.FirstOrDefault(source => source.SourceId == previous) ?? Sources.FirstOrDefault();
     }
@@ -1357,7 +1357,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         {
             var node = new DirectoryNodeViewModel
             {
-                Name = Path.GetFileName(source.Path),
+                Name = AppServices.ServiceMode ? $"远程 · {Path.GetFileName(source.Path)}" : Path.GetFileName(source.Path),
                 FullPath = source.Path,
                 Icon = "📁",
                 ImageCount = source.ImageCount,
