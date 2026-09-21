@@ -151,6 +151,28 @@ public partial class ImageItemViewModel : ObservableObject
                 _previewPath = await _videoPreviewLoader(video, cts.Token);
                 imagePaths = await Task.Run(GetImagePaths, cts.Token);
             }
+            if (imagePaths.Count == 0 && !IsVideo && AppServices.ServiceMode)
+            {
+                await using var remote = await AppServices.Gateway.OpenThumbnailAsync(_record.Id, cts.Token);
+                if (remote is not null)
+                {
+                    using var buffer = new MemoryStream();
+                    await remote.CopyToAsync(buffer, cts.Token);
+                    buffer.Position = 0;
+                    var remoteImage = new BitmapImage();
+                    remoteImage.BeginInit();
+                    remoteImage.CacheOption = BitmapCacheOption.OnLoad;
+                    remoteImage.StreamSource = buffer;
+                    remoteImage.EndInit();
+                    remoteImage.Freeze();
+                    if (!cts.IsCancellationRequested)
+                    {
+                        _thumbnail = remoteImage;
+                        OnPropertyChanged(nameof(Thumbnail));
+                    }
+                }
+                return;
+            }
             if (imagePaths.Count == 0)
                 return;
             var bi = await Task.Run(() =>

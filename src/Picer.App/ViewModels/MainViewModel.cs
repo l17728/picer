@@ -282,6 +282,15 @@ public partial class MainViewModel : ObservableObject, IDisposable
         BackfillBurstGroupsAsync().Forget();
     }
 
+    public async Task RefreshFromRemoteMirrorAsync()
+    {
+        if (!AppServices.ServiceMode) return;
+        await ReloadSourcesAsync();
+        await ApplySearchAndFilterAsync();
+        await LoadDirectoryTreeAsync();
+        StatusText = "远程索引已同步";
+    }
+
     private async Task BackfillBurstGroupsAsync()
     {
         try

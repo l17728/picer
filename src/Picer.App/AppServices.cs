@@ -70,6 +70,29 @@ public static class AppServices
                 ? new HttpIndexGateway(baseUrl, RequireToken(backend), backend.SpkiPin)
                 : new PipeIndexGateway(backend.PipeName ?? throw new InvalidOperationException("service-endpoint.json 缺少管道名与 URL。"), RequireToken(backend));
             AppLogger.Info("AppServices 已进入 service 模式（零构建逻辑，仅网关）");
+            Db = new PicerDatabase(Path.Combine(AppPaths.DataRoot, "remote-mirror.db"));
+            Config = StorageConfig.Load(ConfigPath);
+            Storage = Config.CreateProvider(Path.Combine(AppPaths.DataRoot, "remote-cache"));
+            Thumbnails = new ThumbnailService(Path.Combine(AppPaths.DataRoot, "remote-thumbs"));
+            Index = new IndexEngine(Db, Storage, Thumbnails);
+            FileOperations = new WindowsRecycleBinFileOperation();
+            Geocoder = new NominatimReverseGeocoder(Path.Combine(AppPaths.DataRoot, "remote-geocoding-cache.json"));
+            LocationHierarchy = new LocationHierarchyService(Db, Geocoder);
+            VisionRepository = new VisionAnalysisRepository(Db);
+            People = new PeopleService(Db);
+            FaceThumbnails = new FaceThumbnailService(Path.Combine(AppPaths.DataRoot, "remote-face-thumbs"));
+            FaceSuggestions = new FaceSuggestionEngine(VisionRepository, People);
+            UnknownFaceClusters = new UnknownFaceClusterer(VisionRepository);
+            FaceValidation = new FaceValidationService(Db, VisionRepository);
+            FaceTraining = new FaceTrainingService(VisionRepository);
+            CloudVisionRepository = new CloudVisionRepository(Db);
+            VisualConceptRepository = new VisualConceptRepository(Db);
+            Videos = new VideoRepository(Db);
+            MediaSearch = new MediaSearchTool(Db, Videos);
+            VideoIndex = new VideoIndexService(Db, Videos);
+            VideoSummaries = new VideoSummaryService(Videos, Path.Combine(AppPaths.DataRoot, "remote-video-summary-cache"));
+            ClipRepository = new ClipSemanticRepository(Db);
+            FlorenceResults = new FlorenceResultRepository(Db);
             return;
         }
 
@@ -172,6 +195,27 @@ public static class AppServices
         config.Cache?.Directory is { Length: > 0 } configured
             ? Path.GetFullPath(configured)
             : Path.Combine(AppPaths.DataRoot, "cache");
+
+    public static async Task SyncRemoteMirrorAsync(CancellationToken cancellationToken = default)
+    {
+        if (!ServiceMode) return;
+        var sources = await Gateway.ListSourcesAsync(cancellationToken).ConfigureAwait(false);
+        foreach (var source in sources)
+        {
+            var localSource = Db.AddSource(source.Path);
+            string? cursor = null;
+            do
+            {
+                var page = await Gateway.ListImagesAsync(source.Id, false, 500, cursor, cancellationToken).ConfigureAwait(false);
+                foreach (var image in page.Items)
+                {
+                    image.SourceId = localSource.Id;
+                    Db.UpsertMirroredImage(image);
+                }
+                cursor = page.NextCursor;
+            } while (cursor is not null);
+        }
+    }
 
     public static (CloudVisionAnalysisService Service, OpenAiCompatibleCloudVisionAnalyzer Analyzer, CloudVisionRunPolicy Policy, string ProviderLabel, bool IsLocal)? CreateCloudVisionService(string featureId = AiFeatureIds.PhotoAnalysis)
     {

@@ -79,14 +79,7 @@ public partial class App : Application
         {
             LogInfo("正在创建 ViewModel...");
             if (AppServices.ServiceMode)
-            {
-                var serviceWindow = new MainWindow();
-                MainWindow = serviceWindow;
-                serviceWindow.Show();
-                PicerEventSource.Log.StartupStage("shell-visible", Stopwatch.GetElapsedTime(startupTimestamp).TotalMilliseconds);
-                LogInfo("service 模式：原始 MainWindow 已显示");
-                return;
-            }
+                LogInfo("service 模式：将在后台同步远程索引镜像");
             var peopleViewModel = new PeopleViewModel(
                 AppServices.Db, AppServices.People, AppServices.VisionRepository,
                 AppServices.VisionAnalysis, AppServices.FaceThumbnails, AppServices.FaceSuggestions,
@@ -98,6 +91,8 @@ public partial class App : Application
             var window = new MainWindow(_mainViewModel);
             MainWindow = window;
             window.Show();
+            if (AppServices.ServiceMode)
+                _ = SyncRemoteMirrorInBackgroundAsync();
             _ = peopleViewModel.PublishEvaluationSnapshotForPlatformAsync();
             PicerEventSource.Log.StartupStage("shell-visible", Stopwatch.GetElapsedTime(startupTimestamp).TotalMilliseconds);
             LogInfo("MainWindow 已显示");
@@ -108,6 +103,26 @@ public partial class App : Application
             MessageBox.Show($"启动失败：{ex.Message}\n\n详见 {LogPath}", "Picer",
                 MessageBoxButton.OK, MessageBoxImage.Error);
             Shutdown(-1);
+        }
+    }
+
+    private async Task SyncRemoteMirrorInBackgroundAsync()
+    {
+        try
+        {
+            using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(3));
+            await AppServices.SyncRemoteMirrorAsync(timeout.Token);
+            if (_mainViewModel is not null)
+                await _mainViewModel.RefreshFromRemoteMirrorAsync();
+            LogInfo("远程索引镜像同步完成");
+        }
+        catch (OperationCanceledException)
+        {
+            LogInfo("远程索引镜像同步超时，保留已同步内容");
+        }
+        catch (Exception exception)
+        {
+            LogCrash("远程索引镜像同步失败", exception);
         }
     }
 

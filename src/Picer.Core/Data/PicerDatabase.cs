@@ -1388,6 +1388,24 @@ public sealed class PicerDatabase : IDisposable
         return rec;
     }
 
+    /// <summary>Imports a read-only gateway record while preserving its server id.</summary>
+    public void UpsertMirroredImage(ImageRecord rec)
+    {
+        using var cmd = Command("""
+            INSERT INTO images (id, source_id, path, file_size, modified_utc, sha256, width, height,
+                                taken_utc, camera, gps, thumb_path, status, indexed_utc, ahash, dhash, file_created_utc, content_sha256)
+            VALUES ($id, $sid, $p, $fs, $m, $sha, $w, $h, $t, $cam, $gps, $th, $st, $ix, $ah, $dh, $created, $csha)
+            ON CONFLICT(id) DO UPDATE SET source_id=excluded.source_id, path=excluded.path, file_size=excluded.file_size,
+              modified_utc=excluded.modified_utc, sha256=excluded.sha256, width=excluded.width, height=excluded.height,
+              taken_utc=excluded.taken_utc, camera=excluded.camera, gps=excluded.gps, thumb_path=excluded.thumb_path,
+              status=excluded.status, indexed_utc=excluded.indexed_utc, ahash=excluded.ahash, dhash=excluded.dhash,
+              file_created_utc=excluded.file_created_utc, content_sha256=excluded.content_sha256
+            """);
+        cmd.Parameters.AddWithValue("$id", rec.Id);
+        BindRecord(cmd, rec);
+        cmd.ExecuteNonQuery();
+    }
+
     public void UpdateImage(ImageRecord rec)
     {
         using var cmd = Command("""
