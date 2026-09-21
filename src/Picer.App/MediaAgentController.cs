@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.IO;
+using System.Security.Cryptography;
 using System.Text.Json;
 
 namespace Picer.App;
@@ -10,6 +11,39 @@ internal static class MediaAgentController
     private static readonly string ConfigPath = Path.Combine(AppPaths.DataRoot, "media-agent.json");
 
     public sealed record Settings(bool Enabled, string ServiceIp);
+
+    public static string ResolveToken()
+    {
+        var environment = Environment.GetEnvironmentVariable("PICER_INDEX_SERVICE_TOKEN")?.Trim();
+        if (!string.IsNullOrWhiteSpace(environment)) return environment;
+        return ReadEndpointValue("TokenCipher", value =>
+        {
+            if (value.StartsWith("plain:", StringComparison.OrdinalIgnoreCase))
+                return System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(value["plain:".Length..]));
+            if (value.StartsWith("dpapi:", StringComparison.OrdinalIgnoreCase))
+            {
+                var protectedValue = Convert.FromBase64String(value["dpapi:".Length..]);
+                return System.Text.Encoding.UTF8.GetString(ProtectedData.Unprotect(protectedValue, null, DataProtectionScope.CurrentUser));
+            }
+            return null;
+        }) ?? "";
+    }
+
+    public static string? ResolveSpkiPin()
+        => Environment.GetEnvironmentVariable("PICER_INDEX_SERVICE_SPKI_PIN")?.Trim()
+            ?? ReadEndpointValue("SpkiPin", value => value);
+
+    private static string? ReadEndpointValue(string propertyName, Func<string, string?> transform)
+    {
+        try
+        {
+            if (!File.Exists(AppPaths.ServiceEndpointPath)) return null;
+            using var document = JsonDocument.Parse(File.ReadAllText(AppPaths.ServiceEndpointPath));
+            return document.RootElement.TryGetProperty(propertyName, out var property)
+                ? transform(property.GetString() ?? "") : null;
+        }
+        catch { return null; }
+    }
 
     public static Settings Load()
     {

@@ -46,8 +46,8 @@ public partial class IndexServiceWindow : Window
         if (!System.Net.IPAddress.TryParse(ip, out _)) { AgentStatusText.Text = "IP 地址格式不正确。"; return; }
         var roots = AppServices.Db?.GetSources().Select(source => source.Path) ?? [];
         var started = MediaAgentController.Start(ip,
-            Environment.GetEnvironmentVariable("PICER_INDEX_SERVICE_TOKEN") ?? "",
-            Environment.GetEnvironmentVariable("PICER_INDEX_SERVICE_SPKI_PIN"), roots);
+            MediaAgentController.ResolveToken(),
+            MediaAgentController.ResolveSpkiPin(), roots);
         if (!started) { AgentStatusText.Text = "找不到 Picer.MediaAgent.exe，请先完成发布或 Debug 构建。"; return; }
         MediaAgentController.Save(new MediaAgentController.Settings(AgentEnabledBox.IsChecked == true, ip));
         AgentStatusText.Text = "原图代理已启动，等待 IndexService 连接。";
@@ -58,7 +58,7 @@ public partial class IndexServiceWindow : Window
     {
         if (AppServices.ServiceMode || AppServices.Db is null) { HealthText.Text = "当前不是本地索引，不能从此窗口推送本地索引。"; return; }
         var ip = AgentIpBox.Text.Trim();
-        var token = Environment.GetEnvironmentVariable("PICER_INDEX_SERVICE_TOKEN") ?? "";
+        var token = MediaAgentController.ResolveToken();
         if (!System.Net.IPAddress.TryParse(ip, out _) || string.IsNullOrWhiteSpace(token))
         {
             HealthText.Text = "请先填写有效的 IndexService IP，并配置 PICER_INDEX_SERVICE_TOKEN。";
@@ -74,7 +74,7 @@ public partial class IndexServiceWindow : Window
             {
                 var roots = AppServices.Db.GetSources().Select(source => source.Path);
                 if (!MediaAgentController.Start(ip, token,
-                        Environment.GetEnvironmentVariable("PICER_INDEX_SERVICE_SPKI_PIN"), roots))
+                        MediaAgentController.ResolveSpkiPin(), roots))
                 {
                     AgentStatusText.Text = "无法启动原图代理，索引仍会继续同步；请检查 media-agent 发布文件。";
                 }
