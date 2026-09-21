@@ -19,4 +19,10 @@ public partial class ServiceBrowseWindow : Window
         DataContext = ViewModel;
         if (autoLoad) Loaded += async (_, _) => await ViewModel.SearchAsync();
     }
+
+    private async void SourcesTree_SelectedItemChanged(object sender, RoutedPropertyChangedEventArgs<object> e)
+    {
+        if (e.NewValue is Picer.Core.Models.SourceFolder source)
+            await ViewModel.SelectSourceAsync(source);
+    }
 }

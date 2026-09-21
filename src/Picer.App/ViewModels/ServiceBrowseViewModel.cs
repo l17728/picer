@@ -6,6 +6,7 @@ using System.Windows.Media.Imaging;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Picer.Core.Gateway;
+using Picer.Core.Models;
 using Picer.Core.Search;
 
 namespace Picer.App.ViewModels;
@@ -30,6 +31,10 @@ public partial class ServiceBrowseViewModel : ObservableObject
     private readonly RemoteAssetCache _assetCache = new(Path.Combine(AppPaths.DataRoot, "remote-assets"));
 
     public ObservableCollection<ServicePhotoItem> Items { get; } = [];
+    public ObservableCollection<SourceFolder> Sources { get; } = [];
+
+    [ObservableProperty]
+    private SourceFolder? _selectedSource;
 
     [ObservableProperty]
     private string _searchText = "";
@@ -42,12 +47,23 @@ public partial class ServiceBrowseViewModel : ObservableObject
 
     [ObservableProperty]
     private bool _isBusy;
+    private bool _sourcesLoaded;
 
     public ServiceBrowseViewModel(IIndexGateway gateway) => _gateway = gateway;
 
     [RelayCommand]
     public async Task SearchAsync()
     {
+        if (!_sourcesLoaded)
+        {
+            try
+            {
+                Sources.Clear();
+                foreach (var source in await _gateway.ListSourcesAsync()) Sources.Add(source);
+                _sourcesLoaded = true;
+            }
+            catch (Exception exception) { StatusText = $"目录加载失败：{exception.Message}"; }
+        }
         Items.Clear();
         _cursor = null;
         TotalCount = 0;
@@ -63,7 +79,7 @@ public partial class ServiceBrowseViewModel : ObservableObject
         var cts = _loadCts = new CancellationTokenSource();
         try
         {
-            var filters = new SearchFilters { IncludeMissing = false, Query = SearchText };
+            var filters = new SearchFilters { IncludeMissing = false, Query = SearchText, SourceId = SelectedSource?.Id };
             var page = await _gateway.SearchAsync(filters, 200, _cursor, cts.Token);
             _cursor = page.NextCursor;
             TotalCount = page.TotalCount;
@@ -88,6 +104,12 @@ public partial class ServiceBrowseViewModel : ObservableObject
         {
             IsBusy = false;
         }
+    }
+
+    public Task SelectSourceAsync(SourceFolder? source)
+    {
+        SelectedSource = source;
+        return SearchAsync();
     }
 
     [RelayCommand]

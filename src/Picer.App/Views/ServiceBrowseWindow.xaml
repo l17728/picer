@@ -16,7 +16,17 @@
             <Button Content="加载更多" Command="{Binding LoadMoreCommand}" Padding="14,4"/>
             <TextBlock Text="{Binding StatusText}" VerticalAlignment="Center" Margin="12,0,0,0" TextTrimming="CharacterEllipsis"/>
         </StackPanel>
-        <ListBox x:Name="Photos" ItemsSource="{Binding Items}"
+        <Grid>
+            <Grid.ColumnDefinitions><ColumnDefinition Width="280"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+            <Border Grid.Column="0" BorderBrush="#D5DDE7" BorderThickness="1" Margin="0,0,10,0" Padding="6">
+                <DockPanel>
+                    <TextBlock DockPanel.Dock="Top" Text="目录浏览" FontSize="16" FontWeight="SemiBold" Margin="4,2,4,8"/>
+                    <TreeView x:Name="SourcesTree" ItemsSource="{Binding Sources}" SelectedItemChanged="SourcesTree_SelectedItemChanged" AutomationProperties.Name="远程目录树">
+                        <TreeView.ItemTemplate><DataTemplate><StackPanel Orientation="Horizontal"><TextBlock Text="📁" Margin="0,0,5,0"/><TextBlock Text="{Binding Path}" TextTrimming="CharacterEllipsis" ToolTip="{Binding Path}"/><TextBlock Text="{Binding ImageCount, StringFormat=（{0}）}" Foreground="#777" Margin="5,0,0,0"/></StackPanel></DataTemplate></TreeView.ItemTemplate>
+                    </TreeView>
+                </DockPanel>
+            </Border>
+            <ListBox Grid.Column="1" x:Name="Photos" ItemsSource="{Binding Items}"
                  ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                  VirtualizingPanel.IsVirtualizing="True"
                  AutomationProperties.Name="图片网格">
@@ -36,6 +46,7 @@
                     </StackPanel>
                 </DataTemplate>
             </ListBox.ItemTemplate>
-        </ListBox>
+            </ListBox>
+        </Grid>
     </DockPanel>
 </Window>
