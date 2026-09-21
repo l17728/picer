@@ -47,6 +47,8 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
     private bool _suppressCollectionSelectionCallbacks;
     private int _baselinePublishStarted;
     private readonly SemaphoreSlim _modelSwitchGate = new(1, 1);
+    private CancellationTokenSource? _modelSwitchCancellation;
+    private long _modelSwitchGeneration;
 
     public PeopleViewModel(PicerDatabase database, PeopleService peopleService,
         VisionAnalysisRepository repository, VisionAnalysisService? analysisService,
@@ -111,7 +113,10 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
     partial void OnSelectedFaceModelVersionChanged(string? value)
     {
         if (!_isLoaded || string.IsNullOrWhiteSpace(value)) return;
-        _ = SwitchFaceModelAsync(value);
+        var generation = Interlocked.Increment(ref _modelSwitchGeneration);
+        var cancellation = new CancellationTokenSource();
+        Interlocked.Exchange(ref _modelSwitchCancellation, cancellation)?.Cancel();
+        _ = SwitchFaceModelAsync(value, generation, cancellation);
     }
 
     partial void OnSelectedFaceModelOptionChanged(FaceModelOption? value)
@@ -247,11 +252,16 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         }
     }
 
-    private async Task SwitchFaceModelAsync(string modelVersion)
+    private async Task SwitchFaceModelAsync(string modelVersion, long generation, CancellationTokenSource cancellation)
     {
-        if (!await _modelSwitchGate.WaitAsync(0).ConfigureAwait(false)) return;
+        var cancellationToken = cancellation.Token;
+        var gateAcquired = false;
         try
         {
+            await _modelSwitchGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            gateAcquired = true;
+            if (generation != Volatile.Read(ref _modelSwitchGeneration) ||
+                !string.Equals(SelectedFaceModelVersion, modelVersion, StringComparison.OrdinalIgnoreCase)) return;
             StatusText = $"正在检查 {GetFaceModelDisplayName(modelVersion)} 的人脸向量覆盖率…";
             // History is independent from local vector coverage. Load it first
             // so the user can see the available 91%/93% versions while the
@@ -296,8 +306,11 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
                         $"FaceVectorBackfill.Save.{target}",
                         () => _repository.SaveBackfilledEmbeddings(source, target, values)));
                 var result = await service.RunAsync(sourceModel, modelVersion,
-                    new Progress<FaceVectorBackfillProgress>(value => StatusText =
-                        $"正在生成 {GetFaceModelDisplayName(modelVersion)} 向量：{value.Completed}/{value.Total}，成功 {value.Analyzed}，失败 {value.Failed}"));
+                    new Progress<FaceVectorBackfillProgress>(value =>
+                    {
+                        if (!cancellationToken.IsCancellationRequested)
+                            StatusText = $"正在生成 {GetFaceModelDisplayName(modelVersion)} 向量：{value.Completed}/{value.Total}，成功 {value.Analyzed}，失败 {value.Failed}";
+                    }), cancellationToken);
                 if (!result.Completed)
                 {
                     StatusText = $"{GetFaceModelDisplayName(modelVersion)} 向量生成未完成：失败 {result.Failed} 条，请修复服务后重试";
@@ -319,24 +332,38 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             StatusText = $"切换 {GetFaceModelDisplayName(modelVersion)} 失败：{exception.Message}";
             AppLogger.Error($"切换人脸模型空间失败：model={modelVersion}", exception);
         }
-        finally { _modelSwitchGate.Release(); }
+        finally
+        {
+            if (gateAcquired) _modelSwitchGate.Release();
+            Interlocked.CompareExchange(ref _modelSwitchCancellation, null, cancellation);
+            cancellation.Dispose();
+        }
     }
 
     private async Task LoadTrainingHistoryAsync(string modelVersion)
     {
-        var history = await UiWork.RunDatabaseAsync(() => _repository.GetFaceTrainingHistory(modelVersion));
+        var aliases = GetModelVersionAliases(modelVersion);
+        var history = await UiWork.RunDatabaseAsync(() => aliases
+            .SelectMany(version => _repository.GetFaceTrainingHistory(version))
+            .GroupBy(value => value.ArtifactId, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.First())
+            .ToArray());
         IReadOnlyList<RemoteTrainingHistoryData> remote = [];
         try
         {
             var endpoint = Environment.GetEnvironmentVariable("PICER_MODEL_SERVER_URL")?.Trim() ?? "http://127.0.0.1:8090";
             var key = Environment.GetEnvironmentVariable("PICER_MODEL_SERVER_API_KEY")?.Trim() ?? "";
             using var platform = new FaceTrainingSubmissionService(endpoint, key);
-            remote = await platform.GetTrainingHistoryAsync(modelVersion).ConfigureAwait(false);
+            var remoteRecords = new List<RemoteTrainingHistoryData>();
+            foreach (var alias in aliases)
+                remoteRecords.AddRange(await platform.GetTrainingHistoryAsync(alias).ConfigureAwait(false));
+            remote = remoteRecords.GroupBy(value => value.ArtifactId ?? $"{value.ModelVersion}:{value.CreatedUtc:o}", StringComparer.OrdinalIgnoreCase)
+                .Select(group => group.First()).ToArray();
         }
         catch (Exception exception) { AppLogger.Warn($"加载平台训练历史失败：{exception.Message}"); }
         var remoteOptions = new List<FaceTrainingHistoryOption>();
         foreach (var value in remote.Where(value => value.Status.Equals("completed", StringComparison.OrdinalIgnoreCase)
-                     && value.SampleCount >= 10 && value.ValidationAccuracy >= .90 && !string.IsNullOrWhiteSpace(value.ArtifactId)))
+                     && value.ValidationAccuracy >= .90 && !string.IsNullOrWhiteSpace(value.ArtifactId)))
         {
             var artifact = await TryGetRemoteArtifactAsync(value.ArtifactId!).ConfigureAwait(false);
             remoteOptions.Add(new(value.ArtifactId!, value.ModelVersion, value.ValidationAccuracy!.Value,
@@ -358,12 +385,24 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         });
     }
 
+    private static IReadOnlyList<string> GetModelVersionAliases(string modelVersion)
+    {
+        if (modelVersion.Contains("insightface", StringComparison.OrdinalIgnoreCase))
+            return new[] { modelVersion, "insightface", "insightface-arcface" }
+                .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        return new[] { modelVersion };
+    }
+
+    private static bool IsSameModelFamily(string left, string right)
+        => GetModelVersionAliases(left).Contains(right, StringComparer.OrdinalIgnoreCase) ||
+           GetModelVersionAliases(right).Contains(left, StringComparer.OrdinalIgnoreCase);
+
     [RelayCommand]
     private async Task ApplySelectedTrainingAsync()
     {
         if (IsAnalyzing || SelectedTrainingHistory is null) return;
         var modelVersion = SelectedFaceModelVersion ?? "sface";
-        if (!string.Equals(modelVersion, SelectedTrainingHistory.ModelVersion, StringComparison.OrdinalIgnoreCase))
+        if (!IsSameModelFamily(modelVersion, SelectedTrainingHistory.ModelVersion))
         {
             StatusText = "历史模型与当前模型空间不一致，已阻止应用";
             return;
