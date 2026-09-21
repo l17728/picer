@@ -5,6 +5,7 @@ using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text.Json;
 using Picer.Core.Models;
+using Picer.Core.People;
 using Picer.Core.Search;
 using Picer.Core.Video;
 
@@ -185,6 +186,13 @@ public sealed class HttpIndexGateway : IIndexGateway, IMediaAssetGateway, IDispo
         using var response = await _client.GetAsync("api/gateway/v1/albums", cancellationToken);
         await EnsureSuccessAsync(response, cancellationToken);
         return await response.Content.ReadFromJsonAsync<IReadOnlyList<Album>>(Json, cancellationToken) ?? [];
+    }
+
+    public async Task<IReadOnlyList<PersonSummary>> ListPeopleAsync(CancellationToken cancellationToken = default)
+    {
+        using var response = await _client.GetAsync("api/gateway/v1/people", cancellationToken);
+        await EnsureSuccessAsync(response, cancellationToken);
+        return await response.Content.ReadFromJsonAsync<IReadOnlyList<PersonSummary>>(Json, cancellationToken) ?? [];
     }
 
     public async Task<SourceFolder> RegisterSourceAsync(string path, CancellationToken cancellationToken = default)

@@ -11,6 +11,7 @@ using Picer.Core.Gateway;
 using Picer.Core.Indexing;
 using Picer.Core.Logging;
 using Picer.Core.Models;
+using Picer.Core.People;
 using Picer.Core.Search;
 using Picer.Core.Storage;
 using Picer.Core.Thumbnails;
@@ -73,6 +74,7 @@ public sealed class IndexApiHandlers(PicerDatabase db, ThumbnailService thumbnai
     public IReadOnlyList<SourceFolder> ListSources() => db.GetSources();
     public IReadOnlyList<Tag> ListTags() => SemanticEngine.GetTags(db);
     public IReadOnlyList<Album> ListAlbums() => SemanticEngine.GetAlbums(db);
+    public IReadOnlyList<PersonSummary> ListPeople() => new PeopleService(db).GetAll();
 
     public SourceFolder? GetSource(long id) => db.GetSource(id);
 
@@ -253,6 +255,7 @@ public static class IndexServiceHost
         app.MapGet("/api/gateway/v1/sources", () => Results.Json(handlers.ListSources()));
         app.MapGet("/api/gateway/v1/tags", () => Results.Json(handlers.ListTags()));
         app.MapGet("/api/gateway/v1/albums", () => Results.Json(handlers.ListAlbums()));
+        app.MapGet("/api/gateway/v1/people", () => Results.Json(handlers.ListPeople()));
         app.MapPost("/api/gateway/v1/sources", (GatewaySourceRegistration request) =>
         {
             try { return Results.Json(handlers.RegisterSource(request.Path)); }

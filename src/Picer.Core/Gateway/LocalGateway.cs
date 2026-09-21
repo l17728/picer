@@ -1,6 +1,7 @@
 using Picer.Core.Data;
 using Picer.Core.Indexing;
 using Picer.Core.Models;
+using Picer.Core.People;
 using Picer.Core.Search;
 using Picer.Core.Thumbnails;
 using Picer.Core.Video;
@@ -80,6 +81,9 @@ public sealed class LocalGateway(PicerDatabase db, ThumbnailService thumbnails, 
 
     public Task<IReadOnlyList<Album>> ListAlbumsAsync(CancellationToken cancellationToken = default) =>
         Task.FromResult<IReadOnlyList<Album>>(SemanticEngine.GetAlbums(db));
+
+    public Task<IReadOnlyList<PersonSummary>> ListPeopleAsync(CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<PersonSummary>>(new PeopleService(db).GetAll());
 
     public Task<SourceFolder> RegisterSourceAsync(string path, CancellationToken cancellationToken = default)
     {

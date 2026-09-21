@@ -1,4 +1,5 @@
 using Picer.Core.Models;
+using Picer.Core.People;
 using Picer.Core.Search;
 using Picer.Core.Video;
 
@@ -21,6 +22,7 @@ public interface IIndexGateway : IDisposable
     Task<IReadOnlyList<SourceFolder>> ListSourcesAsync(CancellationToken cancellationToken = default);
     Task<IReadOnlyList<Tag>> ListTagsAsync(CancellationToken cancellationToken = default);
     Task<IReadOnlyList<Album>> ListAlbumsAsync(CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<PersonSummary>> ListPeopleAsync(CancellationToken cancellationToken = default);
     Task<SourceFolder> RegisterSourceAsync(string path, CancellationToken cancellationToken = default);
     Task<bool> RemoveSourceAsync(long sourceId, CancellationToken cancellationToken = default);
     Task<string> StartScanAsync(long sourceId, CancellationToken cancellationToken = default);

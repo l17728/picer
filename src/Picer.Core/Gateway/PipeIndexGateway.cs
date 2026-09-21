@@ -3,6 +3,7 @@ using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text.Json;
 using Picer.Core.Models;
+using Picer.Core.People;
 using Picer.Core.Video;
 using Picer.Core.Search;
 
@@ -99,6 +100,9 @@ public sealed class PipeIndexGateway : IIndexGateway, IDisposable
 
     public async Task<IReadOnlyList<Album>> ListAlbumsAsync(CancellationToken cancellationToken = default) =>
         await CallAsync<IReadOnlyList<Album>>("albums", null, cancellationToken) ?? [];
+
+    public async Task<IReadOnlyList<PersonSummary>> ListPeopleAsync(CancellationToken cancellationToken = default) =>
+        await CallAsync<IReadOnlyList<PersonSummary>>("people", null, cancellationToken) ?? [];
 
     public async Task<SourceFolder> RegisterSourceAsync(string path, CancellationToken cancellationToken = default) =>
         await CallAsync<SourceFolder>("add_source", new { path }, cancellationToken)

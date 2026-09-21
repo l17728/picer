@@ -204,6 +204,8 @@ public static class AppServices
             Db.UpsertMirroredTag(tag);
         foreach (var album in await Gateway.ListAlbumsAsync(cancellationToken).ConfigureAwait(false))
             Db.UpsertMirroredAlbum(album);
+        foreach (var person in await Gateway.ListPeopleAsync(cancellationToken).ConfigureAwait(false))
+            Db.UpsertMirroredPerson(person);
         foreach (var source in sources)
         {
             var localSource = Db.AddSource(source.Path);

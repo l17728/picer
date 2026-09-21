@@ -1422,6 +1422,14 @@ public sealed class PicerDatabase : IDisposable
         cmd.Parameters.AddWithValue("$description", (object?)album.Description ?? DBNull.Value); cmd.ExecuteNonQuery();
     }
 
+    public void UpsertMirroredPerson(PersonSummary person)
+    {
+        using var cmd = Command("INSERT INTO people(id,display_name,created_utc,updated_utc) VALUES($id,$name,$created,$updated) ON CONFLICT(id) DO UPDATE SET display_name=excluded.display_name,updated_utc=excluded.updated_utc");
+        var now = DateTime.UtcNow.ToString("o");
+        cmd.Parameters.AddWithValue("$id", person.Id); cmd.Parameters.AddWithValue("$name", person.DisplayName);
+        cmd.Parameters.AddWithValue("$created", now); cmd.Parameters.AddWithValue("$updated", now); cmd.ExecuteNonQuery();
+    }
+
     public void UpdateImage(ImageRecord rec)
     {
         using var cmd = Command("""

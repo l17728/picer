@@ -5,6 +5,7 @@ using System.Windows.Threading;
 using Picer.App.Views;
 using Picer.Core.Gateway;
 using Picer.Core.Models;
+using Picer.Core.People;
 using Picer.Core.Search;
 using Picer.Core.Video;
 
@@ -60,6 +61,9 @@ public sealed class ServiceBrowseWindowTests
 
         public Task<IReadOnlyList<Album>> ListAlbumsAsync(CancellationToken cancellationToken = default) =>
             Task.FromResult<IReadOnlyList<Album>>(Array.Empty<Album>());
+
+        public Task<IReadOnlyList<PersonSummary>> ListPeopleAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<PersonSummary>>(Array.Empty<PersonSummary>());
 
         public Task<SourceFolder> RegisterSourceAsync(string path, CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
