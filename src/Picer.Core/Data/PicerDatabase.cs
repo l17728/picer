@@ -1406,6 +1406,22 @@ public sealed class PicerDatabase : IDisposable
         cmd.ExecuteNonQuery();
     }
 
+    public void UpsertMirroredTag(Tag tag)
+    {
+        using var cmd = Command("INSERT INTO tags(id,name,created_utc) VALUES($id,$name,$created) ON CONFLICT(id) DO UPDATE SET name=excluded.name,created_utc=excluded.created_utc");
+        cmd.Parameters.AddWithValue("$id", tag.Id); cmd.Parameters.AddWithValue("$name", tag.Name);
+        cmd.Parameters.AddWithValue("$created", tag.CreatedUtc.ToUniversalTime().ToString("o")); cmd.ExecuteNonQuery();
+    }
+
+    public void UpsertMirroredAlbum(Album album)
+    {
+        using var cmd = Command("INSERT INTO albums(id,name,creator_id,created_utc,description) VALUES($id,$name,$creator,$created,$description) ON CONFLICT(id) DO UPDATE SET name=excluded.name,creator_id=excluded.creator_id,created_utc=excluded.created_utc,description=excluded.description");
+        cmd.Parameters.AddWithValue("$id", album.Id); cmd.Parameters.AddWithValue("$name", album.Name);
+        cmd.Parameters.AddWithValue("$creator", (object?)album.CreatorId ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$created", album.CreatedUtc.ToUniversalTime().ToString("o"));
+        cmd.Parameters.AddWithValue("$description", (object?)album.Description ?? DBNull.Value); cmd.ExecuteNonQuery();
+    }
+
     public void UpdateImage(ImageRecord rec)
     {
         using var cmd = Command("""

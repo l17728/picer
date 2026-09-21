@@ -55,6 +55,12 @@ public sealed class ServiceBrowseWindowTests
         public Task<IReadOnlyList<SourceFolder>> ListSourcesAsync(CancellationToken cancellationToken = default) =>
             Task.FromResult<IReadOnlyList<SourceFolder>>(Array.Empty<SourceFolder>());
 
+        public Task<IReadOnlyList<Tag>> ListTagsAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<Tag>>(Array.Empty<Tag>());
+
+        public Task<IReadOnlyList<Album>> ListAlbumsAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<Album>>(Array.Empty<Album>());
+
         public Task<SourceFolder> RegisterSourceAsync(string path, CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
 

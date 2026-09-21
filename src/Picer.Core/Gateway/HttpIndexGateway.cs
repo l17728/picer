@@ -173,6 +173,20 @@ public sealed class HttpIndexGateway : IIndexGateway, IMediaAssetGateway, IDispo
         return await response.Content.ReadFromJsonAsync<IReadOnlyList<SourceFolder>>(Json, cancellationToken) ?? [];
     }
 
+    public async Task<IReadOnlyList<Tag>> ListTagsAsync(CancellationToken cancellationToken = default)
+    {
+        using var response = await _client.GetAsync("api/gateway/v1/tags", cancellationToken);
+        await EnsureSuccessAsync(response, cancellationToken);
+        return await response.Content.ReadFromJsonAsync<IReadOnlyList<Tag>>(Json, cancellationToken) ?? [];
+    }
+
+    public async Task<IReadOnlyList<Album>> ListAlbumsAsync(CancellationToken cancellationToken = default)
+    {
+        using var response = await _client.GetAsync("api/gateway/v1/albums", cancellationToken);
+        await EnsureSuccessAsync(response, cancellationToken);
+        return await response.Content.ReadFromJsonAsync<IReadOnlyList<Album>>(Json, cancellationToken) ?? [];
+    }
+
     public async Task<SourceFolder> RegisterSourceAsync(string path, CancellationToken cancellationToken = default)
     {
         using var response = await _client.PostAsJsonAsync("api/gateway/v1/sources", new { path }, Json, cancellationToken);

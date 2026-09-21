@@ -71,6 +71,8 @@ public sealed class IndexApiHandlers(PicerDatabase db, ThumbnailService thumbnai
     }
 
     public IReadOnlyList<SourceFolder> ListSources() => db.GetSources();
+    public IReadOnlyList<Tag> ListTags() => SemanticEngine.GetTags(db);
+    public IReadOnlyList<Album> ListAlbums() => SemanticEngine.GetAlbums(db);
 
     public SourceFolder? GetSource(long id) => db.GetSource(id);
 
@@ -249,6 +251,8 @@ public static class IndexServiceHost
         app.MapPost("/api/gateway/v1/search", async (GatewaySearchRequest request, CancellationToken cancellationToken) =>
             Results.Json(await handlers.SearchAsync(request, cancellationToken)));
         app.MapGet("/api/gateway/v1/sources", () => Results.Json(handlers.ListSources()));
+        app.MapGet("/api/gateway/v1/tags", () => Results.Json(handlers.ListTags()));
+        app.MapGet("/api/gateway/v1/albums", () => Results.Json(handlers.ListAlbums()));
         app.MapPost("/api/gateway/v1/sources", (GatewaySourceRegistration request) =>
         {
             try { return Results.Json(handlers.RegisterSource(request.Path)); }

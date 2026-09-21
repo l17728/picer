@@ -75,6 +75,12 @@ public sealed class LocalGateway(PicerDatabase db, ThumbnailService thumbnails, 
     public Task<IReadOnlyList<SourceFolder>> ListSourcesAsync(CancellationToken cancellationToken = default) =>
         Task.FromResult<IReadOnlyList<SourceFolder>>(db.GetSources());
 
+    public Task<IReadOnlyList<Tag>> ListTagsAsync(CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<Tag>>(SemanticEngine.GetTags(db));
+
+    public Task<IReadOnlyList<Album>> ListAlbumsAsync(CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<Album>>(SemanticEngine.GetAlbums(db));
+
     public Task<SourceFolder> RegisterSourceAsync(string path, CancellationToken cancellationToken = default)
     {
         var fullPath = Path.GetFullPath(path);

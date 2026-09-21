@@ -200,6 +200,10 @@ public static class AppServices
     {
         if (!ServiceMode) return;
         var sources = await Gateway.ListSourcesAsync(cancellationToken).ConfigureAwait(false);
+        foreach (var tag in await Gateway.ListTagsAsync(cancellationToken).ConfigureAwait(false))
+            Db.UpsertMirroredTag(tag);
+        foreach (var album in await Gateway.ListAlbumsAsync(cancellationToken).ConfigureAwait(false))
+            Db.UpsertMirroredAlbum(album);
         foreach (var source in sources)
         {
             var localSource = Db.AddSource(source.Path);

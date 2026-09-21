@@ -94,6 +94,12 @@ public sealed class PipeIndexGateway : IIndexGateway, IDisposable
     public async Task<IReadOnlyList<SourceFolder>> ListSourcesAsync(CancellationToken cancellationToken = default) =>
         await CallAsync<IReadOnlyList<SourceFolder>>("sources", null, cancellationToken) ?? [];
 
+    public async Task<IReadOnlyList<Tag>> ListTagsAsync(CancellationToken cancellationToken = default) =>
+        await CallAsync<IReadOnlyList<Tag>>("tags", null, cancellationToken) ?? [];
+
+    public async Task<IReadOnlyList<Album>> ListAlbumsAsync(CancellationToken cancellationToken = default) =>
+        await CallAsync<IReadOnlyList<Album>>("albums", null, cancellationToken) ?? [];
+
     public async Task<SourceFolder> RegisterSourceAsync(string path, CancellationToken cancellationToken = default) =>
         await CallAsync<SourceFolder>("add_source", new { path }, cancellationToken)
             ?? throw new InvalidOperationException("Empty source payload.");
