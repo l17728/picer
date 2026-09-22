@@ -335,11 +335,12 @@ public sealed class DatabaseTests : IDisposable
     {
         var source = _db.AddSource(@"C:\Test");
         var insertedPaths = new List<string>();
+        var records = new List<ImageRecord>();
         for (int i = 0; i < 1200; i++)
         {
             var path = $@"C:\Test\img{i:D4}.jpg";
             insertedPaths.Add(path);
-            _db.UpsertImage(new ImageRecord
+            records.Add(new ImageRecord
             {
                 SourceId = source.Id,
                 Path = path,
@@ -350,6 +351,12 @@ public sealed class DatabaseTests : IDisposable
                 IndexedUtc = DateTime.UtcNow
             });
         }
+
+        // The first record establishes the source and the remaining records
+        // are inserted atomically to keep this large-parameter regression test
+        // deterministic on Windows SQLite.
+        _db.UpsertImage(records[0]);
+        _db.UpsertImagesBatch(records.Skip(1));
 
         var queryPaths = insertedPaths.Take(600).ToList();
         queryPaths.Add(@"C:\Test\notexist.jpg");

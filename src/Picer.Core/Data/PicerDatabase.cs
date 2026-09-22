@@ -1785,6 +1785,19 @@ public sealed class PicerDatabase : IDisposable
         UpdateImageInTransaction(rec, tx);
     }
 
+    /// <summary>Upserts a set of image records in one SQLite transaction.</summary>
+    /// <remarks>This is used by bulk imports and keeps large maintenance/test
+    /// batches from paying a journal fsync for every individual image.</remarks>
+    public void UpsertImagesBatch(IEnumerable<ImageRecord> records)
+    {
+        var batch = records.ToArray();
+        if (batch.Length == 0) return;
+        using var transaction = _conn.BeginTransaction();
+        foreach (var record in batch)
+            UpsertImageInTransaction(record, transaction);
+        transaction.Commit();
+    }
+
     public void UpdateImageInTransaction(ImageRecord rec, SqliteTransaction tx)
     {
         using var cmd = Command("""
