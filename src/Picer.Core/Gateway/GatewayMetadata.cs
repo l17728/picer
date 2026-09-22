@@ -19,6 +19,11 @@ public sealed record GatewayVideoFace(long Id, long VideoId, long KeyframeId, do
     double BoxX, double BoxY, double BoxWidth, double BoxHeight, double Confidence, byte[]? Embedding,
     long? SuggestedPersonId, double? MatchConfidence, long? AssignedPersonId, string? AssignmentState,
     string? UpdatedUtc, string CreatedUtc);
+public sealed record GatewayCloudVisionAnalysis(long ImageId, string Provider, string ModelVersion, string PromptVersion,
+    string Status, string? Summary, string? ResultJson, string UpdatedUtc);
+public sealed record GatewaySceneGroupDescription(string Fingerprint, string DirectoryPath, string StartUtc, string EndUtc,
+    string ImageIdsJson, string RepresentativeImageIdsJson, string Provider, string ModelVersion, string PromptVersion,
+    string SceneName, string Summary, string SearchTermsJson, string State, string CreatedUtc, string ReviewedUtc);
 [method: JsonConstructor]
 public sealed record GatewayMetadata(
     IReadOnlyList<GatewayAlbumImageLink> AlbumImages,
@@ -29,7 +34,9 @@ public sealed record GatewayMetadata(
     IReadOnlyList<GatewayVideoKeyframe> VideoKeyframes,
     IReadOnlyList<GatewayVideoTranscript> VideoTranscripts,
     IReadOnlyList<GatewayVideoSummary> VideoSummaries,
-    IReadOnlyList<GatewayVideoFace>? VideoFaces = null)
+    IReadOnlyList<GatewayVideoFace>? VideoFaces = null,
+    IReadOnlyList<GatewayCloudVisionAnalysis>? CloudVisionAnalyses = null,
+    IReadOnlyList<GatewaySceneGroupDescription>? SceneGroupDescriptions = null)
 {
     public GatewayMetadata(
         IReadOnlyList<GatewayAlbumImageLink> albumImages,
@@ -38,4 +45,6 @@ public sealed record GatewayMetadata(
         : this(albumImages, imageTags, locations, [], [], [], [], [], []) { }
 
     public IReadOnlyList<GatewayVideoFace> VideoFacesOrEmpty => VideoFaces ?? [];
+    public IReadOnlyList<GatewayCloudVisionAnalysis> CloudVisionAnalysesOrEmpty => CloudVisionAnalyses ?? [];
+    public IReadOnlyList<GatewaySceneGroupDescription> SceneGroupDescriptionsOrEmpty => SceneGroupDescriptions ?? [];
 }

@@ -1571,6 +1571,22 @@ public sealed class PicerDatabase : IDisposable
         return result;
     }
 
+    public IReadOnlyList<GatewayCloudVisionAnalysis> GetAllMirroredCloudVisionAnalyses()
+    {
+        using var command = Command("SELECT image_id,provider,model_version,prompt_version,status,summary,result_json,updated_utc FROM cloud_vision_analyses WHERE status='completed'");
+        using var reader = command.ExecuteReader(); var result = new List<GatewayCloudVisionAnalysis>();
+        while (reader.Read()) result.Add(new GatewayCloudVisionAnalysis(reader.GetInt64(0), reader.GetString(1), reader.GetString(2), reader.GetString(3), reader.GetString(4), reader.IsDBNull(5) ? null : reader.GetString(5), reader.IsDBNull(6) ? null : reader.GetString(6), reader.GetString(7)));
+        return result;
+    }
+
+    public IReadOnlyList<GatewaySceneGroupDescription> GetAllMirroredSceneGroupDescriptions()
+    {
+        using var command = Command("SELECT fingerprint,directory_path,start_utc,end_utc,image_ids_json,representative_image_ids_json,provider,model_version,prompt_version,scene_name,summary,search_terms_json,state,created_utc,reviewed_utc FROM scene_group_descriptions");
+        using var reader = command.ExecuteReader(); var result = new List<GatewaySceneGroupDescription>();
+        while (reader.Read()) result.Add(new GatewaySceneGroupDescription(reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetString(3), reader.GetString(4), reader.GetString(5), reader.GetString(6), reader.GetString(7), reader.GetString(8), reader.GetString(9), reader.GetString(10), reader.GetString(11), reader.GetString(12), reader.GetString(13), reader.GetString(14)));
+        return result;
+    }
+
     public void UpsertMirroredVideoMetadata(GatewayMetadata metadata)
     {
         using var transaction = BeginTransaction();
@@ -1583,6 +1599,16 @@ public sealed class PicerDatabase : IDisposable
         {
             using var command = Command("INSERT INTO video_detected_faces(id,video_id,keyframe_id,timestamp_seconds,ordinal,box_x,box_y,box_width,box_height,confidence,embedding,suggested_person_id,match_confidence,assigned_person_id,assignment_state,updated_utc,created_utc) VALUES($id,$video,$key,$time,$ordinal,$x,$y,$w,$h,$confidence,$embedding,$suggested,$match,$assigned,$state,$updated,$created) ON CONFLICT(id) DO UPDATE SET assigned_person_id=excluded.assigned_person_id,assignment_state=excluded.assignment_state,updated_utc=excluded.updated_utc,suggested_person_id=excluded.suggested_person_id,match_confidence=excluded.match_confidence");
             command.Transaction = transaction; command.Parameters.AddWithValue("$id", face.Id); command.Parameters.AddWithValue("$video", face.VideoId); command.Parameters.AddWithValue("$key", face.KeyframeId); command.Parameters.AddWithValue("$time", face.TimestampSeconds); command.Parameters.AddWithValue("$ordinal", face.Ordinal); command.Parameters.AddWithValue("$x", face.BoxX); command.Parameters.AddWithValue("$y", face.BoxY); command.Parameters.AddWithValue("$w", face.BoxWidth); command.Parameters.AddWithValue("$h", face.BoxHeight); command.Parameters.AddWithValue("$confidence", face.Confidence); command.Parameters.AddWithValue("$embedding", (object?)face.Embedding ?? DBNull.Value); command.Parameters.AddWithValue("$suggested", (object?)face.SuggestedPersonId ?? DBNull.Value); command.Parameters.AddWithValue("$match", (object?)face.MatchConfidence ?? DBNull.Value); command.Parameters.AddWithValue("$assigned", (object?)face.AssignedPersonId ?? DBNull.Value); command.Parameters.AddWithValue("$state", (object?)face.AssignmentState ?? DBNull.Value); command.Parameters.AddWithValue("$updated", (object?)face.UpdatedUtc ?? DBNull.Value); command.Parameters.AddWithValue("$created", face.CreatedUtc); command.ExecuteNonQuery();
+        }
+        foreach (var analysis in metadata.CloudVisionAnalysesOrEmpty)
+        {
+            using var command = Command("INSERT INTO cloud_vision_analyses(image_id,provider,model_version,prompt_version,source_file_size,source_modified_utc,location_fingerprint,status,summary,result_json,updated_utc) VALUES($image,$provider,$model,$prompt,0,'','remote','completed',$summary,$json,$updated) ON CONFLICT(image_id,provider) DO UPDATE SET model_version=excluded.model_version,prompt_version=excluded.prompt_version,status=excluded.status,summary=excluded.summary,result_json=excluded.result_json,updated_utc=excluded.updated_utc");
+            command.Transaction = transaction; command.Parameters.AddWithValue("$image", analysis.ImageId); command.Parameters.AddWithValue("$provider", analysis.Provider); command.Parameters.AddWithValue("$model", analysis.ModelVersion); command.Parameters.AddWithValue("$prompt", analysis.PromptVersion); command.Parameters.AddWithValue("$summary", (object?)analysis.Summary ?? DBNull.Value); command.Parameters.AddWithValue("$json", (object?)analysis.ResultJson ?? DBNull.Value); command.Parameters.AddWithValue("$updated", analysis.UpdatedUtc); command.ExecuteNonQuery();
+        }
+        foreach (var scene in metadata.SceneGroupDescriptionsOrEmpty)
+        {
+            using var command = Command("INSERT INTO scene_group_descriptions(fingerprint,directory_path,start_utc,end_utc,image_ids_json,representative_image_ids_json,provider,model_version,prompt_version,scene_name,summary,search_terms_json,state,created_utc,reviewed_utc) VALUES($fingerprint,$directory,$start,$end,$images,$representatives,$provider,$model,$prompt,$scene,$summary,$terms,$state,$created,$reviewed) ON CONFLICT(fingerprint) DO UPDATE SET scene_name=excluded.scene_name,summary=excluded.summary,search_terms_json=excluded.search_terms_json,state=excluded.state,reviewed_utc=excluded.reviewed_utc");
+            command.Transaction = transaction; command.Parameters.AddWithValue("$fingerprint", scene.Fingerprint); command.Parameters.AddWithValue("$directory", scene.DirectoryPath); command.Parameters.AddWithValue("$start", scene.StartUtc); command.Parameters.AddWithValue("$end", scene.EndUtc); command.Parameters.AddWithValue("$images", scene.ImageIdsJson); command.Parameters.AddWithValue("$representatives", scene.RepresentativeImageIdsJson); command.Parameters.AddWithValue("$provider", scene.Provider); command.Parameters.AddWithValue("$model", scene.ModelVersion); command.Parameters.AddWithValue("$prompt", scene.PromptVersion); command.Parameters.AddWithValue("$scene", scene.SceneName); command.Parameters.AddWithValue("$summary", scene.Summary); command.Parameters.AddWithValue("$terms", scene.SearchTermsJson); command.Parameters.AddWithValue("$state", scene.State); command.Parameters.AddWithValue("$created", scene.CreatedUtc); command.Parameters.AddWithValue("$reviewed", scene.ReviewedUtc); command.ExecuteNonQuery();
         }
         foreach (var transcript in metadata.VideoTranscripts)
         {
