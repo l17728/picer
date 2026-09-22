@@ -99,7 +99,7 @@ public sealed class IndexApiHandlers(PicerDatabase db, ThumbnailService thumbnai
     public IReadOnlyList<SourceFolder> ListSources() => db.GetSources();
     public IReadOnlyList<Tag> ListTags() => SemanticEngine.GetTags(db);
     public IReadOnlyList<Album> ListAlbums() => SemanticEngine.GetAlbums(db);
-    public GatewayMetadata GetMetadata()
+    public GatewayMetadata GetMetadata(bool includeEmbeddings = true)
     {
         var albumImages = SemanticEngine.GetAlbums(db).SelectMany(album =>
             SemanticEngine.GetAlbumImages(db, album.Id).Select(image => new GatewayAlbumImageLink(album.Id, image.Id))).ToArray();
@@ -112,7 +112,7 @@ public sealed class IndexApiHandlers(PicerDatabase db, ThumbnailService thumbnai
             while (reader.Read())
                 faces.Add(new GatewayDetectedFace(reader.GetInt64(0), reader.GetInt64(1), reader.GetString(2), reader.GetInt32(3),
                     reader.GetDouble(4), reader.GetDouble(5), reader.GetDouble(6), reader.GetDouble(7), reader.GetDouble(8),
-                    reader.IsDBNull(9) ? null : reader.GetString(9), reader.IsDBNull(10) ? null : (byte[])reader[10], reader.GetString(11)));
+                    reader.IsDBNull(9) ? null : reader.GetString(9), includeEmbeddings && !reader.IsDBNull(10) ? (byte[])reader[10] : null, reader.GetString(11)));
         }
         var assignments = new List<GatewayFaceAssignment>();
         using (var command = db.Command("SELECT face_id,person_id,state,confidence,assigned_by,updated_utc FROM face_person_assignments"))
@@ -263,7 +263,10 @@ public static class IndexServiceHost
             var record = await handlers.GetVideoAsync(id, cancellationToken);
             return record is null ? Results.NotFound() : Results.Json(record);
         });
-        app.MapGet("/api/gateway/v1/metadata", () => Results.Json(handlers.GetMetadata()));
+        // The default remote mirror payload deliberately omits embeddings. Face
+        // boxes, albums and video metadata become available quickly; vectors
+        // remain available to an explicit trusted caller when needed.
+        app.MapGet("/api/gateway/v1/metadata", (bool includeEmbeddings = false) => Results.Json(handlers.GetMetadata(includeEmbeddings)));
         app.MapGet("/api/gateway/v1/thumbs/{id:long}", async (long id, string? agentId, CancellationToken cancellationToken) =>
         {
             var stream = await handlers.OpenThumbnailAsync(id, cancellationToken);
