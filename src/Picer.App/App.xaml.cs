@@ -114,7 +114,14 @@ public partial class App : Application
             using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(10));
             await AppServices.SyncRemoteMirrorAsync(timeout.Token);
             if (_mainViewModel is not null)
+            {
                 await _mainViewModel.RefreshFromRemoteMirrorAsync();
+                // SQLite readers can briefly retain the pre-commit snapshot when
+                // the metadata batch finishes on a background connection. Re-read
+                // once after the commit boundary so the tree never remains partial.
+                await Task.Delay(250, timeout.Token);
+                await _mainViewModel.RefreshFromRemoteMirrorAsync();
+            }
             LogInfo("远程索引镜像同步完成");
         }
         catch (OperationCanceledException)

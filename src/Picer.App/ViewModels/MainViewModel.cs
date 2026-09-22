@@ -1352,6 +1352,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             Albums: SemanticEngine.GetAlbums(_db)
                 .Select(album => (Album: album, Images: SemanticEngine.GetAlbumImages(_db, album.Id).ToArray())).ToArray(),
             Locations: _db.GetImageLocationHierarchyRows().ToArray()));
+        AppLogger.Info($"Directory tree snapshot: sources={snapshot.Sources.Length}, albums={snapshot.Albums.Length}, albumImages={snapshot.Albums.Sum(item => item.Images.Length)}, locations={snapshot.Locations.Length}, serviceMode={AppServices.ServiceMode}");
         DirectoryTree.Clear();
         foreach (var source in snapshot.Sources)
         {
