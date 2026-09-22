@@ -139,7 +139,11 @@ public sealed class DesktopSmokeTests
         using var process = Process.Start(new ProcessStartInfo(executable)
         {
             UseShellExecute = false,
-            Environment = { ["PICER_DATA_ROOT"] = isolatedData }
+            Environment =
+            {
+                ["PICER_DATA_ROOT"] = isolatedData,
+                ["PICER_BOOTSTRAP_ROOT"] = Path.Combine(isolatedData, "bootstrap")
+            }
         })!;
         try
         {
@@ -192,12 +196,14 @@ public sealed class DesktopSmokeTests
         Directory.CreateDirectory(isolatedData);
         SeedLibrary(Path.Combine(isolatedData, "picer.db"), 1);
         var previousDataRoot = Environment.GetEnvironmentVariable("PICER_DATA_ROOT");
+        var previousBootstrapRoot = Environment.GetEnvironmentVariable("PICER_BOOTSTRAP_ROOT");
         Exception? failure = null;
         var thread = new Thread(() =>
         {
             try
             {
                 Environment.SetEnvironmentVariable("PICER_DATA_ROOT", isolatedData);
+                Environment.SetEnvironmentVariable("PICER_BOOTSTRAP_ROOT", Path.Combine(isolatedData, "bootstrap"));
                 Picer.App.AppServices.Initialize();
                 var people = new Picer.App.ViewModels.PeopleViewModel(Picer.App.AppServices.Db, Picer.App.AppServices.People,
                     Picer.App.AppServices.VisionRepository, Picer.App.AppServices.VisionAnalysis, Picer.App.AppServices.FaceThumbnails,
@@ -230,6 +236,7 @@ public sealed class DesktopSmokeTests
             {
                 Picer.App.AppServices.Shutdown();
                 Environment.SetEnvironmentVariable("PICER_DATA_ROOT", previousDataRoot);
+                Environment.SetEnvironmentVariable("PICER_BOOTSTRAP_ROOT", previousBootstrapRoot);
             }
         });
         thread.SetApartmentState(ApartmentState.STA);
@@ -278,7 +285,11 @@ public sealed class DesktopSmokeTests
             process.StartInfo = new ProcessStartInfo(executable)
             {
                 UseShellExecute = false,
-                Environment = { ["PICER_DATA_ROOT"] = isolatedData }
+                Environment =
+                {
+                    ["PICER_DATA_ROOT"] = isolatedData,
+                    ["PICER_BOOTSTRAP_ROOT"] = Path.Combine(isolatedData, "bootstrap")
+                }
             };
             process.Start();
             try
@@ -394,7 +405,11 @@ public sealed class DesktopSmokeTests
         using var process = Process.Start(new ProcessStartInfo(Path.Combine(appDirectory, "Picer.App.exe"))
         {
             UseShellExecute = false,
-            Environment = { ["PICER_DATA_ROOT"] = isolatedData }
+            Environment =
+            {
+                ["PICER_DATA_ROOT"] = isolatedData,
+                ["PICER_BOOTSTRAP_ROOT"] = Path.Combine(isolatedData, "bootstrap")
+            }
         })!;
         try
         {
@@ -467,7 +482,11 @@ public sealed class DesktopSmokeTests
         using var process = Process.Start(new ProcessStartInfo(Path.Combine(appDirectory, "Picer.App.exe"))
         {
             UseShellExecute = false,
-            Environment = { ["PICER_DATA_ROOT"] = isolatedData }
+            Environment =
+            {
+                ["PICER_DATA_ROOT"] = isolatedData,
+                ["PICER_BOOTSTRAP_ROOT"] = Path.Combine(isolatedData, "bootstrap")
+            }
         })!;
         try
         {
