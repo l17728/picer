@@ -275,11 +275,15 @@ public partial class MainViewModel : ObservableObject, IDisposable
         await ApplySearchAndFilterAsync();
         await LoadLookupValuesAsync();
         await LoadDirectoryTreeAsync();
-        _ = Video.LoadAsync();
-        _ = EnrichLocationHierarchyAsync();
-        _ = RebuildTextIndexAsync();
+        if (!AppServices.ServiceMode)
+        {
+            _ = Video.LoadAsync();
+            _ = EnrichLocationHierarchyAsync();
+            _ = RebuildTextIndexAsync();
+        }
         PicerEventSource.Log.StartupStage("first-page-ready", Stopwatch.GetElapsedTime(started).TotalMilliseconds);
-        BackfillBurstGroupsAsync().Forget();
+        if (!AppServices.ServiceMode)
+            BackfillBurstGroupsAsync().Forget();
     }
 
     public async Task RefreshFromRemoteMirrorAsync()
@@ -288,6 +292,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         await ReloadSourcesAsync();
         await ApplySearchAndFilterAsync();
         await LoadDirectoryTreeAsync();
+        _ = Video.LoadAsync();
         StatusText = "远程索引已同步";
     }
 

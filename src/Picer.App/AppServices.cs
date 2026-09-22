@@ -233,27 +233,42 @@ public static class AppServices
         }
         foreach (var source in sources)
         {
-            var localSource = Db.AddSource(source.Path);
+            var existingSources = Db.GetSources();
+            var localSource = existingSources.FirstOrDefault(item => string.Equals(item.Path, source.Path, StringComparison.OrdinalIgnoreCase))
+                ?? (existingSources.Count == 1 && existingSources[0].ImageCount == source.ImageCount
+                    ? existingSources[0]
+                    : Db.AddSource(source.Path));
+            var mediaComplete = localSource.ImageCount == source.ImageCount && source.ImageCount > 0;
             string? cursor = null;
-            do
+            if (!mediaComplete)
             {
-                var page = await Gateway.ListImagesAsync(source.Id, false, 500, cursor, cancellationToken).ConfigureAwait(false);
-                foreach (var image in page.Items)
+                do
                 {
-                    image.SourceId = localSource.Id;
-                    Db.UpsertMirroredImage(image);
-                }
-                cursor = page.NextCursor;
-            } while (cursor is not null);
+                    var page = await Gateway.ListImagesAsync(source.Id, false, 500, cursor, cancellationToken).ConfigureAwait(false);
+                    foreach (var image in page.Items)
+                    {
+                        image.SourceId = localSource.Id;
+                        Db.UpsertMirroredImage(image);
+                    }
+                    cursor = page.NextCursor;
+                } while (cursor is not null);
+            }
 
             cursor = null;
-            do
+            try
             {
-                var page = await Gateway.ListVideosAsync(source.Id, 500, cursor, cancellationToken).ConfigureAwait(false);
-                foreach (var video in page.Items)
-                    Videos.UpsertMirrored(video, localSource.Id);
-                cursor = page.NextCursor;
-            } while (cursor is not null);
+                do
+                {
+                    var page = await Gateway.ListVideosAsync(source.Id, 500, cursor, cancellationToken).ConfigureAwait(false);
+                    foreach (var video in page.Items)
+                        Videos.UpsertMirrored(video, localSource.Id);
+                    cursor = page.NextCursor;
+                } while (cursor is not null);
+            }
+            catch (Exception ex) when (ex is HttpRequestException or InvalidOperationException or Microsoft.Data.Sqlite.SqliteException)
+            {
+                AppLogger.Warn("Remote video mirror deferred; image metadata sync will continue: " + ex.Message);
+            }
         }
         try
         {
