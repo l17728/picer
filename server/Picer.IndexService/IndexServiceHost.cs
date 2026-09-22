@@ -22,6 +22,14 @@ namespace Picer.IndexService;
 public sealed record GatewaySearchRequest(SearchFilters? Filters, int PageSize, string? Cursor);
 public sealed record SyncImagesRequest(string SourcePath, IReadOnlyList<ImageRecord> Images);
 public sealed record SyncVideosRequest(string SourcePath, IReadOnlyList<VideoRecord> Videos);
+public sealed record SyncMetadataRequest(
+    IReadOnlyList<Tag> Tags,
+    IReadOnlyList<Album> Albums,
+    IReadOnlyList<AlbumImageLink> AlbumImages,
+    IReadOnlyList<ImageTagLink> ImageTags,
+    IReadOnlyList<ImageLocationHierarchyRow> Locations);
+public sealed record AlbumImageLink(long AlbumId, long ImageId);
+public sealed record ImageTagLink(long ImageId, long TagId);
 
 public sealed class IndexApiHandlers(PicerDatabase db, ThumbnailService thumbnails, VideoRepository videos)
 {
@@ -74,6 +82,14 @@ public sealed class IndexApiHandlers(PicerDatabase db, ThumbnailService thumbnai
     public IReadOnlyList<SourceFolder> ListSources() => db.GetSources();
     public IReadOnlyList<Tag> ListTags() => SemanticEngine.GetTags(db);
     public IReadOnlyList<Album> ListAlbums() => SemanticEngine.GetAlbums(db);
+    public GatewayMetadata GetMetadata()
+    {
+        var albumImages = SemanticEngine.GetAlbums(db).SelectMany(album =>
+            SemanticEngine.GetAlbumImages(db, album.Id).Select(image => new GatewayAlbumImageLink(album.Id, image.Id))).ToArray();
+        var imageTags = db.GetImages(includeMissing: true).SelectMany(image =>
+            SemanticEngine.GetImageTags(db, image.Id).Select(tag => new GatewayImageTagLink(image.Id, tag.Id))).ToArray();
+        return new GatewayMetadata(albumImages, imageTags, db.GetImageLocationHierarchyRows());
+    }
     public IReadOnlyList<PersonSummary> ListPeople() => new PeopleService(db).GetAll();
 
     public SourceFolder? GetSource(long id) => db.GetSource(id);
@@ -201,6 +217,7 @@ public static class IndexServiceHost
             var record = await handlers.GetVideoAsync(id, cancellationToken);
             return record is null ? Results.NotFound() : Results.Json(record);
         });
+        app.MapGet("/api/gateway/v1/metadata", () => Results.Json(handlers.GetMetadata()));
         app.MapGet("/api/gateway/v1/thumbs/{id:long}", async (long id, string? agentId, CancellationToken cancellationToken) =>
         {
             var stream = await handlers.OpenThumbnailAsync(id, cancellationToken);
@@ -220,7 +237,7 @@ public static class IndexServiceHost
             foreach (var image in request.Images)
             {
                 image.SourceId = source.Id;
-                db.UpsertImage(image);
+                db.UpsertMirroredImage(image);
                 accepted++;
             }
             return Results.Json(new { accepted, sourceId = source.Id });
@@ -231,6 +248,17 @@ public static class IndexServiceHost
             var source = db.AddSource(request.SourcePath);
             foreach (var video in request.Videos) videoRepository.UpsertRemote(video, source.Id);
             return Results.Json(new { accepted = request.Videos.Count, sourceId = source.Id });
+        });
+        app.MapPost("/api/sync/v1/metadata", (SyncMetadataRequest request) =>
+        {
+            foreach (var tag in request.Tags) db.UpsertMirroredTag(tag);
+            foreach (var album in request.Albums) db.UpsertMirroredAlbum(album);
+            foreach (var link in request.AlbumImages) SemanticEngine.AddToAlbum(db, link.AlbumId, link.ImageId);
+            foreach (var link in request.ImageTags) db.UpsertMirroredImageTag(link.ImageId, link.TagId);
+            foreach (var location in request.Locations) db.UpsertMirroredLocation(location);
+            return Results.Json(new { tags = request.Tags.Count, albums = request.Albums.Count,
+                albumImages = request.AlbumImages.Count, imageTags = request.ImageTags.Count,
+                locations = request.Locations.Count });
         });
         app.MapGet("/api/gateway/v1/assets/images/{id:long}", async (long id, string? agentId, CancellationToken cancellationToken) =>
         {

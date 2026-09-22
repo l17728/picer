@@ -224,6 +224,20 @@ public static class AppServices
         }
         try
         {
+            var metadata = await Gateway.GetMetadataAsync(cancellationToken).ConfigureAwait(false);
+            foreach (var link in metadata.AlbumImages)
+                SemanticEngine.AddToAlbum(Db, link.AlbumId, link.ImageId);
+            foreach (var link in metadata.ImageTags)
+                Db.UpsertMirroredImageTag(link.ImageId, link.TagId);
+            foreach (var location in metadata.Locations)
+                Db.UpsertMirroredLocation(location);
+        }
+        catch (Exception ex) when (ex is HttpRequestException or InvalidOperationException)
+        {
+            AppLogger.Warn("Remote metadata links are unavailable; continuing media sync: " + ex.Message);
+        }
+        try
+        {
             foreach (var person in await Gateway.ListPeopleAsync(cancellationToken).ConfigureAwait(false))
                 Db.UpsertMirroredPerson(person);
         }

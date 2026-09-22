@@ -22,6 +22,7 @@ public interface IIndexGateway : IDisposable
     Task<IReadOnlyList<SourceFolder>> ListSourcesAsync(CancellationToken cancellationToken = default);
     Task<IReadOnlyList<Tag>> ListTagsAsync(CancellationToken cancellationToken = default);
     Task<IReadOnlyList<Album>> ListAlbumsAsync(CancellationToken cancellationToken = default);
+    Task<GatewayMetadata> GetMetadataAsync(CancellationToken cancellationToken = default);
     Task<IReadOnlyList<PersonSummary>> ListPeopleAsync(CancellationToken cancellationToken = default);
     Task<SourceFolder> RegisterSourceAsync(string path, CancellationToken cancellationToken = default);
     Task<bool> RemoveSourceAsync(long sourceId, CancellationToken cancellationToken = default);

@@ -3,6 +3,7 @@ using System.Threading;
 using System.Windows;
 using System.Windows.Threading;
 using Picer.App.Views;
+using Picer.Core.Data;
 using Picer.Core.Gateway;
 using Picer.Core.Models;
 using Picer.Core.People;
@@ -61,6 +62,9 @@ public sealed class ServiceBrowseWindowTests
 
         public Task<IReadOnlyList<Album>> ListAlbumsAsync(CancellationToken cancellationToken = default) =>
             Task.FromResult<IReadOnlyList<Album>>(Array.Empty<Album>());
+
+        public Task<GatewayMetadata> GetMetadataAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult(new GatewayMetadata(Array.Empty<GatewayAlbumImageLink>(), Array.Empty<GatewayImageTagLink>(), Array.Empty<ImageLocationHierarchyRow>()));
 
         public Task<IReadOnlyList<PersonSummary>> ListPeopleAsync(CancellationToken cancellationToken = default) =>
             Task.FromResult<IReadOnlyList<PersonSummary>>(Array.Empty<PersonSummary>());

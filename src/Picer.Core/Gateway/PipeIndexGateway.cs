@@ -101,6 +101,9 @@ public sealed class PipeIndexGateway : IIndexGateway, IDisposable
     public async Task<IReadOnlyList<Album>> ListAlbumsAsync(CancellationToken cancellationToken = default) =>
         await CallAsync<IReadOnlyList<Album>>("albums", null, cancellationToken) ?? [];
 
+    public async Task<GatewayMetadata> GetMetadataAsync(CancellationToken cancellationToken = default) =>
+        await CallAsync<GatewayMetadata>("metadata", null, cancellationToken) ?? new GatewayMetadata([], [], []);
+
     public async Task<IReadOnlyList<PersonSummary>> ListPeopleAsync(CancellationToken cancellationToken = default) =>
         await CallAsync<IReadOnlyList<PersonSummary>>("people", null, cancellationToken) ?? [];
 

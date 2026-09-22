@@ -87,6 +87,8 @@ public partial class IndexServiceWindow : Window
             var progress = new Progress<(int done, int total)>(value => HealthText.Text = $"正在同步索引：{value.done}/{value.total}…");
             var count = await client.PushImagesAsync(AppServices.Db, progress);
             var videoCount = await client.PushVideosAsync(AppServices.Db, progress);
+            await client.PushMetadataAsync(AppServices.Db);
+            HealthText.Text = "正在同步元数据...";
             HealthText.Text = $"索引同步完成：{count} 张图片、{videoCount} 个视频记录已发送。代理可按需提供原图。";
         }
         catch (Exception exception) { HealthText.Text = $"索引同步失败：{exception.Message}"; }

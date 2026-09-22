@@ -5,6 +5,7 @@ using System.Security.Cryptography.X509Certificates;
 using System.Text.Json;
 using Picer.Core.Data;
 using Picer.Core.Models;
+using Picer.Core.Search;
 using Picer.Core.Video;
 
 namespace Picer.Core.Gateway;
@@ -67,4 +68,27 @@ public sealed class IndexSyncClient(HttpClient client)
         }
         return done;
     }
+
+    public async Task PushMetadataAsync(PicerDatabase database, CancellationToken cancellationToken = default)
+    {
+        var albums = SemanticEngine.GetAlbums(database);
+        var memberships = albums.SelectMany(album =>
+            SemanticEngine.GetAlbumImages(database, album.Id).Select(image => new GatewayAlbumImageLink(album.Id, image.Id))).ToArray();
+        var tagLinks = database.GetImages(includeMissing: true)
+            .SelectMany(image => SemanticEngine.GetImageTags(database, image.Id)
+                .Select(tag => new GatewayImageTagLink(image.Id, tag.Id))).ToArray();
+        var request = new SyncMetadataRequest(
+            SemanticEngine.GetTags(database), albums, memberships,
+            tagLinks, database.GetImageLocationHierarchyRows());
+        using var response = await client.PostAsJsonAsync("api/sync/v1/metadata", request, Json, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    private sealed record SyncMetadataRequest(
+        IReadOnlyList<Tag> Tags,
+        IReadOnlyList<Album> Albums,
+        IReadOnlyList<GatewayAlbumImageLink> AlbumImages,
+        IReadOnlyList<GatewayImageTagLink> ImageTags,
+        IReadOnlyList<ImageLocationHierarchyRow> Locations);
+
 }
