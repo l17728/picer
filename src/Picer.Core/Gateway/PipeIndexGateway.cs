@@ -43,6 +43,9 @@ public sealed class PipeIndexGateway : IIndexGateway, IDisposable
         return new MemoryStream(Convert.FromBase64String(body.DataBase64), writable: false);
     }
 
+    public Task<Stream?> OpenVideoThumbnailAsync(long videoId, string? agentId = null, CancellationToken cancellationToken = default) =>
+        Task.FromResult<Stream?>(null);
+
     public async Task<GatewayVideoPage> ListVideosAsync(long? sourceId = null, int pageSize = 200, string? cursor = null, CancellationToken cancellationToken = default) =>
         await CallAsync<GatewayVideoPage>("videos", new { sourceId, pageSize = Math.Clamp(pageSize, 1, 500), cursor }, cancellationToken) ??
         throw new InvalidOperationException("Empty video page payload.");

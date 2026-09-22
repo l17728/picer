@@ -90,6 +90,15 @@ public sealed class HttpIndexGateway : IIndexGateway, IMediaAssetGateway, IDispo
         return await response.Content.ReadAsStreamAsync(cancellationToken);
     }
 
+    public async Task<Stream?> OpenVideoThumbnailAsync(long videoId, string? agentId = null, CancellationToken cancellationToken = default)
+    {
+        var query = string.IsNullOrWhiteSpace(agentId) ? "" : $"?agentId={Uri.EscapeDataString(agentId)}";
+        var response = await _client.GetAsync($"api/gateway/v1/video-thumbs/{videoId}{query}", cancellationToken);
+        if (response.StatusCode == HttpStatusCode.NotFound) { response.Dispose(); return null; }
+        await EnsureSuccessAsync(response, cancellationToken);
+        return await response.Content.ReadAsStreamAsync(cancellationToken);
+    }
+
     public async Task<Stream?> OpenOriginalImageAsync(long imageId, string? agentId = null, CancellationToken cancellationToken = default)
     {
         var query = string.IsNullOrWhiteSpace(agentId) ? "" : $"?agentId={Uri.EscapeDataString(agentId)}";

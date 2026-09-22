@@ -48,6 +48,12 @@ public sealed class LocalGateway(PicerDatabase db, ThumbnailService thumbnails, 
         return Task.FromResult<Stream?>(path is not null && File.Exists(path) ? File.OpenRead(path) : null);
     }
 
+    public Task<Stream?> OpenVideoThumbnailAsync(long videoId, string? agentId = null, CancellationToken cancellationToken = default)
+    {
+        var path = _videos.GetKeyframes(videoId).FirstOrDefault()?.Path;
+        return Task.FromResult<Stream?>(path is not null && File.Exists(path) ? File.OpenRead(path) : null);
+    }
+
     public Task<Stream?> OpenOriginalVideoAsync(long videoId, string? agentId = null, CancellationToken cancellationToken = default)
     {
         var path = _videos.GetAll().FirstOrDefault(video => video.Id == videoId)?.Path;

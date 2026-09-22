@@ -63,6 +63,13 @@ public sealed class IndexApiHandlers(PicerDatabase db, ThumbnailService thumbnai
     public Task<VideoRecord?> GetVideoAsync(long id, CancellationToken cancellationToken) =>
         Task.FromResult(videos.GetAll().FirstOrDefault(video => video.Id == id));
 
+    public string? GetFirstVideoKeyframePath(long id)
+    {
+        using var command = db.Command("SELECT path FROM video_keyframes WHERE video_id=$video ORDER BY timestamp_seconds,id LIMIT 1");
+        command.Parameters.AddWithValue("$video", id);
+        return command.ExecuteScalar() as string;
+    }
+
     public Task<Stream?> OpenThumbnailAsync(long id, CancellationToken cancellationToken)
     {
         var record = db.GetImage(id);
@@ -265,6 +272,14 @@ public static class IndexServiceHost
                 if (image is not null && await agents.RequestAsync(agentId, image.Path, cancellationToken) is { } asset)
                     stream = thumbnails.GetOrCreate(new MemoryStream(asset.Content), id) is { } cached && File.Exists(cached) ? File.OpenRead(cached) : null;
             }
+            return stream is null ? Results.NotFound() : Results.Stream(stream, "image/jpeg");
+        });
+        app.MapGet("/api/gateway/v1/video-thumbs/{id:long}", async (long id, string? agentId, CancellationToken cancellationToken) =>
+        {
+            var path = handlers.GetFirstVideoKeyframePath(id);
+            Stream? stream = !string.IsNullOrWhiteSpace(path) && File.Exists(path) ? File.OpenRead(path) : null;
+            if (stream is null && !string.IsNullOrWhiteSpace(path) && await agents.RequestAsync(agentId, path, cancellationToken) is { } asset)
+                stream = new MemoryStream(asset.Content, writable: false);
             return stream is null ? Results.NotFound() : Results.Stream(stream, "image/jpeg");
         });
         app.MapPost("/api/sync/v1/images", (SyncImagesRequest request) =>

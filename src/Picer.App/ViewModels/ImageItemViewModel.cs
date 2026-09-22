@@ -173,6 +173,22 @@ public partial class ImageItemViewModel : ObservableObject
                 }
                 return;
             }
+            if (imagePaths.Count == 0 && IsVideo && AppServices.ServiceMode &&
+                AppServices.Gateway is Picer.Core.Gateway.IMediaAssetGateway mediaGateway && VideoRecord is { } remoteVideo)
+            {
+                await using var remote = await mediaGateway.OpenVideoThumbnailAsync(remoteVideo.Id, cancellationToken: cts.Token);
+                if (remote is not null)
+                {
+                    using var buffer = new MemoryStream();
+                    await remote.CopyToAsync(buffer, cts.Token);
+                    buffer.Position = 0;
+                    var remoteImage = new BitmapImage();
+                    remoteImage.BeginInit(); remoteImage.CacheOption = BitmapCacheOption.OnLoad;
+                    remoteImage.DecodePixelWidth = 256; remoteImage.StreamSource = buffer; remoteImage.EndInit(); remoteImage.Freeze();
+                    if (!cts.IsCancellationRequested) { _thumbnail = remoteImage; OnPropertyChanged(nameof(Thumbnail)); }
+                }
+                return;
+            }
             if (imagePaths.Count == 0)
                 return;
             var bi = await Task.Run(() =>
