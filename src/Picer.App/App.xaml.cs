@@ -85,7 +85,8 @@ public partial class App : Application
             var peopleViewModel = new PeopleViewModel(
                 AppServices.Db, AppServices.People, AppServices.VisionRepository,
                 AppServices.VisionAnalysis, AppServices.FaceThumbnails, AppServices.FaceSuggestions,
-                AppServices.UnknownFaceClusters, AppServices.VisionUnavailableReason);
+                AppServices.UnknownFaceClusters, AppServices.VisionUnavailableReason,
+                AppServices.Gateway as Picer.Core.Gateway.IMediaAssetGateway);
             _mainViewModel = new MainViewModel(AppServices.Db, AppServices.Index, AppServices.Geocoder, peopleViewModel);
             LogInfo("ViewModel 创建完成");
 

@@ -1,12 +1,15 @@
 using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.IO;
+using System.Net;
+using System.Net.Http;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Picer.Core.Data;
 using Picer.Core.People;
 using Picer.Core.Logging;
 using Picer.Core.Vision;
+using Picer.Core.Gateway;
 using Picer.Core.Indexing;
 using Picer.App.Views;
 using System.Windows;
@@ -30,6 +33,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
     private readonly VisionAnalysisRepository _repository;
     private readonly VisionAnalysisService? _analysisService;
     private readonly FaceThumbnailService _faceThumbnails;
+    private readonly IMediaAssetGateway? _mediaGateway;
     private readonly FaceSuggestionEngine _suggestionEngine;
     private readonly UnknownFaceClusterer _unknownFaceClusterer;
     private readonly string? _unavailableReason;
@@ -53,16 +57,39 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
     public PeopleViewModel(PicerDatabase database, PeopleService peopleService,
         VisionAnalysisRepository repository, VisionAnalysisService? analysisService,
         FaceThumbnailService faceThumbnails, FaceSuggestionEngine suggestionEngine,
-        UnknownFaceClusterer unknownFaceClusterer, string? unavailableReason)
+        UnknownFaceClusterer unknownFaceClusterer, string? unavailableReason, IMediaAssetGateway? mediaGateway = null)
     {
         _database = database;
         _peopleService = peopleService;
         _repository = repository;
         _analysisService = analysisService;
         _faceThumbnails = faceThumbnails;
+        _mediaGateway = mediaGateway;
         _suggestionEngine = suggestionEngine;
         _unknownFaceClusterer = unknownFaceClusterer;
         _unavailableReason = unavailableReason;
+    }
+
+    private async Task<string?> GetFaceThumbnailAsync(UnassignedFaceRecord face, CancellationToken cancellationToken = default)
+    {
+        if (_mediaGateway is not null && AppServices.ServiceMode)
+        {
+            await _thumbnailGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                var cached = _faceThumbnails.GetCachedPath(face.FaceId);
+                if (cached is not null) return cached;
+                await using var stream = await _mediaGateway.OpenFaceThumbnailAsync(face.FaceId, cancellationToken: cancellationToken).ConfigureAwait(false);
+                return stream is null ? null : await _faceThumbnails.StoreAsync(face.FaceId, stream, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception exception) when (exception is IOException or HttpRequestException or InvalidOperationException)
+            {
+                AppLogger.Warn($"Remote face thumbnail failed face={face.FaceId}: {exception.Message}");
+                return null;
+            }
+            finally { _thumbnailGate.Release(); }
+        }
+        return await _faceThumbnails.GetOrCreateAsync(face, cancellationToken).ConfigureAwait(false);
     }
 
     public ObservableCollection<PersonSummary> People { get; } = [];
@@ -1824,7 +1851,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
 
     private async Task LoadFaceThumbnailAsync(UnassignedFaceViewModel item)
     {
-        var path = await _faceThumbnails.GetOrCreateAsync(item.Record);
+        var path = await GetFaceThumbnailAsync(item.Record);
         if (path is not null && UnassignedFaces.Contains(item)) item.FaceThumbnailPath = path;
     }
 
@@ -1833,13 +1860,13 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
     {
         var representative = item.Faces.FirstOrDefault();
         if (representative is null) return;
-        var path = await _faceThumbnails.GetOrCreateAsync(representative);
+        var path = await GetFaceThumbnailAsync(representative);
         if (path is not null && CandidateClusters.Contains(item)) item.RepresentativeThumbnailPath = path;
     }
 
     private async Task LoadClusterMemberThumbnailAsync(UnassignedFaceViewModel item)
     {
-        var path = await _faceThumbnails.GetOrCreateAsync(item.Record);
+        var path = await GetFaceThumbnailAsync(item.Record);
         if (path is not null && SelectedClusterFaces.Contains(item)) item.FaceThumbnailPath = path;
     }
 
@@ -1919,7 +1946,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
 
     private async Task LoadAssignedFaceThumbnailAsync(UnassignedFaceViewModel item)
     {
-        var path = await _faceThumbnails.GetOrCreateAsync(item.Record);
+        var path = await GetFaceThumbnailAsync(item.Record);
         if (path is not null && AssignedFaces.Contains(item)) item.FaceThumbnailPath = path;
     }
 
@@ -2063,7 +2090,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         try
         {
             if (!DisplayedFaces.Contains(item)) return;
-            var path = await _faceThumbnails.GetOrCreateAsync(item.Record);
+            var path = await GetFaceThumbnailAsync(item.Record);
             cancellationToken.ThrowIfCancellationRequested();
             if (path is not null && DisplayedFaces.Contains(item)) item.FaceThumbnailPath = path;
         }

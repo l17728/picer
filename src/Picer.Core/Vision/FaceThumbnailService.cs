@@ -37,6 +37,20 @@ public sealed class FaceThumbnailService
         return File.Exists(path) ? path : null;
     }
 
+    public async Task<string?> StoreAsync(long faceId, Stream content, CancellationToken cancellationToken = default)
+    {
+        var destination = GetCachePath(faceId);
+        var temporary = destination + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        try
+        {
+            await using (var output = File.Create(temporary)) await content.CopyToAsync(output, cancellationToken).ConfigureAwait(false);
+            File.Move(temporary, destination, true);
+            return destination;
+        }
+        catch (OperationCanceledException) { throw; }
+        catch { try { if (File.Exists(temporary)) File.Delete(temporary); } catch { } return null; }
+    }
+
     private string GetCachePath(long faceId) => Path.Combine(_cacheDirectory, $"{faceId}.v{CacheVersion}.jpg");
 
     private static string? Create(UnassignedFaceRecord face, string destination, CancellationToken cancellationToken)

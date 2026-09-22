@@ -16,6 +16,7 @@ using Picer.Core.Search;
 using Picer.Core.Storage;
 using Picer.Core.Thumbnails;
 using Picer.Core.Video;
+using Picer.Core.Vision;
 
 namespace Picer.IndexService;
 
@@ -273,6 +274,25 @@ public static class IndexServiceHost
                     stream = thumbnails.GetOrCreate(new MemoryStream(asset.Content), id) is { } cached && File.Exists(cached) ? File.OpenRead(cached) : null;
             }
             return stream is null ? Results.NotFound() : Results.Stream(stream, "image/jpeg");
+        });
+        app.MapGet("/api/gateway/v1/face-thumbs/{id:long}", async (long id, string? agentId, CancellationToken cancellationToken) =>
+        {
+            using var command = db.Command("SELECT image_id,box_x,box_y,box_width,box_height FROM detected_faces WHERE id=$id");
+            command.Parameters.AddWithValue("$id", id);
+            using var reader = command.ExecuteReader();
+            if (!reader.Read()) return Results.NotFound();
+            var image = db.GetImage(reader.GetInt64(0));
+            if (image is null) return Results.NotFound();
+            var box = new NormalizedFaceBox((float)reader.GetDouble(1), (float)reader.GetDouble(2), (float)reader.GetDouble(3), (float)reader.GetDouble(4));
+            Stream? original = File.Exists(image.Path) ? File.OpenRead(image.Path) : null;
+            if (original is null && await agents.RequestAsync(agentId, image.Path, cancellationToken) is { } asset)
+                original = new MemoryStream(asset.Content, writable: false);
+            if (original is null) return Results.NotFound();
+            await using (original)
+            {
+                var crop = FaceThumbnailCropper.Crop(original, box, cancellationToken);
+                return crop is null ? Results.NotFound() : Results.Stream(crop, "image/jpeg");
+            }
         });
         app.MapGet("/api/gateway/v1/video-thumbs/{id:long}", async (long id, string? agentId, CancellationToken cancellationToken) =>
         {

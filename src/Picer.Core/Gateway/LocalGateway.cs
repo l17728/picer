@@ -5,6 +5,7 @@ using Picer.Core.People;
 using Picer.Core.Search;
 using Picer.Core.Thumbnails;
 using Picer.Core.Video;
+using Picer.Core.Vision;
 
 namespace Picer.Core.Gateway;
 
@@ -40,6 +41,19 @@ public sealed class LocalGateway(PicerDatabase db, ThumbnailService thumbnails, 
         {
             return Task.FromResult<Stream?>(null);
         }
+    }
+
+    public Task<Stream?> OpenFaceThumbnailAsync(long faceId, string? agentId = null, CancellationToken cancellationToken = default)
+    {
+        using var command = db.Command("SELECT image_id,box_x,box_y,box_width,box_height FROM detected_faces WHERE id=$id");
+        command.Parameters.AddWithValue("$id", faceId);
+        using var reader = command.ExecuteReader();
+        if (!reader.Read()) return Task.FromResult<Stream?>(null);
+        var image = db.GetImage(reader.GetInt64(0));
+        if (image is null || !File.Exists(image.Path)) return Task.FromResult<Stream?>(null);
+        using var source = File.OpenRead(image.Path);
+        var crop = FaceThumbnailCropper.Crop(source, new NormalizedFaceBox((float)reader.GetDouble(1), (float)reader.GetDouble(2), (float)reader.GetDouble(3), (float)reader.GetDouble(4)), cancellationToken);
+        return Task.FromResult(crop);
     }
 
     public Task<Stream?> OpenOriginalImageAsync(long imageId, string? agentId = null, CancellationToken cancellationToken = default)
