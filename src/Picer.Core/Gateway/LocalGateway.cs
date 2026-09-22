@@ -88,7 +88,9 @@ public sealed class LocalGateway(PicerDatabase db, ThumbnailService thumbnails, 
             SemanticEngine.GetAlbumImages(db, album.Id).Select(image => new GatewayAlbumImageLink(album.Id, image.Id))).ToArray();
         var imageTags = db.GetImages(includeMissing: true).SelectMany(image =>
             SemanticEngine.GetImageTags(db, image.Id).Select(tag => new GatewayImageTagLink(image.Id, tag.Id))).ToArray();
-        return Task.FromResult(new GatewayMetadata(albumImages, imageTags, db.GetImageLocationHierarchyRows()));
+        return Task.FromResult(new GatewayMetadata(albumImages, imageTags, db.GetImageLocationHierarchyRows(),
+            db.GetAllMirroredFaces(), db.GetAllMirroredFaceAssignments(), db.GetAllMirroredVideoKeyframes(),
+            db.GetAllMirroredVideoTranscripts(), db.GetAllMirroredVideoSummaries()));
     }
 
     public Task<IReadOnlyList<PersonSummary>> ListPeopleAsync(CancellationToken cancellationToken = default) =>

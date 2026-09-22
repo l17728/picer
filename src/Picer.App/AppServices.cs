@@ -275,6 +275,11 @@ public static class AppServices
             // Apply relationships only after all mirrored media rows exist; the
             // foreign keys intentionally protect against partial remote syncs.
             var metadata = await Gateway.GetMetadataAsync(cancellationToken).ConfigureAwait(false);
+            // Face rows are part of the mirrored index, not local-only state. They
+            // must be applied before assignments so the same people/faces are
+            // visible in the remote client and can be searched there.
+            Db.UpsertMirroredFaces(metadata.Faces, metadata.FaceAssignments);
+            Db.UpsertMirroredVideoMetadata(metadata);
             foreach (var link in metadata.AlbumImages)
                 SemanticEngine.AddToAlbum(Db, link.AlbumId, link.ImageId);
             foreach (var link in metadata.ImageTags)

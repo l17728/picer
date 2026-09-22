@@ -289,6 +289,15 @@ public partial class MainViewModel : ObservableObject, IDisposable
     public async Task RefreshFromRemoteMirrorAsync()
     {
         if (!AppServices.ServiceMode) return;
+        if (!Application.Current.Dispatcher.CheckAccess())
+        {
+            // The remote poller runs on a worker thread. CollectionView-backed
+            // ObservableCollections must be refreshed on the WPF dispatcher or
+            // switching from a partially loaded tree can throw and stop polling.
+            var operation = Application.Current.Dispatcher.InvokeAsync(RefreshFromRemoteMirrorAsync);
+            await operation.Task.Unwrap();
+            return;
+        }
         await ReloadSourcesAsync();
         await ApplySearchAndFilterAsync();
         await LoadDirectoryTreeAsync();
@@ -464,7 +473,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             Sources.Add(new SourceNodeViewModel
             {
                 SourceId = s.Id,
-                DisplayName = AppServices.ServiceMode ? $"远程 · {Path.GetFileName(s.Path)}" : Path.GetFileName(s.Path),
+                DisplayName = AppServices.ServiceMode ? $"远程 / {GetDisplaySourceName(s.Path)}" : Path.GetFileName(s.Path),
                 FullPath = s.Path,
                 ImageCount = s.ImageCount
             });
@@ -481,7 +490,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         foreach (var source in snapshot.Sources)
             Sources.Add(new SourceNodeViewModel
             {
-                SourceId = source.Id, DisplayName = AppServices.ServiceMode ? $"远程 · {Path.GetFileName(source.Path)}" : Path.GetFileName(source.Path), FullPath = source.Path, ImageCount = source.ImageCount
+                SourceId = source.Id, DisplayName = AppServices.ServiceMode ? $"远程 / {GetDisplaySourceName(source.Path)}" : Path.GetFileName(source.Path), FullPath = source.Path, ImageCount = source.ImageCount
             });
         SelectedSource = Sources.FirstOrDefault(source => source.SourceId == previous) ?? Sources.FirstOrDefault();
     }
@@ -1363,14 +1372,19 @@ public partial class MainViewModel : ObservableObject, IDisposable
         {
             var node = new DirectoryNodeViewModel
             {
-                Name = AppServices.ServiceMode ? $"远程 · {Path.GetFileName(source.Path)}" : Path.GetFileName(source.Path),
+                SourceId = source.Id,
+                Name = AppServices.ServiceMode ? $"远程 / {GetDisplaySourceName(source.Path)}" : Path.GetFileName(source.Path),
                 FullPath = source.Path,
                 Icon = "📁",
                 ImageCount = source.ImageCount,
                 IsExpanded = true
             };
             DirectoryTree.Add(node);
-            _ = ExpandDirectoryAsync(node);
+            // A service-mode source path is the server's path (often Linux) and
+            // is not a valid Windows directory. Remote children are represented
+            // by indexed nodes, never enumerated through the local filesystem.
+            if (!AppServices.ServiceMode)
+                _ = ExpandDirectoryAsync(node);
         }
         var regularAlbums = snapshot.Albums.Where(item => !IsTimelineAlbum(item.Album)).ToArray();
         var timelineAlbums = snapshot.Albums.Where(item => IsTimelineAlbum(item.Album)).ToArray();
@@ -1811,7 +1825,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 StatusText = $"请选择“{selectedDirectory.Name}”下的一个相册";
                 return;
             }
-            var records = await UiWork.RunDatabaseAsync(() => selectedDirectory.IsSceneAnchor || selectedDirectory.IsGeoNode || selectedDirectory.IsAlbumRoot
+            var records = await UiWork.RunDatabaseAsync(() => AppServices.ServiceMode && selectedDirectory.SourceId is { } remoteSourceId
+                ? _db.GetImages(remoteSourceId, includeMissing: false)
+                : selectedDirectory.IsSceneAnchor || selectedDirectory.IsGeoNode || selectedDirectory.IsAlbumRoot
                 ? selectedDirectory.AnchorImageIds.Select(id => _db.GetImage(id)).Where(image => image is not null).Cast<ImageRecord>()
                     .OrderBy(SceneTimeClusterService.EffectiveTime).ThenBy(image => image.Id).ToList()
                 : selectedDirectory.AlbumId is { } albumId
@@ -1832,6 +1848,14 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 ? []
                 : await UiWork.RunDatabaseAsync("DirectoryVideos.Load", () =>
                 {
+                    if (AppServices.ServiceMode && selectedDirectory.SourceId is { } remoteSourceId)
+                    {
+                        var remotePosters = AppServices.Videos.GetFirstKeyframePaths();
+                        return AppServices.Videos.GetAll()
+                            .Where(video => video.Status == "active" && video.SourceId == remoteSourceId)
+                            .Where(video => string.IsNullOrWhiteSpace(SearchQuery) || Path.GetFileName(video.Path).Contains(SearchQuery.Trim(), StringComparison.CurrentCultureIgnoreCase))
+                            .Select(video => new ImageItemViewModel(video, remotePosters.GetValueOrDefault(video.Id), LoadVideoPosterPathAsync, cts.Token)).ToArray();
+                    }
                     // Keep the directory view self-healing: videos may have been imported
                     // before the explicit video scan was introduced. Index files under the
                     // selected source/child directory before reading the view.
@@ -1879,7 +1903,15 @@ public partial class MainViewModel : ObservableObject, IDisposable
             OnPropertyChanged(nameof(DirectoryImageCount));
             StatusText = $"[{selectedDirectory.Name}] 已显示 {DirectoryImages.Count} 个媒体项";
 
-            var unindexedFiles = DirectoryMediaFilter == DirectoryMediaFilter.Videos || selectedDirectory.IsSceneAnchor || selectedDirectory.IsGeoNode || selectedDirectory.IsAlbumRoot || selectedDirectory.AlbumId is not null ? [] : await Task.Run(() =>
+            // A service-mode source is a logical remote root.  Its stored path is
+            // the server's path (for example `/opt/picer-index/G:\\Apple照片`),
+            // which is intentionally not a valid local Windows directory.  Never
+            // enumerate it as a local filesystem fallback; all indexed media has
+            // already arrived through the gateway and thumbnails are loaded via
+            // the remote cache endpoint.
+            var unindexedFiles = AppServices.ServiceMode && selectedDirectory.SourceId is not null
+                ? []
+                : DirectoryMediaFilter == DirectoryMediaFilter.Videos || selectedDirectory.IsSceneAnchor || selectedDirectory.IsGeoNode || selectedDirectory.IsAlbumRoot || selectedDirectory.AlbumId is not null ? [] : await Task.Run(() =>
             {
                 var options = new EnumerationOptions
                 {
@@ -1927,6 +1959,16 @@ public partial class MainViewModel : ObservableObject, IDisposable
         var root = Path.GetFullPath(directory).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
                    + Path.DirectorySeparatorChar;
         return Path.GetFullPath(path).StartsWith(root, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string GetDisplaySourceName(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return "未知来源";
+        var normalized = path.Replace('\\', '/').TrimEnd('/');
+        var name = normalized[(normalized.LastIndexOf('/') + 1)..];
+        var colon = name.IndexOf(':');
+        if (colon >= 0 && colon + 1 < name.Length) name = name[(colon + 1)..].Trim('/');
+        return string.IsNullOrWhiteSpace(name) ? "远程来源" : name;
     }
 
     private async Task<string?> LoadVideoPosterPathAsync(VideoRecord video, CancellationToken cancellationToken)
@@ -2072,6 +2114,7 @@ public sealed class AiVideoResultViewModel
 
 public partial class DirectoryNodeViewModel : ObservableObject
 {
+    public long? SourceId { get; set; }
     public string Name { get; set; } = "";
     public string FullPath { get; set; } = "";
     public string Icon { get; set; } = "📁";

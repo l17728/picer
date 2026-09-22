@@ -5,6 +5,7 @@ using System.Security.Cryptography.X509Certificates;
 using System.Text.Json;
 using Picer.Core.Data;
 using Picer.Core.Models;
+using Picer.Core.People;
 using Picer.Core.Search;
 using Picer.Core.Video;
 
@@ -79,9 +80,20 @@ public sealed class IndexSyncClient(HttpClient client)
                 .Select(tag => new GatewayImageTagLink(image.Id, tag.Id))).ToArray();
         var request = new SyncMetadataRequest(
             SemanticEngine.GetTags(database), albums, memberships,
-            tagLinks, database.GetImageLocationHierarchyRows());
+            tagLinks, database.GetImageLocationHierarchyRows(), new PeopleService(database).GetAll(), null, null,
+            database.GetAllMirroredVideoKeyframes(), database.GetAllMirroredVideoTranscripts(), database.GetAllMirroredVideoSummaries());
         using var response = await client.PostAsJsonAsync("api/sync/v1/metadata", request, Json, cancellationToken);
         response.EnsureSuccessStatusCode();
+        var faces = database.GetAllMirroredFaces();
+        var assignments = database.GetAllMirroredFaceAssignments().ToDictionary(item => item.FaceId);
+        foreach (var batch in faces.Chunk(2000))
+        {
+            var batchAssignments = batch.Where(face => assignments.TryGetValue(face.Id, out _))
+                .Select(face => assignments[face.Id]).ToArray();
+            using var faceResponse = await client.PostAsJsonAsync("api/sync/v1/faces",
+                new { faces = batch, assignments = batchAssignments }, Json, cancellationToken);
+            faceResponse.EnsureSuccessStatusCode();
+        }
     }
 
     private sealed record SyncMetadataRequest(
@@ -89,6 +101,12 @@ public sealed class IndexSyncClient(HttpClient client)
         IReadOnlyList<Album> Albums,
         IReadOnlyList<GatewayAlbumImageLink> AlbumImages,
         IReadOnlyList<GatewayImageTagLink> ImageTags,
-        IReadOnlyList<ImageLocationHierarchyRow> Locations);
+        IReadOnlyList<ImageLocationHierarchyRow> Locations,
+        IReadOnlyList<PersonSummary> People,
+        IReadOnlyList<GatewayDetectedFace>? Faces = null,
+        IReadOnlyList<GatewayFaceAssignment>? FaceAssignments = null,
+        IReadOnlyList<GatewayVideoKeyframe>? VideoKeyframes = null,
+        IReadOnlyList<GatewayVideoTranscript>? VideoTranscripts = null,
+        IReadOnlyList<GatewayVideoSummary>? VideoSummaries = null);
 
 }

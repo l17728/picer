@@ -35,7 +35,11 @@ public sealed class HttpIndexGateway : IIndexGateway, IMediaAssetGateway, IDispo
                 }
                 return CryptographicOperations.FixedTimeEquals(pin, expectedSpkiPin);
             };
-            _client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(30) };
+            // Metadata includes face vectors and can be tens of megabytes for a
+            // large library. The request is still cancellation-bound by the
+            // caller, but must not be cut off by the old 30-second transport
+            // timeout while the UI is bootstrapping a remote mirror.
+            _client = new HttpClient(handler) { Timeout = TimeSpan.FromMinutes(10) };
             _ownsClient = true;
         }
         else

@@ -1,4 +1,5 @@
 using Microsoft.Data.Sqlite;
+using Picer.Core.Gateway;
 using Picer.Core.Models;
 using Picer.Core.Search;
 using Picer.Core.People;
@@ -1428,6 +1429,148 @@ public sealed class PicerDatabase : IDisposable
         var now = DateTime.UtcNow.ToString("o");
         cmd.Parameters.AddWithValue("$id", person.Id); cmd.Parameters.AddWithValue("$name", person.DisplayName);
         cmd.Parameters.AddWithValue("$created", now); cmd.Parameters.AddWithValue("$updated", now); cmd.ExecuteNonQuery();
+    }
+
+    public void UpsertMirroredFace(GatewayDetectedFace face)
+    {
+        using var cmd = Command("""
+            INSERT INTO detected_faces(id,image_id,model_version,ordinal,box_x,box_y,box_width,box_height,confidence,landmarks_json,embedding,created_utc)
+            VALUES($id,$image,$model,$ordinal,$x,$y,$w,$h,$confidence,$landmarks,$embedding,$created)
+            ON CONFLICT(id) DO UPDATE SET image_id=excluded.image_id,model_version=excluded.model_version,ordinal=excluded.ordinal,
+              box_x=excluded.box_x,box_y=excluded.box_y,box_width=excluded.box_width,box_height=excluded.box_height,
+              confidence=excluded.confidence,landmarks_json=excluded.landmarks_json,embedding=excluded.embedding,created_utc=excluded.created_utc
+            """);
+        cmd.Parameters.AddWithValue("$id", face.Id); cmd.Parameters.AddWithValue("$image", face.ImageId);
+        cmd.Parameters.AddWithValue("$model", face.ModelVersion); cmd.Parameters.AddWithValue("$ordinal", face.Ordinal);
+        cmd.Parameters.AddWithValue("$x", face.BoxX); cmd.Parameters.AddWithValue("$y", face.BoxY);
+        cmd.Parameters.AddWithValue("$w", face.BoxWidth); cmd.Parameters.AddWithValue("$h", face.BoxHeight);
+        cmd.Parameters.AddWithValue("$confidence", face.Confidence);
+        cmd.Parameters.AddWithValue("$landmarks", (object?)face.LandmarksJson ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$embedding", (object?)face.Embedding ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$created", face.CreatedUtc); cmd.ExecuteNonQuery();
+    }
+
+    public void UpsertMirroredFaceAssignment(GatewayFaceAssignment assignment)
+    {
+        using var cmd = Command("""
+            INSERT INTO face_person_assignments(face_id,person_id,state,confidence,assigned_by,updated_utc)
+            VALUES($face,$person,$state,$confidence,$by,$updated)
+            ON CONFLICT(face_id) DO UPDATE SET person_id=excluded.person_id,state=excluded.state,
+              confidence=excluded.confidence,assigned_by=excluded.assigned_by,updated_utc=excluded.updated_utc
+            """);
+        cmd.Parameters.AddWithValue("$face", assignment.FaceId); cmd.Parameters.AddWithValue("$person", assignment.PersonId);
+        cmd.Parameters.AddWithValue("$state", assignment.State); cmd.Parameters.AddWithValue("$confidence", (object?)assignment.Confidence ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$by", assignment.AssignedBy); cmd.Parameters.AddWithValue("$updated", assignment.UpdatedUtc);
+        cmd.ExecuteNonQuery();
+    }
+
+    public void UpsertMirroredFaces(IReadOnlyList<GatewayDetectedFace> faces, IReadOnlyList<GatewayFaceAssignment> assignments)
+    {
+        using var transaction = BeginTransaction();
+        using var faceCommand = Command("""
+            INSERT INTO detected_faces(id,image_id,model_version,ordinal,box_x,box_y,box_width,box_height,confidence,landmarks_json,embedding,created_utc)
+            VALUES($id,$image,$model,$ordinal,$x,$y,$w,$h,$confidence,$landmarks,$embedding,$created)
+            ON CONFLICT(id) DO UPDATE SET image_id=excluded.image_id,model_version=excluded.model_version,ordinal=excluded.ordinal,
+              box_x=excluded.box_x,box_y=excluded.box_y,box_width=excluded.box_width,box_height=excluded.box_height,
+              confidence=excluded.confidence,landmarks_json=excluded.landmarks_json,embedding=excluded.embedding,created_utc=excluded.created_utc
+            """);
+        faceCommand.Transaction = transaction;
+        foreach (var face in faces)
+        {
+            faceCommand.Parameters.Clear();
+            faceCommand.Parameters.AddWithValue("$id", face.Id); faceCommand.Parameters.AddWithValue("$image", face.ImageId);
+            faceCommand.Parameters.AddWithValue("$model", face.ModelVersion); faceCommand.Parameters.AddWithValue("$ordinal", face.Ordinal);
+            faceCommand.Parameters.AddWithValue("$x", face.BoxX); faceCommand.Parameters.AddWithValue("$y", face.BoxY);
+            faceCommand.Parameters.AddWithValue("$w", face.BoxWidth); faceCommand.Parameters.AddWithValue("$h", face.BoxHeight);
+            faceCommand.Parameters.AddWithValue("$confidence", face.Confidence);
+            faceCommand.Parameters.AddWithValue("$landmarks", (object?)face.LandmarksJson ?? DBNull.Value);
+            faceCommand.Parameters.AddWithValue("$embedding", (object?)face.Embedding ?? DBNull.Value);
+            faceCommand.Parameters.AddWithValue("$created", face.CreatedUtc); faceCommand.ExecuteNonQuery();
+        }
+        using var assignmentCommand = Command("""
+            INSERT INTO face_person_assignments(face_id,person_id,state,confidence,assigned_by,updated_utc)
+            VALUES($face,$person,$state,$confidence,$by,$updated)
+            ON CONFLICT(face_id) DO UPDATE SET person_id=excluded.person_id,state=excluded.state,
+              confidence=excluded.confidence,assigned_by=excluded.assigned_by,updated_utc=excluded.updated_utc
+            """);
+        assignmentCommand.Transaction = transaction;
+        foreach (var assignment in assignments)
+        {
+            assignmentCommand.Parameters.Clear();
+            assignmentCommand.Parameters.AddWithValue("$face", assignment.FaceId); assignmentCommand.Parameters.AddWithValue("$person", assignment.PersonId);
+            assignmentCommand.Parameters.AddWithValue("$state", assignment.State); assignmentCommand.Parameters.AddWithValue("$confidence", (object?)assignment.Confidence ?? DBNull.Value);
+            assignmentCommand.Parameters.AddWithValue("$by", assignment.AssignedBy); assignmentCommand.Parameters.AddWithValue("$updated", assignment.UpdatedUtc);
+            assignmentCommand.ExecuteNonQuery();
+        }
+        transaction.Commit();
+    }
+
+    public IReadOnlyList<GatewayDetectedFace> GetAllMirroredFaces()
+    {
+        using var command = Command("SELECT id,image_id,model_version,ordinal,box_x,box_y,box_width,box_height,confidence,landmarks_json,embedding,created_utc FROM detected_faces");
+        using var reader = command.ExecuteReader();
+        var result = new List<GatewayDetectedFace>();
+        while (reader.Read())
+            result.Add(new GatewayDetectedFace(reader.GetInt64(0), reader.GetInt64(1), reader.GetString(2), reader.GetInt32(3),
+                reader.GetDouble(4), reader.GetDouble(5), reader.GetDouble(6), reader.GetDouble(7), reader.GetDouble(8),
+                reader.IsDBNull(9) ? null : reader.GetString(9), reader.IsDBNull(10) ? null : (byte[])reader[10], reader.GetString(11)));
+        return result;
+    }
+
+    public IReadOnlyList<GatewayFaceAssignment> GetAllMirroredFaceAssignments()
+    {
+        using var command = Command("SELECT face_id,person_id,state,confidence,assigned_by,updated_utc FROM face_person_assignments");
+        using var reader = command.ExecuteReader();
+        var result = new List<GatewayFaceAssignment>();
+        while (reader.Read())
+            result.Add(new GatewayFaceAssignment(reader.GetInt64(0), reader.GetInt64(1), reader.GetString(2),
+                reader.IsDBNull(3) ? null : reader.GetDouble(3), reader.GetString(4), reader.GetString(5)));
+        return result;
+    }
+
+    public IReadOnlyList<GatewayVideoKeyframe> GetAllMirroredVideoKeyframes()
+    {
+        using var command = Command("SELECT id,video_id,timestamp_seconds,path,dhash FROM video_keyframes");
+        using var reader = command.ExecuteReader(); var result = new List<GatewayVideoKeyframe>();
+        while (reader.Read()) result.Add(new GatewayVideoKeyframe(reader.GetInt64(0), reader.GetInt64(1), reader.GetDouble(2), reader.GetString(3), reader.GetInt64(4)));
+        return result;
+    }
+
+    public IReadOnlyList<GatewayVideoTranscript> GetAllMirroredVideoTranscripts()
+    {
+        using var command = Command("SELECT video_id,model_version,transcript_json FROM video_transcripts");
+        using var reader = command.ExecuteReader(); var result = new List<GatewayVideoTranscript>();
+        while (reader.Read()) result.Add(new GatewayVideoTranscript(reader.GetInt64(0), reader.GetString(1), reader.GetString(2)));
+        return result;
+    }
+
+    public IReadOnlyList<GatewayVideoSummary> GetAllMirroredVideoSummaries()
+    {
+        using var command = Command("SELECT video_id,provider,model_version,prompt_version,summary,result_json FROM video_summaries");
+        using var reader = command.ExecuteReader(); var result = new List<GatewayVideoSummary>();
+        while (reader.Read()) result.Add(new GatewayVideoSummary(reader.GetInt64(0), reader.GetString(1), reader.GetString(2), reader.GetString(3), reader.GetString(4), reader.GetString(5)));
+        return result;
+    }
+
+    public void UpsertMirroredVideoMetadata(GatewayMetadata metadata)
+    {
+        using var transaction = BeginTransaction();
+        foreach (var frame in metadata.VideoKeyframes)
+        {
+            using var command = Command("INSERT INTO video_keyframes(id,video_id,timestamp_seconds,path,dhash,created_utc) VALUES($id,$video,$time,$path,$hash,$now) ON CONFLICT(id) DO UPDATE SET video_id=excluded.video_id,timestamp_seconds=excluded.timestamp_seconds,path=excluded.path,dhash=excluded.dhash");
+            command.Transaction = transaction; command.Parameters.AddWithValue("$id", frame.Id); command.Parameters.AddWithValue("$video", frame.VideoId); command.Parameters.AddWithValue("$time", frame.TimestampSeconds); command.Parameters.AddWithValue("$path", frame.Path); command.Parameters.AddWithValue("$hash", frame.DifferenceHash); command.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("o")); command.ExecuteNonQuery();
+        }
+        foreach (var transcript in metadata.VideoTranscripts)
+        {
+            using var command = Command("INSERT INTO video_transcripts(video_id,model_version,transcript_json,created_utc) VALUES($video,$model,$json,$now) ON CONFLICT(video_id) DO UPDATE SET model_version=excluded.model_version,transcript_json=excluded.transcript_json,created_utc=excluded.created_utc");
+            command.Transaction = transaction; command.Parameters.AddWithValue("$video", transcript.VideoId); command.Parameters.AddWithValue("$model", transcript.ModelVersion); command.Parameters.AddWithValue("$json", transcript.TranscriptJson); command.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("o")); command.ExecuteNonQuery();
+        }
+        foreach (var summary in metadata.VideoSummaries)
+        {
+            using var command = Command("INSERT INTO video_summaries(video_id,provider,model_version,prompt_version,source_file_size,source_modified_utc,summary,result_json,input_tokens,output_tokens,estimated_cost_yuan,created_utc) SELECT $video,$provider,$model,$prompt,0,'',$summary,$json,0,0,0,$now ON CONFLICT(video_id) DO UPDATE SET provider=excluded.provider,model_version=excluded.model_version,prompt_version=excluded.prompt_version,summary=excluded.summary,result_json=excluded.result_json,created_utc=excluded.created_utc");
+            command.Transaction = transaction; command.Parameters.AddWithValue("$video", summary.VideoId); command.Parameters.AddWithValue("$provider", summary.Provider); command.Parameters.AddWithValue("$model", summary.ModelVersion); command.Parameters.AddWithValue("$prompt", summary.PromptVersion); command.Parameters.AddWithValue("$summary", summary.Summary); command.Parameters.AddWithValue("$json", summary.ResultJson); command.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("o")); command.ExecuteNonQuery();
+        }
+        transaction.Commit();
     }
 
     public void UpsertMirroredImageTag(long imageId, long tagId)

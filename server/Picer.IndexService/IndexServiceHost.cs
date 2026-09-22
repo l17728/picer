@@ -27,7 +27,16 @@ public sealed record SyncMetadataRequest(
     IReadOnlyList<Album> Albums,
     IReadOnlyList<AlbumImageLink> AlbumImages,
     IReadOnlyList<ImageTagLink> ImageTags,
-    IReadOnlyList<ImageLocationHierarchyRow> Locations);
+    IReadOnlyList<ImageLocationHierarchyRow> Locations,
+    IReadOnlyList<PersonSummary>? People = null,
+    IReadOnlyList<GatewayDetectedFace>? Faces = null,
+    IReadOnlyList<GatewayFaceAssignment>? FaceAssignments = null,
+    IReadOnlyList<GatewayVideoKeyframe>? VideoKeyframes = null,
+    IReadOnlyList<GatewayVideoTranscript>? VideoTranscripts = null,
+    IReadOnlyList<GatewayVideoSummary>? VideoSummaries = null);
+public sealed record SyncFacesRequest(
+    IReadOnlyList<GatewayDetectedFace> Faces,
+    IReadOnlyList<GatewayFaceAssignment> Assignments);
 public sealed record AlbumImageLink(long AlbumId, long ImageId);
 public sealed record ImageTagLink(long ImageId, long TagId);
 
@@ -88,7 +97,36 @@ public sealed class IndexApiHandlers(PicerDatabase db, ThumbnailService thumbnai
             SemanticEngine.GetAlbumImages(db, album.Id).Select(image => new GatewayAlbumImageLink(album.Id, image.Id))).ToArray();
         var imageTags = db.GetImages(includeMissing: true).SelectMany(image =>
             SemanticEngine.GetImageTags(db, image.Id).Select(tag => new GatewayImageTagLink(image.Id, tag.Id))).ToArray();
-        return new GatewayMetadata(albumImages, imageTags, db.GetImageLocationHierarchyRows());
+        var faces = new List<GatewayDetectedFace>();
+        using (var command = db.Command("SELECT id,image_id,model_version,ordinal,box_x,box_y,box_width,box_height,confidence,landmarks_json,embedding,created_utc FROM detected_faces"))
+        using (var reader = command.ExecuteReader())
+        {
+            while (reader.Read())
+                faces.Add(new GatewayDetectedFace(reader.GetInt64(0), reader.GetInt64(1), reader.GetString(2), reader.GetInt32(3),
+                    reader.GetDouble(4), reader.GetDouble(5), reader.GetDouble(6), reader.GetDouble(7), reader.GetDouble(8),
+                    reader.IsDBNull(9) ? null : reader.GetString(9), reader.IsDBNull(10) ? null : (byte[])reader[10], reader.GetString(11)));
+        }
+        var assignments = new List<GatewayFaceAssignment>();
+        using (var command = db.Command("SELECT face_id,person_id,state,confidence,assigned_by,updated_utc FROM face_person_assignments"))
+        using (var reader = command.ExecuteReader())
+        {
+            while (reader.Read())
+                assignments.Add(new GatewayFaceAssignment(reader.GetInt64(0), reader.GetInt64(1), reader.GetString(2),
+                    reader.IsDBNull(3) ? null : reader.GetDouble(3), reader.GetString(4), reader.GetString(5)));
+        }
+        var keyframes = new List<GatewayVideoKeyframe>();
+        using (var command = db.Command("SELECT id,video_id,timestamp_seconds,path,dhash FROM video_keyframes"))
+        using (var reader = command.ExecuteReader())
+            while (reader.Read()) keyframes.Add(new GatewayVideoKeyframe(reader.GetInt64(0), reader.GetInt64(1), reader.GetDouble(2), reader.GetString(3), reader.GetInt64(4)));
+        var transcripts = new List<GatewayVideoTranscript>();
+        using (var command = db.Command("SELECT video_id,model_version,transcript_json FROM video_transcripts"))
+        using (var reader = command.ExecuteReader())
+            while (reader.Read()) transcripts.Add(new GatewayVideoTranscript(reader.GetInt64(0), reader.GetString(1), reader.GetString(2)));
+        var summaries = new List<GatewayVideoSummary>();
+        using (var command = db.Command("SELECT video_id,provider,model_version,prompt_version,summary,result_json FROM video_summaries"))
+        using (var reader = command.ExecuteReader())
+            while (reader.Read()) summaries.Add(new GatewayVideoSummary(reader.GetInt64(0), reader.GetString(1), reader.GetString(2), reader.GetString(3), reader.GetString(4), reader.GetString(5)));
+        return new GatewayMetadata(albumImages, imageTags, db.GetImageLocationHierarchyRows(), faces, assignments, keyframes, transcripts, summaries);
     }
     public IReadOnlyList<PersonSummary> ListPeople() => new PeopleService(db).GetAll();
 
@@ -253,12 +291,21 @@ public static class IndexServiceHost
         {
             foreach (var tag in request.Tags) db.UpsertMirroredTag(tag);
             foreach (var album in request.Albums) db.UpsertMirroredAlbum(album);
+            foreach (var person in request.People ?? []) db.UpsertMirroredPerson(person);
+            foreach (var face in request.Faces ?? []) db.UpsertMirroredFace(face);
+            foreach (var assignment in request.FaceAssignments ?? []) db.UpsertMirroredFaceAssignment(assignment);
+            db.UpsertMirroredVideoMetadata(new GatewayMetadata([], [], [], [], [], request.VideoKeyframes ?? [], request.VideoTranscripts ?? [], request.VideoSummaries ?? []));
             foreach (var link in request.AlbumImages) SemanticEngine.AddToAlbum(db, link.AlbumId, link.ImageId);
             foreach (var link in request.ImageTags) db.UpsertMirroredImageTag(link.ImageId, link.TagId);
             foreach (var location in request.Locations) db.UpsertMirroredLocation(location);
             return Results.Json(new { tags = request.Tags.Count, albums = request.Albums.Count,
                 albumImages = request.AlbumImages.Count, imageTags = request.ImageTags.Count,
-                locations = request.Locations.Count });
+                locations = request.Locations.Count, people = request.People?.Count ?? 0 });
+        });
+        app.MapPost("/api/sync/v1/faces", (SyncFacesRequest request) =>
+        {
+            db.UpsertMirroredFaces(request.Faces, request.Assignments);
+            return Results.Json(new { faces = request.Faces.Count, assignments = request.Assignments.Count });
         });
         app.MapGet("/api/gateway/v1/assets/images/{id:long}", async (long id, string? agentId, CancellationToken cancellationToken) =>
         {

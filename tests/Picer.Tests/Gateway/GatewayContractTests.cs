@@ -12,6 +12,7 @@ using Picer.Core.Gateway;
 using Picer.Core.Indexing;
 using Picer.Core.Logging;
 using Picer.Core.Models;
+using Picer.Core.People;
 using Picer.Core.Search;
 using Picer.Core.Thumbnails;
 using Picer.IndexService;
@@ -66,6 +67,23 @@ public sealed class GatewayServiceFixture : IDisposable
                 Height = 1,
                 Status = ImageStatus.Active
             });
+        }
+        var person = new PeopleService(Db).Create("测试人物");
+        var firstImage = Db.GetImages(SourceId).First();
+        using (var face = Db.Command("INSERT INTO detected_faces(image_id,model_version,ordinal,box_x,box_y,box_width,box_height,confidence,embedding,created_utc) VALUES($image,'test-model',0,.1,.1,.5,.5,.99,$embedding,$created)"))
+        {
+            face.Parameters.AddWithValue("$image", firstImage.Id);
+            face.Parameters.AddWithValue("$embedding", new byte[] { 1, 2, 3, 4 });
+            face.Parameters.AddWithValue("$created", DateTime.UtcNow.ToString("o"));
+            face.ExecuteNonQuery();
+        }
+        var faceId = Convert.ToInt64(Db.Command("SELECT last_insert_rowid()").ExecuteScalar());
+        using (var assignment = Db.Command("INSERT INTO face_person_assignments(face_id,person_id,state,confidence,assigned_by,updated_utc) VALUES($face,$person,'confirmed',.99,'user',$updated)"))
+        {
+            assignment.Parameters.AddWithValue("$face", faceId);
+            assignment.Parameters.AddWithValue("$person", person.Id);
+            assignment.Parameters.AddWithValue("$updated", DateTime.UtcNow.ToString("o"));
+            assignment.ExecuteNonQuery();
         }
 
         Thumbnails = new ThumbnailService(Path.Combine(Root, "thumbs"));
@@ -179,6 +197,17 @@ public sealed class GatewayContractTests(GatewayServiceFixture fixture) : IClass
         Assert.Equal(expected.Id, actual.Id);
         Assert.Equal(expected.Path, actual.Path);
         Assert.Null(await gateway.GetImageAsync(99_999_999));
+    }
+
+    [Theory]
+    [MemberData(nameof(Transports))]
+    public async Task Metadata_LocalAndRemoteTransportsExposeTheSameFaceAndRelationshipSet(string transport)
+    {
+        using var gateway = fixture.CreateGateway(transport);
+        var metadata = await gateway.GetMetadataAsync();
+        Assert.Single(metadata.Faces);
+        Assert.Single(metadata.FaceAssignments);
+        Assert.Equal(metadata.Faces.Select(face => face.Id), metadata.FaceAssignments.Select(assignment => assignment.FaceId));
     }
 
     [Theory]

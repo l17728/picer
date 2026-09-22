@@ -9,6 +9,8 @@ namespace Picer.App;
 public partial class App : Application
 {
     private MainViewModel? _mainViewModel;
+    private readonly CancellationTokenSource _remoteMirrorLoopCts = new();
+    private Task? _remoteMirrorLoop;
     private static readonly string LogPath = Path.Combine(AppPaths.DataRoot, "logs", "crash.log");
     private static readonly object CrashLogLock = new();
     private static string? _lastCrashFingerprint;
@@ -93,8 +95,13 @@ public partial class App : Application
             MainWindow = window;
             window.Show();
             if (AppServices.ServiceMode)
-                _ = SyncRemoteMirrorInBackgroundAsync();
-            _ = peopleViewModel.PublishEvaluationSnapshotForPlatformAsync();
+                _remoteMirrorLoop = Task.Run(() => RemoteMirrorLoopAsync(_remoteMirrorLoopCts.Token));
+            // A remote client is a read/mirror consumer. Publishing the local
+            // evaluation snapshot here needlessly scans thousands of faces and
+            // competes with mirror bootstrap, making the remote tree appear
+            // empty. Only the authoritative local client publishes it.
+            if (!AppServices.ServiceMode)
+                _ = peopleViewModel.PublishEvaluationSnapshotForPlatformAsync();
             PicerEventSource.Log.StartupStage("shell-visible", Stopwatch.GetElapsedTime(startupTimestamp).TotalMilliseconds);
             LogInfo("MainWindow 已显示");
         }
@@ -107,11 +114,40 @@ public partial class App : Application
         }
     }
 
-    private async Task SyncRemoteMirrorInBackgroundAsync()
+    /// <summary>
+    /// Keeps a service-mode client up to date after the initial bootstrap. The
+    /// mirror is deliberately refreshed off the UI thread; a failed poll is
+    /// isolated and retried on the next interval so a temporary network or
+    /// SQLite lock never takes down the shell.
+    /// </summary>
+    private async Task RemoteMirrorLoopAsync(CancellationToken cancellationToken)
+    {
+        LogInfo("远程索引镜像后台轮询已启动，间隔 30 秒");
+        try
+        {
+            await SyncRemoteMirrorInBackgroundAsync(cancellationToken).ConfigureAwait(false);
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                await Task.Delay(TimeSpan.FromSeconds(30), cancellationToken).ConfigureAwait(false);
+                await SyncRemoteMirrorInBackgroundAsync(cancellationToken).ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            LogInfo("远程索引镜像后台轮询已停止");
+        }
+        catch (Exception exception)
+        {
+            LogCrash("远程索引镜像后台轮询失败", exception);
+        }
+    }
+
+    private async Task SyncRemoteMirrorInBackgroundAsync(CancellationToken cancellationToken = default)
     {
         try
         {
-            using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(10));
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeout.CancelAfter(TimeSpan.FromMinutes(10));
             await AppServices.SyncRemoteMirrorAsync(timeout.Token);
             if (_mainViewModel is not null)
             {
@@ -137,6 +173,9 @@ public partial class App : Application
     protected override void OnExit(ExitEventArgs e)
     {
         LogInfo("=== Picer 退出 ===");
+        _remoteMirrorLoopCts.Cancel();
+        try { _remoteMirrorLoop?.Wait(TimeSpan.FromSeconds(2)); } catch { }
+        _remoteMirrorLoopCts.Dispose();
         _mainViewModel?.Dispose();
         AppServices.Shutdown();
         base.OnExit(e);
