@@ -224,20 +224,6 @@ public static class AppServices
         }
         try
         {
-            var metadata = await Gateway.GetMetadataAsync(cancellationToken).ConfigureAwait(false);
-            foreach (var link in metadata.AlbumImages)
-                SemanticEngine.AddToAlbum(Db, link.AlbumId, link.ImageId);
-            foreach (var link in metadata.ImageTags)
-                Db.UpsertMirroredImageTag(link.ImageId, link.TagId);
-            foreach (var location in metadata.Locations)
-                Db.UpsertMirroredLocation(location);
-        }
-        catch (Exception ex) when (ex is HttpRequestException or InvalidOperationException)
-        {
-            AppLogger.Warn("Remote metadata links are unavailable; continuing media sync: " + ex.Message);
-        }
-        try
-        {
             foreach (var person in await Gateway.ListPeopleAsync(cancellationToken).ConfigureAwait(false))
                 Db.UpsertMirroredPerson(person);
         }
@@ -268,6 +254,21 @@ public static class AppServices
                     Videos.UpsertMirrored(video, localSource.Id);
                 cursor = page.NextCursor;
             } while (cursor is not null);
+        }
+        try
+        {
+            // Apply relationships only after all mirrored media rows exist; the
+            // foreign keys intentionally protect against partial remote syncs.
+            var metadata = await Gateway.GetMetadataAsync(cancellationToken).ConfigureAwait(false);
+            foreach (var link in metadata.AlbumImages)
+                SemanticEngine.AddToAlbum(Db, link.AlbumId, link.ImageId);
+            foreach (var link in metadata.ImageTags)
+                Db.UpsertMirroredImageTag(link.ImageId, link.TagId);
+            Db.UpsertMirroredLocations(metadata.Locations);
+        }
+        catch (Exception ex) when (ex is HttpRequestException or InvalidOperationException or Microsoft.Data.Sqlite.SqliteException)
+        {
+            AppLogger.Warn("Remote metadata links are unavailable; continuing media sync: " + ex.Message);
         }
     }
 

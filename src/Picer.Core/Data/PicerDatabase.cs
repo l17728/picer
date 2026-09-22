@@ -1470,6 +1470,49 @@ public sealed class PicerDatabase : IDisposable
         cmd.ExecuteNonQuery();
     }
 
+    public void UpsertMirroredLocations(IEnumerable<ImageLocationHierarchyRow> rows)
+    {
+        var materialized = rows.ToArray();
+        if (materialized.Length == 0) return;
+        using var transaction = BeginTransaction();
+        using var gpsCommand = Command("SELECT COALESCE(gps,'') FROM images WHERE id=$image");
+        using var command = Command("""
+            INSERT INTO image_locations(image_id,latitude,longitude,country,province,city,county,district,town,village,display_name,search_text,resolved_utc)
+            VALUES($image,$latitude,$longitude,$country,$province,$city,$county,$district,$town,$village,$display,$display,$now)
+            ON CONFLICT(image_id) DO UPDATE SET latitude=excluded.latitude,longitude=excluded.longitude,
+              country=excluded.country,province=excluded.province,city=excluded.city,county=excluded.county,
+              district=excluded.district,town=excluded.town,village=excluded.village,display_name=excluded.display_name,
+              search_text=excluded.search_text,resolved_utc=excluded.resolved_utc
+            """);
+        gpsCommand.Transaction = transaction;
+        command.Transaction = transaction;
+        foreach (var row in materialized)
+        {
+            gpsCommand.Parameters.Clear();
+            gpsCommand.Parameters.AddWithValue("$image", row.ImageId);
+            var gps = gpsCommand.ExecuteScalar()?.ToString() ?? string.Empty;
+            GeoPlaceResolver.TryParseCoordinates(gps, out var latitude, out var longitude);
+            var display = string.Join(" / ", new[] { row.Village, row.Town, row.District, row.County,
+                row.City, row.Province, row.Country }.Where(value => !string.IsNullOrWhiteSpace(value)));
+            if (string.IsNullOrWhiteSpace(display)) display = row.HasGps ? "待解析位置" : "未知位置";
+            command.Parameters.Clear();
+            command.Parameters.AddWithValue("$image", row.ImageId);
+            command.Parameters.AddWithValue("$latitude", (object?)latitude ?? DBNull.Value);
+            command.Parameters.AddWithValue("$longitude", (object?)longitude ?? DBNull.Value);
+            command.Parameters.AddWithValue("$country", (object?)row.Country ?? DBNull.Value);
+            command.Parameters.AddWithValue("$province", (object?)row.Province ?? DBNull.Value);
+            command.Parameters.AddWithValue("$city", (object?)row.City ?? DBNull.Value);
+            command.Parameters.AddWithValue("$county", (object?)row.County ?? DBNull.Value);
+            command.Parameters.AddWithValue("$district", (object?)row.District ?? DBNull.Value);
+            command.Parameters.AddWithValue("$town", (object?)row.Town ?? DBNull.Value);
+            command.Parameters.AddWithValue("$village", (object?)row.Village ?? DBNull.Value);
+            command.Parameters.AddWithValue("$display", display);
+            command.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("o"));
+            command.ExecuteNonQuery();
+        }
+        transaction.Commit();
+    }
+
     public void UpdateImage(ImageRecord rec)
     {
         using var cmd = Command("""

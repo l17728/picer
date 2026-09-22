@@ -111,7 +111,7 @@ public partial class App : Application
     {
         try
         {
-            using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(3));
+            using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(10));
             await AppServices.SyncRemoteMirrorAsync(timeout.Token);
             if (_mainViewModel is not null)
                 await _mainViewModel.RefreshFromRemoteMirrorAsync();
