@@ -43,7 +43,8 @@ public sealed class IndexSyncClient(HttpClient client)
             foreach (var batch in images.Chunk(200))
             {
                 using var response = await client.PostAsJsonAsync("api/sync/v1/images", new { sourcePath = source.Path, images }, Json, cancellationToken);
-                response.EnsureSuccessStatusCode();
+                if (!response.IsSuccessStatusCode)
+                    throw new HttpRequestException($"Image sync failed ({(int)response.StatusCode}): {await response.Content.ReadAsStringAsync(cancellationToken)}");
                 done += batch.Length;
                 progress?.Report((done, total));
             }

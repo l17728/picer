@@ -1383,7 +1383,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
             // A service-mode source path is the server's path (often Linux) and
             // is not a valid Windows directory. Remote children are represented
             // by indexed nodes, never enumerated through the local filesystem.
-            if (!AppServices.ServiceMode)
+            if (AppServices.ServiceMode)
+                BuildRemoteDirectoryChildren(node, snapshot.Sources.First(item => item.Id == source.Id));
+            else
                 _ = ExpandDirectoryAsync(node);
         }
         var regularAlbums = snapshot.Albums.Where(item => !IsTimelineAlbum(item.Album)).ToArray();
@@ -1826,7 +1828,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 return;
             }
             var records = await UiWork.RunDatabaseAsync(() => AppServices.ServiceMode && selectedDirectory.SourceId is { } remoteSourceId
-                ? _db.GetImages(remoteSourceId, includeMissing: false)
+                ? FilterRemoteDirectoryImages(_db.GetImages(remoteSourceId, includeMissing: false), selectedDirectory.RemotePathPrefix)
                 : selectedDirectory.IsSceneAnchor || selectedDirectory.IsGeoNode || selectedDirectory.IsAlbumRoot
                 ? selectedDirectory.AnchorImageIds.Select(id => _db.GetImage(id)).Where(image => image is not null).Cast<ImageRecord>()
                     .OrderBy(SceneTimeClusterService.EffectiveTime).ThenBy(image => image.Id).ToList()
@@ -1853,6 +1855,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
                         var remotePosters = AppServices.Videos.GetFirstKeyframePaths();
                         return AppServices.Videos.GetAll()
                             .Where(video => video.Status == "active" && video.SourceId == remoteSourceId)
+                            .Where(video => string.IsNullOrWhiteSpace(selectedDirectory.RemotePathPrefix) ||
+                                NormalizeRemotePath(video.Path).StartsWith(NormalizeRemotePath(selectedDirectory.RemotePathPrefix!) + "/", StringComparison.OrdinalIgnoreCase))
                             .Where(video => string.IsNullOrWhiteSpace(SearchQuery) || Path.GetFileName(video.Path).Contains(SearchQuery.Trim(), StringComparison.CurrentCultureIgnoreCase))
                             .Select(video => new ImageItemViewModel(video, remotePosters.GetValueOrDefault(video.Id), LoadVideoPosterPathAsync, cts.Token)).ToArray();
                     }
@@ -1969,6 +1973,59 @@ public partial class MainViewModel : ObservableObject, IDisposable
         var colon = name.IndexOf(':');
         if (colon >= 0 && colon + 1 < name.Length) name = name[(colon + 1)..].Trim('/');
         return string.IsNullOrWhiteSpace(name) ? "远程来源" : name;
+    }
+
+    private void BuildRemoteDirectoryChildren(DirectoryNodeViewModel root, SourceFolder source)
+    {
+        var records = _db.GetImages(source.Id, includeMissing: false);
+        var rootPath = NormalizeRemotePath(source.Path).TrimEnd('/');
+        var map = new Dictionary<string, DirectoryNodeViewModel>(StringComparer.OrdinalIgnoreCase)
+        {
+            [rootPath] = root
+        };
+        foreach (var record in records)
+        {
+            var normalized = NormalizeRemotePath(record.Path);
+            if (!normalized.StartsWith(rootPath + "/", StringComparison.OrdinalIgnoreCase)) continue;
+            var relative = normalized[(rootPath.Length + 1)..];
+            var segments = relative.Split('/', StringSplitOptions.RemoveEmptyEntries);
+            if (segments.Length < 2) continue;
+            var currentPath = rootPath;
+            var parent = root;
+            for (var index = 0; index < segments.Length - 1; index++)
+            {
+                currentPath += "/" + segments[index];
+                if (!map.TryGetValue(currentPath, out var child))
+                {
+                    child = new DirectoryNodeViewModel
+                    {
+                        Name = segments[index], FullPath = currentPath, RemotePathPrefix = currentPath,
+                        SourceId = source.Id, Icon = "📂", IsExpanded = false
+                    };
+                    map[currentPath] = child;
+                    parent.Children.Add(child);
+                }
+                child.ImageCount++;
+                parent = child;
+            }
+        }
+        root.IsLoaded = true;
+    }
+
+    private static string NormalizeRemotePath(string path) =>
+        path.Replace('\\', '/').TrimEnd('/');
+
+    private static List<ImageRecord> FilterRemoteDirectoryImages(IEnumerable<ImageRecord> records, string? prefix)
+    {
+        if (string.IsNullOrWhiteSpace(prefix)) return records.ToList();
+        var normalizedPrefix = NormalizeRemotePath(prefix);
+        return records.Where(record =>
+        {
+            var path = NormalizeRemotePath(record.Path);
+            var slash = path.LastIndexOf('/');
+            var directory = slash < 0 ? path : path[..slash];
+            return string.Equals(directory, normalizedPrefix, StringComparison.OrdinalIgnoreCase);
+        }).ToList();
     }
 
     private async Task<string?> LoadVideoPosterPathAsync(VideoRecord video, CancellationToken cancellationToken)
@@ -2115,6 +2172,7 @@ public sealed class AiVideoResultViewModel
 public partial class DirectoryNodeViewModel : ObservableObject
 {
     public long? SourceId { get; set; }
+    public string? RemotePathPrefix { get; set; }
     public string Name { get; set; } = "";
     public string FullPath { get; set; } = "";
     public string Icon { get; set; } = "📁";

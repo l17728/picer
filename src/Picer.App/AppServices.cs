@@ -21,6 +21,7 @@ namespace Picer.App;
 
 public static class AppServices
 {
+    private static bool _remoteMediaBootstrapped;
     public static IIndexGateway Gateway { get; private set; } = null!;
     public static bool ServiceMode { get; private set; }
     public static PicerDatabase Db { get; private set; } = null!;
@@ -200,6 +201,7 @@ public static class AppServices
     public static async Task SyncRemoteMirrorAsync(CancellationToken cancellationToken = default)
     {
         if (!ServiceMode) return;
+        var fullMediaReconciliation = !Volatile.Read(ref _remoteMediaBootstrapped);
         var sources = await Gateway.ListSourcesAsync(cancellationToken).ConfigureAwait(false);
         // Metadata routes were added after the initial index-service deployment. Keep
         // image/video mirroring compatible with an older service while it is being
@@ -238,7 +240,7 @@ public static class AppServices
                 ?? (existingSources.Count == 1 && existingSources[0].ImageCount == source.ImageCount
                     ? existingSources[0]
                     : Db.AddSource(source.Path));
-            var mediaComplete = localSource.ImageCount == source.ImageCount && source.ImageCount > 0;
+            var mediaComplete = !fullMediaReconciliation && localSource.ImageCount == source.ImageCount && source.ImageCount > 0;
             string? cursor = null;
             if (!mediaComplete)
             {
@@ -270,6 +272,7 @@ public static class AppServices
                 AppLogger.Warn("Remote video mirror deferred; image metadata sync will continue: " + ex.Message);
             }
         }
+        Volatile.Write(ref _remoteMediaBootstrapped, true);
         try
         {
             // Apply relationships only after all mirrored media rows exist; the

@@ -1392,6 +1392,17 @@ public sealed class PicerDatabase : IDisposable
     /// <summary>Imports a read-only gateway record while preserving its server id.</summary>
     public void UpsertMirroredImage(ImageRecord rec)
     {
+        // A mirror may have been populated by an older source-path mapping.
+        // Reconciliation is keyed by the authoritative image id, but SQLite
+        // also enforces a unique path. Remove only the stale mirror row that
+        // owns the incoming path; FK cascades clean its derived metadata.
+        var pathOwner = GetImageByPath(rec.Path, anyStatus: true);
+        if (pathOwner is not null && pathOwner.Id != rec.Id)
+        {
+            using var removeStale = Command("DELETE FROM images WHERE id=$id");
+            removeStale.Parameters.AddWithValue("$id", pathOwner.Id);
+            removeStale.ExecuteNonQuery();
+        }
         using var cmd = Command("""
             INSERT INTO images (id, source_id, path, file_size, modified_utc, sha256, width, height,
                                 taken_utc, camera, gps, thumb_path, status, indexed_utc, ahash, dhash, file_created_utc, content_sha256)
