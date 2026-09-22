@@ -320,7 +320,7 @@ public static class IndexSearchEngine
     private static SearchCursor CreateCursor(ImageRecord record, SortField field) => new(field switch
     {
         SortField.FileName => record.Path,
-        SortField.TakenDate => Fmt(record.TakenUtc ?? record.IndexedUtc),
+        SortField.TakenDate => Fmt(record.TakenUtc ?? record.CreatedUtc ?? record.ModifiedUtc),
         SortField.Width => record.Width,
         SortField.Height => record.Height,
         SortField.FileSize => record.FileSize,
