@@ -15,6 +15,10 @@ public sealed record GatewayFaceAssignment(
 public sealed record GatewayVideoKeyframe(long Id, long VideoId, double TimestampSeconds, string Path, long DifferenceHash);
 public sealed record GatewayVideoTranscript(long VideoId, string ModelVersion, string TranscriptJson);
 public sealed record GatewayVideoSummary(long VideoId, string Provider, string ModelVersion, string PromptVersion, string Summary, string ResultJson);
+public sealed record GatewayVideoFace(long Id, long VideoId, long KeyframeId, double TimestampSeconds, int Ordinal,
+    double BoxX, double BoxY, double BoxWidth, double BoxHeight, double Confidence, byte[]? Embedding,
+    long? SuggestedPersonId, double? MatchConfidence, long? AssignedPersonId, string? AssignmentState,
+    string? UpdatedUtc, string CreatedUtc);
 [method: JsonConstructor]
 public sealed record GatewayMetadata(
     IReadOnlyList<GatewayAlbumImageLink> AlbumImages,
@@ -24,11 +28,14 @@ public sealed record GatewayMetadata(
     IReadOnlyList<GatewayFaceAssignment> FaceAssignments,
     IReadOnlyList<GatewayVideoKeyframe> VideoKeyframes,
     IReadOnlyList<GatewayVideoTranscript> VideoTranscripts,
-    IReadOnlyList<GatewayVideoSummary> VideoSummaries)
+    IReadOnlyList<GatewayVideoSummary> VideoSummaries,
+    IReadOnlyList<GatewayVideoFace>? VideoFaces = null)
 {
     public GatewayMetadata(
         IReadOnlyList<GatewayAlbumImageLink> albumImages,
         IReadOnlyList<GatewayImageTagLink> imageTags,
         IReadOnlyList<ImageLocationHierarchyRow> locations)
-        : this(albumImages, imageTags, locations, [], [], [], [], []) { }
+        : this(albumImages, imageTags, locations, [], [], [], [], [], []) { }
+
+    public IReadOnlyList<GatewayVideoFace> VideoFacesOrEmpty => VideoFaces ?? [];
 }

@@ -82,7 +82,7 @@ public sealed class IndexSyncClient(HttpClient client)
         var request = new SyncMetadataRequest(
             SemanticEngine.GetTags(database), albums, memberships,
             tagLinks, database.GetImageLocationHierarchyRows(), new PeopleService(database).GetAll(), null, null,
-            database.GetAllMirroredVideoKeyframes(), database.GetAllMirroredVideoTranscripts(), database.GetAllMirroredVideoSummaries());
+            database.GetAllMirroredVideoKeyframes(), database.GetAllMirroredVideoTranscripts(), database.GetAllMirroredVideoSummaries(), database.GetAllMirroredVideoFaces());
         using var response = await client.PostAsJsonAsync("api/sync/v1/metadata", request, Json, cancellationToken);
         response.EnsureSuccessStatusCode();
         var faces = database.GetAllMirroredFaces();
@@ -108,6 +108,7 @@ public sealed class IndexSyncClient(HttpClient client)
         IReadOnlyList<GatewayFaceAssignment>? FaceAssignments = null,
         IReadOnlyList<GatewayVideoKeyframe>? VideoKeyframes = null,
         IReadOnlyList<GatewayVideoTranscript>? VideoTranscripts = null,
-        IReadOnlyList<GatewayVideoSummary>? VideoSummaries = null);
+        IReadOnlyList<GatewayVideoSummary>? VideoSummaries = null,
+        IReadOnlyList<GatewayVideoFace>? VideoFaces = null);
 
 }

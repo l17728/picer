@@ -1563,6 +1563,14 @@ public sealed class PicerDatabase : IDisposable
         return result;
     }
 
+    public IReadOnlyList<GatewayVideoFace> GetAllMirroredVideoFaces()
+    {
+        using var command = Command("SELECT id,video_id,keyframe_id,timestamp_seconds,ordinal,box_x,box_y,box_width,box_height,confidence,embedding,suggested_person_id,match_confidence,assigned_person_id,assignment_state,updated_utc,created_utc FROM video_detected_faces");
+        using var reader = command.ExecuteReader(); var result = new List<GatewayVideoFace>();
+        while (reader.Read()) result.Add(new GatewayVideoFace(reader.GetInt64(0), reader.GetInt64(1), reader.GetInt64(2), reader.GetDouble(3), reader.GetInt32(4), reader.GetDouble(5), reader.GetDouble(6), reader.GetDouble(7), reader.GetDouble(8), reader.GetDouble(9), reader.IsDBNull(10) ? null : (byte[])reader[10], reader.IsDBNull(11) ? null : reader.GetInt64(11), reader.IsDBNull(12) ? null : reader.GetDouble(12), reader.IsDBNull(13) ? null : reader.GetInt64(13), reader.IsDBNull(14) ? null : reader.GetString(14), reader.IsDBNull(15) ? null : reader.GetString(15), reader.GetString(16)));
+        return result;
+    }
+
     public void UpsertMirroredVideoMetadata(GatewayMetadata metadata)
     {
         using var transaction = BeginTransaction();
@@ -1570,6 +1578,11 @@ public sealed class PicerDatabase : IDisposable
         {
             using var command = Command("INSERT INTO video_keyframes(id,video_id,timestamp_seconds,path,dhash,created_utc) VALUES($id,$video,$time,$path,$hash,$now) ON CONFLICT(id) DO UPDATE SET video_id=excluded.video_id,timestamp_seconds=excluded.timestamp_seconds,path=excluded.path,dhash=excluded.dhash");
             command.Transaction = transaction; command.Parameters.AddWithValue("$id", frame.Id); command.Parameters.AddWithValue("$video", frame.VideoId); command.Parameters.AddWithValue("$time", frame.TimestampSeconds); command.Parameters.AddWithValue("$path", frame.Path); command.Parameters.AddWithValue("$hash", frame.DifferenceHash); command.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("o")); command.ExecuteNonQuery();
+        }
+        foreach (var face in metadata.VideoFacesOrEmpty)
+        {
+            using var command = Command("INSERT INTO video_detected_faces(id,video_id,keyframe_id,timestamp_seconds,ordinal,box_x,box_y,box_width,box_height,confidence,embedding,suggested_person_id,match_confidence,assigned_person_id,assignment_state,updated_utc,created_utc) VALUES($id,$video,$key,$time,$ordinal,$x,$y,$w,$h,$confidence,$embedding,$suggested,$match,$assigned,$state,$updated,$created) ON CONFLICT(id) DO UPDATE SET assigned_person_id=excluded.assigned_person_id,assignment_state=excluded.assignment_state,updated_utc=excluded.updated_utc,suggested_person_id=excluded.suggested_person_id,match_confidence=excluded.match_confidence");
+            command.Transaction = transaction; command.Parameters.AddWithValue("$id", face.Id); command.Parameters.AddWithValue("$video", face.VideoId); command.Parameters.AddWithValue("$key", face.KeyframeId); command.Parameters.AddWithValue("$time", face.TimestampSeconds); command.Parameters.AddWithValue("$ordinal", face.Ordinal); command.Parameters.AddWithValue("$x", face.BoxX); command.Parameters.AddWithValue("$y", face.BoxY); command.Parameters.AddWithValue("$w", face.BoxWidth); command.Parameters.AddWithValue("$h", face.BoxHeight); command.Parameters.AddWithValue("$confidence", face.Confidence); command.Parameters.AddWithValue("$embedding", (object?)face.Embedding ?? DBNull.Value); command.Parameters.AddWithValue("$suggested", (object?)face.SuggestedPersonId ?? DBNull.Value); command.Parameters.AddWithValue("$match", (object?)face.MatchConfidence ?? DBNull.Value); command.Parameters.AddWithValue("$assigned", (object?)face.AssignedPersonId ?? DBNull.Value); command.Parameters.AddWithValue("$state", (object?)face.AssignmentState ?? DBNull.Value); command.Parameters.AddWithValue("$updated", (object?)face.UpdatedUtc ?? DBNull.Value); command.Parameters.AddWithValue("$created", face.CreatedUtc); command.ExecuteNonQuery();
         }
         foreach (var transcript in metadata.VideoTranscripts)
         {

@@ -1578,7 +1578,15 @@ public partial class MainViewModel : ObservableObject, IDisposable
         try
         {
             var recursive=_directoryClassification.IncludesDescendants(node.FullPath);node.ClassificationIncludesDescendants=recursive;
-            var clusters=await UiWork.RunDatabaseAsync(()=>new SceneTimeClusterService(_db).Build(node.FullPath,recursive));
+            var clusters=await UiWork.RunDatabaseAsync(() =>
+            {
+                if (AppServices.ServiceMode && node.SourceId is { } remoteSourceId)
+                {
+                    var images = FilterRemoteDirectoryImages(_db.GetImages(remoteSourceId, includeMissing: false), node.RemotePathPrefix, recursive);
+                    return new SceneTimeClusterService(_db).Build(images);
+                }
+                return new SceneTimeClusterService(_db).Build(node.FullPath, recursive);
+            });
             foreach(var anchor in node.Children.Where(child=>child.IsSceneAnchor).ToList())node.Children.Remove(anchor);
             foreach(var cluster in clusters)node.Children.Add(new DirectoryNodeViewModel{Name=cluster.DisplayName,FullPath=node.FullPath,Icon="⚓",ImageCount=cluster.ImageIds.Count,IsSceneAnchor=true,SceneName=cluster.SceneName,AnchorImageIds=cluster.ImageIds});
             node.SceneAnchorsLoaded=true;
@@ -1978,7 +1986,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private void BuildRemoteDirectoryChildren(DirectoryNodeViewModel root, SourceFolder source)
     {
         var records = _db.GetImages(source.Id, includeMissing: false);
-        var rootPath = NormalizeRemotePath(source.Path).TrimEnd('/');
+        // The index service stores the source's server-side mount prefix
+        // (for example `/opt/picer-index/G:\\Apple照片`), while image records
+        // retain the authoritative client path (`G:\\Apple照片\\...`).
+        // Strip that transport prefix before building the tree; otherwise no
+        // image can be a descendant of the source root and the remote tree is
+        // empty/flat even though the index contains all files.
+        var rootPath = NormalizeRemoteSourcePath(source.Path);
         var map = new Dictionary<string, DirectoryNodeViewModel>(StringComparer.OrdinalIgnoreCase)
         {
             [rootPath] = root
@@ -2015,7 +2029,18 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private static string NormalizeRemotePath(string path) =>
         path.Replace('\\', '/').TrimEnd('/');
 
-    private static List<ImageRecord> FilterRemoteDirectoryImages(IEnumerable<ImageRecord> records, string? prefix)
+    private static string NormalizeRemoteSourcePath(string path)
+    {
+        var normalized = NormalizeRemotePath(path);
+        for (var index = 0; index + 2 < normalized.Length; index++)
+        {
+            if (char.IsLetter(normalized[index]) && normalized[index + 1] == ':' && normalized[index + 2] == '/')
+                return normalized[index..].TrimEnd('/');
+        }
+        return normalized;
+    }
+
+    private static List<ImageRecord> FilterRemoteDirectoryImages(IEnumerable<ImageRecord> records, string? prefix, bool includeDescendants = false)
     {
         if (string.IsNullOrWhiteSpace(prefix)) return records.ToList();
         var normalizedPrefix = NormalizeRemotePath(prefix);
@@ -2024,7 +2049,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
             var path = NormalizeRemotePath(record.Path);
             var slash = path.LastIndexOf('/');
             var directory = slash < 0 ? path : path[..slash];
-            return string.Equals(directory, normalizedPrefix, StringComparison.OrdinalIgnoreCase);
+            return includeDescendants
+                ? string.Equals(directory, normalizedPrefix, StringComparison.OrdinalIgnoreCase) ||
+                  path.StartsWith(normalizedPrefix + "/", StringComparison.OrdinalIgnoreCase)
+                : string.Equals(directory, normalizedPrefix, StringComparison.OrdinalIgnoreCase);
         }).ToList();
     }
 
