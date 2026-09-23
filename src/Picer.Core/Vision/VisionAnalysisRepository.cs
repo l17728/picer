@@ -1128,6 +1128,21 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
         return versions;
     }
 
+    /// <summary>Returns model versions and row counts in one indexed query.</summary>
+    public IReadOnlyList<(string Version, int Count)> GetFaceModelVersionCounts()
+    {
+        using var command = database.Command("""
+            SELECT model_version, COUNT(*)
+            FROM detected_faces
+            GROUP BY model_version
+            ORDER BY model_version
+            """);
+        using var reader = command.ExecuteReader();
+        var result = new List<(string Version, int Count)>();
+        while (reader.Read()) result.Add((reader.GetString(0), reader.GetInt32(1)));
+        return result;
+    }
+
     public int GetFaceEmbeddingCount(string modelVersion)
     {
         using var command = database.Command("SELECT COUNT(*) FROM detected_faces WHERE model_version=$model AND embedding IS NOT NULL");

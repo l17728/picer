@@ -231,13 +231,15 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
     public async Task InitializePageAsync()
     {
         if (_isLoaded || IsLoading) return;
+        var initializationTimer = Stopwatch.StartNew();
         IsLoading = true;
         StatusText = "正在加载人物分类…";
         var modelVersions = await UiWork.RunDatabaseAsync(() =>
         {
-            var versions = _repository.GetFaceModelVersions();
-            var sface = versions.Where(value => value.Contains("sface", StringComparison.OrdinalIgnoreCase))
-                .Select(value => (Version: value, Count: _repository.GetFaceSources(value).Count))
+            var versionCounts = _repository.GetFaceModelVersionCounts();
+            var versions = versionCounts.Select(value => value.Version).ToArray();
+            var sface = versionCounts.Where(value => value.Version.Contains("sface", StringComparison.OrdinalIgnoreCase))
+                .Select(value => (Version: value.Version, Count: value.Count))
                 .OrderByDescending(value => value.Count).ThenBy(value => value.Version)
                 .FirstOrDefault();
             return versions.Where(value => !value.Contains("sface", StringComparison.OrdinalIgnoreCase)
@@ -260,6 +262,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         _isLoaded = true;
         IsLoading = false;
         StatusText = "模型空间已加载，正在后台加载人物分类数据…";
+        AppLogger.Info($"People model options ready: count={FaceModelOptions.Count}; elapsedMs={initializationTimer.ElapsedMilliseconds}");
         await RefreshAsync();
         if (!string.IsNullOrWhiteSpace(selectedVersion)) await LoadTrainingHistoryAsync(selectedVersion);
         _ = LoadPlatformModelOptionsAsync();
@@ -352,15 +355,16 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             var historyTask = LoadTrainingHistoryAsync(modelVersion);
             var (sourceModel, sourceCount, targetCount, targetEmbeddings, missingCount) = await UiWork.RunDatabaseAsync(() =>
             {
-                var versions = _repository.GetFaceModelVersions();
-                var source = versions.Where(value => !string.Equals(value, modelVersion, StringComparison.OrdinalIgnoreCase))
-                    .Select(value => (Version: value, Count: _repository.GetFaceSources(value).Count))
+                var versionCounts = _repository.GetFaceModelVersionCounts();
+                var source = versionCounts.Where(value => !string.Equals(value.Version, modelVersion, StringComparison.OrdinalIgnoreCase))
+                    .Select(value => (Version: value.Version, Count: value.Count))
                     // 必须先选择覆盖率最高的人脸框来源；自适应版本只有在覆盖率
                     // 相当时才优先，否则会把完整的 8000+ 张脸误缩成少量自适应记录。
                     .OrderByDescending(value => value.Count)
                     .ThenByDescending(value => value.Version.StartsWith("adaptive:", StringComparison.OrdinalIgnoreCase))
                     .FirstOrDefault();
-                var targetCount = _repository.GetFaceSources(modelVersion).Count;
+                var targetCount = versionCounts.FirstOrDefault(value =>
+                    string.Equals(value.Version, modelVersion, StringComparison.OrdinalIgnoreCase)).Count;
                 var targetEmbeddings = _repository.GetFaceEmbeddingCount(modelVersion);
                 var missing = Math.Max(0, targetCount - targetEmbeddings);
                 return (source.Version, source.Count, targetCount, targetEmbeddings, missing);
@@ -381,6 +385,15 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             // page entry rebuild the same partial target index forever. Once
             // the target model has persisted vectors, keep them and do not
             // rerun an expensive backfill on every navigation.
+            // Publish the selected model's people/queue before any optional
+            // vector backfill. This keeps the page responsive even when the
+            // first switch has to generate missing embeddings.
+            await RefreshAsync(loadFaces: false);
+            _ = ShowUnassignedFacesCoreAsync(collapseBursts: false);
+            // The page is now usable. Keep the progress text visible while a
+            // missing-vector backfill completes, but do not disable the face
+            // controls for that background maintenance work.
+            if (generation == Volatile.Read(ref _modelSwitchGeneration)) IsLoading = false;
             if (missingCount > 0)
             {
                 StatusText = $"正在后台生成 {GetFaceModelDisplayName(modelVersion)} 向量：已有 {targetEmbeddings}/{targetCount}，待补齐 {missingCount}…";
@@ -415,7 +428,6 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             // "更新自动归类" remains the only entry point that rebuilds it.
             cancellationToken.ThrowIfCancellationRequested();
             if (generation != Volatile.Read(ref _modelSwitchGeneration)) return;
-            await RefreshAsync();
             if (generation != Volatile.Read(ref _modelSwitchGeneration)) return;
             var restorePersonId = Interlocked.Exchange(ref _personToRestoreAfterModelSwitch, 0);
             if (restorePersonId > 0 && generation == Volatile.Read(ref _modelSwitchGeneration))
@@ -666,7 +678,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         return reader.Read() ? string.Join('|', Enumerable.Range(0, 6).Select(reader.GetValue)) : "empty";
     }
 
-    private async Task RefreshAsync()
+    private async Task RefreshAsync(bool loadFaces = true)
     {
         _pageLoadCancellation?.Cancel();
         _personLoadCancellation?.Cancel();
@@ -706,12 +718,15 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         People.Clear();
         foreach (var person in snapshot.People) People.Add(person);
         UnassignedFaces.Clear();
-        await UiWork.AddInBatchesAsync(snapshot.Faces, face =>
-            {
-                var item = CreateFaceItem(face);
-                UnassignedFaces.Add(item);
-                _ = LoadFaceThumbnailAsync(item);
-            }, cancellation.Token);
+        if (loadFaces)
+        {
+            await UiWork.AddInBatchesAsync(snapshot.Faces, face =>
+                {
+                    var item = CreateFaceItem(face);
+                    UnassignedFaces.Add(item);
+                    _ = LoadFaceThumbnailAsync(item);
+                }, cancellation.Token);
+        }
         CandidateClusters.Clear();
         foreach (var cluster in snapshot.Clusters)
         {
@@ -742,7 +757,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         else if (restoredSuggestedGroup is not null) SelectedSuggestedPersonGroup = restoredSuggestedGroup;
         else if (restoredCluster is not null) SelectedCandidateCluster = restoredCluster;
         else if (restoreIgnored) await ShowIgnoredFacesAsync();
-        else if (restoreUnassigned || DisplayedFaces.Count == 0) await ShowUnassignedFacesAsync();
+        else if (loadFaces && (restoreUnassigned || DisplayedFaces.Count == 0)) await ShowUnassignedFacesAsync();
     }
 
     [RelayCommand]
@@ -1769,7 +1784,9 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
     }
 
     [RelayCommand]
-    private async Task ShowUnassignedFacesAsync()
+    private Task ShowUnassignedFacesAsync() => ShowUnassignedFacesCoreAsync(collapseBursts: true);
+
+    private async Task ShowUnassignedFacesCoreAsync(bool collapseBursts)
     {
         var stopwatch = Stopwatch.StartNew();
         AppLogger.Info("People pending-faces load started");
@@ -1787,7 +1804,12 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
                 Counts: _repository.GetFaceWorkQueueCounts(SelectedFaceModelVersion)), cancellation.Token);
             var records = snapshot.Records;
             if (DisplayedCollectionKind != DisplayedFaceCollectionKind.Unassigned) return;
-            var items = await BuildBurstAwareFaceItemsAsync(records, cancellation.Token);
+            // A model switch should paint the pending faces immediately. The
+            // burst grouping query is useful for the settled view, but it is
+            // not allowed to delay the first render of a newly selected model.
+            var items = collapseBursts
+                ? await BuildBurstAwareFaceItemsAsync(records, cancellation.Token)
+                : records.Select(CreateFaceItem).ToArray();
             if (DisplayedCollectionKind != DisplayedFaceCollectionKind.Unassigned) return;
             UnassignedFaces.Clear();
             await UiWork.AddInBatchesAsync(items, item =>
