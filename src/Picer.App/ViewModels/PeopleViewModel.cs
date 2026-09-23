@@ -321,7 +321,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             // so the user can see the available 91%/93% versions while the
             // potentially long backfill continues in the background.
             await LoadTrainingHistoryAsync(modelVersion);
-            var (sourceModel, sourceCount, missingCount) = await UiWork.RunDatabaseAsync(() =>
+            var (sourceModel, sourceCount, targetCount, targetEmbeddings, missingCount) = await UiWork.RunDatabaseAsync(() =>
             {
                 var versions = _repository.GetFaceModelVersions();
                 var source = versions.Where(value => !string.Equals(value, modelVersion, StringComparison.OrdinalIgnoreCase))
@@ -331,9 +331,10 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
                     .OrderByDescending(value => value.Count)
                     .ThenByDescending(value => value.Version.StartsWith("adaptive:", StringComparison.OrdinalIgnoreCase))
                     .FirstOrDefault();
-                var missing = string.IsNullOrWhiteSpace(source.Version) || source.Count == 0
-                    ? 0 : _repository.GetMissingFaceEmbeddingCount(source.Version, modelVersion);
-                return (source.Version, source.Count, missing);
+                var targetCount = _repository.GetFaceSources(modelVersion).Count;
+                var targetEmbeddings = _repository.GetFaceEmbeddingCount(modelVersion);
+                var missing = Math.Max(0, targetCount - targetEmbeddings);
+                return (source.Version, source.Count, targetCount, targetEmbeddings, missing);
             });
 
             if (string.IsNullOrWhiteSpace(sourceModel) || sourceCount == 0)
@@ -350,8 +351,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             // rerun an expensive backfill on every navigation.
             if (missingCount > 0)
             {
-                var existingCount = Math.Max(0, sourceCount - missingCount);
-                StatusText = $"正在后台生成 {GetFaceModelDisplayName(modelVersion)} 向量：已有 {existingCount}/{sourceCount}，待补齐 {missingCount}…";
+                StatusText = $"正在后台生成 {GetFaceModelDisplayName(modelVersion)} 向量：已有 {targetEmbeddings}/{targetCount}，待补齐 {missingCount}…";
                 var endpoint = Environment.GetEnvironmentVariable("PICER_MODEL_SERVER_URL")?.Trim() ?? "http://127.0.0.1:8090";
                 var key = Environment.GetEnvironmentVariable("PICER_MODEL_SERVER_API_KEY")?.Trim() ?? "";
                 using var platform = new FaceTrainingSubmissionService(endpoint, key);

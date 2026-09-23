@@ -1139,11 +1139,9 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
     {
         using var command = database.Command("""
             SELECT COUNT(*)
-            FROM detected_faces source
-            JOIN images i ON i.id=source.image_id AND i.status='active'
-            LEFT JOIN detected_faces target ON target.image_id=source.image_id
-                AND target.ordinal=source.ordinal AND target.model_version=$target
-            WHERE source.model_version=$source AND target.embedding IS NULL
+            FROM detected_faces target
+            JOIN images i ON i.id=target.image_id AND i.status='active'
+            WHERE target.model_version=$target AND target.embedding IS NULL
             """);
         command.Parameters.AddWithValue("$source", sourceModelVersion);
         command.Parameters.AddWithValue("$target", targetModelVersion);
