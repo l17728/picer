@@ -169,6 +169,37 @@ public sealed class CloudVisionTests : IDisposable
     }
 
     [Fact]
+    public void SceneTimeClusters_UseStableAcceptedTitleBeforeRemotePhotoAnalysesArrive()
+    {
+        var start = DateTime.UtcNow.AddHours(-2);
+        _image.CreatedUtc = start;
+        _database.UpdateImage(_image);
+        var secondPath = Path.Combine(_root, "mirror-second.jpg");
+        File.WriteAllBytes(secondPath, [8, 9, 10]);
+        var second = _database.UpsertImage(new ImageRecord
+        {
+            SourceId = _image.SourceId, Path = secondPath, FileSize = 3,
+            ModifiedUtc = start.AddMinutes(20), CreatedUtc = start.AddMinutes(20),
+            Status = ImageStatus.Active, IndexedUtc = DateTime.UtcNow
+        });
+        var images = new[] { _image, second };
+        var descriptions = new SceneGroupDescriptionService(_database, new CloudVisionRepository(_database));
+        var plan = descriptions.BuildPlan(_root, images);
+        descriptions.SaveAccepted(plan, new SceneGroupDescription(plan.Fingerprint,
+            "远程聚餐", "远程镜像先到的场景摘要", ["聚餐"], "test", "e2e", "scene-v1", "accepted"));
+        // Simulate a legacy/mirror fingerprint whose SQLite ids differ while
+        // the stable directory and time range remain the same.
+        using (var command = _database.Command("UPDATE scene_group_descriptions SET fingerprint='legacy-mirror-fingerprint' WHERE fingerprint=$fingerprint"))
+        {
+            command.Parameters.AddWithValue("$fingerprint", plan.Fingerprint);
+            command.ExecuteNonQuery();
+        }
+
+        var cluster = Assert.Single(new SceneTimeClusterService(_database).Build(images));
+        Assert.Equal("远程聚餐", cluster.SceneName);
+    }
+
+    [Fact]
     public void SceneTimeClusters_TolerateLegacyResultsWithNullSceneArrays()
     {
         _image.CreatedUtc = DateTime.UtcNow;

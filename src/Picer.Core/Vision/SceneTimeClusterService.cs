@@ -52,7 +52,13 @@ public sealed class SceneTimeClusterService(PicerDatabase database)
             // after every image in this time group has a usable scene result.
             if (group.Any(image => !sceneByImage.ContainsKey(image.Id)))
             {
-                result.Add(Create(group, "未分类场景"));
+                // A remote mirror can receive the accepted scene record before
+                // all per-photo cloud analyses. Preserve the user's title in
+                // that case; otherwise every mirrored group regresses to
+                // “未分类场景” until a later full analysis sync.
+                var stableAccepted = descriptions.GetAcceptedForGroup(
+                    Path.GetDirectoryName(group[0].Path) ?? string.Empty, group);
+                result.Add(Create(group, stableAccepted?.SceneName ?? "未分类场景"));
                 continue;
             }
 
