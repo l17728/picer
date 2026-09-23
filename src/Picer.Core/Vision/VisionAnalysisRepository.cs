@@ -350,7 +350,13 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
             WITH ranked_faces AS (
                 SELECT f.*, ROW_NUMBER() OVER (
                     PARTITION BY f.model_version, COALESCE(NULLIF(i.sha256,''), printf('image:%d', i.id)), f.ordinal
-                    ORDER BY f.id) AS duplicate_rank
+                    ORDER BY
+                        CASE WHEN EXISTS (SELECT 1 FROM face_person_assignments pa WHERE pa.face_id=f.id)
+                                  OR EXISTS (SELECT 1 FROM face_review_states pr WHERE pr.face_id=f.id)
+                             THEN 1 ELSE 0 END,
+                        CASE WHEN EXISTS (SELECT 1 FROM face_candidate_members pcm WHERE pcm.face_id=f.id)
+                             THEN 1 ELSE 0 END,
+                        f.id) AS duplicate_rank
                 FROM detected_faces f JOIN images i ON i.id=f.image_id AND i.status='active'
                 WHERE ($model IS NULL OR f.model_version=$model)
                   AND NOT EXISTS (
@@ -405,21 +411,33 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
     public FaceWorkQueueCounts GetFaceWorkQueueCounts(string? modelVersion = null)
     {
         using var command = database.Command("""
-            SELECT a.state, i.sha256, i.ahash, i.width, i.height,
+            WITH ranked_faces AS (
+                SELECT f.*, i.sha256, i.ahash, i.width, i.height,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY f.model_version, COALESCE(NULLIF(i.sha256,''), printf('image:%d', i.id)), f.ordinal
+                           ORDER BY
+                               CASE WHEN a.face_id IS NULL AND r.face_id IS NULL THEN 0 ELSE 1 END,
+                               CASE WHEN EXISTS (SELECT 1 FROM face_candidate_members pcm WHERE pcm.face_id=f.id) THEN 1 ELSE 0 END,
+                               f.id) AS duplicate_rank,
+                       a.state AS assignment_state
+                FROM detected_faces f
+                JOIN images i ON i.id=f.image_id AND i.status='active'
+                LEFT JOIN face_person_assignments a ON a.face_id=f.id
+                LEFT JOIN face_review_states r ON r.face_id=f.id
+                WHERE ($model IS NULL OR f.model_version=$model)
+            )
+            SELECT assignment_state, sha256, ahash, width, height,
                    f.box_x, f.box_y, f.box_width, f.box_height, f.confidence
-            FROM detected_faces f
-            JOIN images i ON i.id=f.image_id AND i.status='active'
-            LEFT JOIN face_person_assignments a ON a.face_id=f.id
-            LEFT JOIN face_review_states r ON r.face_id=f.id
-            WHERE (a.face_id IS NULL OR a.state='suggested') AND r.face_id IS NULL
-              AND ($model IS NULL OR f.model_version=$model)
+            FROM ranked_faces f
+            WHERE f.duplicate_rank=1 AND (f.assignment_state IS NULL OR f.assignment_state='suggested')
+              AND NOT EXISTS (SELECT 1 FROM face_review_states rr WHERE rr.face_id=f.id)
               AND NOT EXISTS (
                   SELECT 1 FROM face_candidate_members cm
                   JOIN face_candidate_clusters cc ON cc.id=cm.cluster_id
                   JOIN detected_faces cf ON cf.id=cm.face_id
                   WHERE cc.model_version=f.model_version
                     AND cf.image_id=f.image_id AND cf.ordinal=f.ordinal)
-            ORDER BY CASE a.state WHEN 'suggested' THEN 0 ELSE 1 END, f.id
+            ORDER BY CASE f.assignment_state WHEN 'suggested' THEN 0 ELSE 1 END, f.id
             """);
         command.Parameters.AddWithValue("$model", (object?)modelVersion ?? DBNull.Value);
         var deduplicator = new FaceSourceDeduplicator();
