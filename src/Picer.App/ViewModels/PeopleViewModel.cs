@@ -53,6 +53,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
     private readonly SemaphoreSlim _modelSwitchGate = new(1, 1);
     private CancellationTokenSource? _modelSwitchCancellation;
     private long _modelSwitchGeneration;
+    private long _personToRestoreAfterModelSwitch;
 
     public PeopleViewModel(PicerDatabase database, PeopleService peopleService,
         VisionAnalysisRepository repository, VisionAnalysisService? analysisService,
@@ -143,12 +144,20 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         var generation = Interlocked.Increment(ref _modelSwitchGeneration);
         var cancellation = new CancellationTokenSource();
         Interlocked.Exchange(ref _modelSwitchCancellation, cancellation)?.Cancel();
+        _personToRestoreAfterModelSwitch = SelectedPerson?.Id ?? 0;
         ResetModelSpaceForSwitch(value);
         _ = SwitchFaceModelAsync(value, generation, cancellation);
     }
 
     private void ResetModelSpaceForSwitch(string modelVersion)
     {
+        // Cancel every presentation load from the previous model before
+        // clearing its collections. Otherwise an old named-person/candidate
+        // task can finish later and repopulate the new model's pane.
+        _pageLoadCancellation?.Cancel();
+        _personLoadCancellation?.Cancel();
+        _clusterLoadCancellation?.Cancel();
+        _collectionLoadCancellation?.Cancel();
         // Do not leave the previous model's faces actionable while its
         // replacement is loading.  Clearing only the presentation collections
         // keeps the database untouched and makes a rapid second switch safe.
@@ -317,10 +326,13 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             if (generation != Volatile.Read(ref _modelSwitchGeneration) ||
                 !string.Equals(SelectedFaceModelVersion, modelVersion, StringComparison.OrdinalIgnoreCase)) return;
             StatusText = $"正在检查 {GetFaceModelDisplayName(modelVersion)} 的人脸向量覆盖率…";
-            // History is independent from local vector coverage. Load it first
-            // so the user can see the available 91%/93% versions while the
-            // potentially long backfill continues in the background.
-            await LoadTrainingHistoryAsync(modelVersion);
+            // History is independent from local vector coverage. Do not block
+            // switching the face space on the platform archive: a remote
+            // archive can be slow/unreachable while the mirrored index is
+            // already fully usable. The history task updates the combo box
+            // when it completes, while the model-specific faces continue
+            // loading immediately.
+            var historyTask = LoadTrainingHistoryAsync(modelVersion);
             var (sourceModel, sourceCount, targetCount, targetEmbeddings, missingCount) = await UiWork.RunDatabaseAsync(() =>
             {
                 var versions = _repository.GetFaceModelVersions();
@@ -336,6 +348,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
                 var missing = Math.Max(0, targetCount - targetEmbeddings);
                 return (source.Version, source.Count, targetCount, targetEmbeddings, missing);
             });
+            AppLogger.Info($"Face model switch coverage: model={modelVersion}; source={sourceModel}/{sourceCount}; target={targetEmbeddings}/{targetCount}; missing={missingCount}");
 
             if (string.IsNullOrWhiteSpace(sourceModel) || sourceCount == 0)
             {
@@ -378,8 +391,19 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             // 每个模型空间必须独立生成建议和待命名组，不能沿用其他模型空间的结果。
             await OrganizeFacesAsync();
             await RefreshAsync();
-            await LoadTrainingHistoryAsync(modelVersion);
+            var restorePersonId = Interlocked.Exchange(ref _personToRestoreAfterModelSwitch, 0);
+            if (restorePersonId > 0 && generation == Volatile.Read(ref _modelSwitchGeneration))
+            {
+                var restored = People.FirstOrDefault(person => person.Id == restorePersonId);
+                if (restored is not null) SelectedPerson = restored;
+            }
+            // The archive request is deliberately best-effort. If it is still
+            // in flight, keep the newly loaded faces visible and let it fill
+            // the artifact list later instead of making the page appear stuck.
+            if (historyTask.IsCompleted)
+                await historyTask.ConfigureAwait(false);
             StatusText = $"已切换到 {GetFaceModelDisplayName(modelVersion)}；自动归类结果独立显示，已命名/不分类仍共享";
+            AppLogger.Info($"Face model switch completed: model={modelVersion}; displayed={DisplayedFaces.Count}; unassigned={UnassignedFaces.Count}; candidates={CandidateClusters.Count}");
         }
         catch (Exception exception)
         {
@@ -397,6 +421,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
 
     private async Task LoadTrainingHistoryAsync(string modelVersion)
     {
+        var requestedGeneration = Volatile.Read(ref _modelSwitchGeneration);
         var aliases = GetModelVersionAliases(modelVersion);
         var history = await UiWork.RunDatabaseAsync(() => aliases
             .SelectMany(version => _repository.GetFaceTrainingHistory(version))
@@ -409,7 +434,8 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             var endpoint = Environment.GetEnvironmentVariable("PICER_MODEL_SERVER_URL")?.Trim() ?? "http://127.0.0.1:8090";
             var key = Environment.GetEnvironmentVariable("PICER_MODEL_SERVER_API_KEY")?.Trim() ?? "";
             using var platform = new FaceTrainingSubmissionService(endpoint, key);
-            var remoteRecords = (await Task.WhenAll(aliases.Select(alias => platform.GetTrainingHistoryAsync(alias)))
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+            var remoteRecords = (await Task.WhenAll(aliases.Select(alias => platform.GetTrainingHistoryAsync(alias, timeout.Token)))
                     .ConfigureAwait(false)).SelectMany(value => value).ToList();
             remote = remoteRecords.GroupBy(value => value.ArtifactId ?? $"{value.ModelVersion}:{value.CreatedUtc:o}", StringComparer.OrdinalIgnoreCase)
                 .Select(group => group.First()).ToArray();
@@ -425,6 +451,8 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         }
         await Application.Current.Dispatcher.InvokeAsync(() =>
         {
+            if (!string.Equals(SelectedFaceModelVersion, modelVersion, StringComparison.OrdinalIgnoreCase))
+                return;
             TrainingHistoryOptions.Clear();
             foreach (var value in history.Where(value => value.ValidationAccuracy >= .90))
                 TrainingHistoryOptions.Add(new(value.ArtifactId, value.ModelVersion, value.ValidationAccuracy, value.CreatedUtc, value.State));
@@ -437,6 +465,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             }
             SelectedTrainingHistory = TrainingHistoryOptions.FirstOrDefault(value => value.State == "active") ?? TrainingHistoryOptions.FirstOrDefault();
         });
+        AppLogger.Info($"Face training history loaded: model={modelVersion}; local={history.Length}; remote={remoteOptions.Count}; currentGeneration={Volatile.Read(ref _modelSwitchGeneration)}; requestedGeneration={requestedGeneration}");
     }
 
     private static IReadOnlyList<string> GetModelVersionAliases(string modelVersion)
