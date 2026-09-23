@@ -254,10 +254,14 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             ?? FaceModelVersions.FirstOrDefault();
         SelectedFaceModelVersion = selectedVersion;
         SelectedFaceModelOption = FaceModelOptions.FirstOrDefault(value => value.ModelVersion == selectedVersion);
-        await RefreshAsync();
+        // Publish the model-space selector before loading thousands of face
+        // rows/thumbnails. The page can render and accept a model choice
+        // immediately; the expensive face refresh continues asynchronously.
         _isLoaded = true;
-        if (!string.IsNullOrWhiteSpace(selectedVersion)) await LoadTrainingHistoryAsync(selectedVersion);
         IsLoading = false;
+        StatusText = "模型空间已加载，正在后台加载人物分类数据…";
+        await RefreshAsync();
+        if (!string.IsNullOrWhiteSpace(selectedVersion)) await LoadTrainingHistoryAsync(selectedVersion);
         _ = LoadPlatformModelOptionsAsync();
         _ = PublishEvaluationSnapshotAsync();
 
