@@ -116,6 +116,25 @@ public static class AppServices
             SyncGateway = new HttpIndexGateway($"https://{syncIp}:8445", syncToken);
             AppLogger.Info("local mode incremental index publisher configured from PICER_INDEX_SYNC_IP");
         }
+        else
+        {
+            try
+            {
+                var paired = IndexBackendConfig.LoadConfiguredServiceEndpoint(
+                    AppPaths.ServiceEndpointPath,
+                    static cipher => System.Security.Cryptography.ProtectedData.Unprotect(cipher, null, System.Security.Cryptography.DataProtectionScope.CurrentUser));
+                if (paired?.BaseUrl is { Length: > 0 } pairedUrl && paired.Token is { Length: > 0 } pairedToken)
+                {
+                    SyncClient = IndexSyncClient.Create(pairedUrl, pairedToken, paired.SpkiPin);
+                    SyncGateway = new HttpIndexGateway(pairedUrl, pairedToken, paired.SpkiPin);
+                    AppLogger.Info("local mode incremental index publisher configured from paired service endpoint");
+                }
+            }
+            catch (Exception exception)
+            {
+                AppLogger.Warn("local mode paired sync endpoint unavailable: " + exception.Message);
+            }
+        }
 
         var credentials = new WindowsCredentialStore();
         var legacyWebDavPassword = StorageConfig.ReadLegacyWebDavPassword(ConfigPath);

@@ -66,6 +66,27 @@ public static class IndexBackendConfig
         return new IndexBackendOptions(ServiceMode, baseUrl, Convert.FromBase64String(endpoint.SpkiPin), token, endpoint.PipeName);
     }
 
+    /// <summary>Loads a paired endpoint for the local-mode background sync publisher.</summary>
+    public static IndexBackendOptions? LoadConfiguredServiceEndpoint(string? serviceEndpointJsonPath, Func<byte[], byte[]>? unprotect = null)
+    {
+        if (string.IsNullOrWhiteSpace(serviceEndpointJsonPath) || !File.Exists(serviceEndpointJsonPath)) return null;
+        var endpoint = JsonSerializer.Deserialize<EndpointFile>(File.ReadAllText(serviceEndpointJsonPath), Json);
+        if (endpoint is null) return null;
+        var environmentToken = Environment.GetEnvironmentVariable("PICER_INDEX_SERVICE_TOKEN");
+        var token = !string.IsNullOrWhiteSpace(environmentToken) ? environmentToken : DecodeToken(endpoint.TokenCipher, unprotect);
+        return new IndexBackendOptions(ServiceMode, endpoint.Url, Convert.FromBase64String(endpoint.SpkiPin), token, endpoint.PipeName);
+    }
+
+    private static string DecodeToken(string tokenCipher, Func<byte[], byte[]>? unprotect)
+    {
+        if (tokenCipher.StartsWith("plain:", StringComparison.OrdinalIgnoreCase))
+            return Encoding.UTF8.GetString(Convert.FromBase64String(tokenCipher["plain:".Length..]));
+        if (unprotect is null) throw new InvalidOperationException("service endpoint requires a token decryptor");
+        var base64 = tokenCipher.StartsWith("dpapi:", StringComparison.OrdinalIgnoreCase)
+            ? tokenCipher["dpapi:".Length..] : tokenCipher;
+        return Encoding.UTF8.GetString(unprotect(Convert.FromBase64String(base64)));
+    }
+
     private static string BuildIndexServiceUrl(string ip)
     {
         var host = ip.Trim();
