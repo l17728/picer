@@ -1355,6 +1355,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
                     return created;
                 });
             await RefreshPeopleDropdownAsync(person.Id);
+            _ = RefreshPendingSummaryAsync();
             StatusText = faceIds.Length == 0
                 ? $"已创建人物“{person.DisplayName}”"
                 : $"已创建人物“{person.DisplayName}”并归入 {faceIds.Length} 张人脸";
@@ -2199,6 +2200,15 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
 
     private void RemoveFacesFromCurrentView(IReadOnlyCollection<long> faceIds)
     {
+        // Update the action button immediately. The authoritative counts are
+        // refreshed asynchronously after the database mutation completes.
+        if (DisplayedCollectionKind is DisplayedFaceCollectionKind.Unassigned
+            or DisplayedFaceCollectionKind.CandidateCluster
+            or DisplayedFaceCollectionKind.SuggestedGroup)
+        {
+            UnassignedSummary = "待处理人脸 · 正在同步…";
+            _ = RefreshPendingSummaryAsync();
+        }
         var ids = faceIds.ToHashSet();
         foreach (var item in DisplayedFaces.Where(item => ids.Contains(item.FaceId)).ToArray()) DisplayedFaces.Remove(item);
         foreach (var item in AssignedFaces.Where(item => ids.Contains(item.FaceId)).ToArray()) AssignedFaces.Remove(item);
@@ -2231,6 +2241,30 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             DisplayedFaceCollectionKind.Ignored => $"不分类（{DisplayedFaces.Count}）",
             _ => DisplayedFacesTitle
         };
+    }
+
+    private async Task RefreshPendingSummaryAsync()
+    {
+        var modelVersion = SelectedFaceModelVersion;
+        try
+        {
+            // Give the mutation transaction a chance to commit when this
+            // refresh was scheduled by the optimistic view update.
+            await Task.Delay(150);
+            var counts = await UiWork.RunDatabaseAsync(
+                "People.PendingSummary",
+                () => _repository.GetFaceWorkQueueCounts(modelVersion));
+            // A model switch may have happened while the query was running;
+            // never let an old model overwrite the newly selected summary.
+            if (!string.Equals(SelectedFaceModelVersion, modelVersion, StringComparison.OrdinalIgnoreCase))
+                return;
+            UnassignedSummary = $"待处理人脸 · {counts.Total}（待确认 {counts.Suggested} / 待命名 {counts.Candidate} / 待分类 {counts.Unassigned}）";
+            AppLogger.Info($"People pending summary refreshed: model={modelVersion ?? "default"}; total={counts.Total}; suggested={counts.Suggested}; candidate={counts.Candidate}; unassigned={counts.Unassigned}");
+        }
+        catch (Exception exception)
+        {
+            AppLogger.Warn($"People pending summary refresh failed: {exception.Message}");
+        }
     }
 
     private async Task RefreshPeopleDropdownAsync(long createdPersonId)
