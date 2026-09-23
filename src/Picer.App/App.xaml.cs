@@ -96,7 +96,10 @@ public partial class App : Application
             MainWindow = window;
             window.Show();
             if (AppServices.ServiceMode)
+            {
+                StartConfiguredMediaAgent();
                 _remoteMirrorLoop = Task.Run(() => RemoteMirrorLoopAsync(_remoteMirrorLoopCts.Token));
+            }
             // A remote client is a read/mirror consumer. Publishing the local
             // evaluation snapshot here needlessly scans thousands of faces and
             // competes with mirror bootstrap, making the remote tree appear
@@ -112,6 +115,42 @@ public partial class App : Application
             MessageBox.Show($"启动失败：{ex.Message}\n\n详见 {LogPath}", "Picer",
                 MessageBoxButton.OK, MessageBoxImage.Error);
             Shutdown(-1);
+        }
+    }
+
+    private static void StartConfiguredMediaAgent()
+    {
+        try
+        {
+            var settings = MediaAgentController.Load();
+            if (!settings.Enabled || string.IsNullOrWhiteSpace(settings.ServiceIp))
+            {
+                LogInfo("远程模式未启用原图代理，跳过 MediaAgent 自动启动");
+                return;
+            }
+            var roots = AppServices.Db.GetSources().Select(source => source.Path).Where(Directory.Exists).ToArray();
+            // A service-mode client normally owns only remote-mirror.db. If
+            // this machine is also the source host, recover the real source
+            // roots from its local index so the agent can serve media.
+            if (roots.Length == 0 && File.Exists(AppPaths.DbPath))
+            {
+                using var localDb = new PicerDatabase(AppPaths.DbPath);
+                roots = localDb.GetSources().Select(source => source.Path).Where(Directory.Exists).ToArray();
+            }
+            if (roots.Length == 0)
+            {
+                LogInfo("远程模式未找到可代理的本地源目录，跳过 MediaAgent 自动启动");
+                return;
+            }
+            if (MediaAgentController.Start(settings.ServiceIp, MediaAgentController.ResolveToken(),
+                    MediaAgentController.ResolveSpkiPin(), roots))
+                LogInfo($"远程模式已自动启动 MediaAgent：service={settings.ServiceIp}; roots={roots.Length}");
+            else
+                LogInfo("远程模式无法启动 MediaAgent：未找到可执行文件");
+        }
+        catch (Exception exception)
+        {
+            LogCrash("远程模式启动 MediaAgent 失败", exception);
         }
     }
 
