@@ -16,6 +16,7 @@ using Picer.Core.People;
 using Picer.Core.Search;
 using Picer.Core.Thumbnails;
 using Picer.IndexService;
+using Picer.Core.Vision;
 
 namespace Picer.Tests;
 
@@ -346,6 +347,79 @@ public sealed class GatewayContractTests(GatewayServiceFixture fixture) : IClass
         var roundTrip = await client.GetFromJsonAsync<Dictionary<string, bool>>("api/gateway/v1/directory-classification");
         Assert.NotNull(roundTrip);
         Assert.Equal(values, roundTrip);
+    }
+
+    [Fact]
+    [Trait("Category", "E2E")]
+    public async Task DirectoryBrowse_LocalAndRemoteMirrorHaveIdenticalSceneSequence()
+    {
+        // This is the regression contract for the real directory-browser path:
+        // local clustering is the reference answer, while the remote side first
+        // receives the same image and scene metadata and then rebuilds its tree.
+        var mirrorRoot = Path.Combine(Path.GetTempPath(), "picer-scene-mirror-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(mirrorRoot);
+        using var parityFixture = new GatewayServiceFixture();
+        try
+        {
+            var source = parityFixture.Db.GetSources().Single();
+            var browsePath = Path.Combine(source.Path, "scene-parity");
+            Directory.CreateDirectory(browsePath);
+            var start = new DateTime(2026, 5, 1, 8, 0, 0, DateTimeKind.Utc);
+            var images = new List<ImageRecord>();
+            for (var index = 0; index < 4; index++)
+            {
+                var path = Path.Combine(browsePath, $"scene-parity-{index}.png");
+                await File.WriteAllBytesAsync(path, [1, 2, 3, (byte)index]);
+                images.Add(parityFixture.Db.UpsertImage(new ImageRecord
+                {
+                    SourceId = source.Id, Path = path, FileSize = 4,
+                    ModifiedUtc = start.AddHours(index < 2 ? index * .25 : 5 + (index - 2) * .25),
+                    TakenUtc = start.AddHours(index < 2 ? index * .25 : 5 + (index - 2) * .25),
+                    IndexedUtc = start, Width = 2, Height = 2, Status = ImageStatus.Active
+                }));
+            }
+
+            var descriptions = new SceneGroupDescriptionService(parityFixture.Db, new CloudVisionRepository(parityFixture.Db));
+            var firstGroup = images.Take(2).ToArray();
+            var secondGroup = images.Skip(2).ToArray();
+            var firstPlan = descriptions.BuildPlan(browsePath, firstGroup);
+            descriptions.SaveAccepted(firstPlan, new SceneGroupDescription(firstPlan.Fingerprint,
+                "本地聚餐", "本地聚餐摘要", ["聚餐"], "test", "e2e", "scene-v1", "accepted"));
+            var secondPlan = descriptions.BuildPlan(browsePath, secondGroup);
+            descriptions.SaveAccepted(secondPlan, new SceneGroupDescription(secondPlan.Fingerprint,
+                "本地登山", "本地登山摘要", ["登山"], "test", "e2e", "scene-v1", "accepted"));
+
+            using var http = parityFixture.CreateHttpGateway();
+            var remotePage = await http.ListImagesAsync(source.Id, includeMissing: false, pageSize: 500);
+            Assert.Contains(remotePage.Items, item => item.Path.EndsWith("scene-parity-0.png", StringComparison.OrdinalIgnoreCase));
+
+            using var mirror = new PicerDatabase(Path.Combine(mirrorRoot, "remote-mirror.db"));
+            mirror.AddSource(source.Path);
+            foreach (var image in parityFixture.Db.GetImages(source.Id, includeMissing: false))
+                mirror.UpsertMirroredImage(image);
+            mirror.UpsertMirroredVideoMetadata(new GatewayMetadata(
+                [], [], [], [], [], [], [], [], [], [], parityFixture.Db.GetAllMirroredSceneGroupDescriptions()));
+
+            var localClusters = new SceneTimeClusterService(parityFixture.Db).Build(browsePath, includeDescendants: false);
+            var remoteImages = mirror.GetActiveImagesInDirectory(browsePath, includeDescendants: false);
+            var remoteClusters = new SceneTimeClusterService(mirror).Build(remoteImages);
+            var localSnapshot = localClusters.Select(cluster => (cluster.SceneName, cluster.ImageIds.Count,
+                cluster.ImageIds.ToArray())).ToArray();
+            var remoteSnapshot = remoteClusters.Select(cluster => (cluster.SceneName, cluster.ImageIds.Count,
+                cluster.ImageIds.ToArray())).ToArray();
+            Assert.Equal(localSnapshot.Length, remoteSnapshot.Length);
+            for (var index = 0; index < localSnapshot.Length; index++)
+            {
+                Assert.Equal(localSnapshot[index].SceneName, remoteSnapshot[index].SceneName);
+                Assert.Equal(localSnapshot[index].Item2, remoteSnapshot[index].Item2);
+                Assert.Equal(localSnapshot[index].Item3, remoteSnapshot[index].Item3);
+            }
+            Assert.Equal(["本地聚餐", "本地登山"], remoteClusters.Select(cluster => cluster.SceneName));
+        }
+        finally
+        {
+            try { Directory.Delete(mirrorRoot, true); } catch { }
+        }
     }
 
     [Fact]
