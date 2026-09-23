@@ -16,7 +16,7 @@ namespace Picer.App.ViewModels;
 
 public partial class VideoViewModel(VideoRepository repository, VideoIndexService index, FfmpegKeyframeService? keyframes,
     IVideoTranscriptionService? transcription = null, VideoFaceTimelineService? faceTimeline = null,
-    VideoSummaryService? summaryService = null, PeopleService? peopleService = null) : ObservableObject
+    VideoSummaryService? summaryService = null, PeopleService? peopleService = null, bool remoteMode = false) : ObservableObject
 {
     private CancellationTokenSource? _loadCancellation;
     public ObservableCollection<VideoItemViewModel> Videos { get; } = new();
@@ -36,7 +36,9 @@ public partial class VideoViewModel(VideoRepository repository, VideoIndexServic
     [NotifyCanExecuteChangedFor(nameof(AnalyzePeopleCommand))]
     [NotifyCanExecuteChangedFor(nameof(GenerateSummaryCommand))]
     private bool _isBusy;
-    [ObservableProperty] private string _statusText = keyframes is null ? "FFmpeg尚未就绪" : "就绪";
+    [ObservableProperty] private string _statusText = keyframes is not null
+        ? "就绪"
+        : remoteMode ? "远程关键帧由索引服务提供" : "FFmpeg尚未就绪";
     [ObservableProperty] private string _transcriptText = "尚未转写";
     [ObservableProperty] private string _peopleTimelineText = "尚未分析视频人物";
     [ObservableProperty] private VideoFaceItemViewModel? _selectedVideoFace;
@@ -278,7 +280,11 @@ public partial class VideoViewModel(VideoRepository repository, VideoIndexServic
     {
         var targets = (_selectedVideos.Length > 0 ? _selectedVideos : SelectedVideo is null ? [] : [SelectedVideo]).ToArray();
         if (targets.Length == 0) { StatusText = "请先选择视频"; return; }
-        if (keyframes is null) { StatusText = "FFmpeg尚未安装或路径无效"; return; }
+        if (keyframes is null)
+        {
+            StatusText = remoteMode ? "远程模式不能在本机生成关键帧，请在本地端生成后同步" : "FFmpeg尚未安装或路径无效";
+            return;
+        }
         IsBusy = true;
         var concurrency = Math.Min(3, Math.Max(2, Environment.ProcessorCount / 2));
         var generated = 0;
