@@ -693,7 +693,9 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         var modelVersion = SelectedFaceModelVersion;
         var snapshot = await UiWork.RunDatabaseAsync(() => (
             People: _peopleService.GetAll().ToArray(),
-            Faces: _repository.GetUnassignedFaces(modelVersion: modelVersion).ToArray(),
+            Faces: loadFaces
+                ? _repository.GetUnassignedFaces(modelVersion: modelVersion).ToArray()
+                : Array.Empty<UnassignedFaceRecord>(),
             Clusters: _repository.GetCandidateClusters(modelVersion).ToArray(),
             SuggestedGroups: _repository.GetSuggestedPersonGroups(modelVersion).ToArray(),
             WorkQueue: _repository.GetFaceWorkQueueCounts(modelVersion),
