@@ -59,7 +59,7 @@ public partial class App : Application
         {
             LogInfo("正在初始化 AppServices...");
             AppServices.Initialize();
-            LogInfo("AppServices 初始化完成");
+            LogInfo($"AppServices 初始化完成；serviceMode={AppServices.ServiceMode}; syncClient={(AppServices.SyncClient is null ? "未配置" : "已配置")}; gateway={AppServices.Gateway.GetType().Name}");
             if (!AppServices.ServiceMode)
             {
                 var recovery = new Picer.Core.People.TrainingJobRecoveryService(AppServices.VisionRepository);
