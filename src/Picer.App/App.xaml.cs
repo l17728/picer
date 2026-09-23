@@ -163,7 +163,7 @@ public partial class App : Application
     /// </summary>
     private async Task RemoteMirrorLoopAsync(CancellationToken cancellationToken)
     {
-        LogInfo($"索引双向同步后台轮询已启动，间隔 30 秒；mode={(AppServices.ServiceMode ? "remote" : "local")}");
+        LogInfo($"索引双向同步后台轮询已启动，间隔 5 秒；mode={(AppServices.ServiceMode ? "remote" : "local")}");
         try
         {
             if (AppServices.ServiceMode)
@@ -171,7 +171,7 @@ public partial class App : Application
             await SyncReplicationInBackgroundAsync(cancellationToken).ConfigureAwait(false);
             while (!cancellationToken.IsCancellationRequested)
             {
-                await Task.Delay(TimeSpan.FromSeconds(30), cancellationToken).ConfigureAwait(false);
+                await Task.Delay(TimeSpan.FromSeconds(5), cancellationToken).ConfigureAwait(false);
                 await SyncReplicationInBackgroundAsync(cancellationToken).ConfigureAwait(false);
             }
         }
