@@ -435,12 +435,20 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         IReadOnlyList<RemoteTrainingHistoryData> remote = [];
         try
         {
-            var endpoint = Environment.GetEnvironmentVariable("PICER_MODEL_SERVER_URL")?.Trim() ?? "http://127.0.0.1:8090";
             var key = Environment.GetEnvironmentVariable("PICER_MODEL_SERVER_API_KEY")?.Trim() ?? "";
-            using var platform = new FaceTrainingSubmissionService(endpoint, key);
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(8));
-            var remoteRecords = (await Task.WhenAll(aliases.Select(alias => platform.GetTrainingHistoryAsync(alias, timeout.Token)))
-                    .ConfigureAwait(false)).SelectMany(value => value).ToList();
+            var configuredEndpoint = Environment.GetEnvironmentVariable("PICER_MODEL_SERVER_URL")?.Trim();
+            var endpoints = new[] { configuredEndpoint, "http://127.0.0.1:8090" }
+                .Where(value => !string.IsNullOrWhiteSpace(value))
+                .Distinct(StringComparer.OrdinalIgnoreCase);
+            var remoteRecords = new List<RemoteTrainingHistoryData>();
+            foreach (var endpoint in endpoints)
+            {
+                using var platform = new FaceTrainingSubmissionService(endpoint!, key);
+                remoteRecords = (await Task.WhenAll(aliases.Select(alias => platform.GetTrainingHistoryAsync(alias, timeout.Token)))
+                        .ConfigureAwait(false)).SelectMany(value => value).ToList();
+                if (remoteRecords.Count > 0) break;
+            }
             remote = remoteRecords.GroupBy(value => value.ArtifactId ?? $"{value.ModelVersion}:{value.CreatedUtc:o}", StringComparer.OrdinalIgnoreCase)
                 .Select(group => group.First()).ToArray();
         }
@@ -613,6 +621,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             IgnoredCount: _repository.GetIgnoredFaceCount(),
             Summary: _repository.GetSummary()), cancellation.Token);
         cancellation.Token.ThrowIfCancellationRequested();
+        AppLogger.Info($"People refresh snapshot: model={modelVersion}; faces={snapshot.Faces.Length}; candidates={snapshot.Clusters.Length}; suggestedGroups={snapshot.SuggestedGroups.Length}; partition={snapshot.Partition.Total}/{snapshot.Partition.Ignored}/{snapshot.Partition.Named}/{snapshot.Partition.Suggested}/{snapshot.Partition.Candidate}/{snapshot.Partition.Unassigned}");
 
         SelectedPerson = null;
         SelectedCandidateCluster = null;
