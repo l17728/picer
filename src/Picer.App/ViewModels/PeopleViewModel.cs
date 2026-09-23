@@ -2260,7 +2260,6 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
 
     private async Task LoadDisplayedFaceThumbnailAsync(UnassignedFaceViewModel item, CancellationToken cancellationToken = default)
     {
-        await _thumbnailGate.WaitAsync(cancellationToken);
         try
         {
             if (!DisplayedFaces.Contains(item)) return;
@@ -2268,7 +2267,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             cancellationToken.ThrowIfCancellationRequested();
             if (path is not null && DisplayedFaces.Contains(item)) item.FaceThumbnailPath = path;
         }
-        finally { _thumbnailGate.Release(); }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
     }
 }
 
