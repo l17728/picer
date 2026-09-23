@@ -23,6 +23,7 @@ public static class AppServices
 {
     private static bool _remoteMediaBootstrapped;
     public static IIndexGateway Gateway { get; private set; } = null!;
+    public static IndexSyncClient? SyncClient { get; private set; }
     public static bool ServiceMode { get; private set; }
     public static PicerDatabase Db { get; private set; } = null!;
     public static IStorageProvider Storage { get; private set; } = null!;
@@ -66,6 +67,8 @@ public static class AppServices
 
         var backend = AppPaths.LoadIndexBackend();
         ServiceMode = backend.Mode == IndexBackendConfig.ServiceMode;
+        if (ServiceMode && backend.BaseUrl is { Length: > 0 } serviceUrl)
+            SyncClient = IndexSyncClient.Create(serviceUrl, RequireToken(backend), backend.SpkiPin);
         if (ServiceMode)
         {
             Gateway = backend.BaseUrl is { Length: > 0 } baseUrl
@@ -99,6 +102,18 @@ public static class AppServices
         }
 
         Db = new PicerDatabase(AppPaths.DbPath);
+
+        // Local mode remains offline by default. When an IndexService endpoint
+        // is explicitly supplied, publish local mutations in the background
+        // without changing the local gateway used by the UI.
+        var syncIp = Environment.GetEnvironmentVariable("PICER_INDEX_SYNC_IP");
+        var syncToken = Environment.GetEnvironmentVariable("PICER_INDEX_SERVICE_TOKEN");
+        if (!string.IsNullOrWhiteSpace(syncIp) && !string.IsNullOrWhiteSpace(syncToken)
+            && System.Net.IPAddress.TryParse(syncIp, out _))
+        {
+            SyncClient = IndexSyncClient.Create($"https://{syncIp}:8445", syncToken);
+            AppLogger.Info("local mode incremental index publisher configured from PICER_INDEX_SYNC_IP");
+        }
 
         var credentials = new WindowsCredentialStore();
         var legacyWebDavPassword = StorageConfig.ReadLegacyWebDavPassword(ConfigPath);
@@ -309,6 +324,17 @@ public static class AppServices
         {
             AppLogger.Warn("Remote metadata links are unavailable; continuing media sync: " + ex.Message);
         }
+    }
+
+    public static async Task<IndexSyncClient.IndexSyncResult?> SyncLocalChangesToRemoteAsync(
+        CancellationToken cancellationToken = default, IProgress<string>? progress = null)
+    {
+        if (SyncClient is null) return null;
+        var checkpoint = Path.Combine(AppPaths.DataRoot,
+            ServiceMode ? "remote-sync-checkpoint.json" : "index-sync-checkpoint.json");
+        var result = await SyncClient.PushIncrementalAsync(Db, checkpoint, progress, cancellationToken).ConfigureAwait(false);
+        AppLogger.Info($"增量索引发布完成：changed={result.Changed}; images={result.Images}; videos={result.Videos}");
+        return result;
     }
 
     public static (CloudVisionAnalysisService Service, OpenAiCompatibleCloudVisionAnalyzer Analyzer, CloudVisionRunPolicy Policy, string ProviderLabel, bool IsLocal)? CreateCloudVisionService(string featureId = AiFeatureIds.PhotoAnalysis)

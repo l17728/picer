@@ -98,8 +98,9 @@ public partial class App : Application
             if (AppServices.ServiceMode)
             {
                 StartConfiguredMediaAgent();
-                _remoteMirrorLoop = Task.Run(() => RemoteMirrorLoopAsync(_remoteMirrorLoopCts.Token));
             }
+            if (AppServices.SyncClient is not null)
+                _remoteMirrorLoop = Task.Run(() => RemoteMirrorLoopAsync(_remoteMirrorLoopCts.Token));
             // A remote client is a read/mirror consumer. Publishing the local
             // evaluation snapshot here needlessly scans thousands of faces and
             // competes with mirror bootstrap, making the remote tree appear
@@ -162,14 +163,16 @@ public partial class App : Application
     /// </summary>
     private async Task RemoteMirrorLoopAsync(CancellationToken cancellationToken)
     {
-        LogInfo("远程索引镜像后台轮询已启动，间隔 30 秒");
+        LogInfo($"索引双向同步后台轮询已启动，间隔 30 秒；mode={(AppServices.ServiceMode ? "remote" : "local")}");
         try
         {
-            await SyncRemoteMirrorInBackgroundAsync(cancellationToken).ConfigureAwait(false);
+            if (AppServices.ServiceMode)
+                await SyncRemoteMirrorInBackgroundAsync(cancellationToken).ConfigureAwait(false);
+            await SyncReplicationInBackgroundAsync(cancellationToken).ConfigureAwait(false);
             while (!cancellationToken.IsCancellationRequested)
             {
                 await Task.Delay(TimeSpan.FromSeconds(30), cancellationToken).ConfigureAwait(false);
-                await SyncRemoteMirrorInBackgroundAsync(cancellationToken).ConfigureAwait(false);
+                await SyncReplicationInBackgroundAsync(cancellationToken).ConfigureAwait(false);
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -180,6 +183,23 @@ public partial class App : Application
         {
             LogCrash("远程索引镜像后台轮询失败", exception);
         }
+    }
+
+    private async Task SyncReplicationInBackgroundAsync(CancellationToken cancellationToken)
+    {
+        // Publish first so a remote client's mutation is not overwritten by an
+        // older mirror pull. The checkpoint makes this incremental and
+        // idempotent; unchanged media/metadata produces no network writes.
+        try
+        {
+            await AppServices.SyncLocalChangesToRemoteAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            LogCrash("本地索引增量发布失败", exception);
+        }
+        if (AppServices.ServiceMode)
+            await SyncRemoteMirrorInBackgroundAsync(cancellationToken).ConfigureAwait(false);
     }
 
     private async Task SyncRemoteMirrorInBackgroundAsync(CancellationToken cancellationToken = default)
