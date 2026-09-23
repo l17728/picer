@@ -278,6 +278,20 @@ public static class AppServices
             // Apply relationships only after all mirrored media rows exist; the
             // foreign keys intentionally protect against partial remote syncs.
             var metadata = await Gateway.GetMetadataAsync(cancellationToken).ConfigureAwait(false);
+            // The normal mirror payload omits vectors for speed. Fetch them
+            // once when this mirror has not yet populated a model space; later
+            // 30-second refreshes keep the existing vectors via COALESCE.
+            if (ServiceMode && Gateway is HttpIndexGateway httpGateway && metadata.Faces.Count > 0)
+            {
+                var missingModelVectors = metadata.Faces.Select(face => face.ModelVersion)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .Any(model => VisionRepository.GetFaceEmbeddingCount(model) == 0);
+                if (missingModelVectors)
+                {
+                    AppLogger.Info("Remote mirror is missing face vectors; requesting one full vector payload");
+                    metadata = await httpGateway.GetMetadataAsync(cancellationToken, includeEmbeddings: true).ConfigureAwait(false);
+                }
+            }
             AppLogger.Info($"Remote metadata projection: faces={metadata.Faces.Count}, reviews={metadata.FaceReviewStatesOrEmpty.Count}, candidateClusters={metadata.FaceCandidateClustersOrEmpty.Count}, candidateMembers={metadata.FaceCandidateMembersOrEmpty.Count}, scenes={metadata.SceneGroupDescriptionsOrEmpty.Count}");
             // Face rows are part of the mirrored index, not local-only state. They
             // must be applied before assignments so the same people/faces are

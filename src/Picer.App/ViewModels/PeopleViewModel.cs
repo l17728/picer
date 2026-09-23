@@ -143,7 +143,34 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         var generation = Interlocked.Increment(ref _modelSwitchGeneration);
         var cancellation = new CancellationTokenSource();
         Interlocked.Exchange(ref _modelSwitchCancellation, cancellation)?.Cancel();
+        ResetModelSpaceForSwitch(value);
         _ = SwitchFaceModelAsync(value, generation, cancellation);
+    }
+
+    private void ResetModelSpaceForSwitch(string modelVersion)
+    {
+        // Do not leave the previous model's faces actionable while its
+        // replacement is loading.  Clearing only the presentation collections
+        // keeps the database untouched and makes a rapid second switch safe.
+        SelectedPerson = null;
+        SelectedCandidateCluster = null;
+        SelectedSuggestedPersonGroup = null;
+        SelectedFace = null;
+        SelectedClusterFace = null;
+        SelectedDisplayedFace = null;
+        DisplayedFaces.Clear();
+        AssignedFaces.Clear();
+        SelectedClusterFaces.Clear();
+        PersonVideoFaces.Clear();
+        UnassignedFaces.Clear();
+        CandidateClusters.Clear();
+        SuggestedPersonGroups.Clear();
+        TrainingHistoryOptions.Clear();
+        UnassignedSummary = $"正在切换到 {GetFaceModelDisplayName(modelVersion)}…";
+        FacePartitionSummary = "正在加载新的模型空间…";
+        DisplayedFacesTitle = "正在加载模型空间";
+        StatusText = $"正在切换到 {GetFaceModelDisplayName(modelVersion)}，旧分类已暂时隐藏…";
+        IsLoading = true;
     }
 
     partial void OnSelectedFaceModelOptionChanged(FaceModelOption? value)
@@ -363,6 +390,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         {
             if (gateAcquired) _modelSwitchGate.Release();
             Interlocked.CompareExchange(ref _modelSwitchCancellation, null, cancellation);
+            if (generation == Volatile.Read(ref _modelSwitchGeneration)) IsLoading = false;
             cancellation.Dispose();
         }
     }
@@ -381,9 +409,8 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             var endpoint = Environment.GetEnvironmentVariable("PICER_MODEL_SERVER_URL")?.Trim() ?? "http://127.0.0.1:8090";
             var key = Environment.GetEnvironmentVariable("PICER_MODEL_SERVER_API_KEY")?.Trim() ?? "";
             using var platform = new FaceTrainingSubmissionService(endpoint, key);
-            var remoteRecords = new List<RemoteTrainingHistoryData>();
-            foreach (var alias in aliases)
-                remoteRecords.AddRange(await platform.GetTrainingHistoryAsync(alias).ConfigureAwait(false));
+            var remoteRecords = (await Task.WhenAll(aliases.Select(alias => platform.GetTrainingHistoryAsync(alias)))
+                    .ConfigureAwait(false)).SelectMany(value => value).ToList();
             remote = remoteRecords.GroupBy(value => value.ArtifactId ?? $"{value.ModelVersion}:{value.CreatedUtc:o}", StringComparer.OrdinalIgnoreCase)
                 .Select(group => group.First()).ToArray();
         }

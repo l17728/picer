@@ -1449,7 +1449,8 @@ public sealed class PicerDatabase : IDisposable
             VALUES($id,$image,$model,$ordinal,$x,$y,$w,$h,$confidence,$landmarks,$embedding,$created)
             ON CONFLICT(id) DO UPDATE SET image_id=excluded.image_id,model_version=excluded.model_version,ordinal=excluded.ordinal,
               box_x=excluded.box_x,box_y=excluded.box_y,box_width=excluded.box_width,box_height=excluded.box_height,
-              confidence=excluded.confidence,landmarks_json=excluded.landmarks_json,embedding=excluded.embedding,created_utc=excluded.created_utc
+              confidence=excluded.confidence,landmarks_json=excluded.landmarks_json,
+              embedding=COALESCE(excluded.embedding,detected_faces.embedding),created_utc=excluded.created_utc
             """);
         cmd.Parameters.AddWithValue("$id", face.Id); cmd.Parameters.AddWithValue("$image", face.ImageId);
         cmd.Parameters.AddWithValue("$model", face.ModelVersion); cmd.Parameters.AddWithValue("$ordinal", face.Ordinal);
@@ -1483,7 +1484,8 @@ public sealed class PicerDatabase : IDisposable
             VALUES($id,$image,$model,$ordinal,$x,$y,$w,$h,$confidence,$landmarks,$embedding,$created)
             ON CONFLICT(id) DO UPDATE SET image_id=excluded.image_id,model_version=excluded.model_version,ordinal=excluded.ordinal,
               box_x=excluded.box_x,box_y=excluded.box_y,box_width=excluded.box_width,box_height=excluded.box_height,
-              confidence=excluded.confidence,landmarks_json=excluded.landmarks_json,embedding=excluded.embedding,created_utc=excluded.created_utc
+              confidence=excluded.confidence,landmarks_json=excluded.landmarks_json,
+              embedding=COALESCE(excluded.embedding,detected_faces.embedding),created_utc=excluded.created_utc
             """);
         faceCommand.Transaction = transaction;
         foreach (var face in faces)
