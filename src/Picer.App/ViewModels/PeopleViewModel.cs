@@ -52,6 +52,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
     private int _baselinePublishStarted;
     private readonly SemaphoreSlim _modelSwitchGate = new(1, 1);
     private CancellationTokenSource? _modelSwitchCancellation;
+    private CancellationTokenSource? _organizeCancellation;
     private long _modelSwitchGeneration;
     private long _personToRestoreAfterModelSwitch;
 
@@ -158,6 +159,11 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         _personLoadCancellation?.Cancel();
         _clusterLoadCancellation?.Cancel();
         _collectionLoadCancellation?.Cancel();
+        // An automatic-organize pass started while the old model was visible
+        // must not finish later and repopulate the newly selected model's
+        // presentation.  The explicit organize command can be run again once
+        // the new space is loaded.
+        _organizeCancellation?.Cancel();
         // Do not leave the previous model's faces actionable while its
         // replacement is loading.  Clearing only the presentation collections
         // keeps the database untouched and makes a rapid second switch safe.
@@ -321,7 +327,11 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         var gateAcquired = false;
         try
         {
-            await _modelSwitchGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            // This workflow updates WPF-bound properties and commands. Keep
+            // the continuation on the dispatcher thread; ConfigureAwait(false)
+            // here causes OrganizeFacesAsync to raise CanExecuteChanged from a
+            // worker thread and leaves the previous model rendered.
+            await _modelSwitchGate.WaitAsync(cancellationToken);
             gateAcquired = true;
             if (generation != Volatile.Read(ref _modelSwitchGeneration) ||
                 !string.Equals(SelectedFaceModelVersion, modelVersion, StringComparison.OrdinalIgnoreCase)) return;
@@ -350,11 +360,13 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             });
             AppLogger.Info($"Face model switch coverage: model={modelVersion}; source={sourceModel}/{sourceCount}; target={targetEmbeddings}/{targetCount}; missing={missingCount}");
 
-            if (string.IsNullOrWhiteSpace(sourceModel) || sourceCount == 0)
-            {
-                StatusText = $"无法切换到 {GetFaceModelDisplayName(modelVersion)}：当前没有可用于裁剪的人脸框";
-                return;
-            }
+            // A model space is a view over its own persisted vectors and
+            // workflow records.  It must not depend on another model's
+            // detector count merely to become visible.  In particular, a
+            // remote mirror can legitimately contain InsightFace vectors
+            // while its SFace/YuNet source rows are still being refreshed.
+            // The old source-count guard made a valid model switch silently
+            // abort and left the previous (usually SFace) faces on screen.
 
             // Different detectors legitimately produce different face counts
             // (InsightFace does not have to match YuNet/SFace's 10k boxes).
@@ -388,10 +400,13 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
                     : $"{GetFaceModelDisplayName(modelVersion)} 向量补齐未完成：成功 {result.Analyzed}，失败 {result.Failed}；已停止切换，请修复后重试";
                 if (result.Failed > 0) return;
             }
-            // 每个模型空间必须独立生成建议和待命名组，不能沿用其他模型空间的结果。
+            // 每个模型空间必须独立显示已经持久化的建议和待命名组，不能沿用其他模型空间的结果。
+            // Do not rebuild automatic classification on every ComboBox
+            // change.  That operation is expensive, mutates workflow data,
+            // and held the switch gate long enough for a second switch to
+            // appear as "Insight selected, SFace still shown".  Explicit
+            // "更新自动归类" remains the only entry point that rebuilds it.
             cancellationToken.ThrowIfCancellationRequested();
-            if (generation != Volatile.Read(ref _modelSwitchGeneration)) return;
-            await OrganizeFacesAsync(cancellationToken);
             if (generation != Volatile.Read(ref _modelSwitchGeneration)) return;
             await RefreshAsync();
             if (generation != Volatile.Read(ref _modelSwitchGeneration)) return;
@@ -405,7 +420,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             // in flight, keep the newly loaded faces visible and let it fill
             // the artifact list later instead of making the page appear stuck.
             if (historyTask.IsCompleted)
-                await historyTask.ConfigureAwait(false);
+                await historyTask;
             StatusText = $"已切换到 {GetFaceModelDisplayName(modelVersion)}；自动归类结果独立显示，已命名/不分类仍共享";
             AppLogger.Info($"Face model switch completed: model={modelVersion}; displayed={DisplayedFaces.Count}; unassigned={UnassignedFaces.Count}; candidates={CandidateClusters.Count}");
         }
@@ -436,7 +451,6 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         try
         {
             var key = Environment.GetEnvironmentVariable("PICER_MODEL_SERVER_API_KEY")?.Trim() ?? "";
-            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(8));
             var configuredEndpoint = Environment.GetEnvironmentVariable("PICER_MODEL_SERVER_URL")?.Trim();
             var endpoints = new[] { configuredEndpoint, "http://127.0.0.1:8090" }
                 .Where(value => !string.IsNullOrWhiteSpace(value))
@@ -444,9 +458,21 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             var remoteRecords = new List<RemoteTrainingHistoryData>();
             foreach (var endpoint in endpoints)
             {
-                using var platform = new FaceTrainingSubmissionService(endpoint!, key);
-                remoteRecords = (await Task.WhenAll(aliases.Select(alias => platform.GetTrainingHistoryAsync(alias, timeout.Token)))
-                        .ConfigureAwait(false)).SelectMany(value => value).ToList();
+                // A dead configured endpoint must not consume the cancellation
+                // budget of the localhost fallback.  The old shared token made
+                // the fallback immediately return [] after one slow endpoint.
+                using var endpointTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(4));
+                try
+                {
+                    using var platform = new FaceTrainingSubmissionService(endpoint!, key);
+                    remoteRecords = (await Task.WhenAll(aliases.Select(alias => platform.GetTrainingHistoryAsync(alias, endpointTimeout.Token)))
+                            .ConfigureAwait(false)).SelectMany(value => value).ToList();
+                }
+                catch (Exception endpointException)
+                {
+                    AppLogger.Warn($"读取训练历史端点失败：endpoint={endpoint}; error={endpointException.Message}");
+                    remoteRecords.Clear();
+                }
                 if (remoteRecords.Count > 0) break;
             }
             remote = remoteRecords.GroupBy(value => value.ArtifactId ?? $"{value.ModelVersion}:{value.CreatedUtc:o}", StringComparer.OrdinalIgnoreCase)
@@ -454,12 +480,24 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         }
         catch (Exception exception) { AppLogger.Warn($"加载平台训练历史失败：{exception.Message}"); }
         var remoteOptions = new List<FaceTrainingHistoryOption>();
-        foreach (var value in remote.Where(value => value.Status.Equals("completed", StringComparison.OrdinalIgnoreCase)
-                     && value.ValidationAccuracy >= .90 && !string.IsNullOrWhiteSpace(value.ArtifactId)))
+        var remoteCandidates = remote.Where(value => (value.Status.Equals("completed", StringComparison.OrdinalIgnoreCase)
+                     || value.Status.Equals("applied", StringComparison.OrdinalIgnoreCase))
+                     && value.ValidationAccuracy >= .90 && !string.IsNullOrWhiteSpace(value.ArtifactId)).ToArray();
+        // Artifact verification is best effort.  History must still populate
+        // the ComboBox when an artifact endpoint is slow or temporarily
+        // unavailable; otherwise the model switch looks like it has no
+        // versions at all.  Applying an unavailable entry remains blocked by
+        // CanApply=false.
+        var artifacts = await Task.WhenAll(remoteCandidates.Select(async value =>
         {
             var artifact = await TryGetRemoteArtifactAsync(value.ArtifactId!).ConfigureAwait(false);
+            return (value, Available: artifact is not null);
+        })).ConfigureAwait(false);
+        foreach (var item in artifacts)
+        {
+            var value = item.value;
             remoteOptions.Add(new(value.ArtifactId!, value.ModelVersion, value.ValidationAccuracy!.Value,
-                value.CreatedUtc, value.Status, CanApply: artifact is not null));
+                value.CreatedUtc, value.Status, CanApply: item.Available));
         }
         await Application.Current.Dispatcher.InvokeAsync(() =>
         {
@@ -522,16 +560,29 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         finally { IsAnalyzing = false; }
     }
 
-    private async Task<TrainingArtifactData?> TryGetRemoteArtifactAsync(string artifactId)
+    private async Task<TrainingArtifactData?> TryGetRemoteArtifactAsync(string artifactId, CancellationToken cancellationToken = default)
     {
-        try
+        var configuredEndpoint = Environment.GetEnvironmentVariable("PICER_MODEL_SERVER_URL")?.Trim();
+        var endpoints = new[] { configuredEndpoint, "http://127.0.0.1:8090" }
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Distinct(StringComparer.OrdinalIgnoreCase);
+        var key = Environment.GetEnvironmentVariable("PICER_MODEL_SERVER_API_KEY")?.Trim() ?? "";
+        foreach (var endpoint in endpoints)
         {
-            var endpoint = Environment.GetEnvironmentVariable("PICER_MODEL_SERVER_URL")?.Trim() ?? "http://127.0.0.1:8090";
-            var key = Environment.GetEnvironmentVariable("PICER_MODEL_SERVER_API_KEY")?.Trim() ?? "";
-            using var platform = new FaceTrainingSubmissionService(endpoint, key);
-            return await platform.GetArtifactAsync(artifactId).ConfigureAwait(false);
+            try
+            {
+                using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                timeout.CancelAfter(TimeSpan.FromSeconds(4));
+                using var platform = new FaceTrainingSubmissionService(endpoint!, key);
+                var artifact = await platform.GetArtifactAsync(artifactId, timeout.Token).ConfigureAwait(false);
+                if (artifact is not null) return artifact;
+            }
+            catch (Exception exception)
+            {
+                AppLogger.Warn($"读取训练制品失败：endpoint={endpoint}; artifact={artifactId}; error={exception.Message}");
+            }
         }
-        catch { return null; }
+        return null;
     }
 
     public Task PublishEvaluationSnapshotForPlatformAsync() => PublishEvaluationSnapshotAsync();
@@ -1329,6 +1380,10 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         var stopwatch = Stopwatch.StartNew();
         IsOrganizing = true;
         ShowOrganizeProgress = true;
+        using var organizeCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        Interlocked.Exchange(ref _organizeCancellation, organizeCancellation)?.Cancel();
+        cancellationToken = organizeCancellation.Token;
+        var organizingModelVersion = SelectedFaceModelVersion;
         try
         {
             ProgressValue = 5;
@@ -1342,7 +1397,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
                 OrganizeProgressText = StatusText;
             });
             var suggestions = await UiWork.RunDatabaseAsync("People.AutoOrganize.Suggest",
-                () => _suggestionEngine.Suggest(progress: suggestionProgress, modelVersion: SelectedFaceModelVersion), cancellationToken);
+                () => _suggestionEngine.Suggest(progress: suggestionProgress, modelVersion: organizingModelVersion), cancellationToken);
 
             ProgressValue = 35;
             StatusText = $"正在使用最新标准更新自动归类（2/3：重建待命名人物组，35%；已检查 {suggestions.Considered} 张脸）";
@@ -1357,9 +1412,12 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             });
             var clusters = await UiWork.RunDatabaseAsync("People.AutoOrganize.Cluster",
                 () => _unknownFaceClusterer.Rebuild(suggestions.AppliedThreshold, progress: clusterProgress,
-                    modelVersion: SelectedFaceModelVersion), cancellationToken);
+                    modelVersion: organizingModelVersion), cancellationToken);
 
             ProgressValue = 80;
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!string.Equals(SelectedFaceModelVersion, organizingModelVersion, StringComparison.OrdinalIgnoreCase))
+                throw new OperationCanceledException(cancellationToken);
             StatusText = $"正在使用最新标准更新自动归类（3/3：同步界面，80%；共 {clusters.ClusterCount} 个候选组）";
             OrganizeProgressText = StatusText;
             await RefreshAsync();
@@ -1384,6 +1442,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         }
         finally
         {
+            Interlocked.CompareExchange(ref _organizeCancellation, null, organizeCancellation);
             IsOrganizing = false;
             _organizeGate.Release();
         }
