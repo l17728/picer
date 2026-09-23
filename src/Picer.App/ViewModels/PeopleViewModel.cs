@@ -141,6 +141,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
 
     partial void OnSelectedFaceModelVersionChanged(string? value)
     {
+        AppLogger.Info($"People model selection changed: version={value ?? "<null>"}; loaded={_isLoaded}");
         if (!_isLoaded || string.IsNullOrWhiteSpace(value)) return;
         var generation = Interlocked.Increment(ref _modelSwitchGeneration);
         var cancellation = new CancellationTokenSource();
@@ -152,6 +153,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
 
     private void ResetModelSpaceForSwitch(string modelVersion)
     {
+        AppLogger.Info($"People model switch reset: target={modelVersion}; cancelPreviousLoads=true");
         // Cancel every presentation load from the previous model before
         // clearing its collections. Otherwise an old named-person/candidate
         // task can finish later and repopulate the new model's pane.
@@ -190,6 +192,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
 
     partial void OnSelectedFaceModelOptionChanged(FaceModelOption? value)
     {
+        AppLogger.Info($"People model option changed: option={value?.ModelVersion ?? "<null>"}; display={value?.DisplayName ?? "<null>"}");
         if (value is not null && !string.Equals(SelectedFaceModelVersion, value.ModelVersion, StringComparison.Ordinal))
             SelectedFaceModelVersion = value.ModelVersion;
         // The option may be restored with the same version value; notify the
@@ -447,6 +450,18 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             .GroupBy(value => value.ArtifactId, StringComparer.OrdinalIgnoreCase)
             .Select(group => group.First())
             .ToArray());
+        // Publish local history before touching the network.  A slow or
+        // unavailable ModelServer must never make a valid local artifact
+        // dropdown appear empty during a model switch.
+        await Application.Current.Dispatcher.InvokeAsync(() =>
+        {
+            if (!string.Equals(SelectedFaceModelVersion, modelVersion, StringComparison.OrdinalIgnoreCase))
+                return;
+            TrainingHistoryOptions.Clear();
+            foreach (var value in history.Where(value => value.ValidationAccuracy >= .90))
+                TrainingHistoryOptions.Add(new(value.ArtifactId, value.ModelVersion, value.ValidationAccuracy, value.CreatedUtc, value.State));
+            SelectedTrainingHistory = TrainingHistoryOptions.FirstOrDefault(value => value.State == "active") ?? TrainingHistoryOptions.FirstOrDefault();
+        });
         IReadOnlyList<RemoteTrainingHistoryData> remote = [];
         try
         {
@@ -475,6 +490,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
                 }
                 if (remoteRecords.Count > 0) break;
             }
+            AppLogger.Info($"Face training history endpoint query: model={modelVersion}; aliases={string.Join(',', aliases)}; records={remoteRecords.Count}");
             remote = remoteRecords.GroupBy(value => value.ArtifactId ?? $"{value.ModelVersion}:{value.CreatedUtc:o}", StringComparer.OrdinalIgnoreCase)
                 .Select(group => group.First()).ToArray();
         }
