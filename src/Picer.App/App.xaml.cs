@@ -134,7 +134,7 @@ public partial class App : Application
             // roots from its local index so the agent can serve media.
             if (roots.Length == 0 && File.Exists(AppPaths.DbPath))
             {
-                using var localDb = new PicerDatabase(AppPaths.DbPath);
+                using var localDb = new Picer.Core.Data.PicerDatabase(AppPaths.DbPath);
                 roots = localDb.GetSources().Select(source => source.Path).Where(Directory.Exists).ToArray();
             }
             if (roots.Length == 0)
