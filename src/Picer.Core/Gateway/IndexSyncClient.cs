@@ -9,6 +9,7 @@ using Picer.Core.Models;
 using Picer.Core.People;
 using Picer.Core.Search;
 using Picer.Core.Video;
+using Picer.Core.Vision;
 
 namespace Picer.Core.Gateway;
 
@@ -74,6 +75,12 @@ public sealed class IndexSyncClient(HttpClient client) : IDisposable
 
     public async Task PushMetadataAsync(PicerDatabase database, CancellationToken cancellationToken = default)
     {
+        // Scene ordering is a local index result, not something the remote
+        // mirror should recompute. Materialize layouts for every indexed
+        // directory before sending metadata; both direct-directory and
+        // recursive variants are retained so the remote UI can honor the
+        // same classification preference.
+        await Task.Run(() => EnsureSceneLayoutSnapshots(database, cancellationToken), cancellationToken).ConfigureAwait(false);
         // Face workflow projections reference detected_faces. Upload the face
         // rows first so a first-time mirror can apply review/candidate state
         // atomically without foreign-key failures.
@@ -90,6 +97,29 @@ public sealed class IndexSyncClient(HttpClient client) : IDisposable
         var request = BuildMetadataRequest(database);
         using var response = await client.PostAsJsonAsync("api/sync/v1/metadata", request, Json, cancellationToken);
         response.EnsureSuccessStatusCode();
+    }
+
+    private static void EnsureSceneLayoutSnapshots(PicerDatabase database, CancellationToken cancellationToken)
+    {
+        var clusterer = new SceneTimeClusterService(database);
+        var descriptions = new SceneGroupDescriptionService(database, new CloudVisionRepository(database));
+        foreach (var source in database.GetSources())
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var images = database.GetImages(source.Id, includeMissing: false);
+            var directories = images.Select(image => Path.GetDirectoryName(image.Path))
+                .Where(path => !string.IsNullOrWhiteSpace(path))!
+                .Select(path => Path.GetFullPath(path!)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            foreach (var directory in directories)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var direct = images.Where(image => string.Equals(Path.GetDirectoryName(image.Path), directory, StringComparison.OrdinalIgnoreCase)).ToArray();
+                descriptions.SaveLayoutSnapshot(directory, false, clusterer.Build(direct));
+                // Recursive snapshots preserve layouts such as 100APPLE→115APPLE
+                // when the local directory preference includes descendants.
+                descriptions.SaveLayoutSnapshot(directory, true, clusterer.Build(directory, true));
+            }
+        }
     }
 
     /// <summary>
