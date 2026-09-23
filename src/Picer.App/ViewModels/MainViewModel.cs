@@ -419,7 +419,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     .Where(image => image is { Status: ImageStatus.Active }).Cast<ImageRecord>().ToArray();
                 if (images.Length == 0) return $"场景：{node.SceneName}　没有可用照片记录";
                 var service = new SceneGroupDescriptionService(_db, AppServices.CloudVisionRepository);
-                var accepted = service.GetAccepted(SceneGroupDescriptionService.CreateFingerprint(images));
+                var accepted = service.GetAccepted(SceneGroupDescriptionService.CreateFingerprint(images))
+                    ?? service.GetAcceptedForGroup(node.FullPath, images);
                 if (accepted is not null) return $"场景：{accepted.SceneName}　摘要：{accepted.Summary}";
                 var descriptions = images.Select(image => AppServices.CloudVisionRepository.GetLatestCompleted(image.Id)?.Result.Summary)
                     .Where(value => !string.IsNullOrWhiteSpace(value)).Distinct(StringComparer.CurrentCultureIgnoreCase).Take(2).ToArray();
@@ -1701,7 +1702,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
             .Where(image => image is { Status: ImageStatus.Active }).Cast<ImageRecord>().ToArray());
         if (images.Length == 0) { StatusText = "该场景没有可编辑的照片记录"; return; }
         var plan = await UiWork.RunDatabaseAsync(() => service.BuildPlan(node.FullPath, images));
-        var accepted = await UiWork.RunDatabaseAsync(() => service.GetAccepted(plan.Fingerprint));
+        var accepted = await UiWork.RunDatabaseAsync(() => service.GetAccepted(plan.Fingerprint)
+            ?? service.GetAcceptedForGroup(node.FullPath, images));
         var window = new EditSceneDescriptionWindow(accepted?.SceneName ?? node.SceneName, accepted?.Summary ?? "")
         {
             Owner = Application.Current.MainWindow
@@ -1714,7 +1716,15 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 service.SaveAccepted(plan, new SceneGroupDescription(plan.Fingerprint, window.SceneTitle,
                     window.SceneSummary, [window.SceneTitle], "user", "manual-edit", "manual-edit-v1", "accepted"));
             }
-            else service.UpdateAcceptedText(plan.Fingerprint, window.SceneTitle, window.SceneSummary);
+            else if (string.Equals(accepted.Fingerprint, plan.Fingerprint, StringComparison.OrdinalIgnoreCase))
+                service.UpdateAcceptedText(plan.Fingerprint, window.SceneTitle, window.SceneSummary);
+            else
+            {
+                // A mirrored database can rebuild the same time group with different
+                // SQLite ids. Preserve the accepted record's stable identity instead
+                // of creating a second description that only exists on one side.
+                service.UpdateAcceptedText(accepted.Fingerprint, window.SceneTitle, window.SceneSummary);
+            }
         });
         var parent = EnumerateDirectoryNodes(DirectoryTree).FirstOrDefault(candidate => candidate.Children.Contains(node));
         if (parent is not null)

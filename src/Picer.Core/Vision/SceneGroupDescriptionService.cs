@@ -124,21 +124,39 @@ public sealed class SceneGroupDescriptionService(PicerDatabase database, CloudVi
         var start = SceneTimeClusterService.EffectiveTime(images.MinBy(SceneTimeClusterService.EffectiveTime)!);
         var end = SceneTimeClusterService.EffectiveTime(images.MaxBy(SceneTimeClusterService.EffectiveTime)!);
         using var command = database.Command("""
-            SELECT fingerprint,scene_name,summary,search_terms_json,provider,model_version,prompt_version,state
+            SELECT fingerprint,start_utc,end_utc,image_ids_json,scene_name,summary,search_terms_json,provider,model_version,prompt_version,state
             FROM scene_group_descriptions
             WHERE state='accepted' AND (directory_path=$directory OR lower(directory_path)=lower($directory))
               AND start_utc <= $end AND end_utc >= $start
-            ORDER BY abs(julianday(start_utc)-julianday($start)) + abs(julianday(end_utc)-julianday($end))
-            LIMIT 1
             """);
         command.Parameters.AddWithValue("$directory", Path.GetFullPath(directoryPath));
         command.Parameters.AddWithValue("$start", start.ToString("O"));
         command.Parameters.AddWithValue("$end", end.ToString("O"));
         using var reader = command.ExecuteReader();
-        if (!reader.Read()) return null;
-        var terms = JsonSerializer.Deserialize<string[]>(reader.GetString(3)) ?? [];
-        return new(reader.GetString(0), reader.GetString(1), reader.GetString(2), terms,
-            reader.GetString(4), reader.GetString(5), reader.GetString(6), reader.GetString(7));
+        SceneGroupDescription? best = null;
+        var bestScore = double.MinValue;
+        while (reader.Read())
+        {
+            if (!DateTime.TryParse(reader.GetString(1), null, System.Globalization.DateTimeStyles.RoundtripKind, out var candidateStart) ||
+                !DateTime.TryParse(reader.GetString(2), null, System.Globalization.DateTimeStyles.RoundtripKind, out var candidateEnd))
+                continue;
+            var overlapStart = candidateStart > start ? candidateStart : start;
+            var overlapEnd = candidateEnd < end ? candidateEnd : end;
+            if (overlapEnd < overlapStart) continue;
+            var unionSeconds = Math.Max(1, (Math.Max(candidateEnd.Ticks, end.Ticks) - Math.Min(candidateStart.Ticks, start.Ticks)) / (double)TimeSpan.TicksPerSecond);
+            var overlapSeconds = Math.Max(0, (overlapEnd - overlapStart).TotalSeconds);
+            var temporalScore = overlapSeconds / unionSeconds;
+            var candidateCount = 0;
+            try { candidateCount = JsonSerializer.Deserialize<long[]>(reader.GetString(3))?.Length ?? 0; } catch (JsonException) { }
+            var countScore = 1d - Math.Min(1d, Math.Abs(candidateCount - images.Count) / (double)Math.Max(candidateCount, images.Count));
+            var score = temporalScore * .7 + countScore * .3;
+            if (score <= bestScore) continue;
+            var terms = JsonSerializer.Deserialize<string[]>(reader.GetString(6)) ?? [];
+            bestScore = score;
+            best = new(reader.GetString(0), reader.GetString(4), reader.GetString(5), terms,
+                reader.GetString(7), reader.GetString(8), reader.GetString(9), reader.GetString(10));
+        }
+        return best;
     }
 
     public void UpdateAcceptedText(string fingerprint, string sceneName, string summary)

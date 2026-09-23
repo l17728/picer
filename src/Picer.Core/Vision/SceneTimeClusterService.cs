@@ -37,8 +37,11 @@ public sealed class SceneTimeClusterService(PicerDatabase database)
         var descriptions = new SceneGroupDescriptionService(database, new CloudVisionRepository(database));
         foreach (var group in timeGroups)
         {
-            var accepted = descriptions.GetAccepted(SceneGroupDescriptionService.CreateFingerprint(group))
-                ?? descriptions.GetAcceptedForGroup(Path.GetDirectoryName(group[0].Path) ?? string.Empty, group);
+            // Only an exact fingerprint may short-circuit a time group. The
+            // stable directory/time fallback is intentionally applied after
+            // model-scene splitting; otherwise an accepted description for one
+            // subgroup could incorrectly collapse the entire three-hour group.
+            var accepted = descriptions.GetAccepted(SceneGroupDescriptionService.CreateFingerprint(group));
             if (accepted is not null)
             {
                 result.Add(Create(group, accepted.SceneName));
