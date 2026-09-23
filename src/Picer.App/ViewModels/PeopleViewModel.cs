@@ -389,8 +389,12 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
                 if (result.Failed > 0) return;
             }
             // 每个模型空间必须独立生成建议和待命名组，不能沿用其他模型空间的结果。
-            await OrganizeFacesAsync();
+            cancellationToken.ThrowIfCancellationRequested();
+            if (generation != Volatile.Read(ref _modelSwitchGeneration)) return;
+            await OrganizeFacesAsync(cancellationToken);
+            if (generation != Volatile.Read(ref _modelSwitchGeneration)) return;
             await RefreshAsync();
+            if (generation != Volatile.Read(ref _modelSwitchGeneration)) return;
             var restorePersonId = Interlocked.Exchange(ref _personToRestoreAfterModelSwitch, 0);
             if (restorePersonId > 0 && generation == Volatile.Read(ref _modelSwitchGeneration))
             {
