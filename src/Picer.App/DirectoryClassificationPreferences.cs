@@ -16,5 +16,24 @@ public sealed class DirectoryClassificationPreferences
         return false;
     }
     public void Set(string path,bool includeDescendants){_overrides[Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar)]=includeDescendants;Save();}
+    public IReadOnlyDictionary<string,bool> Snapshot() => new Dictionary<string,bool>(_overrides, StringComparer.OrdinalIgnoreCase);
+    public void Merge(IReadOnlyDictionary<string,bool> values)
+    {
+        foreach (var (path, value) in values)
+            if (!string.IsNullOrWhiteSpace(path)) _overrides[path] = value;
+        Save();
+    }
+    public void Reload()
+    {
+        try
+        {
+            if (File.Exists(_path) && JsonSerializer.Deserialize<Dictionary<string,bool>>(File.ReadAllText(_path)) is { } values)
+            {
+                _overrides.Clear();
+                foreach (var (path, value) in values) _overrides[path] = value;
+            }
+        }
+        catch { }
+    }
     private void Save(){var directory=Path.GetDirectoryName(_path);if(!string.IsNullOrWhiteSpace(directory))Directory.CreateDirectory(directory);var temporary=_path+".tmp";File.WriteAllText(temporary,JsonSerializer.Serialize(_overrides,new JsonSerializerOptions{WriteIndented=true}));File.Move(temporary,_path,true);}
 }

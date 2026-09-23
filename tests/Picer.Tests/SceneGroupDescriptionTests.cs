@@ -62,6 +62,37 @@ public sealed class SceneGroupDescriptionTests : IDisposable
             new SearchFilters { Query = "毕业", IncludeMissing = false }).Count);
     }
 
+    [Fact]
+    public void AcceptedDescription_FallsBackToStableDirectoryAndTimeAcrossMirrorIds()
+    {
+        var source = _db.AddSource(_root);
+        var start = new DateTime(2026, 8, 29, 12, 0, 0, DateTimeKind.Utc);
+        var images = Enumerable.Range(0, 2).Select(index =>
+        {
+            var path = Path.Combine(_root, $"mirror-{index}.jpg"); File.WriteAllBytes(path, [1]);
+            return _db.UpsertImage(new ImageRecord
+            {
+                SourceId = source.Id, Path = path, FileSize = 1,
+                ModifiedUtc = start.AddMinutes(index), TakenUtc = start.AddMinutes(index),
+                IndexedUtc = start, Status = ImageStatus.Active
+            });
+        }).ToArray();
+        var service = new SceneGroupDescriptionService(_db, new CloudVisionRepository(_db));
+        var plan = service.BuildPlan(_root, images);
+        service.SaveAccepted(plan, new SceneGroupDescription(plan.Fingerprint, "远程聚餐", "远程摘要", ["聚餐"], "test", "v1", "p1", "accepted"));
+
+        var mirrorRows = images.Select((image, index) => new ImageRecord
+        {
+            Id = image.Id + 10000, SourceId = image.SourceId, Path = image.Path,
+            FileSize = image.FileSize, ModifiedUtc = image.ModifiedUtc, TakenUtc = image.TakenUtc,
+            IndexedUtc = image.IndexedUtc, Status = ImageStatus.Active
+        }).ToArray();
+        var resolved = service.GetAcceptedForGroup(_root, mirrorRows);
+        Assert.NotNull(resolved);
+        Assert.Equal("远程聚餐", resolved!.SceneName);
+        Assert.Equal("远程摘要", resolved.Summary);
+    }
+
     public void Dispose() { _db.Dispose(); try { Directory.Delete(_root, true); } catch { } }
 
     private sealed class ScenarioAnalyzer : ICloudVisionAnalyzer

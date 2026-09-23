@@ -297,6 +297,58 @@ public sealed class GatewayContractTests(GatewayServiceFixture fixture) : IClass
     }
 
     [Fact]
+    public async Task IncrementalSync_IsIdempotentAndPublishesChangedMetadata()
+    {
+        var clientRoot = Path.Combine(Path.GetTempPath(), "picer-sync-client-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(clientRoot);
+        var checkpoint = Path.Combine(clientRoot, "sync-checkpoint.json");
+        try
+        {
+            using var clientDb = new PicerDatabase(Path.Combine(clientRoot, "picer.db"));
+            var source = clientDb.AddSource(clientRoot);
+            var imagePath = Path.Combine(clientRoot, "sync.png");
+            await File.WriteAllBytesAsync(imagePath, [1, 2, 3]);
+            clientDb.UpsertImage(new ImageRecord
+            {
+                SourceId = source.Id, Path = imagePath, FileSize = 3,
+                ModifiedUtc = DateTime.UtcNow, IndexedUtc = DateTime.UtcNow,
+                Width = 1, Height = 1, Status = ImageStatus.Active
+            });
+            using var sync = IndexSyncClient.Create(fixture.BaseUrl, "picer-test-token", fixture.SpkiPin);
+            var first = await sync.PushIncrementalAsync(clientDb, checkpoint);
+            var second = await sync.PushIncrementalAsync(clientDb, checkpoint);
+            Assert.True(first.Changed);
+            Assert.False(second.Changed);
+            Assert.True(first.Images > 0);
+
+            var record = clientDb.GetImages(source.Id).Single();
+            record.Camera = "sync-camera";
+            clientDb.UpsertImage(record);
+            var third = await sync.PushIncrementalAsync(clientDb, checkpoint);
+            Assert.True(third.Changed);
+            Assert.NotEqual(first.MediaFingerprint, third.MediaFingerprint);
+        }
+        finally
+        {
+            try { Directory.Delete(clientRoot, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task DirectoryClassificationPreferences_RoundTripThroughService()
+    {
+        using var handler = new HttpClientHandler { ServerCertificateCustomValidationCallback = (_, _, _, _) => true };
+        using var client = new HttpClient(handler) { BaseAddress = new Uri(fixture.BaseUrl) };
+        client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", "picer-test-token");
+        var values = new Dictionary<string, bool> { ["C:\\Photos"] = true, ["C:\\Photos\\Trips"] = false };
+        using var post = await client.PostAsJsonAsync("api/sync/v1/directory-classification", new { overrides = values });
+        post.EnsureSuccessStatusCode();
+        var roundTrip = await client.GetFromJsonAsync<Dictionary<string, bool>>("api/gateway/v1/directory-classification");
+        Assert.NotNull(roundTrip);
+        Assert.Equal(values, roundTrip);
+    }
+
+    [Fact]
     public async Task SyncVideos_UpsertsMetadataAndListsThroughGateway()
     {
         using var handler = new HttpClientHandler { ServerCertificateCustomValidationCallback = (_, _, _, _) => true };

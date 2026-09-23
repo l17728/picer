@@ -12,7 +12,7 @@ using Picer.Core.Video;
 
 namespace Picer.Core.Gateway;
 
-public sealed class IndexSyncClient(HttpClient client)
+public sealed class IndexSyncClient(HttpClient client) : IDisposable
 {
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
@@ -109,7 +109,12 @@ public sealed class IndexSyncClient(HttpClient client)
         var mediaFingerprint = Fingerprint(database.GetSources().Select(source => new
         {
             source.Id, source.Path,
-            Images = database.GetImages(source.Id, includeMissing: true).Select(image => new { image.Id, image.Path, image.FileSize, image.ModifiedUtc, image.Sha256 }).ToArray(),
+            Images = database.GetImages(source.Id, includeMissing: true).Select(image => new
+            {
+                image.Id, image.Path, image.FileSize, image.ModifiedUtc, image.Sha256,
+                image.Status, image.Width, image.Height, image.TakenUtc, image.Camera, image.Gps,
+                image.ThumbPath, image.AverageHash, image.DifferenceHash
+            }).ToArray(),
             Videos = new VideoRepository(database).GetAll().Where(video => video.SourceId == source.Id)
                 .Select(video => new { video.Id, video.Path, video.FileSize, video.ModifiedUtc }).ToArray()
         }).ToArray());
@@ -132,6 +137,23 @@ public sealed class IndexSyncClient(HttpClient client)
         if (changed)
             SaveCheckpoint(checkpointPath, new SyncCheckpoint(mediaFingerprint, metadataFingerprint, DateTimeOffset.UtcNow));
         return new IndexSyncResult(changed, pushedImages, pushedVideos, metadataFingerprint, mediaFingerprint);
+    }
+
+    public async Task PushDirectoryClassificationAsync(IReadOnlyDictionary<string, bool> overrides,
+        CancellationToken cancellationToken = default)
+    {
+        using var response = await client.PostAsJsonAsync("api/sync/v1/directory-classification",
+            new { overrides }, Json, cancellationToken).ConfigureAwait(false);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task<IReadOnlyDictionary<string, bool>> GetDirectoryClassificationAsync(
+        CancellationToken cancellationToken = default)
+    {
+        using var response = await client.GetAsync("api/gateway/v1/directory-classification", cancellationToken).ConfigureAwait(false);
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadFromJsonAsync<Dictionary<string, bool>>(Json, cancellationToken).ConfigureAwait(false)
+            ?? new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
     }
 
     private SyncMetadataRequest BuildMetadataRequest(PicerDatabase database)
@@ -174,6 +196,8 @@ public sealed class IndexSyncClient(HttpClient client)
 
     private sealed record SyncCheckpoint(string MediaFingerprint, string MetadataFingerprint, DateTimeOffset UpdatedUtc);
     public sealed record IndexSyncResult(bool Changed, int Images, int Videos, string MetadataFingerprint, string MediaFingerprint);
+
+    public void Dispose() => client.Dispose();
 
     private sealed record SyncMetadataRequest(
         IReadOnlyList<Tag> Tags,

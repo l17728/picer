@@ -37,7 +37,8 @@ public sealed class SceneTimeClusterService(PicerDatabase database)
         var descriptions = new SceneGroupDescriptionService(database, new CloudVisionRepository(database));
         foreach (var group in timeGroups)
         {
-            var accepted = descriptions.GetAccepted(SceneGroupDescriptionService.CreateFingerprint(group));
+            var accepted = descriptions.GetAccepted(SceneGroupDescriptionService.CreateFingerprint(group))
+                ?? descriptions.GetAcceptedForGroup(Path.GetDirectoryName(group[0].Path) ?? string.Empty, group);
             if (accepted is not null)
             {
                 result.Add(Create(group, accepted.SceneName));
@@ -76,7 +77,8 @@ public sealed class SceneTimeClusterService(PicerDatabase database)
     private static SceneTimeCluster CreateWithAccepted(IReadOnlyList<ImageRecord> images, string fallbackSceneName,
         SceneGroupDescriptionService descriptions)
     {
-        var accepted = descriptions.GetAccepted(SceneGroupDescriptionService.CreateFingerprint(images));
+        var accepted = descriptions.GetAccepted(SceneGroupDescriptionService.CreateFingerprint(images))
+            ?? descriptions.GetAcceptedForGroup(Path.GetDirectoryName(images[0].Path) ?? string.Empty, images);
         return Create(images, accepted?.SceneName ?? fallbackSceneName);
     }
 

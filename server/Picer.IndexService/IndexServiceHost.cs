@@ -44,6 +44,7 @@ public sealed record SyncMetadataRequest(
 public sealed record SyncFacesRequest(
     IReadOnlyList<GatewayDetectedFace> Faces,
     IReadOnlyList<GatewayFaceAssignment> Assignments);
+public sealed record SyncDirectoryClassificationRequest(IReadOnlyDictionary<string, bool> Overrides);
 public sealed record AlbumImageLink(long AlbumId, long ImageId);
 public sealed record ImageTagLink(long ImageId, long TagId);
 
@@ -378,6 +379,28 @@ public static class IndexServiceHost
         {
             db.UpsertMirroredFaces(request.Faces, request.Assignments);
             return Results.Json(new { faces = request.Faces.Count, assignments = request.Assignments.Count });
+        });
+        app.MapGet("/api/gateway/v1/directory-classification", () =>
+        {
+            var path = Path.Combine(dataRoot, "directory-classification.json");
+            try
+            {
+                if (!File.Exists(path)) return Results.Json(new Dictionary<string, bool>());
+                return Results.Json(JsonSerializer.Deserialize<Dictionary<string, bool>>(File.ReadAllText(path)) ?? new());
+            }
+            catch (Exception exception)
+            {
+                AppLogger.Warn("读取目录场景分类偏好失败：" + exception.Message);
+                return Results.Json(new Dictionary<string, bool>());
+            }
+        });
+        app.MapPost("/api/sync/v1/directory-classification", (SyncDirectoryClassificationRequest request) =>
+        {
+            var path = Path.Combine(dataRoot, "directory-classification.json");
+            var temporary = path + ".tmp";
+            File.WriteAllText(temporary, JsonSerializer.Serialize(request.Overrides));
+            File.Move(temporary, path, true);
+            return Results.Json(new { count = request.Overrides.Count });
         });
         app.MapGet("/api/gateway/v1/assets/images/{id:long}", async (long id, string? agentId, CancellationToken cancellationToken) =>
         {

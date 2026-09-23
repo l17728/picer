@@ -289,7 +289,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     public async Task RefreshFromRemoteMirrorAsync()
     {
-        if (!AppServices.ServiceMode) return;
+        if (AppServices.SyncClient is null) return;
         if (!Application.Current.Dispatcher.CheckAccess())
         {
             // The remote poller runs on a worker thread. CollectionView-backed
@@ -299,6 +299,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             await operation.Task.Unwrap();
             return;
         }
+        _directoryClassification.Reload();
         await ReloadSourcesAsync();
         await ApplySearchAndFilterAsync();
         await LoadDirectoryTreeAsync();
@@ -1588,6 +1589,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 }
                 return new SceneTimeClusterService(_db).Build(node.FullPath, recursive);
             });
+            AppLogger.Info($"Scene anchors loaded: path={node.FullPath}; model={(AppServices.ServiceMode ? "remote-mirror" : "local")}; recursive={recursive}; clusters={clusters.Count}; images={clusters.Sum(cluster => cluster.ImageIds.Count)}");
             foreach(var anchor in node.Children.Where(child=>child.IsSceneAnchor).ToList())node.Children.Remove(anchor);
             foreach(var cluster in clusters)node.Children.Add(new DirectoryNodeViewModel{Name=cluster.DisplayName,FullPath=node.FullPath,Icon="⚓",ImageCount=cluster.ImageIds.Count,IsSceneAnchor=true,SceneName=cluster.SceneName,AnchorImageIds=cluster.ImageIds});
             node.SceneAnchorsLoaded=true;

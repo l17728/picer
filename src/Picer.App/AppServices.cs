@@ -240,6 +240,18 @@ public static class AppServices
         if (mirrorGateway is null) return;
         var fullMediaReconciliation = !Volatile.Read(ref _remoteMediaBootstrapped);
         var sources = await mirrorGateway.ListSourcesAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var preferences = SyncClient is not null
+                ? await SyncClient.GetDirectoryClassificationAsync(cancellationToken).ConfigureAwait(false)
+                : new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+            if (preferences.Count > 0)
+                new DirectoryClassificationPreferences(AppPaths.DirectoryClassificationSettingsPath).Merge(preferences);
+        }
+        catch (Exception exception) when (exception is HttpRequestException or InvalidOperationException)
+        {
+            AppLogger.Warn("Remote directory classification preferences unavailable: " + exception.Message);
+        }
         // Metadata routes were added after the initial index-service deployment. Keep
         // image/video mirroring compatible with an older service while it is being
         // upgraded; each collection is optional and can be retried on the next sync.
@@ -336,6 +348,7 @@ public static class AppServices
             Db.UpsertMirroredFaces(metadata.Faces, metadata.FaceAssignments);
             Db.ReplaceMirroredFaceWorkflow(metadata);
             Db.UpsertMirroredVideoMetadata(metadata);
+            AppLogger.Info($"Remote metadata applied: scenes={Db.GetAllMirroredSceneGroupDescriptions().Count}; analyses={Db.GetAllMirroredCloudVisionAnalyses().Count}; faces={Db.GetAllMirroredFaces().Count}");
             foreach (var link in metadata.AlbumImages)
                 SemanticEngine.AddToAlbum(Db, link.AlbumId, link.ImageId);
             foreach (var link in metadata.ImageTags)
@@ -355,6 +368,8 @@ public static class AppServices
         var checkpoint = Path.Combine(AppPaths.DataRoot,
             ServiceMode ? "remote-sync-checkpoint.json" : "index-sync-checkpoint.json");
         var result = await SyncClient.PushIncrementalAsync(Db, checkpoint, progress, cancellationToken).ConfigureAwait(false);
+        await SyncClient.PushDirectoryClassificationAsync(
+            new DirectoryClassificationPreferences(AppPaths.DirectoryClassificationSettingsPath).Snapshot(), cancellationToken).ConfigureAwait(false);
         AppLogger.Info($"增量索引发布完成：changed={result.Changed}; images={result.Images}; videos={result.Videos}");
         return result;
     }

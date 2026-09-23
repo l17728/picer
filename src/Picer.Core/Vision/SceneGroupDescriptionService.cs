@@ -111,6 +111,36 @@ public sealed class SceneGroupDescriptionService(PicerDatabase database, CloudVi
         return new(fingerprint, reader.GetString(0), reader.GetString(1), terms, reader.GetString(3), reader.GetString(4), reader.GetString(5), reader.GetString(6));
     }
 
+    /// <summary>
+    /// Resolves a description when image ids came from a different mirror
+    /// database. The scene fingerprint historically used SQLite ids, which are
+    /// not guaranteed to be stable across a local/server bootstrap. Directory
+    /// and effective-time bounds are stable metadata and provide a safe
+    /// compatibility fallback.
+    /// </summary>
+    public SceneGroupDescription? GetAcceptedForGroup(string directoryPath, IReadOnlyList<ImageRecord> images)
+    {
+        if (images.Count == 0) return null;
+        var start = SceneTimeClusterService.EffectiveTime(images.MinBy(SceneTimeClusterService.EffectiveTime)!);
+        var end = SceneTimeClusterService.EffectiveTime(images.MaxBy(SceneTimeClusterService.EffectiveTime)!);
+        using var command = database.Command("""
+            SELECT fingerprint,scene_name,summary,search_terms_json,provider,model_version,prompt_version,state
+            FROM scene_group_descriptions
+            WHERE state='accepted' AND (directory_path=$directory OR lower(directory_path)=lower($directory))
+              AND start_utc <= $end AND end_utc >= $start
+            ORDER BY abs(julianday(start_utc)-julianday($start)) + abs(julianday(end_utc)-julianday($end))
+            LIMIT 1
+            """);
+        command.Parameters.AddWithValue("$directory", Path.GetFullPath(directoryPath));
+        command.Parameters.AddWithValue("$start", start.ToString("O"));
+        command.Parameters.AddWithValue("$end", end.ToString("O"));
+        using var reader = command.ExecuteReader();
+        if (!reader.Read()) return null;
+        var terms = JsonSerializer.Deserialize<string[]>(reader.GetString(3)) ?? [];
+        return new(reader.GetString(0), reader.GetString(1), reader.GetString(2), terms,
+            reader.GetString(4), reader.GetString(5), reader.GetString(6), reader.GetString(7));
+    }
+
     public void UpdateAcceptedText(string fingerprint, string sceneName, string summary)
     {
         if (string.IsNullOrWhiteSpace(sceneName)) throw new ArgumentException("场景标题不能为空。", nameof(sceneName));
