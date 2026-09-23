@@ -23,6 +23,7 @@ public static class AppServices
 {
     private static bool _remoteMediaBootstrapped;
     public static IIndexGateway Gateway { get; private set; } = null!;
+    private static IIndexGateway? SyncGateway { get; set; }
     public static IndexSyncClient? SyncClient { get; private set; }
     public static bool ServiceMode { get; private set; }
     public static PicerDatabase Db { get; private set; } = null!;
@@ -112,6 +113,7 @@ public static class AppServices
             && System.Net.IPAddress.TryParse(syncIp, out _))
         {
             SyncClient = IndexSyncClient.Create($"https://{syncIp}:8445", syncToken);
+            SyncGateway = new HttpIndexGateway($"https://{syncIp}:8445", syncToken);
             AppLogger.Info("local mode incremental index publisher configured from PICER_INDEX_SYNC_IP");
         }
 
@@ -215,15 +217,16 @@ public static class AppServices
 
     public static async Task SyncRemoteMirrorAsync(CancellationToken cancellationToken = default)
     {
-        if (!ServiceMode) return;
+        var mirrorGateway = ServiceMode ? Gateway : SyncGateway;
+        if (mirrorGateway is null) return;
         var fullMediaReconciliation = !Volatile.Read(ref _remoteMediaBootstrapped);
-        var sources = await Gateway.ListSourcesAsync(cancellationToken).ConfigureAwait(false);
+        var sources = await mirrorGateway.ListSourcesAsync(cancellationToken).ConfigureAwait(false);
         // Metadata routes were added after the initial index-service deployment. Keep
         // image/video mirroring compatible with an older service while it is being
         // upgraded; each collection is optional and can be retried on the next sync.
         try
         {
-            foreach (var tag in await Gateway.ListTagsAsync(cancellationToken).ConfigureAwait(false))
+            foreach (var tag in await mirrorGateway.ListTagsAsync(cancellationToken).ConfigureAwait(false))
                 Db.UpsertMirroredTag(tag);
         }
         catch (Exception ex) when (ex is HttpRequestException or InvalidOperationException)
@@ -232,7 +235,7 @@ public static class AppServices
         }
         try
         {
-            foreach (var album in await Gateway.ListAlbumsAsync(cancellationToken).ConfigureAwait(false))
+            foreach (var album in await mirrorGateway.ListAlbumsAsync(cancellationToken).ConfigureAwait(false))
                 Db.UpsertMirroredAlbum(album);
         }
         catch (Exception ex) when (ex is HttpRequestException or InvalidOperationException)
@@ -241,7 +244,7 @@ public static class AppServices
         }
         try
         {
-            foreach (var person in await Gateway.ListPeopleAsync(cancellationToken).ConfigureAwait(false))
+            foreach (var person in await mirrorGateway.ListPeopleAsync(cancellationToken).ConfigureAwait(false))
                 Db.UpsertMirroredPerson(person);
         }
         catch (Exception ex) when (ex is HttpRequestException or InvalidOperationException)
@@ -261,7 +264,7 @@ public static class AppServices
             {
                 do
                 {
-                    var page = await Gateway.ListImagesAsync(source.Id, false, 500, cursor, cancellationToken).ConfigureAwait(false);
+                    var page = await mirrorGateway.ListImagesAsync(source.Id, false, 500, cursor, cancellationToken).ConfigureAwait(false);
                     foreach (var image in page.Items)
                     {
                         image.SourceId = localSource.Id;
@@ -276,7 +279,7 @@ public static class AppServices
             {
                 do
                 {
-                    var page = await Gateway.ListVideosAsync(source.Id, 500, cursor, cancellationToken).ConfigureAwait(false);
+                    var page = await mirrorGateway.ListVideosAsync(source.Id, 500, cursor, cancellationToken).ConfigureAwait(false);
                     foreach (var video in page.Items)
                         Videos.UpsertMirrored(video, localSource.Id);
                     cursor = page.NextCursor;
@@ -292,11 +295,11 @@ public static class AppServices
         {
             // Apply relationships only after all mirrored media rows exist; the
             // foreign keys intentionally protect against partial remote syncs.
-            var metadata = await Gateway.GetMetadataAsync(cancellationToken).ConfigureAwait(false);
+            var metadata = await mirrorGateway.GetMetadataAsync(cancellationToken).ConfigureAwait(false);
             // The normal mirror payload omits vectors for speed. Fetch them
             // once when this mirror has not yet populated a model space; later
             // 30-second refreshes keep the existing vectors via COALESCE.
-            if (ServiceMode && Gateway is HttpIndexGateway httpGateway && metadata.Faces.Count > 0)
+            if (mirrorGateway is HttpIndexGateway httpGateway && metadata.Faces.Count > 0)
             {
                 var missingModelVectors = metadata.Faces.Select(face => face.ModelVersion)
                     .Distinct(StringComparer.OrdinalIgnoreCase)

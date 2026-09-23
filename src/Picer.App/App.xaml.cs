@@ -198,7 +198,7 @@ public partial class App : Application
         {
             LogCrash("本地索引增量发布失败", exception);
         }
-        if (AppServices.ServiceMode)
+        if (AppServices.SyncClient is not null)
             await SyncRemoteMirrorInBackgroundAsync(cancellationToken).ConfigureAwait(false);
     }
 
