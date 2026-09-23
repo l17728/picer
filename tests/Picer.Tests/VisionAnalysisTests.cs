@@ -566,6 +566,29 @@ public sealed class VisionAnalysisTests : IDisposable
     }
 
     [Fact]
+    public async Task PendingFaces_AreDeduplicatedWithinModelSpaceOnly()
+    {
+        var repository = new VisionAnalysisRepository(_database);
+        using var analysis = new VisionAnalysisService(repository, new FakeFaceAnalyzer("model-1"));
+        await analysis.AnalyzeAsync([_image]);
+
+        // The same source photo has a second detector/model face. It must not
+        // be hidden by the first model's identical sha256+ordinal signature.
+        using var insert = _database.Command("""
+            INSERT INTO detected_faces(image_id,model_version,ordinal,box_x,box_y,box_width,box_height,confidence,embedding,created_utc)
+            VALUES($image,'model-2',0,.1,.1,.5,.5,.99,$embedding,$created)
+            """);
+        insert.Parameters.AddWithValue("$image", _image.Id);
+        insert.Parameters.AddWithValue("$embedding", new byte[512]);
+        insert.Parameters.AddWithValue("$created", DateTime.UtcNow.ToString("O"));
+        insert.ExecuteNonQuery();
+
+        Assert.Single(repository.GetUnassignedFaces(modelVersion: "model-1"));
+        Assert.Single(repository.GetUnassignedFaces(modelVersion: "model-2"));
+        Assert.Equal(1, repository.GetFacePartitionCounts("model-2").Unassigned);
+    }
+
+    [Fact]
     public async Task NamedPersonViews_CollapseSameFileNameOrShaEvenWhenFaceDetectionsDiffer()
     {
         using (var update = _database.Command("UPDATE images SET sha256='shared-content' WHERE id=$id"))

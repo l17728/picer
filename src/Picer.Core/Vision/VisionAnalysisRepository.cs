@@ -349,7 +349,7 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
         using var command = database.Command("""
             WITH ranked_faces AS (
                 SELECT f.*, ROW_NUMBER() OVER (
-                    PARTITION BY COALESCE(NULLIF(i.sha256,''), printf('image:%d', i.id)), f.ordinal
+                    PARTITION BY f.model_version, COALESCE(NULLIF(i.sha256,''), printf('image:%d', i.id)), f.ordinal
                     ORDER BY f.id) AS duplicate_rank
                 FROM detected_faces f JOIN images i ON i.id=f.image_id AND i.status='active'
                 WHERE ($model IS NULL OR f.model_version=$model)
@@ -471,7 +471,7 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
         using var command = database.Command("""
             WITH ranked_faces AS (
                 SELECT f.*, ROW_NUMBER() OVER (
-                    PARTITION BY COALESCE(NULLIF(i.sha256,''), printf('image:%d', i.id)), f.ordinal
+                    PARTITION BY f.model_version, COALESCE(NULLIF(i.sha256,''), printf('image:%d', i.id)), f.ordinal
                     ORDER BY f.id) AS duplicate_rank
                 FROM detected_faces f JOIN images i ON i.id=f.image_id AND i.status='active'
                 WHERE $model IS NULL OR f.model_version=$model
@@ -552,7 +552,7 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
         using var command = database.Command("""
             WITH ranked_faces AS (
                 SELECT f.*, ROW_NUMBER() OVER (
-                    PARTITION BY COALESCE(NULLIF(i.sha256,''), printf('image:%d', i.id)), f.ordinal
+                    PARTITION BY f.model_version, COALESCE(NULLIF(i.sha256,''), printf('image:%d', i.id)), f.ordinal
                     ORDER BY f.id) AS duplicate_rank
                 FROM detected_faces f JOIN images i ON i.id=f.image_id AND i.status='active'
                 WHERE $model IS NULL OR f.model_version=$model
@@ -598,7 +598,7 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
         using var command = database.Command("""
             WITH ranked_faces AS (
                 SELECT f.*, ROW_NUMBER() OVER (
-                    PARTITION BY COALESCE(NULLIF(i.sha256,''), printf('image:%d', i.id)), f.ordinal
+                    PARTITION BY f.model_version, COALESCE(NULLIF(i.sha256,''), printf('image:%d', i.id)), f.ordinal
                     ORDER BY f.id) AS duplicate_rank
                 FROM detected_faces f JOIN images i ON i.id=f.image_id AND i.status='active'
                 WHERE $model IS NULL OR f.model_version=$model
