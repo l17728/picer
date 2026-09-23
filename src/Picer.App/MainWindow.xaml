@@ -366,6 +366,7 @@
                                 <Button Content="提交人物识别校准任务" Command="{Binding StartTrainingCommand}" Padding="12,5" Margin="4,0"
                                         ToolTip="提交平台异步校准：优化人物原型、阈值和样本配方，不修改 InsightFace/ArcFace 等基础模型权重"/>
                                 <ComboBox Width="300" ItemsSource="{Binding TrainingHistoryOptions}" SelectedItem="{Binding SelectedTrainingHistory}"
+                                          AutomationProperties.Name="模型历史制品下拉列表"
                                           DisplayMemberPath="DisplayName" ToolTip="只显示当前模型空间达到 90% 的历史训练版本"/>
                                 <Button Content="应用选中历史模型" Command="{Binding ApplySelectedTrainingCommand}" Padding="12,5" Margin="4,0"
                                         ToolTip="应用当前模型空间选中的历史版本；不会跨模型混用向量"/>
