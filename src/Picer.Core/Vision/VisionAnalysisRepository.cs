@@ -54,13 +54,30 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
             try
             {
                 using var json = JsonDocument.Parse(reader.GetString(1));
-                if ((json.RootElement.TryGetProperty("metrics", out var metrics) || json.RootElement.TryGetProperty("Metrics", out metrics)) &&
-                    (metrics.TryGetProperty("validationAccuracy", out var value) || metrics.TryGetProperty("ValidationAccuracy", out value)))
+                if (TryGetPropertyIgnoreCase(json.RootElement, "metrics", out var metrics) &&
+                    TryGetPropertyIgnoreCase(metrics, "validationAccuracy", out var value))
                     accuracy[reader.GetString(0)] = value.GetDouble();
             }
             catch (JsonException) { }
         }
         return summaries.Select(value => value with { ValidationAccuracy = accuracy.GetValueOrDefault(value.ArtifactId) }).ToArray();
+    }
+
+    private static bool TryGetPropertyIgnoreCase(JsonElement element, string name, out JsonElement value)
+    {
+        if (element.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var property in element.EnumerateObject())
+            {
+                if (string.Equals(property.Name, name, StringComparison.OrdinalIgnoreCase))
+                {
+                    value = property.Value;
+                    return true;
+                }
+            }
+        }
+        value = default;
+        return false;
     }
 
     public TrainingArtifactData? GetFaceTrainingArtifact(string artifactId, string modelVersion)

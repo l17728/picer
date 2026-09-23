@@ -78,10 +78,8 @@ public sealed class PeopleModelSpaceRegressionTests
             // history list; an empty list is the production bug this test guards.
             var historyCombo = WaitForElement(window, "模型历史制品下拉列表", TimeSpan.FromSeconds(15));
             Assert.NotNull(historyCombo);
-            // WPF's popup provider does not expose DisplayMemberPath/item
-            // names consistently through UIA. The persisted artifact is
-            // asserted above; this check guards that the model-scoped history
-            // ComboBox itself is present after the Insight switch.
+            var historyItems = ExpandItems(historyCombo!, TimeSpan.FromSeconds(5));
+            Assert.Contains(historyItems, item => item.Current.Name.Contains("93", StringComparison.OrdinalIgnoreCase));
 
             ((InvokePattern)pending.GetCurrentPattern(InvokePattern.Pattern)).Invoke();
             Assert.Equal(1, WaitForListItems(faceList!, TimeSpan.FromSeconds(15)));

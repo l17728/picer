@@ -466,6 +466,8 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             .GroupBy(value => value.ArtifactId, StringComparer.OrdinalIgnoreCase)
             .Select(group => group.First())
             .ToArray());
+        var localEligible = history.Where(value => value.ValidationAccuracy >= .90).ToArray();
+        AppLogger.Info($"Face training history local query: model={modelVersion}; aliases={string.Join(',', aliases)}; records={history.Length}; eligible={localEligible.Length}");
         // Publish local history before touching the network.  A slow or
         // unavailable ModelServer must never make a valid local artifact
         // dropdown appear empty during a model switch.
@@ -474,7 +476,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             if (!string.Equals(SelectedFaceModelVersion, modelVersion, StringComparison.OrdinalIgnoreCase))
                 return;
             TrainingHistoryOptions.Clear();
-            foreach (var value in history.Where(value => value.ValidationAccuracy >= .90))
+            foreach (var value in localEligible)
                 TrainingHistoryOptions.Add(new(value.ArtifactId, value.ModelVersion, value.ValidationAccuracy, value.CreatedUtc, value.State));
             SelectedTrainingHistory = TrainingHistoryOptions.FirstOrDefault(value => value.State == "active") ?? TrainingHistoryOptions.FirstOrDefault();
         });
@@ -536,7 +538,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             if (!string.Equals(SelectedFaceModelVersion, modelVersion, StringComparison.OrdinalIgnoreCase))
                 return;
             TrainingHistoryOptions.Clear();
-            foreach (var value in history.Where(value => value.ValidationAccuracy >= .90))
+            foreach (var value in localEligible)
                 TrainingHistoryOptions.Add(new(value.ArtifactId, value.ModelVersion, value.ValidationAccuracy, value.CreatedUtc, value.State));
             // Small synthetic multi-model baseline probes are not user training
             // versions and must not appear as selectable history.
