@@ -27,6 +27,75 @@ public sealed record SceneGroupDescription(
 
 public sealed class SceneGroupDescriptionService(PicerDatabase database, CloudVisionRepository cloud)
 {
+    private const string LayoutProvider = "picer-local-layout";
+
+    /// <summary>Persists the local directory scene layout so a remote mirror can render
+    /// exactly the same ordered groups without independently re-clustering.</summary>
+    public void SaveLayoutSnapshot(string directoryPath, bool includeDescendants, IReadOnlyList<SceneTimeCluster> clusters)
+    {
+        var directory = Path.GetFullPath(directoryPath);
+        var layoutVersion = includeDescendants ? "layout-v1:recursive" : "layout-v1:directory";
+        var fingerprints = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var cluster in clusters)
+        {
+            var imageIds = cluster.ImageIds.ToArray();
+            if (imageIds.Length == 0) continue;
+            var fingerprint = CreateLayoutFingerprint(directory, includeDescendants, imageIds);
+            fingerprints.Add(fingerprint);
+            using var command = database.Command("""
+                INSERT INTO scene_group_descriptions(fingerprint,directory_path,start_utc,end_utc,image_ids_json,
+                  representative_image_ids_json,provider,model_version,prompt_version,scene_name,summary,search_terms_json,
+                  state,created_utc,reviewed_utc)
+                VALUES($fingerprint,$directory,$start,$end,$images,'[]',$provider,'layout-v1',$layout,$scene,'','[]','layout',$now,$now)
+                ON CONFLICT(fingerprint) DO UPDATE SET directory_path=excluded.directory_path,start_utc=excluded.start_utc,
+                  end_utc=excluded.end_utc,image_ids_json=excluded.image_ids_json,scene_name=excluded.scene_name,
+                  prompt_version=excluded.prompt_version,state='layout',reviewed_utc=excluded.reviewed_utc
+                """);
+            command.Parameters.AddWithValue("$fingerprint", fingerprint);
+            command.Parameters.AddWithValue("$directory", directory);
+            command.Parameters.AddWithValue("$start", cluster.StartUtc.ToString("O"));
+            command.Parameters.AddWithValue("$end", cluster.EndUtc.ToString("O"));
+            command.Parameters.AddWithValue("$images", JsonSerializer.Serialize(imageIds));
+            command.Parameters.AddWithValue("$provider", LayoutProvider);
+            command.Parameters.AddWithValue("$layout", layoutVersion);
+            command.Parameters.AddWithValue("$scene", cluster.SceneName);
+            command.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("O"));
+            command.ExecuteNonQuery();
+        }
+        using var cleanup = database.Command("DELETE FROM scene_group_descriptions WHERE state='layout' AND directory_path=$directory AND prompt_version=$layout AND fingerprint NOT IN (SELECT value FROM json_each($fingerprints))");
+        cleanup.Parameters.AddWithValue("$directory", directory);
+        cleanup.Parameters.AddWithValue("$layout", layoutVersion);
+        cleanup.Parameters.AddWithValue("$fingerprints", JsonSerializer.Serialize(fingerprints));
+        cleanup.ExecuteNonQuery();
+    }
+
+    public IReadOnlyList<SceneTimeCluster> GetLayoutSnapshot(string directoryPath, bool includeDescendants, IReadOnlyList<ImageRecord> images)
+    {
+        var directory = Path.GetFullPath(directoryPath);
+        var layoutVersion = includeDescendants ? "layout-v1:recursive" : "layout-v1:directory";
+        var byId = images.ToDictionary(image => image.Id);
+        using var command = database.Command("SELECT start_utc,end_utc,image_ids_json,scene_name FROM scene_group_descriptions WHERE state='layout' AND directory_path=$directory AND prompt_version=$layout ORDER BY start_utc, fingerprint");
+        command.Parameters.AddWithValue("$directory", directory); command.Parameters.AddWithValue("$layout", layoutVersion);
+        using var reader = command.ExecuteReader();
+        var result = new List<SceneTimeCluster>();
+        while (reader.Read())
+        {
+            long[] ids;
+            try { ids = JsonSerializer.Deserialize<long[]>(reader.GetString(2)) ?? []; } catch (JsonException) { continue; }
+            var resolved = ids.Where(byId.ContainsKey).Select(id => byId[id]).ToArray();
+            if (resolved.Length == 0 || resolved.Length != ids.Length) continue;
+            if (!DateTime.TryParse(reader.GetString(0), null, System.Globalization.DateTimeStyles.RoundtripKind, out var start) ||
+                !DateTime.TryParse(reader.GetString(1), null, System.Globalization.DateTimeStyles.RoundtripKind, out var end)) continue;
+            result.Add(new SceneTimeCluster(start, end, reader.GetString(3), ids));
+        }
+        return result;
+    }
+
+    public static string CreateLayoutFingerprint(string directoryPath, bool includeDescendants, IEnumerable<long> imageIds)
+    {
+        var text = $"layout-v1|{Path.GetFullPath(directoryPath)}|{includeDescendants}|{string.Join(',', imageIds)}";
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text)));
+    }
     public async Task<SceneGroupDescription?> SummarizeWithAiAsync(SceneGroupPlan plan,
         ISceneGroupSummarizer summarizer, CancellationToken cancellationToken = default)
     {

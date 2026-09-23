@@ -4,6 +4,8 @@ using Picer.Core.Models;
 using Picer.Core.People;
 using Picer.Core.Video;
 using Picer.Core.Vision;
+using Picer.Core.Logging;
+using System.Diagnostics;
 
 namespace Picer.Core.Search;
 
@@ -20,6 +22,7 @@ public sealed class AiMediaRetrievalService(PicerDatabase database, PeopleServic
     public async Task<AiMediaAnswer> AskAsync(string question, bool includeVideos, DateTime today,
         IProgress<(string Stage, int Percent)>? progress = null, CancellationToken cancellationToken = default)
     {
+        var stopwatch = Stopwatch.StartNew();
         progress?.Report(("理解问题", 5));
         // Only expose manually confirmed identities to the planner; candidate
         // and unassigned clusters are not valid person filters.
@@ -36,6 +39,7 @@ public sealed class AiMediaRetrievalService(PicerDatabase database, PeopleServic
         catch (Exception exception) { throw new InvalidDataException("AI 未能生成有效的结构化查询。", exception); }
         if (plan is null) throw new InvalidDataException("AI 查询计划为空。");
         plan = plan with { Keywords = plan.Keywords?.Where(value => !string.IsNullOrWhiteSpace(value)).Select(value => value.Trim()).Distinct().ToArray() ?? [] };
+        AppLogger.Info($"AiQuestion plan ready; hasPerson={(!string.IsNullOrWhiteSpace(plan.PersonName))}; hasLocation={(!string.IsNullOrWhiteSpace(plan.Location))}; hasDate={(!string.IsNullOrWhiteSpace(plan.StartDate) || !string.IsNullOrWhiteSpace(plan.EndDate))}; keywordCount={plan.Keywords.Count}; elapsedMs={stopwatch.ElapsedMilliseconds}");
 
         progress?.Report(("检索照片索引", 25));
         var mention = !string.IsNullOrWhiteSpace(plan.PersonName)
@@ -71,6 +75,7 @@ public sealed class AiMediaRetrievalService(PicerDatabase database, PeopleServic
             var image = database.GetImage(hit.Id);
             if (image is not null) photoCandidates[image.Id] = image;
         }
+        AppLogger.Info($"AiQuestion photo retrieval completed; primaryHits={toolResult.Items.Count}; uniquePhotos={photoCandidates.Count}; geoFilter={(bounds is not null)}; elapsedMs={stopwatch.ElapsedMilliseconds}");
         if (bounds is not null && !string.IsNullOrWhiteSpace(plan.Location))
         {
             // Preserve recall for legacy descriptions that contain a place name
@@ -89,6 +94,12 @@ public sealed class AiMediaRetrievalService(PicerDatabase database, PeopleServic
         progress?.Report(("检索视频索引", 45));
         var videoCandidates = includeVideos ? RetrieveVideos(plan, mention?.Id, start, end).Take(50).ToArray() : [];
         var photos = photoCandidates.Values.Take(50).ToArray();
+        if (photos.Length == 0 && videoCandidates.Length == 0)
+        {
+            progress?.Report(("完成", 100));
+            AppLogger.Info($"AiQuestion completed without evidence; photos=0; videos=0; elapsedMs={stopwatch.ElapsedMilliseconds}");
+            return new("## 未找到匹配内容\n\n当前索引中没有同时满足这些条件的照片或视频。", [], [], plan);
+        }
         progress?.Report(("AI复核候选", 65));
         var evidence = new
         {

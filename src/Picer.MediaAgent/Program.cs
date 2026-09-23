@@ -10,9 +10,13 @@ namespace Picer.MediaAgent;
 
 internal static class Program
 {
+    private const string SingleInstanceMutexName = "Global\\Picer.MediaAgent.Singleton";
+
     [STAThread]
     private static void Main()
     {
+        using var mutex = new Mutex(true, SingleInstanceMutexName, out var acquired);
+        if (!acquired) return;
         ApplicationConfiguration.Initialize();
         using var agent = new AgentApplication();
         Application.Run();

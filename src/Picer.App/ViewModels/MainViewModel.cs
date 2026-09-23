@@ -1586,9 +1586,19 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 if (AppServices.ServiceMode && node.SourceId is { } remoteSourceId)
                 {
                     var images = FilterRemoteDirectoryImages(_db.GetImages(remoteSourceId, includeMissing: false), node.RemotePathPrefix, recursive);
+                    var mirroredLayout = new SceneGroupDescriptionService(_db, new CloudVisionRepository(_db))
+                        .GetLayoutSnapshot(node.FullPath, recursive, images);
+                    if (mirroredLayout.Count > 0)
+                    {
+                        AppLogger.Info($"Scene anchors using synced local layout: path={node.FullPath}; clusters={mirroredLayout.Count}");
+                        return mirroredLayout;
+                    }
                     return new SceneTimeClusterService(_db).Build(images);
                 }
-                return new SceneTimeClusterService(_db).Build(node.FullPath, recursive);
+                var localClusters = new SceneTimeClusterService(_db).Build(node.FullPath, recursive);
+                new SceneGroupDescriptionService(_db, new CloudVisionRepository(_db))
+                    .SaveLayoutSnapshot(node.FullPath, recursive, localClusters);
+                return localClusters;
             });
             AppLogger.Info($"Scene anchors loaded: path={node.FullPath}; model={(AppServices.ServiceMode ? "remote-mirror" : "local")}; recursive={recursive}; clusters={clusters.Count}; images={clusters.Sum(cluster => cluster.ImageIds.Count)}");
             foreach(var anchor in node.Children.Where(child=>child.IsSceneAnchor).ToList())node.Children.Remove(anchor);
