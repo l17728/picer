@@ -46,10 +46,10 @@ public sealed class SceneGroupDescriptionService(PicerDatabase database, CloudVi
                 INSERT INTO scene_group_descriptions(fingerprint,directory_path,start_utc,end_utc,image_ids_json,
                   representative_image_ids_json,provider,model_version,prompt_version,scene_name,summary,search_terms_json,
                   state,created_utc,reviewed_utc)
-                VALUES($fingerprint,$directory,$start,$end,$images,'[]',$provider,'layout-v1',$layout,$scene,'','[]','layout',$now,$now)
+                VALUES($fingerprint,$directory,$start,$end,$images,'[]',$provider,'layout-v1',$layout,$scene,'','[]','accepted',$now,$now)
                 ON CONFLICT(fingerprint) DO UPDATE SET directory_path=excluded.directory_path,start_utc=excluded.start_utc,
                   end_utc=excluded.end_utc,image_ids_json=excluded.image_ids_json,scene_name=excluded.scene_name,
-                  prompt_version=excluded.prompt_version,state='layout',reviewed_utc=excluded.reviewed_utc
+                  prompt_version=excluded.prompt_version,state='accepted',reviewed_utc=excluded.reviewed_utc
                 """);
             command.Parameters.AddWithValue("$fingerprint", fingerprint);
             command.Parameters.AddWithValue("$directory", directory);
@@ -62,8 +62,9 @@ public sealed class SceneGroupDescriptionService(PicerDatabase database, CloudVi
             command.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("O"));
             command.ExecuteNonQuery();
         }
-        using var cleanup = database.Command("DELETE FROM scene_group_descriptions WHERE state='layout' AND directory_path=$directory AND prompt_version=$layout AND fingerprint NOT IN (SELECT value FROM json_each($fingerprints))");
+        using var cleanup = database.Command("DELETE FROM scene_group_descriptions WHERE state='accepted' AND provider=$provider AND directory_path=$directory AND prompt_version=$layout AND fingerprint NOT IN (SELECT value FROM json_each($fingerprints))");
         cleanup.Parameters.AddWithValue("$directory", directory);
+        cleanup.Parameters.AddWithValue("$provider", LayoutProvider);
         cleanup.Parameters.AddWithValue("$layout", layoutVersion);
         cleanup.Parameters.AddWithValue("$fingerprints", JsonSerializer.Serialize(fingerprints));
         cleanup.ExecuteNonQuery();
@@ -74,8 +75,9 @@ public sealed class SceneGroupDescriptionService(PicerDatabase database, CloudVi
         var directory = Path.GetFullPath(directoryPath);
         var layoutVersion = includeDescendants ? "layout-v1:recursive" : "layout-v1:directory";
         var byId = images.ToDictionary(image => image.Id);
-        using var command = database.Command("SELECT start_utc,end_utc,image_ids_json,scene_name FROM scene_group_descriptions WHERE state='layout' AND directory_path=$directory AND prompt_version=$layout ORDER BY start_utc, fingerprint");
+        using var command = database.Command("SELECT start_utc,end_utc,image_ids_json,scene_name FROM scene_group_descriptions WHERE state='accepted' AND provider=$provider AND directory_path=$directory AND prompt_version=$layout ORDER BY start_utc, fingerprint");
         command.Parameters.AddWithValue("$directory", directory); command.Parameters.AddWithValue("$layout", layoutVersion);
+        command.Parameters.AddWithValue("$provider", LayoutProvider);
         using var reader = command.ExecuteReader();
         var result = new List<SceneTimeCluster>();
         while (reader.Read())
@@ -173,8 +175,10 @@ public sealed class SceneGroupDescriptionService(PicerDatabase database, CloudVi
 
     public SceneGroupDescription? GetAccepted(string fingerprint)
     {
-        using var command = database.Command("SELECT scene_name,summary,search_terms_json,provider,model_version,prompt_version,state FROM scene_group_descriptions WHERE fingerprint=$fingerprint AND state='accepted'");
-        command.Parameters.AddWithValue("$fingerprint", fingerprint); using var reader = command.ExecuteReader();
+        using var command = database.Command("SELECT scene_name,summary,search_terms_json,provider,model_version,prompt_version,state FROM scene_group_descriptions WHERE fingerprint=$fingerprint AND state='accepted' AND provider<>$layoutProvider");
+        command.Parameters.AddWithValue("$fingerprint", fingerprint);
+        command.Parameters.AddWithValue("$layoutProvider", LayoutProvider);
+        using var reader = command.ExecuteReader();
         if (!reader.Read()) return null;
         var terms = JsonSerializer.Deserialize<string[]>(reader.GetString(2)) ?? [];
         return new(fingerprint, reader.GetString(0), reader.GetString(1), terms, reader.GetString(3), reader.GetString(4), reader.GetString(5), reader.GetString(6));
@@ -195,10 +199,11 @@ public sealed class SceneGroupDescriptionService(PicerDatabase database, CloudVi
         using var command = database.Command("""
             SELECT fingerprint,start_utc,end_utc,image_ids_json,scene_name,summary,search_terms_json,provider,model_version,prompt_version,state
             FROM scene_group_descriptions
-            WHERE state='accepted' AND (directory_path=$directory OR lower(directory_path)=lower($directory))
+            WHERE state='accepted' AND provider<>$layoutProvider AND (directory_path=$directory OR lower(directory_path)=lower($directory))
               AND start_utc <= $end AND end_utc >= $start
             """);
         command.Parameters.AddWithValue("$directory", Path.GetFullPath(directoryPath));
+        command.Parameters.AddWithValue("$layoutProvider", LayoutProvider);
         command.Parameters.AddWithValue("$start", start.ToString("O"));
         command.Parameters.AddWithValue("$end", end.ToString("O"));
         using var reader = command.ExecuteReader();
