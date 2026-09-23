@@ -111,7 +111,8 @@ public sealed class LocalGateway(PicerDatabase db, ThumbnailService thumbnails, 
         return Task.FromResult(new GatewayMetadata(albumImages, imageTags, db.GetImageLocationHierarchyRows(),
             db.GetAllMirroredFaces(), db.GetAllMirroredFaceAssignments(), db.GetAllMirroredVideoKeyframes(),
             db.GetAllMirroredVideoTranscripts(), db.GetAllMirroredVideoSummaries(), db.GetAllMirroredVideoFaces(),
-            db.GetAllMirroredCloudVisionAnalyses(), db.GetAllMirroredSceneGroupDescriptions()));
+            db.GetAllMirroredCloudVisionAnalyses(), db.GetAllMirroredSceneGroupDescriptions(),
+            db.GetAllMirroredFaceReviewStates(), db.GetAllMirroredFaceCandidateClusters(), db.GetAllMirroredFaceCandidateMembers()));
     }
 
     public Task<IReadOnlyList<PersonSummary>> ListPeopleAsync(CancellationToken cancellationToken = default) =>

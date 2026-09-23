@@ -37,7 +37,10 @@ public sealed record SyncMetadataRequest(
     IReadOnlyList<GatewayVideoSummary>? VideoSummaries = null,
     IReadOnlyList<GatewayVideoFace>? VideoFaces = null,
     IReadOnlyList<GatewayCloudVisionAnalysis>? CloudVisionAnalyses = null,
-    IReadOnlyList<GatewaySceneGroupDescription>? SceneGroupDescriptions = null);
+    IReadOnlyList<GatewaySceneGroupDescription>? SceneGroupDescriptions = null,
+    IReadOnlyList<GatewayFaceReviewState>? FaceReviewStates = null,
+    IReadOnlyList<GatewayFaceCandidateCluster>? FaceCandidateClusters = null,
+    IReadOnlyList<GatewayFaceCandidateMember>? FaceCandidateMembers = null);
 public sealed record SyncFacesRequest(
     IReadOnlyList<GatewayDetectedFace> Faces,
     IReadOnlyList<GatewayFaceAssignment> Assignments);
@@ -46,6 +49,17 @@ public sealed record ImageTagLink(long ImageId, long TagId);
 
 public sealed class IndexApiHandlers(PicerDatabase db, ThumbnailService thumbnails, VideoRepository videos)
 {
+    internal static string NormalizeAgentPath(string path)
+    {
+        // Mirrored source paths are stored under the service's Linux data root
+        // (for example /opt/picer-index/G:\\Apple照片).  The MediaAgent runs
+        // on the Windows source host and must receive the original Windows
+        // path, not the server storage prefix.
+        const string prefix = "/opt/picer-index/";
+        return path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
+            ? path[prefix.Length..]
+            : path;
+    }
     public GatewayHealth Health() => new("ok", PicerDatabase.CurrentSchemaVersion, "1.0",
         typeof(IndexApiHandlers).Assembly.GetName().Version?.ToString() ?? "unknown");
 
@@ -149,7 +163,10 @@ public sealed class IndexApiHandlers(PicerDatabase db, ThumbnailService thumbnai
         using (var command = db.Command("SELECT fingerprint,directory_path,start_utc,end_utc,image_ids_json,representative_image_ids_json,provider,model_version,prompt_version,scene_name,summary,search_terms_json,state,created_utc,reviewed_utc FROM scene_group_descriptions"))
         using (var reader = command.ExecuteReader())
             while (reader.Read()) scenes.Add(new GatewaySceneGroupDescription(reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetString(3), reader.GetString(4), reader.GetString(5), reader.GetString(6), reader.GetString(7), reader.GetString(8), reader.GetString(9), reader.GetString(10), reader.GetString(11), reader.GetString(12), reader.GetString(13), reader.GetString(14)));
-        return new GatewayMetadata(albumImages, imageTags, db.GetImageLocationHierarchyRows(), faces, assignments, keyframes, transcripts, summaries, videoFaces, analyses, scenes);
+        var reviews = db.GetAllMirroredFaceReviewStates();
+        var clusters = db.GetAllMirroredFaceCandidateClusters();
+        var members = db.GetAllMirroredFaceCandidateMembers();
+        return new GatewayMetadata(albumImages, imageTags, db.GetImageLocationHierarchyRows(), faces, assignments, keyframes, transcripts, summaries, videoFaces, analyses, scenes, reviews, clusters, members);
     }
     public IReadOnlyList<PersonSummary> ListPeople() => new PeopleService(db).GetAll();
 
@@ -288,7 +305,7 @@ public static class IndexServiceHost
             if (stream is null)
             {
                 var image = await handlers.GetAsync(id, cancellationToken);
-                if (image is not null && await agents.RequestAsync(agentId, image.Path, cancellationToken) is { } asset)
+                if (image is not null && await agents.RequestAsync(agentId, IndexApiHandlers.NormalizeAgentPath(image.Path), cancellationToken) is { } asset)
                     stream = thumbnails.GetOrCreate(new MemoryStream(asset.Content), id) is { } cached && File.Exists(cached) ? File.OpenRead(cached) : null;
             }
             return stream is null ? Results.NotFound() : Results.Stream(stream, "image/jpeg");
@@ -303,7 +320,7 @@ public static class IndexServiceHost
             if (image is null) return Results.NotFound();
             var box = new NormalizedFaceBox((float)reader.GetDouble(1), (float)reader.GetDouble(2), (float)reader.GetDouble(3), (float)reader.GetDouble(4));
             Stream? original = File.Exists(image.Path) ? File.OpenRead(image.Path) : null;
-            if (original is null && await agents.RequestAsync(agentId, image.Path, cancellationToken) is { } asset)
+            if (original is null && await agents.RequestAsync(agentId, IndexApiHandlers.NormalizeAgentPath(image.Path), cancellationToken) is { } asset)
                 original = new MemoryStream(asset.Content, writable: false);
             if (original is null) return Results.NotFound();
             await using (original)
@@ -316,7 +333,7 @@ public static class IndexServiceHost
         {
             var path = handlers.GetFirstVideoKeyframePath(id);
             Stream? stream = !string.IsNullOrWhiteSpace(path) && File.Exists(path) ? File.OpenRead(path) : null;
-            if (stream is null && !string.IsNullOrWhiteSpace(path) && await agents.RequestAsync(agentId, path, cancellationToken) is { } asset)
+            if (stream is null && !string.IsNullOrWhiteSpace(path) && await agents.RequestAsync(agentId, IndexApiHandlers.NormalizeAgentPath(path), cancellationToken) is { } asset)
                 stream = new MemoryStream(asset.Content, writable: false);
             return stream is null ? Results.NotFound() : Results.Stream(stream, "image/jpeg");
         });
@@ -348,6 +365,8 @@ public static class IndexServiceHost
             foreach (var face in request.Faces ?? []) db.UpsertMirroredFace(face);
             foreach (var assignment in request.FaceAssignments ?? []) db.UpsertMirroredFaceAssignment(assignment);
             db.UpsertMirroredVideoMetadata(new GatewayMetadata([], [], [], [], [], request.VideoKeyframes ?? [], request.VideoTranscripts ?? [], request.VideoSummaries ?? [], request.VideoFaces ?? [], request.CloudVisionAnalyses ?? [], request.SceneGroupDescriptions ?? []));
+            db.ReplaceMirroredFaceWorkflow(new GatewayMetadata([], [], [], [], [], [], [], [], null, null, null,
+                request.FaceReviewStates, request.FaceCandidateClusters, request.FaceCandidateMembers));
             foreach (var link in request.AlbumImages) SemanticEngine.AddToAlbum(db, link.AlbumId, link.ImageId);
             foreach (var link in request.ImageTags) db.UpsertMirroredImageTag(link.ImageId, link.TagId);
             foreach (var location in request.Locations) db.UpsertMirroredLocation(location);
@@ -364,7 +383,7 @@ public static class IndexServiceHost
         {
             var record = await handlers.GetAsync(id, cancellationToken);
             if (record is null) return Results.NotFound();
-            var asset = await agents.RequestAsync(agentId, record.Path, cancellationToken);
+            var asset = await agents.RequestAsync(agentId, IndexApiHandlers.NormalizeAgentPath(record.Path), cancellationToken);
             return asset is null
                 ? Results.Json(new { error = "media_agent_offline", detail = "没有在线的原图代理" }, statusCode: StatusCodes.Status503ServiceUnavailable)
                 : Results.File(asset.Value.Content, asset.Value.ContentType, enableRangeProcessing: true);
@@ -373,7 +392,7 @@ public static class IndexServiceHost
         {
             var record = await handlers.GetVideoAsync(id, cancellationToken);
             if (record is null) return Results.NotFound();
-            var asset = await agents.RequestAsync(agentId, record.Path, cancellationToken);
+            var asset = await agents.RequestAsync(agentId, IndexApiHandlers.NormalizeAgentPath(record.Path), cancellationToken);
             return asset is null
                 ? Results.Json(new { error = "media_agent_offline", detail = "没有在线的原图代理" }, statusCode: StatusCodes.Status503ServiceUnavailable)
                 : Results.File(asset.Value.Content, "video/mp4", enableRangeProcessing: true);

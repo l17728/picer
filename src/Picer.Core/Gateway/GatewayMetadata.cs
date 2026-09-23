@@ -24,6 +24,9 @@ public sealed record GatewayCloudVisionAnalysis(long ImageId, string Provider, s
 public sealed record GatewaySceneGroupDescription(string Fingerprint, string DirectoryPath, string StartUtc, string EndUtc,
     string ImageIdsJson, string RepresentativeImageIdsJson, string Provider, string ModelVersion, string PromptVersion,
     string SceneName, string Summary, string SearchTermsJson, string State, string CreatedUtc, string ReviewedUtc);
+public sealed record GatewayFaceReviewState(long FaceId, string State, string UpdatedUtc);
+public sealed record GatewayFaceCandidateCluster(long Id, string ModelVersion, string CreatedUtc);
+public sealed record GatewayFaceCandidateMember(long ClusterId, long FaceId, double Similarity);
 [method: JsonConstructor]
 public sealed record GatewayMetadata(
     IReadOnlyList<GatewayAlbumImageLink> AlbumImages,
@@ -36,7 +39,10 @@ public sealed record GatewayMetadata(
     IReadOnlyList<GatewayVideoSummary> VideoSummaries,
     IReadOnlyList<GatewayVideoFace>? VideoFaces = null,
     IReadOnlyList<GatewayCloudVisionAnalysis>? CloudVisionAnalyses = null,
-    IReadOnlyList<GatewaySceneGroupDescription>? SceneGroupDescriptions = null)
+    IReadOnlyList<GatewaySceneGroupDescription>? SceneGroupDescriptions = null,
+    IReadOnlyList<GatewayFaceReviewState>? FaceReviewStates = null,
+    IReadOnlyList<GatewayFaceCandidateCluster>? FaceCandidateClusters = null,
+    IReadOnlyList<GatewayFaceCandidateMember>? FaceCandidateMembers = null)
 {
     public GatewayMetadata(
         IReadOnlyList<GatewayAlbumImageLink> albumImages,
@@ -47,4 +53,7 @@ public sealed record GatewayMetadata(
     public IReadOnlyList<GatewayVideoFace> VideoFacesOrEmpty => VideoFaces ?? [];
     public IReadOnlyList<GatewayCloudVisionAnalysis> CloudVisionAnalysesOrEmpty => CloudVisionAnalyses ?? [];
     public IReadOnlyList<GatewaySceneGroupDescription> SceneGroupDescriptionsOrEmpty => SceneGroupDescriptions ?? [];
+    public IReadOnlyList<GatewayFaceReviewState> FaceReviewStatesOrEmpty => FaceReviewStates ?? [];
+    public IReadOnlyList<GatewayFaceCandidateCluster> FaceCandidateClustersOrEmpty => FaceCandidateClusters ?? [];
+    public IReadOnlyList<GatewayFaceCandidateMember> FaceCandidateMembersOrEmpty => FaceCandidateMembers ?? [];
 }

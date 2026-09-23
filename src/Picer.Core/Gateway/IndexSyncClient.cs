@@ -73,19 +73,9 @@ public sealed class IndexSyncClient(HttpClient client)
 
     public async Task PushMetadataAsync(PicerDatabase database, CancellationToken cancellationToken = default)
     {
-        var albums = SemanticEngine.GetAlbums(database);
-        var memberships = albums.SelectMany(album =>
-            SemanticEngine.GetAlbumImages(database, album.Id).Select(image => new GatewayAlbumImageLink(album.Id, image.Id))).ToArray();
-        var tagLinks = database.GetImages(includeMissing: true)
-            .SelectMany(image => SemanticEngine.GetImageTags(database, image.Id)
-                .Select(tag => new GatewayImageTagLink(image.Id, tag.Id))).ToArray();
-        var request = new SyncMetadataRequest(
-            SemanticEngine.GetTags(database), albums, memberships,
-            tagLinks, database.GetImageLocationHierarchyRows(), new PeopleService(database).GetAll(), null, null,
-            database.GetAllMirroredVideoKeyframes(), database.GetAllMirroredVideoTranscripts(), database.GetAllMirroredVideoSummaries(), database.GetAllMirroredVideoFaces(),
-            database.GetAllMirroredCloudVisionAnalyses(), database.GetAllMirroredSceneGroupDescriptions());
-        using var response = await client.PostAsJsonAsync("api/sync/v1/metadata", request, Json, cancellationToken);
-        response.EnsureSuccessStatusCode();
+        // Face workflow projections reference detected_faces. Upload the face
+        // rows first so a first-time mirror can apply review/candidate state
+        // atomically without foreign-key failures.
         var faces = database.GetAllMirroredFaces();
         var assignments = database.GetAllMirroredFaceAssignments().ToDictionary(item => item.FaceId);
         foreach (var batch in faces.Chunk(2000))
@@ -96,6 +86,20 @@ public sealed class IndexSyncClient(HttpClient client)
                 new { faces = batch, assignments = batchAssignments }, Json, cancellationToken);
             faceResponse.EnsureSuccessStatusCode();
         }
+        var albums = SemanticEngine.GetAlbums(database);
+        var memberships = albums.SelectMany(album =>
+            SemanticEngine.GetAlbumImages(database, album.Id).Select(image => new GatewayAlbumImageLink(album.Id, image.Id))).ToArray();
+        var tagLinks = database.GetImages(includeMissing: true)
+            .SelectMany(image => SemanticEngine.GetImageTags(database, image.Id)
+                .Select(tag => new GatewayImageTagLink(image.Id, tag.Id))).ToArray();
+        var request = new SyncMetadataRequest(
+            SemanticEngine.GetTags(database), albums, memberships,
+            tagLinks, database.GetImageLocationHierarchyRows(), new PeopleService(database).GetAll(), null, null,
+            database.GetAllMirroredVideoKeyframes(), database.GetAllMirroredVideoTranscripts(), database.GetAllMirroredVideoSummaries(), database.GetAllMirroredVideoFaces(),
+            database.GetAllMirroredCloudVisionAnalyses(), database.GetAllMirroredSceneGroupDescriptions(),
+            database.GetAllMirroredFaceReviewStates(), database.GetAllMirroredFaceCandidateClusters(), database.GetAllMirroredFaceCandidateMembers());
+        using var response = await client.PostAsJsonAsync("api/sync/v1/metadata", request, Json, cancellationToken);
+        response.EnsureSuccessStatusCode();
     }
 
     private sealed record SyncMetadataRequest(
@@ -112,6 +116,9 @@ public sealed class IndexSyncClient(HttpClient client)
         IReadOnlyList<GatewayVideoSummary>? VideoSummaries = null,
         IReadOnlyList<GatewayVideoFace>? VideoFaces = null,
         IReadOnlyList<GatewayCloudVisionAnalysis>? CloudVisionAnalyses = null,
-        IReadOnlyList<GatewaySceneGroupDescription>? SceneGroupDescriptions = null);
+        IReadOnlyList<GatewaySceneGroupDescription>? SceneGroupDescriptions = null,
+        IReadOnlyList<GatewayFaceReviewState>? FaceReviewStates = null,
+        IReadOnlyList<GatewayFaceCandidateCluster>? FaceCandidateClusters = null,
+        IReadOnlyList<GatewayFaceCandidateMember>? FaceCandidateMembers = null);
 
 }

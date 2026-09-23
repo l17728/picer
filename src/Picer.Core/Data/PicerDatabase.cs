@@ -1539,6 +1539,70 @@ public sealed class PicerDatabase : IDisposable
         return result;
     }
 
+    public IReadOnlyList<GatewayFaceReviewState> GetAllMirroredFaceReviewStates()
+    {
+        using var command = Command("SELECT face_id,state,updated_utc FROM face_review_states");
+        using var reader = command.ExecuteReader();
+        var result = new List<GatewayFaceReviewState>();
+        while (reader.Read()) result.Add(new GatewayFaceReviewState(reader.GetInt64(0), reader.GetString(1), reader.GetString(2)));
+        return result;
+    }
+
+    public IReadOnlyList<GatewayFaceCandidateCluster> GetAllMirroredFaceCandidateClusters()
+    {
+        using var command = Command("SELECT id,model_version,created_utc FROM face_candidate_clusters");
+        using var reader = command.ExecuteReader();
+        var result = new List<GatewayFaceCandidateCluster>();
+        while (reader.Read()) result.Add(new GatewayFaceCandidateCluster(reader.GetInt64(0), reader.GetString(1), reader.GetString(2)));
+        return result;
+    }
+
+    public IReadOnlyList<GatewayFaceCandidateMember> GetAllMirroredFaceCandidateMembers()
+    {
+        using var command = Command("SELECT cluster_id,face_id,similarity FROM face_candidate_members");
+        using var reader = command.ExecuteReader();
+        var result = new List<GatewayFaceCandidateMember>();
+        while (reader.Read()) result.Add(new GatewayFaceCandidateMember(reader.GetInt64(0), reader.GetInt64(1), reader.GetDouble(2)));
+        return result;
+    }
+
+    /// <summary>Replaces the derived face review/candidate state in a mirror.
+    /// These tables are a projection of the source model space and must not be
+    /// left partially stale, otherwise a remote UI reports thousands of false
+    /// pending faces after switching models.</summary>
+    public void ReplaceMirroredFaceWorkflow(GatewayMetadata metadata)
+    {
+        using var transaction = BeginTransaction();
+        using (var clearMembers = Command("DELETE FROM face_candidate_members")) { clearMembers.Transaction = transaction; clearMembers.ExecuteNonQuery(); }
+        using (var clearClusters = Command("DELETE FROM face_candidate_clusters")) { clearClusters.Transaction = transaction; clearClusters.ExecuteNonQuery(); }
+        using (var clearReview = Command("DELETE FROM face_review_states")) { clearReview.Transaction = transaction; clearReview.ExecuteNonQuery(); }
+        using (var clusters = Command("INSERT INTO face_candidate_clusters(id,model_version,created_utc) VALUES($id,$model,$created)"))
+        {
+            clusters.Transaction = transaction;
+            foreach (var item in metadata.FaceCandidateClustersOrEmpty)
+            {
+                clusters.Parameters.Clear(); clusters.Parameters.AddWithValue("$id", item.Id); clusters.Parameters.AddWithValue("$model", item.ModelVersion); clusters.Parameters.AddWithValue("$created", item.CreatedUtc); clusters.ExecuteNonQuery();
+            }
+        }
+        using (var members = Command("INSERT INTO face_candidate_members(cluster_id,face_id,similarity) VALUES($cluster,$face,$similarity)"))
+        {
+            members.Transaction = transaction;
+            foreach (var item in metadata.FaceCandidateMembersOrEmpty)
+            {
+                members.Parameters.Clear(); members.Parameters.AddWithValue("$cluster", item.ClusterId); members.Parameters.AddWithValue("$face", item.FaceId); members.Parameters.AddWithValue("$similarity", item.Similarity); members.ExecuteNonQuery();
+            }
+        }
+        using (var reviews = Command("INSERT INTO face_review_states(face_id,state,updated_utc) VALUES($face,$state,$updated)"))
+        {
+            reviews.Transaction = transaction;
+            foreach (var item in metadata.FaceReviewStatesOrEmpty)
+            {
+                reviews.Parameters.Clear(); reviews.Parameters.AddWithValue("$face", item.FaceId); reviews.Parameters.AddWithValue("$state", item.State); reviews.Parameters.AddWithValue("$updated", item.UpdatedUtc); reviews.ExecuteNonQuery();
+            }
+        }
+        transaction.Commit();
+    }
+
     public IReadOnlyList<GatewayVideoKeyframe> GetAllMirroredVideoKeyframes()
     {
         using var command = Command("SELECT id,video_id,timestamp_seconds,path,dhash FROM video_keyframes");
