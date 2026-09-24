@@ -4,6 +4,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using Picer.App.ViewModels;
+using Picer.Core.Logging;
 
 namespace Picer.App.Controls;
 
@@ -15,6 +16,7 @@ public partial class PhotoGrid : UserControl
     private HashSet<object> _selectionBeforeDrag = [];
     private Task? _prefetchWorker;
     private long _lastPrefetchRequestTicks;
+    private long _lastPrefetchLogTicks;
     private INotifyCollectionChanged? _itemsNotifier;
     public static readonly DependencyProperty ItemsSourceProperty = DependencyProperty.Register(nameof(ItemsSource), typeof(IEnumerable), typeof(PhotoGrid), new PropertyMetadata(null, OnItemsSourceChanged));
     public static readonly DependencyProperty SelectedItemProperty = DependencyProperty.Register(nameof(SelectedItem), typeof(object), typeof(PhotoGrid), new FrameworkPropertyMetadata(null, FrameworkPropertyMetadataOptions.BindsTwoWayByDefault));
@@ -67,6 +69,12 @@ public partial class PhotoGrid : UserControl
     {
         if (!AppServices.ServiceMode) return;
         Volatile.Write(ref _lastPrefetchRequestTicks, DateTime.UtcNow.Ticks);
+        var now = DateTime.UtcNow.Ticks;
+        if (now - Volatile.Read(ref _lastPrefetchLogTicks) > TimeSpan.TicksPerSecond)
+        {
+            Volatile.Write(ref _lastPrefetchLogTicks, now);
+            AppLogger.Info($"Thumbnail prefetch scheduled; items={List.Items.Count}; visible={IsVisible}");
+        }
         if (_prefetchWorker is null || _prefetchWorker.IsCompleted)
             _prefetchWorker = PrefetchWhenIdleAsync();
     }
@@ -90,12 +98,18 @@ public partial class PhotoGrid : UserControl
                 // running are never cancelled.
                 var all = List.Items.OfType<ImageItemViewModel>().ToArray();
                 var visible = new HashSet<ImageItemViewModel>();
-                for (var index = 0; index < List.Items.Count; index++)
-                    if (List.ItemContainerGenerator.ContainerFromIndex(index) is not null &&
-                        List.Items[index] is ImageItemViewModel item)
-                        visible.Add(item);
+                var range = FindViewportRange();
+                if (range.First >= 0)
+                    for (var index = range.First; index <= range.Last && index < List.Items.Count; index++)
+                        if (List.Items[index] is ImageItemViewModel item) visible.Add(item);
                 var ordered = visible.Concat(all.Where(item => !visible.Contains(item))).ToArray();
                 var pending = ordered.Where(item => !item.HasThumbnail && !item.IsThumbnailLoading).Take(8).ToArray();
+                var batchNow = DateTime.UtcNow.Ticks;
+                if (batchNow - Volatile.Read(ref _lastPrefetchLogTicks) > TimeSpan.TicksPerSecond)
+                {
+                    Volatile.Write(ref _lastPrefetchLogTicks, batchNow);
+                    AppLogger.Info($"Thumbnail prefetch batch; items={all.Length}; viewport={range.First}-{range.Last}; pending={pending.Length}");
+                }
                 if (pending.Length == 0) return;
                 foreach (var item in pending)
                 {
@@ -221,10 +235,29 @@ public partial class PhotoGrid : UserControl
 
     private void PhotoGrid_Loaded(object sender, RoutedEventArgs e) => ScheduleGreedyPrefetch();
 
+    private void PhotoGrid_SizeChanged(object sender, SizeChangedEventArgs e) => ScheduleGreedyPrefetch();
+
     private void List_ScrollChanged(object sender, ScrollChangedEventArgs e)
     {
         if (Math.Abs(e.VerticalChange) > 0.01 || Math.Abs(e.HorizontalChange) > 0.01)
             ScheduleGreedyPrefetch();
+    }
+
+    private (int First, int Last) FindViewportRange()
+    {
+        var panel = FindVisualChild<VirtualizingWrapPanel>(List);
+        return panel?.GetViewportItemRange() ?? (-1, -1);
+    }
+
+    private static T? FindVisualChild<T>(DependencyObject root) where T : DependencyObject
+    {
+        for (var index = 0; index < System.Windows.Media.VisualTreeHelper.GetChildrenCount(root); index++)
+        {
+            var child = System.Windows.Media.VisualTreeHelper.GetChild(root, index);
+            if (child is T match) return match;
+            if (FindVisualChild<T>(child) is { } nested) return nested;
+        }
+        return null;
     }
 
     private void Thumbnail_Loaded(object sender, RoutedEventArgs e)

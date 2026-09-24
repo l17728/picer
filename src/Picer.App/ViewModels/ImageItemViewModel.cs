@@ -7,6 +7,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Picer.Core.Models;
 using Picer.Core.Video;
+using Picer.Core.Logging;
 
 namespace Picer.App.ViewModels;
 
@@ -237,8 +238,18 @@ public partial class ImageItemViewModel : ObservableObject
             }
         }
         catch (OperationCanceledException) { }
-        catch (IOException) { }
-        catch (UnauthorizedAccessException) { }
+        catch (IOException exception)
+        {
+            AppLogger.Warn($"Thumbnail load failed; id={_record.Id}; error={exception.GetType().Name}");
+        }
+        catch (UnauthorizedAccessException exception)
+        {
+            AppLogger.Warn($"Thumbnail load denied; id={_record.Id}; error={exception.GetType().Name}");
+        }
+        catch (Exception exception)
+        {
+            AppLogger.Warn($"Thumbnail load failed; id={_record.Id}; error={exception.GetType().Name}");
+        }
         finally
         {
             if (acquired) ThumbnailLoadGate.Release();

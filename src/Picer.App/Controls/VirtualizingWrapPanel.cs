@@ -234,6 +234,16 @@ public sealed class VirtualizingWrapPanel : VirtualizingPanel, IScrollInfo
     public double ViewportHeight => _viewport.Height;
     public double HorizontalOffset => _offset.X;
     public double VerticalOffset => _offset.Y;
+    /// <summary>Returns the item range at the current scroll position. This is
+    /// based on layout/offset, not on recycled WPF containers (which can lag
+    /// one measure pass behind a scrollbar drag).</summary>
+    public (int First, int Last) GetViewportItemRange()
+    {
+        if (_layouts.Length == 0) return (-1, -1);
+        var first = FindFirstVisibleIndex(_offset.Y);
+        var last = FindLastVisibleIndex(_offset.Y + _viewport.Height);
+        return (Math.Max(0, first), Math.Min(_layouts.Length - 1, last));
+    }
     public ScrollViewer? ScrollOwner { get; set; }
     public void LineUp() => SetVerticalOffset(VerticalOffset - 32);
     public void LineDown() => SetVerticalOffset(VerticalOffset + 32);
