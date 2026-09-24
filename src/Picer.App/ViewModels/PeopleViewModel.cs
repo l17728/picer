@@ -45,6 +45,10 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
     // scheduling rule as media thumbnails so entering a large people group
     // cannot start thousands of decoders at once.
     private readonly SemaphoreSlim _faceCropLoadGate = new(8, 8);
+    private Task? _displayedThumbnailWorker;
+    private long _displayedThumbnailRequestTicks;
+    private HashSet<int> _displayedVisibleIndices = [];
+    private readonly HashSet<UnassignedFaceViewModel> _displayedThumbnailPending = [];
     private CancellationTokenSource? _pageLoadCancellation;
     private CancellationTokenSource? _personLoadCancellation;
     private CancellationTokenSource? _clusterLoadCancellation;
@@ -1824,7 +1828,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             await UiWork.AddInBatchesAsync(items, item =>
             {
                 UnassignedFaces.Add(item); DisplayedFaces.Add(item);
-                LoadDisplayedFaceThumbnailAsync(item, cancellation.Token).Forget();
+                QueueDisplayedFaceThumbnail(item, cancellation.Token);
                 DisplayedFacesTitle = $"待分类人脸 · {DisplayedFaces.Count}/{items.Count}";
             }, cancellation.Token, batchSize: 30);
             UnassignedSummary = $"待处理人脸 · {snapshot.Counts.Total}（待确认 {snapshot.Counts.Suggested} / 待命名 {snapshot.Counts.Candidate} / 待分类 {snapshot.Counts.Unassigned}）";
@@ -1859,7 +1863,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             await UiWork.AddInBatchesAsync(items, item =>
             {
                 DisplayedFaces.Add(item);
-                LoadDisplayedFaceThumbnailAsync(item, cancellation.Token).Forget();
+                QueueDisplayedFaceThumbnail(item, cancellation.Token);
                 DisplayedFacesTitle = $"不分类 · {DisplayedFaces.Count}/{items.Count} 项";
             }, cancellation.Token, batchSize: 30);
             DisplayedFacesTitle = $"不分类（{records.Length}）";
@@ -1964,7 +1968,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             await UiWork.AddInBatchesAsync(items, item =>
             {
                 DisplayedFaces.Add(item);
-                LoadDisplayedFaceThumbnailAsync(item, cancellationToken).Forget();
+                QueueDisplayedFaceThumbnail(item, cancellationToken);
                 DisplayedFacesTitle = $"推荐为 {group.Record.PersonName} · {DisplayedFaces.Count}/{items.Count}";
             }, cancellationToken, batchSize: 30);
             DisplayedFacesTitle = $"推荐为 {group.Record.PersonName}（{DisplayedFaces.Count}）";
@@ -1997,7 +2001,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             {
                 SelectedClusterFaces.Add(item);
                 DisplayedFaces.Add(item);
-                LoadDisplayedFaceThumbnailAsync(item, cancellationToken).Forget();
+                QueueDisplayedFaceThumbnail(item, cancellationToken);
                 DisplayedFacesTitle = $"候选人物 · {DisplayedFaces.Count} / {items.Count} 项";
             }, cancellationToken);
             DisplayedFacesTitle = $"{cluster.Summary}（可输入名称后确认整组）";
@@ -2099,7 +2103,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
                 {
                     AssignedFaces.Add(item);
                     DisplayedFaces.Add(item);
-                    LoadDisplayedFaceThumbnailAsync(item, cancellationToken).Forget();
+                    QueueDisplayedFaceThumbnail(item, cancellationToken);
                 DisplayedFacesTitle = $"{person.DisplayName} · {AssignedFaces.Count} / {items.Count} 项";
                 }, cancellationToken);
                 DisplayedFacesTitle = $"{person.DisplayName} · {AssignedFaces.Count} 张人脸 · {CurrentClassificationModelLabel()}";
@@ -2183,7 +2187,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         foreach (var member in representative.BurstOperationFaces.Skip(1).Reverse())
         {
             DisplayedFaces.Insert(index + 1, member);
-            LoadDisplayedFaceThumbnailAsync(member).Forget();
+            QueueDisplayedFaceThumbnail(member);
         }
     }
 
@@ -2293,22 +2297,71 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         foreach (var face in faces)
         {
             DisplayedFaces.Add(face);
-            _ = LoadDisplayedFaceThumbnailAsync(face);
+            QueueDisplayedFaceThumbnail(face);
         }
+    }
+
+    public void ScheduleDisplayedFaceThumbnails(IEnumerable<int>? visibleIndices = null)
+    {
+        if (visibleIndices is not null) _displayedVisibleIndices = visibleIndices.ToHashSet();
+        Volatile.Write(ref _displayedThumbnailRequestTicks, DateTime.UtcNow.Ticks);
+        if (_displayedThumbnailWorker is null || _displayedThumbnailWorker.IsCompleted)
+            _displayedThumbnailWorker = LoadDisplayedFaceThumbnailsWhenIdleAsync();
+    }
+
+    private void QueueDisplayedFaceThumbnail(UnassignedFaceViewModel item, CancellationToken cancellationToken = default)
+    {
+        if (item.HasThumbnail) return;
+        lock (_displayedThumbnailPending) _displayedThumbnailPending.Add(item);
+        ScheduleDisplayedFaceThumbnails();
+    }
+
+    private async Task LoadDisplayedFaceThumbnailsWhenIdleAsync()
+    {
+        try
+        {
+            await Task.Delay(500);
+            while (true)
+            {
+                var remaining = Volatile.Read(ref _displayedThumbnailRequestTicks) + TimeSpan.TicksPerMillisecond * 500 - DateTime.UtcNow.Ticks;
+                if (remaining > 0) { await Task.Delay(TimeSpan.FromTicks(remaining)); continue; }
+                UnassignedFaceViewModel[] pending;
+                lock (_displayedThumbnailPending)
+                {
+                    var visible = _displayedVisibleIndices
+                        .Where(index => index >= 0 && index < DisplayedFaces.Count)
+                        .Select(index => DisplayedFaces[index]);
+                    pending = visible.Concat(_displayedThumbnailPending)
+                        .Distinct()
+                        .Where(item => DisplayedFaces.Contains(item))
+                        .Where(item => !item.HasThumbnail && !item.IsThumbnailLoading)
+                        .Take(8).ToArray();
+                    foreach (var item in pending) _displayedThumbnailPending.Remove(item);
+                }
+                if (pending.Length == 0) return;
+                foreach (var item in pending) _ = LoadDisplayedFaceThumbnailAsync(item);
+                await Task.Delay(40);
+            }
+        }
+        catch (OperationCanceledException) { }
     }
 
     private async Task LoadDisplayedFaceThumbnailAsync(UnassignedFaceViewModel item, CancellationToken cancellationToken = default)
     {
-        await _faceCropLoadGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        if (item.HasThumbnail || item.IsThumbnailLoading) return;
+        item.IsThumbnailLoading = true;
+        var acquired = false;
         try
         {
+            await _faceCropLoadGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            acquired = true;
             if (!DisplayedFaces.Contains(item)) return;
             var path = await GetFaceThumbnailAsync(item.Record);
             cancellationToken.ThrowIfCancellationRequested();
             if (path is not null && DisplayedFaces.Contains(item)) item.FaceThumbnailPath = path;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
-        finally { _faceCropLoadGate.Release(); }
+        finally { if (acquired) _faceCropLoadGate.Release(); item.IsThumbnailLoading = false; }
     }
 }
 
@@ -2379,6 +2432,10 @@ public partial class UnassignedFaceViewModel(UnassignedFaceRecord record, string
 
     [ObservableProperty]
     private string? _faceThumbnailPath = initialThumbnailPath;
+
+    [ObservableProperty]
+    private bool _isThumbnailLoading;
+    public bool HasThumbnail => !string.IsNullOrWhiteSpace(FaceThumbnailPath);
 
     [ObservableProperty]
     private bool _isAutomaticSuggestion = string.Equals(record.AssignmentState, "suggested", StringComparison.Ordinal);

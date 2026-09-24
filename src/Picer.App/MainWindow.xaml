@@ -489,6 +489,7 @@
                                      PreviewMouseMove="PeopleFace_PreviewMouseMove" PreviewMouseLeftButtonUp="PeopleFace_PreviewMouseLeftButtonUp"
                                      ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                                      ScrollViewer.CanContentScroll="True"
+                                     ScrollViewer.ScrollChanged="PeopleFacesList_ScrollChanged"
                                      VirtualizingPanel.IsVirtualizing="True"
                                      VirtualizingPanel.VirtualizationMode="Recycling">
                                 <ListBox.ContextMenu><ContextMenu Opened="PeopleFaceMenu_Opened"/></ListBox.ContextMenu>

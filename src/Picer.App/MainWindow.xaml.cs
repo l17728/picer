@@ -65,6 +65,29 @@ public partial class MainWindow : Window
             _mainVm.SelectedSource = node;
     }
 
+    private void PeopleFacesList_ScrollChanged(object sender, ScrollChangedEventArgs e)
+    {
+        if (Math.Abs(e.VerticalChange) <= .01 && Math.Abs(e.HorizontalChange) <= .01) return;
+        if (sender is not ListBox list) return;
+        var panel = FindVisualChild<Controls.VirtualizingWrapPanel>(list);
+        var range = panel?.GetViewportItemRange() ?? (-1, -1);
+        var visible = range.First >= 0
+            ? Enumerable.Range(range.First, Math.Max(0, range.Last - range.First + 1))
+            : Enumerable.Empty<int>();
+        _mainVm.People.ScheduleDisplayedFaceThumbnails(visible);
+    }
+
+    private static T? FindVisualChild<T>(DependencyObject root) where T : DependencyObject
+    {
+        for (var index = 0; index < System.Windows.Media.VisualTreeHelper.GetChildrenCount(root); index++)
+        {
+            var child = System.Windows.Media.VisualTreeHelper.GetChild(root, index);
+            if (child is T match) return match;
+            if (FindVisualChild<T>(child) is { } nested) return nested;
+        }
+        return null;
+    }
+
     private void SearchBox_TextChanged(object sender, TextChangedEventArgs e)
     {
         if (MainTabs is null || sender is not TextBox box) return;
