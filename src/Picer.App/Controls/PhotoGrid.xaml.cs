@@ -13,7 +13,8 @@ public partial class PhotoGrid : UserControl
     private int _dragStartIndex = -1;
     private bool _dragSelecting;
     private HashSet<object> _selectionBeforeDrag = [];
-    private CancellationTokenSource? _prefetchCts;
+    private Task? _prefetchWorker;
+    private long _lastPrefetchRequestTicks;
     private INotifyCollectionChanged? _itemsNotifier;
     public static readonly DependencyProperty ItemsSourceProperty = DependencyProperty.Register(nameof(ItemsSource), typeof(IEnumerable), typeof(PhotoGrid), new PropertyMetadata(null, OnItemsSourceChanged));
     public static readonly DependencyProperty SelectedItemProperty = DependencyProperty.Register(nameof(SelectedItem), typeof(object), typeof(PhotoGrid), new FrameworkPropertyMetadata(null, FrameworkPropertyMetadataOptions.BindsTwoWayByDefault));
@@ -49,6 +50,7 @@ public partial class PhotoGrid : UserControl
     {
         InitializeComponent();
         Unloaded += PhotoGrid_Unloaded;
+        Loaded += PhotoGrid_Loaded;
     }
     private static void OnItemsSourceChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
     {
@@ -63,36 +65,47 @@ public partial class PhotoGrid : UserControl
 
     private void ScheduleGreedyPrefetch()
     {
-        _prefetchCts?.Cancel();
         if (!AppServices.ServiceMode) return;
-        var cts = _prefetchCts = new CancellationTokenSource();
-        _ = PrefetchWhenIdleAsync(cts);
+        Volatile.Write(ref _lastPrefetchRequestTicks, DateTime.UtcNow.Ticks);
+        if (_prefetchWorker is null || _prefetchWorker.IsCompleted)
+            _prefetchWorker = PrefetchWhenIdleAsync();
     }
 
-    private async Task PrefetchWhenIdleAsync(CancellationTokenSource owner)
+    private async Task PrefetchWhenIdleAsync()
     {
         try
         {
-            await Task.Delay(750, owner.Token);
-            // Once the user is idle, warm the whole current page. The cache
-            // performs content-key single-flight, so duplicates across cards
-            // and timeline/scene views share one download.
-            foreach (var item in List.Items.OfType<ImageItemViewModel>())
+            await Task.Delay(750);
+            while (AppServices.ServiceMode && IsVisible)
             {
-                owner.Token.ThrowIfCancellationRequested();
-                item.PrefetchThumbnail();
-                await Task.Yield();
+                var idleDeadline = Volatile.Read(ref _lastPrefetchRequestTicks) + TimeSpan.TicksPerMillisecond * 750;
+                var remaining = idleDeadline - DateTime.UtcNow.Ticks;
+                if (remaining > 0)
+                {
+                    await Task.Delay(TimeSpan.FromTicks(remaining));
+                    continue;
+                }
+                // Recompute the order on every batch. A scroll therefore
+                // changes only the not-yet-started work; requests already
+                // running are never cancelled.
+                var all = List.Items.OfType<ImageItemViewModel>().ToArray();
+                var visible = new HashSet<ImageItemViewModel>();
+                for (var index = 0; index < List.Items.Count; index++)
+                    if (List.ItemContainerGenerator.ContainerFromIndex(index) is not null &&
+                        List.Items[index] is ImageItemViewModel item)
+                        visible.Add(item);
+                var ordered = visible.Concat(all.Where(item => !visible.Contains(item))).ToArray();
+                var pending = ordered.Where(item => !item.HasThumbnail && !item.IsThumbnailLoading).Take(8).ToArray();
+                if (pending.Length == 0) return;
+                foreach (var item in pending)
+                {
+                    if (visible.Contains(item)) item.EnsureThumbnailLoad();
+                    else item.PrefetchThumbnail();
+                }
+                await Task.Delay(40);
             }
         }
         catch (OperationCanceledException) { }
-        finally
-        {
-            if (ReferenceEquals(_prefetchCts, owner))
-            {
-                owner.Dispose();
-                _prefetchCts = null;
-            }
-        }
     }
     private static void OnScrollToItemChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
     {
@@ -201,15 +214,19 @@ public partial class PhotoGrid : UserControl
         SelectedItemsTarget.Clear();
         foreach (var item in list.SelectedItems.OfType<ImageItemViewModel>()) SelectedItemsTarget.Add(item);
     }
-    private void Thumbnail_Unloaded(object sender, RoutedEventArgs e)
-    {
-        if (sender is FrameworkElement { DataContext: ImageItemViewModel image }) image.CancelThumbnailLoad();
-    }
-
     private void PhotoGrid_Unloaded(object sender, RoutedEventArgs e)
     {
-        _prefetchCts?.Cancel();
+        Volatile.Write(ref _lastPrefetchRequestTicks, 0);
     }
+
+    private void PhotoGrid_Loaded(object sender, RoutedEventArgs e) => ScheduleGreedyPrefetch();
+
+    private void List_ScrollChanged(object sender, ScrollChangedEventArgs e)
+    {
+        if (Math.Abs(e.VerticalChange) > 0.01 || Math.Abs(e.HorizontalChange) > 0.01)
+            ScheduleGreedyPrefetch();
+    }
+
     private void Thumbnail_Loaded(object sender, RoutedEventArgs e)
     {
         if (sender is not FrameworkElement { DataContext: ImageItemViewModel image }) return;
@@ -217,12 +234,5 @@ public partial class PhotoGrid : UserControl
         // Remote thumbnails are persisted by content identity.  Warm roughly
         // one viewport ahead without affecting the UI thread; already-loaded
         // and in-flight items are no-ops, so scrolling cannot duplicate work.
-        if (AppServices.ServiceMode && FindContainer(sender as DependencyObject) is { } container)
-        {
-            var index = List.ItemContainerGenerator.IndexFromContainer(container);
-            for (var offset = 1; offset <= 12 && index + offset < List.Items.Count; offset++)
-                if (List.Items[index + offset] is ImageItemViewModel next)
-                    next.PrefetchThumbnail();
-        }
     }
 }

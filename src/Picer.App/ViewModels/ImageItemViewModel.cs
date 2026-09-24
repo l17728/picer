@@ -114,18 +114,29 @@ public partial class ImageItemViewModel : ObservableObject
     {
         get
         {
-            if (_thumbnail is null && !_isLoadingThumbnail) LoadThumbnailAsync();
+            if (_thumbnail is null && !_isLoadingThumbnail) EnsureThumbnailLoad();
             return _thumbnail;
         }
     }
 
+    public bool HasThumbnail => _thumbnail is not null;
+    public bool IsThumbnailLoading => _isLoadingThumbnail;
+
     public void EnsureThumbnailLoad()
     {
-        if (_thumbnail is null && !_isLoadingThumbnail) LoadThumbnailAsync();
+        if (_thumbnail is not null) return;
+        if (!_isLoadingThumbnail) LoadThumbnailAsync(priorityToken: null);
     }
 
     /// <summary>Starts a best-effort background load for the next viewport.</summary>
-    public void PrefetchThumbnail() => EnsureThumbnailLoad();
+    public void PrefetchThumbnail()
+    {
+        if (_thumbnail is null && !_isLoadingThumbnail)
+            // A page switch still cancels through _pageCancellation. The
+            // prefetch scheduler itself never cancels an already-started
+            // transfer while the user scrolls.
+            LoadThumbnailAsync(priorityToken: CancellationToken.None);
+    }
 
     public void SetVideoPreviewPath(string path)
     {
@@ -136,12 +147,14 @@ public partial class ImageItemViewModel : ObservableObject
         OnPropertyChanged(nameof(Thumbnail));
     }
 
-    private async void LoadThumbnailAsync()
+    private async void LoadThumbnailAsync(CancellationToken? priorityToken)
     {
         if (_isLoadingThumbnail) return;
         _isLoadingThumbnail = true;
         _thumbnailCts?.Dispose();
-        var cts = _thumbnailCts = CancellationTokenSource.CreateLinkedTokenSource(_pageCancellation);
+        var cts = _thumbnailCts = priorityToken is { } priority
+            ? CancellationTokenSource.CreateLinkedTokenSource(_pageCancellation, priority)
+            : CancellationTokenSource.CreateLinkedTokenSource(_pageCancellation);
         var acquired = false;
 
         try
