@@ -439,8 +439,14 @@ public static class IndexServiceHost
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
             catch (Exception exception)
             {
-                AppLogger.Warn($"AI stream proxy failed: {exception.GetType().Name}");
-                if (!response.HasStarted) response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+                AppLogger.Warn($"AI stream proxy failed: {exception.GetType().Name}; message={exception.Message}");
+                if (!response.HasStarted)
+                {
+                    response.Clear();
+                    response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+                    response.ContentType = "application/json; charset=utf-8";
+                    await response.WriteAsJsonAsync(new { error = "ai_proxy_unavailable", detail = exception.Message }, CancellationToken.None);
+                }
                 else
                 {
                     var error = JsonSerializer.Serialize(new { error = "ai_proxy_failed" });
