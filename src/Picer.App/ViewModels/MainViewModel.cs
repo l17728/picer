@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.IO;
+using System.Net.Http;
 using System.Text;
 using System.Windows;
 using System.Windows.Threading;
@@ -630,7 +631,26 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 AppServices.CloudVisionRepository, chat);
             var answer = await service.AskAsync(question, includeVideos, DateTime.Today, progress, token);
             if (version != _searchVersion || token.IsCancellationRequested) return;
-            QuestionAnswerText = answer.Markdown;
+            QuestionAnswerText = "";
+            StatusText = "AI 问答：正在流式生成回答…";
+            var streamed = new System.Text.StringBuilder();
+            try
+            {
+                await foreach (var chunk in chat.StreamAsync(
+                    "你是私人照片库回答整理器。只能忠实整理给定的检索结论，不得新增人物、地点或照片事实。直接输出中文 Markdown。",
+                    answer.Markdown, 900, token))
+                {
+                    if (version != _searchVersion || token.IsCancellationRequested) return;
+                    streamed.Append(chunk);
+                    QuestionAnswerText = streamed.ToString();
+                    await Dispatcher.Yield(DispatcherPriority.Background);
+                }
+            }
+            catch (Exception streamException) when (streamException is HttpRequestException or InvalidDataException)
+            {
+                AppLogger.Warn($"AiQuestion answer stream fallback: {streamException.GetType().Name}");
+            }
+            if (streamed.Length == 0) QuestionAnswerText = answer.Markdown;
             MatchedCount = answer.Photos.Count;
             _searchCursor = null; HasMoreResults = false;
             Images.Clear(); _searchLoadedRecords.Clear(); _searchLoadedRecords.AddRange(answer.Photos);
