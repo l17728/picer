@@ -31,6 +31,8 @@
                 </DockPanel>
             </Border>
             <ListBox Grid.Column="1" x:Name="Photos" ItemsSource="{Binding Items}"
+                 Loaded="Photos_Loaded" SizeChanged="Photos_SizeChanged"
+                 ScrollViewer.ScrollChanged="Photos_ScrollChanged"
                  ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                  VirtualizingPanel.IsVirtualizing="True"
                  AutomationProperties.Name="图片网格">

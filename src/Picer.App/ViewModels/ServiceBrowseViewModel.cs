@@ -23,6 +23,9 @@ public partial class ServicePhotoItem : ObservableObject
 
     [ObservableProperty]
     private System.Windows.Media.Imaging.BitmapImage? _thumbnail;
+    [ObservableProperty]
+    private bool _isThumbnailLoading;
+    public bool HasThumbnail => Thumbnail is not null;
 }
 
 public sealed class RemoteDirectoryNode
@@ -40,6 +43,10 @@ public partial class ServiceBrowseViewModel : ObservableObject
     private readonly SemaphoreSlim _thumbnailGate = new(4);
     private string? _cursor;
     private CancellationTokenSource? _loadCts;
+    private CancellationTokenSource? _thumbnailPageCts;
+    private Task? _thumbnailWorker;
+    private long _thumbnailRequestTicks;
+    private HashSet<int> _visibleThumbnailIndices = [];
     private readonly RemoteAssetCache _assetCache = new(Path.Combine(AppPaths.DataRoot, "remote-assets"));
 
     public ObservableCollection<ServicePhotoItem> Items { get; } = [];
@@ -87,6 +94,9 @@ public partial class ServiceBrowseViewModel : ObservableObject
         Items.Clear();
         _cursor = null;
         TotalCount = 0;
+        _thumbnailPageCts?.Cancel();
+        _thumbnailPageCts?.Dispose();
+        _thumbnailPageCts = new CancellationTokenSource();
         await LoadMoreAsync();
     }
 
@@ -115,8 +125,8 @@ public partial class ServiceBrowseViewModel : ObservableObject
                 var mediaId = isVideo ? -record.Id : record.Id;
                 var item = new ServicePhotoItem { Id = record.Id, MediaId = mediaId, IsVideo = isVideo, Path = record.Path, FileSize = record.FileSize, Sha256 = record.ContentSha256 ?? record.Sha256 };
                 Items.Add(item);
-                _ = LoadThumbnailAsync(item, cts.Token);
             }
+            ScheduleThumbnailPrefetch();
             StatusText = Items.Count == 0
                 ? "无结果。"
                 : $"已加载 {Items.Count} / {TotalCount} 张（数据来自索引服务）。";
@@ -138,6 +148,36 @@ public partial class ServiceBrowseViewModel : ObservableObject
     {
         MediaFilterIndex = Math.Clamp(index, 0, 2);
         return SearchAsync();
+    }
+
+    public void ScheduleThumbnailPrefetch(IEnumerable<int>? visibleIndices = null)
+    {
+        if (visibleIndices is not null) _visibleThumbnailIndices = visibleIndices.ToHashSet();
+        Volatile.Write(ref _thumbnailRequestTicks, DateTime.UtcNow.Ticks);
+        if (_thumbnailWorker is null || _thumbnailWorker.IsCompleted)
+            _thumbnailWorker = PrefetchThumbnailsWhenIdleAsync();
+    }
+
+    private async Task PrefetchThumbnailsWhenIdleAsync()
+    {
+        try
+        {
+            await Task.Delay(750);
+            while (true)
+            {
+                var remaining = Volatile.Read(ref _thumbnailRequestTicks) + TimeSpan.TicksPerMillisecond * 750 - DateTime.UtcNow.Ticks;
+                if (remaining > 0) { await Task.Delay(TimeSpan.FromTicks(remaining)); continue; }
+                var visible = _visibleThumbnailIndices;
+                var ordered = visible.Select(index => index >= 0 && index < Items.Count ? Items[index] : null)
+                    .Concat(Items.Where((_, index) => !visible.Contains(index)))
+                    .OfType<ServicePhotoItem>().ToArray();
+                var pending = ordered.Where(item => !item.HasThumbnail && !item.IsThumbnailLoading).Take(8).ToArray();
+                if (pending.Length == 0) return;
+                foreach (var item in pending) _ = LoadThumbnailAsync(item, _thumbnailPageCts?.Token ?? CancellationToken.None);
+                await Task.Delay(40);
+            }
+        }
+        catch (OperationCanceledException) { }
     }
 
     private async Task<GatewayPage> SearchVideosAsync(SearchFilters filters, CancellationToken cancellationToken)
@@ -306,21 +346,22 @@ public partial class ServiceBrowseViewModel : ObservableObject
 
     private async Task LoadThumbnailAsync(ServicePhotoItem item, CancellationToken cancellationToken)
     {
-        if (item.IsVideo) return;
+        if (item.IsVideo || item.HasThumbnail || item.IsThumbnailLoading) return;
+        item.IsThumbnailLoading = true;
         try
         {
             await _thumbnailGate.WaitAsync(cancellationToken);
             try
             {
-                await using var stream = await _gateway.OpenThumbnailAsync(item.Id, cancellationToken);
-                if (stream is null) return;
-                using var buffered = new MemoryStream();
-                await stream.CopyToAsync(buffered, cancellationToken);
-                buffered.Position = 0;
+                var record = new ImageRecord { Id = item.MediaId, Path = item.Path, ContentSha256 = item.Sha256 };
+                var path = AppServices.RemoteThumbnails.TryGet(record) ?? await AppServices.RemoteThumbnails.GetOrDownloadAsync(
+                    record, () => _gateway.OpenThumbnailAsync(item.Id, cancellationToken), cancellationToken);
+                if (path is null || !File.Exists(path)) return;
                 var image = new BitmapImage();
                 image.BeginInit();
                 image.CacheOption = BitmapCacheOption.OnLoad;
-                image.StreamSource = buffered;
+                image.DecodePixelWidth = 256;
+                image.UriSource = new Uri(path, UriKind.Absolute);
                 image.EndInit();
                 image.Freeze();
                 Application.Current.Dispatcher.Invoke(() => item.Thumbnail = image);
@@ -336,5 +377,6 @@ public partial class ServiceBrowseViewModel : ObservableObject
         catch (Exception)
         {
         }
+        finally { item.IsThumbnailLoading = false; }
     }
 }

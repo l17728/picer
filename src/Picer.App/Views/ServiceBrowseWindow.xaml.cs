@@ -1,6 +1,7 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
+using Picer.App.Controls;
 using Picer.App.ViewModels;
 using Picer.Core.Gateway;
 
@@ -60,5 +61,34 @@ public partial class ServiceBrowseWindow : Window
     {
         if (!IsLoaded || sender is not ComboBox box || box.SelectedIndex < 0) return;
         await ViewModel.SetMediaFilterAsync(box.SelectedIndex);
+    }
+
+    private void Photos_Loaded(object sender, RoutedEventArgs e) => ScheduleThumbnailPrefetch();
+    private void Photos_SizeChanged(object sender, SizeChangedEventArgs e) => ScheduleThumbnailPrefetch();
+    private void Photos_ScrollChanged(object sender, ScrollChangedEventArgs e)
+    {
+        if (Math.Abs(e.VerticalChange) > .01 || Math.Abs(e.HorizontalChange) > .01)
+            ScheduleThumbnailPrefetch();
+    }
+
+    private void ScheduleThumbnailPrefetch()
+    {
+        var panel = FindVisualChild<VirtualizingWrapPanel>(Photos);
+        var range = panel?.GetViewportItemRange() ?? (-1, -1);
+        var visible = range.First >= 0
+            ? Enumerable.Range(range.First, Math.Max(0, range.Last - range.First + 1))
+            : Enumerable.Empty<int>();
+        ViewModel.ScheduleThumbnailPrefetch(visible);
+    }
+
+    private static T? FindVisualChild<T>(DependencyObject root) where T : DependencyObject
+    {
+        for (var index = 0; index < System.Windows.Media.VisualTreeHelper.GetChildrenCount(root); index++)
+        {
+            var child = System.Windows.Media.VisualTreeHelper.GetChild(root, index);
+            if (child is T match) return match;
+            if (FindVisualChild<T>(child) is { } nested) return nested;
+        }
+        return null;
     }
 }
