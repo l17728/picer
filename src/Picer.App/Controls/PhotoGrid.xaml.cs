@@ -1,4 +1,5 @@
 using System.Collections;
+using System.Collections.Specialized;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -12,7 +13,9 @@ public partial class PhotoGrid : UserControl
     private int _dragStartIndex = -1;
     private bool _dragSelecting;
     private HashSet<object> _selectionBeforeDrag = [];
-    public static readonly DependencyProperty ItemsSourceProperty = DependencyProperty.Register(nameof(ItemsSource), typeof(IEnumerable), typeof(PhotoGrid));
+    private CancellationTokenSource? _prefetchCts;
+    private INotifyCollectionChanged? _itemsNotifier;
+    public static readonly DependencyProperty ItemsSourceProperty = DependencyProperty.Register(nameof(ItemsSource), typeof(IEnumerable), typeof(PhotoGrid), new PropertyMetadata(null, OnItemsSourceChanged));
     public static readonly DependencyProperty SelectedItemProperty = DependencyProperty.Register(nameof(SelectedItem), typeof(object), typeof(PhotoGrid), new FrameworkPropertyMetadata(null, FrameworkPropertyMetadataOptions.BindsTwoWayByDefault));
     public static readonly DependencyProperty SelectedItemsTargetProperty = DependencyProperty.Register(nameof(SelectedItemsTarget), typeof(IList), typeof(PhotoGrid));
     public static readonly DependencyProperty OpenCommandProperty = DependencyProperty.Register(nameof(OpenCommand), typeof(ICommand), typeof(PhotoGrid));
@@ -42,7 +45,55 @@ public partial class PhotoGrid : UserControl
     public bool TimelineMode { get => (bool)GetValue(TimelineModeProperty); set => SetValue(TimelineModeProperty, value); }
     public object? ScrollToItem { get => GetValue(ScrollToItemProperty); set => SetValue(ScrollToItemProperty, value); }
 
-    public PhotoGrid() => InitializeComponent();
+    public PhotoGrid()
+    {
+        InitializeComponent();
+        Unloaded += PhotoGrid_Unloaded;
+    }
+    private static void OnItemsSourceChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+    {
+        var grid = (PhotoGrid)d;
+        if (grid._itemsNotifier is not null) grid._itemsNotifier.CollectionChanged -= grid.Items_CollectionChanged;
+        grid._itemsNotifier = e.NewValue as INotifyCollectionChanged;
+        if (grid._itemsNotifier is not null) grid._itemsNotifier.CollectionChanged += grid.Items_CollectionChanged;
+        grid.ScheduleGreedyPrefetch();
+    }
+
+    private void Items_CollectionChanged(object? sender, NotifyCollectionChangedEventArgs e) => ScheduleGreedyPrefetch();
+
+    private void ScheduleGreedyPrefetch()
+    {
+        _prefetchCts?.Cancel();
+        if (!AppServices.ServiceMode) return;
+        var cts = _prefetchCts = new CancellationTokenSource();
+        _ = PrefetchWhenIdleAsync(cts);
+    }
+
+    private async Task PrefetchWhenIdleAsync(CancellationTokenSource owner)
+    {
+        try
+        {
+            await Task.Delay(750, owner.Token);
+            // Once the user is idle, warm the whole current page. The cache
+            // performs content-key single-flight, so duplicates across cards
+            // and timeline/scene views share one download.
+            foreach (var item in List.Items.OfType<ImageItemViewModel>())
+            {
+                owner.Token.ThrowIfCancellationRequested();
+                item.PrefetchThumbnail();
+                await Task.Yield();
+            }
+        }
+        catch (OperationCanceledException) { }
+        finally
+        {
+            if (ReferenceEquals(_prefetchCts, owner))
+            {
+                owner.Dispose();
+                _prefetchCts = null;
+            }
+        }
+    }
     private static void OnScrollToItemChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
     {
         if (d is not PhotoGrid grid || e.NewValue is null) return;
@@ -154,8 +205,24 @@ public partial class PhotoGrid : UserControl
     {
         if (sender is FrameworkElement { DataContext: ImageItemViewModel image }) image.CancelThumbnailLoad();
     }
+
+    private void PhotoGrid_Unloaded(object sender, RoutedEventArgs e)
+    {
+        _prefetchCts?.Cancel();
+    }
     private void Thumbnail_Loaded(object sender, RoutedEventArgs e)
     {
-        if (sender is FrameworkElement { DataContext: ImageItemViewModel image }) image.EnsureThumbnailLoad();
+        if (sender is not FrameworkElement { DataContext: ImageItemViewModel image }) return;
+        image.EnsureThumbnailLoad();
+        // Remote thumbnails are persisted by content identity.  Warm roughly
+        // one viewport ahead without affecting the UI thread; already-loaded
+        // and in-flight items are no-ops, so scrolling cannot duplicate work.
+        if (AppServices.ServiceMode && FindContainer(sender as DependencyObject) is { } container)
+        {
+            var index = List.ItemContainerGenerator.IndexFromContainer(container);
+            for (var offset = 1; offset <= 12 && index + offset < List.Items.Count; offset++)
+                if (List.Items[index + offset] is ImageItemViewModel next)
+                    next.PrefetchThumbnail();
+        }
     }
 }

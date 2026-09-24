@@ -29,6 +29,7 @@ public static class AppServices
     public static PicerDatabase Db { get; private set; } = null!;
     public static IStorageProvider Storage { get; private set; } = null!;
     public static ThumbnailService Thumbnails { get; private set; } = null!;
+    public static RemoteThumbnailCache RemoteThumbnails { get; private set; } = null!;
     public static IndexEngine Index { get; private set; } = null!;
     public static IUserAuthorizedFileOperation FileOperations { get; private set; } = null!;
     public static IReverseGeocoder Geocoder { get; private set; } = null!;
@@ -80,6 +81,7 @@ public static class AppServices
             Config = StorageConfig.Load(ConfigPath);
             Storage = Config.CreateProvider(Path.Combine(AppPaths.DataRoot, "remote-cache"));
             Thumbnails = new ThumbnailService(Path.Combine(AppPaths.DataRoot, "remote-thumbs"));
+            RemoteThumbnails = new RemoteThumbnailCache(Path.Combine(AppPaths.DataRoot, "remote-thumbs"));
             Index = new IndexEngine(Db, Storage, Thumbnails);
             FileOperations = new WindowsRecycleBinFileOperation();
             Geocoder = new NominatimReverseGeocoder(Path.Combine(AppPaths.DataRoot, "remote-geocoding-cache.json"));

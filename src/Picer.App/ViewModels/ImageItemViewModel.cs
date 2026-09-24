@@ -124,6 +124,9 @@ public partial class ImageItemViewModel : ObservableObject
         if (_thumbnail is null && !_isLoadingThumbnail) LoadThumbnailAsync();
     }
 
+    /// <summary>Starts a best-effort background load for the next viewport.</summary>
+    public void PrefetchThumbnail() => EnsureThumbnailLoad();
+
     public void SetVideoPreviewPath(string path)
     {
         if (!IsVideo || string.IsNullOrWhiteSpace(path)) return;
@@ -153,16 +156,18 @@ public partial class ImageItemViewModel : ObservableObject
             }
             if (imagePaths.Count == 0 && !IsVideo && AppServices.ServiceMode)
             {
-                await using var remote = await AppServices.Gateway.OpenThumbnailAsync(_record.Id, cts.Token);
-                if (remote is not null)
+                var cachedPath = AppServices.RemoteThumbnails.TryGet(_record);
+                var path = cachedPath ?? await AppServices.RemoteThumbnails.GetOrDownloadAsync(
+                    _record,
+                    () => AppServices.Gateway.OpenThumbnailAsync(_record.Id, cts.Token),
+                    cts.Token);
+                if (path is not null && File.Exists(path))
                 {
-                    using var buffer = new MemoryStream();
-                    await remote.CopyToAsync(buffer, cts.Token);
-                    buffer.Position = 0;
                     var remoteImage = new BitmapImage();
                     remoteImage.BeginInit();
                     remoteImage.CacheOption = BitmapCacheOption.OnLoad;
-                    remoteImage.StreamSource = buffer;
+                    remoteImage.DecodePixelWidth = 256;
+                    remoteImage.UriSource = new Uri(path, UriKind.Absolute);
                     remoteImage.EndInit();
                     remoteImage.Freeze();
                     if (!cts.IsCancellationRequested)
