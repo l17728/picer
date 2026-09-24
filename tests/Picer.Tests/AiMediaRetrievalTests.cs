@@ -58,6 +58,52 @@ public sealed class AiMediaRetrievalTests : IDisposable
         Assert.Contains("牟", answer.Markdown);
     }
 
+    [Fact]
+    public async Task MultipleExplicitPeopleRequireIntersectionInsteadOfSinglePersonRecall()
+    {
+        var source = _database.AddSource(_root);
+        var people = new PeopleService(_database);
+        var self = people.Create("我");
+        var mou = people.Create("牟");
+
+        ImageRecord AddImage(string name, params long[] personIds)
+        {
+            var path = Path.Combine(_root, name);
+            File.WriteAllBytes(path, [1, 2, 3]);
+            var image = _database.UpsertImage(new ImageRecord
+            {
+                SourceId = source.Id, Path = path, FileSize = 3,
+                ModifiedUtc = File.GetLastWriteTimeUtc(path), Status = ImageStatus.Active,
+                IndexedUtc = DateTime.UtcNow
+            });
+            foreach (var personId in personIds)
+            {
+                using var insert = _database.Command("""
+                    INSERT INTO detected_faces(image_id,model_version,ordinal,box_x,box_y,box_width,box_height,confidence,created_utc)
+                    VALUES($image,'test',$ordinal,0.1,0.1,0.3,0.3,0.99,$now); SELECT last_insert_rowid();
+                    """);
+                insert.Parameters.AddWithValue("$image", image.Id);
+                insert.Parameters.AddWithValue("$ordinal", personId);
+                insert.Parameters.AddWithValue("$now", DateTime.UtcNow);
+                people.ConfirmFace((long)insert.ExecuteScalar()!, personId);
+            }
+            return image;
+        }
+
+        var selfOnly = AddImage("self.jpg", self.Id);
+        _ = AddImage("mou.jpg", mou.Id);
+        var both = AddImage("both.jpg", self.Id, mou.Id);
+        using var http = new HttpClient(new PlannerAndEmptyReviewerHandler());
+        using var chat = new OpenAiCompatibleChatClient(new Uri("http://127.0.0.1/chat"), "", "test", http);
+        var service = new AiMediaRetrievalService(_database, people, new VideoRepository(_database),
+            new CloudVisionRepository(_database), chat);
+
+        var answer = await service.AskAsync("我和牟的照片", includeVideos: false, DateTime.Today);
+
+        Assert.DoesNotContain(answer.Photos, value => value.Id == selfOnly.Id);
+        Assert.Contains(answer.Photos, value => value.Id == both.Id);
+    }
+
     public void Dispose()
     {
         _database.Dispose();
