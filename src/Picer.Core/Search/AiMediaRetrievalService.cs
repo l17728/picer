@@ -10,7 +10,7 @@ using System.Diagnostics;
 namespace Picer.Core.Search;
 
 public sealed record AiQueryPlan(string? PersonName, string? Location, string? StartDate, string? EndDate,
-    IReadOnlyList<string> Keywords, string Intent);
+    IReadOnlyList<string> Keywords, string Intent, IReadOnlyList<string>? LocationTerms = null);
 public sealed record AiMediaAnswer(string Markdown, IReadOnlyList<ImageRecord> Photos,
     IReadOnlyList<VideoRecord> Videos, AiQueryPlan Plan);
 
@@ -29,6 +29,7 @@ public sealed class AiMediaRetrievalService(PicerDatabase database, PeopleServic
         var names = people.GetAll().Where(value => value.ConfirmedFaceCount > 0)
             .Select(value => value.DisplayName).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         var planText = await chat.CompleteAsync("""
+            Output JSON field locationTerms as an array of alternative place names and administrative expressions for recall (for example Shanghai, Shanghai City). Do not use these terms as final proof; they are only candidate retrieval hints.
             你是私人媒体库的查询规划器。只输出JSON：personName、location、startDate、endDate、keywords、intent。
             日期必须为yyyy-MM-dd；keywords是字符串数组，只保留人物/地点/日期之外的服装、颜色、活动、物体和场景词。
             不得虚构人物名称。无法确定的字段为null。
@@ -45,6 +46,10 @@ public sealed class AiMediaRetrievalService(PicerDatabase database, PeopleServic
         var normalizedPerson = NormalizePlannerText(plan.PersonName);
         var normalizedLocation = NormalizeLocation(plan.Location);
         plan = plan with { PersonName = normalizedPerson, Location = normalizedLocation };
+        var locationTerms = (plan.LocationTerms ?? [])
+            .Concat(normalizedLocation is null ? [] : [normalizedLocation])
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Select(value => value.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         var mention = !string.IsNullOrWhiteSpace(normalizedPerson)
             ? people.FindByName(normalizedPerson) ??
               (people.GetAll().FirstOrDefault(person =>
@@ -67,7 +72,7 @@ public sealed class AiMediaRetrievalService(PicerDatabase database, PeopleServic
         var searchTerms = QueryRewrite.Expand(plan.Keywords.Where(term => !IsDayPartToken(term)))
             // Keep the literal location as a text fallback even when geocoding
             // returned bounds; older analyses may have place names but no GPS.
-            .Concat(!string.IsNullOrWhiteSpace(normalizedLocation) ? [normalizedLocation!] : [])
+            .Concat(QueryRewrite.Expand(locationTerms))
             .ToArray();
         var toolResult = new MediaSearchTool(database, videos).Execute(new MediaSearchRequest(
             MediaTypeFilter.Photo, mention is null ? null : [mention.Id], bounds, start, end,
@@ -79,13 +84,14 @@ public sealed class AiMediaRetrievalService(PicerDatabase database, PeopleServic
             if (image is not null) photoCandidates[image.Id] = image;
         }
         AppLogger.Info($"AiQuestion photo retrieval completed; primaryHits={toolResult.Items.Count}; uniquePhotos={photoCandidates.Count}; geoFilter={(bounds is not null)}; elapsedMs={stopwatch.ElapsedMilliseconds}");
-        if (bounds is not null && !string.IsNullOrWhiteSpace(normalizedLocation))
+        if (bounds is not null && locationTerms.Length > 0)
         {
-            // Preserve recall for legacy descriptions that contain a place name
-            // but have no GPS; the second pass is still bounded by the FTS terms.
+            // GPS is a candidate source, not a hard semantic decision. A second
+            // text-only pass keeps records whose descriptions say “上海” while
+            // GPS is missing, coarse, or outside an imperfect city rectangle.
             var textFallback = new MediaSearchTool(database).Execute(new MediaSearchRequest(
                 MediaTypeFilter.Photo, mention is null ? null : [mention.Id], null, start, end,
-                baseFilter.TimeOfDay, Terms: [normalizedLocation!], IncludeMissing: false, Limit: 200,
+                baseFilter.TimeOfDay, Terms: searchTerms, IncludeMissing: false, Limit: 200,
                 SortDirection: SortDirection.Descending));
             foreach (var hit in textFallback.Items)
             {
