@@ -63,7 +63,11 @@ public static class IndexSearchEngine
             cancellationToken.ThrowIfCancellationRequested();
             var conditions = new List<string>();
             var parameters = new List<(string Name, object Value)>();
-            AddFilterConditions(filters, conditions, parameters, HasAuxiliaryText(connection));
+            // Auxiliary text is part of the user-visible search index. Do not
+            // gate it on a small built-in place dictionary: arbitrary
+            // administrative names (including newly resolved locations) must
+            // be searchable as soon as their metadata is present.
+            AddFilterConditions(filters, conditions, parameters, includeAuxiliaryText: true);
 
         var orderCol = SortColumn(filters.SortBy);
         var direction = filters.SortDir == SortDirection.Ascending ? "ASC" : "DESC";
@@ -220,7 +224,7 @@ public static class IndexSearchEngine
         var parameters = new List<(string Name, object Value)>();
 
         if (!string.IsNullOrWhiteSpace(filters.Query))
-            AddTextCondition(filters.Query, conditions, parameters, HasAuxiliaryText(connection));
+            AddTextCondition(filters.Query, conditions, parameters, includeAuxiliary: true);
         AddGeoConditions(filters, conditions, parameters);
         if (filters.SourceId.HasValue && filters.SourceId.Value > 0)
         {

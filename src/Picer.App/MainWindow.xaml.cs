@@ -125,11 +125,15 @@ public partial class MainWindow : Window
         }
     }
 
-    private async void AiQuestionBox_PreviewKeyDown(object sender, KeyEventArgs e)
+    private void AiQuestionBox_PreviewKeyDown(object sender, KeyEventArgs e)
     {
         if (e.Key != Key.Enter || Keyboard.Modifiers.HasFlag(ModifierKeys.Shift)) return;
         e.Handled = true;
-        await _mainVm.SubmitAiQuestionAsync();
+        // Do not await the long-running model request from the WPF key event.
+        // The mouse command is already fire-and-forget from Button.Command;
+        // keeping the keyboard path identical prevents an apparent UI hang.
+        if (!_mainVm.IsAiQuestionRunning)
+            _ = _mainVm.SubmitAiQuestionAsync();
     }
 
     private void MediaTypeBox_SelectionChanged(object sender, SelectionChangedEventArgs e)

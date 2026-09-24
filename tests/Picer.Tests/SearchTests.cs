@@ -420,4 +420,23 @@ public sealed class SearchTests : IDisposable
         Assert.Single(results);
         Assert.Equal(image.Id, results[0].Id);
     }
+
+    [Fact]
+    public void FullTextSearch_MatchesArbitraryResolvedLocationTextWithoutDictionary()
+    {
+        _db = new PicerDatabase(Path.Combine(_dataDir, "location-text.db"));
+        var source = _db.AddSource(Path.Combine(_dataDir, "photos"));
+        var image = _db.UpsertImage(new ImageRecord
+        {
+            SourceId = source.Id, Path = Path.Combine(source.Path, "unknown-place.jpg"), FileSize = 100,
+            ModifiedUtc = DateTime.UtcNow, IndexedUtc = DateTime.UtcNow, Status = ImageStatus.Active
+        });
+        _db.SetImageLocation(image.Id, new LocationHierarchyChoice(
+            "中国 / 陕西省 / 测试新区 / 测试街道", "中国", "陕西省", "测试新区", "测试街道"));
+
+        var results = IndexSearchEngine.Search(_db, new SearchFilters { Query = "测试新区" });
+
+        Assert.Single(results);
+        Assert.Equal(image.Id, results[0].Id);
+    }
 }
