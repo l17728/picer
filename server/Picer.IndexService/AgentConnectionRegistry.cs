@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
+using System.Threading.Channels;
 
 namespace Picer.IndexService;
 
@@ -40,6 +41,10 @@ internal sealed class AgentConnectionRegistry
                 else if (type == "asset.response")
                 {
                     session.Complete(root);
+                }
+                else if (type is "ai.chunk" or "ai.done" or "ai.error")
+                {
+                    session.CompleteAi(root);
                 }
             }
         }
@@ -80,10 +85,20 @@ internal sealed class AgentConnectionRegistry
         return await session.RequestAsync(path, cancellationToken);
     }
 
+    public async Task StreamAiAsync(string? agentId, ReadOnlyMemory<byte> payload,
+        Func<ReadOnlyMemory<byte>, Task> onChunk, CancellationToken cancellationToken)
+    {
+        var session = !string.IsNullOrWhiteSpace(agentId) ? _sessions.GetValueOrDefault(agentId) : _sessions.Values.SingleOrDefault();
+        if (session is null && _sessions.Count == 1) session = _sessions.Values.Single();
+        if (session is null) throw new InvalidOperationException("media_agent_offline");
+        await session.StreamAiAsync(payload, onChunk, cancellationToken);
+    }
+
     private sealed class AgentSession(string agentId, WebSocket socket) : IDisposable
     {
         private readonly SemaphoreSlim _sendLock = new(1, 1);
         private readonly ConcurrentDictionary<string, TaskCompletionSource<(string, byte[])?>> _pending = new();
+        private readonly ConcurrentDictionary<string, Channel<AiMessage>> _aiPending = new();
         public string AgentId { get; } = agentId;
         private WebSocket Socket { get; } = socket;
 
@@ -122,10 +137,46 @@ internal sealed class AgentConnectionRegistry
             completion.TrySetResult((root.GetProperty("contentType").GetString() ?? "application/octet-stream", content));
         }
 
+        public void CompleteAi(JsonElement root)
+        {
+            if (!root.TryGetProperty("requestId", out var id) || !_aiPending.TryGetValue(id.GetString() ?? "", out var channel)) return;
+            var type = root.GetProperty("type").GetString();
+            if (type == "ai.chunk")
+            {
+                var data = Convert.FromBase64String(root.GetProperty("contentBase64").GetString() ?? "");
+                channel.Writer.TryWrite(new AiMessage(data, null));
+            }
+            else if (type == "ai.error")
+                channel.Writer.TryComplete(new IOException(root.TryGetProperty("message", out var message) ? message.GetString() : "ai_proxy_error"));
+            else
+                channel.Writer.TryComplete();
+        }
+
+        public async Task StreamAiAsync(ReadOnlyMemory<byte> payload, Func<ReadOnlyMemory<byte>, Task> onChunk,
+            CancellationToken cancellationToken)
+        {
+            var requestId = Guid.NewGuid().ToString("N");
+            var channel = Channel.CreateBounded<AiMessage>(new BoundedChannelOptions(32) { FullMode = BoundedChannelFullMode.Wait, SingleReader = true, SingleWriter = true });
+            _aiPending[requestId] = channel;
+            try
+            {
+                await SendAsync(new { type = "ai.open", requestId, payloadBase64 = Convert.ToBase64String(payload.ToArray()) }, cancellationToken);
+                await foreach (var message in channel.Reader.ReadAllAsync(cancellationToken)) await onChunk(message.Payload);
+            }
+            finally
+            {
+                _aiPending.TryRemove(requestId, out _);
+                try { await SendAsync(new { type = "ai.cancel", requestId }, CancellationToken.None); } catch { }
+            }
+        }
+
         public void Dispose()
         {
             foreach (var pending in _pending.Values) pending.TrySetCanceled();
+            foreach (var pending in _aiPending.Values) pending.Writer.TryComplete(new IOException("media_agent_disconnected"));
             _sendLock.Dispose();
         }
+
+        private sealed record AiMessage(byte[] Payload, string? Error);
     }
 }

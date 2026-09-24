@@ -420,6 +420,34 @@ public static class IndexServiceHost
                 ? Results.Json(new { error = "media_agent_offline", detail = "没有在线的原图代理" }, statusCode: StatusCodes.Status503ServiceUnavailable)
                 : Results.File(asset.Value.Content, "video/mp4", enableRangeProcessing: true);
         });
+        app.MapPost("/api/ai/v1/chat/stream", async (HttpRequest request, HttpResponse response, string? agentId, CancellationToken cancellationToken) =>
+        {
+            using var buffer = new MemoryStream();
+            await request.Body.CopyToAsync(buffer, cancellationToken);
+            response.StatusCode = StatusCodes.Status200OK;
+            response.ContentType = "text/event-stream";
+            response.Headers.CacheControl = "no-cache";
+            response.Headers["X-Accel-Buffering"] = "no";
+            try
+            {
+                await agents.StreamAiAsync(agentId, buffer.ToArray(), async chunk =>
+                {
+                    await response.Body.WriteAsync(chunk, cancellationToken);
+                    await response.Body.FlushAsync(cancellationToken);
+                }, cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
+            catch (Exception exception)
+            {
+                AppLogger.Warn($"AI stream proxy failed: {exception.GetType().Name}");
+                if (!response.HasStarted) response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+                else
+                {
+                    var error = JsonSerializer.Serialize(new { error = "ai_proxy_failed" });
+                    await response.WriteAsync($"event: error\ndata: {error}\n\n", CancellationToken.None);
+                }
+            }
+        });
         app.MapPost("/api/gateway/v1/search", async (GatewaySearchRequest request, CancellationToken cancellationToken) =>
             Results.Json(await handlers.SearchAsync(request, cancellationToken)));
         app.MapGet("/api/gateway/v1/sources", () => Results.Json(handlers.ListSources()));

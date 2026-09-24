@@ -1,9 +1,11 @@
 using System.Net.WebSockets;
+using System.Net.Http;
 using System.IO;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.Json;
+using System.Collections.Concurrent;
 using System.Windows.Forms;
 
 namespace Picer.MediaAgent;
@@ -33,6 +35,8 @@ internal sealed class AgentApplication : IDisposable
     private readonly byte[]? _spkiPin = ReadSpkiPin();
     private readonly string[] _roots;
     private readonly SemaphoreSlim _sendLock = new(1, 1);
+    private readonly ConcurrentDictionary<string, CancellationTokenSource> _aiRequests = new(StringComparer.Ordinal);
+    private readonly HttpClient _modelClient = new() { Timeout = TimeSpan.FromMinutes(10) };
     private Task? _loop;
     private static readonly string LogPath = Path.Combine(Path.GetTempPath(), "picer-media-agent.log");
 
@@ -119,7 +123,19 @@ internal sealed class AgentApplication : IDisposable
             if (message is null) return;
             using var document = JsonDocument.Parse(message.Value);
             var root = document.RootElement;
-            if (root.TryGetProperty("type", out var type) && type.GetString() == "asset.open") await ServeAssetAsync(socket, root, cancellationToken);
+            if (!root.TryGetProperty("type", out var type)) continue;
+            switch (type.GetString())
+            {
+                case "asset.open":
+                    _ = ServeAssetAsync(socket, root, cancellationToken);
+                    break;
+                case "ai.open":
+                    _ = ServeAiAsync(socket, root, cancellationToken);
+                    break;
+                case "ai.cancel":
+                    if (root.TryGetProperty("requestId", out var cancelId) && _aiRequests.TryGetValue(cancelId.GetString() ?? "", out var request)) request.Cancel();
+                    break;
+            }
         }
     }
 
@@ -156,6 +172,40 @@ internal sealed class AgentApplication : IDisposable
         }
     }
 
+    private async Task ServeAiAsync(ClientWebSocket socket, JsonElement request, CancellationToken cancellationToken)
+    {
+        var requestId = request.TryGetProperty("requestId", out var id) ? id.GetString() : null;
+        if (string.IsNullOrWhiteSpace(requestId) || !request.TryGetProperty("payloadBase64", out var payloadElement)) return;
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        if (!_aiRequests.TryAdd(requestId, linked)) return;
+        try
+        {
+            var endpoint = Environment.GetEnvironmentVariable("PICER_LOCAL_MODEL_ENDPOINT")?.Trim()
+                ?? "http://127.0.0.1:8090/api/vl/chat";
+            if (!Uri.TryCreate(endpoint, UriKind.Absolute, out var uri) || !string.Equals(uri.Host, "127.0.0.1", StringComparison.OrdinalIgnoreCase) && !string.Equals(uri.Host, "localhost", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("model endpoint must be loopback");
+            using var upstream = new HttpRequestMessage(HttpMethod.Post, uri)
+            {
+                Content = new ByteArrayContent(Convert.FromBase64String(payloadElement.GetString() ?? ""))
+            };
+            upstream.Content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/json");
+            using var response = await _modelClient.SendAsync(upstream, HttpCompletionOption.ResponseHeadersRead, linked.Token);
+            if (!response.IsSuccessStatusCode) throw new InvalidOperationException($"model_http_{(int)response.StatusCode}");
+            await using var stream = await response.Content.ReadAsStreamAsync(linked.Token);
+            var buffer = new byte[32 * 1024];
+            int read;
+            while ((read = await stream.ReadAsync(buffer, linked.Token)) > 0)
+                await SendAsync(socket, new { type = "ai.chunk", requestId, contentBase64 = Convert.ToBase64String(buffer, 0, read) }, linked.Token);
+            await SendAsync(socket, new { type = "ai.done", requestId }, cancellationToken);
+        }
+        catch (OperationCanceledException) when (linked.IsCancellationRequested) { }
+        catch (Exception exception)
+        {
+            try { await SendAsync(socket, new { type = "ai.error", requestId, message = exception.Message }, cancellationToken); } catch { }
+        }
+        finally { _aiRequests.TryRemove(requestId, out _); }
+    }
+
     private async Task SendAsync(ClientWebSocket socket, object value, CancellationToken cancellationToken)
     {
         var bytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(value));
@@ -176,6 +226,9 @@ internal sealed class AgentApplication : IDisposable
         _icon.Visible = false;
         _icon.Dispose();
         _sendLock.Dispose();
+        _modelClient.Dispose();
+        foreach (var request in _aiRequests.Values) request.Cancel();
+        _aiRequests.Clear();
         _stop.Dispose();
     }
 }

@@ -446,18 +446,32 @@ public static class AppServices
     public static OpenAiCompatibleChatClient? CreateAiChatClient(string featureId)
     {
         var settings = CloudVisionSettings.Load(AppPaths.CloudVisionSettingsPath);
-        if (!settings.Enabled) return null;
+        if (!settings.Enabled) { AppLogger.Warn($"AI chat client unavailable: settings disabled; feature={featureId}"); return null; }
         var resolved = settings.Resolve(featureId);
-        if (resolved is null) return null;
+        if (resolved is null) { AppLogger.Warn($"AI chat client unavailable: feature binding missing; feature={featureId}"); return null; }
         var provider = resolved.Value.Provider; var model = resolved.Value.Model;
         var isLocal = AiProviderIds.IsLocal(provider.Id);
+        if (ServiceMode)
+        {
+            var backend = AppPaths.LoadIndexBackend();
+            if (backend.BaseUrl is { Length: > 0 } remoteBase && !string.IsNullOrWhiteSpace(backend.Token)
+                && Uri.TryCreate(remoteBase.TrimEnd('/') + "/api/ai/v1/chat/stream", UriKind.Absolute, out var remoteEndpoint))
+            {
+                AppLogger.Info($"AI chat client routed through IndexService; feature={featureId}");
+                return new OpenAiCompatibleChatClient(remoteEndpoint, backend.Token, model.Id);
+            }
+            AppLogger.Warn($"AI chat client unavailable: remote IndexService endpoint missing; feature={featureId}");
+            return null;
+        }
         var key = isLocal ? "local-proxy" : new WindowsCredentialStore().Read(PicerCredentialTargets.AiProvider(provider.Id));
-        if (string.IsNullOrWhiteSpace(key)) return null;
+        if (string.IsNullOrWhiteSpace(key)) { AppLogger.Warn($"AI chat client unavailable: credential missing; provider={provider.Id}"); return null; }
         var baseUrl = provider.BaseUrl.TrimEnd('/');
         var target = isLocal || baseUrl.EndsWith("/chat/completions", StringComparison.OrdinalIgnoreCase)
             ? baseUrl : baseUrl + "/chat/completions";
-        return Uri.TryCreate(target, UriKind.Absolute, out var endpoint)
-            ? new OpenAiCompatibleChatClient(endpoint, key, model.Id) : null;
+        if (!Uri.TryCreate(target, UriKind.Absolute, out var endpoint))
+        { AppLogger.Warn($"AI chat client unavailable: endpoint invalid; provider={provider.Id}"); return null; }
+        AppLogger.Info($"AI chat client created; feature={featureId}; provider={provider.Id}; local={isLocal}");
+        return new OpenAiCompatibleChatClient(endpoint, key, model.Id);
     }
 
     public static void Shutdown()
