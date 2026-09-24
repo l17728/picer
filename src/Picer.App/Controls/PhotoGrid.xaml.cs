@@ -241,7 +241,15 @@ public partial class PhotoGrid : UserControl
     private void List_ScrollChanged(object sender, ScrollChangedEventArgs e)
     {
         if (Math.Abs(e.VerticalChange) > 0.01 || Math.Abs(e.HorizontalChange) > 0.01)
+        {
+            var now = DateTime.UtcNow.Ticks;
+            if (now - Volatile.Read(ref _lastPrefetchLogTicks) > TimeSpan.TicksPerSecond)
+            {
+                Volatile.Write(ref _lastPrefetchLogTicks, now);
+                AppLogger.Info($"Thumbnail scroll; offset={e.VerticalOffset:F0}; viewport={e.ViewportHeight:F0}; extent={e.ExtentHeight:F0}");
+            }
             ScheduleGreedyPrefetch();
+        }
     }
 
     private (int First, int Last) FindViewportRange()
