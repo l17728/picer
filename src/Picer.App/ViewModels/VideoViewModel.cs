@@ -26,6 +26,8 @@ public partial class VideoViewModel(VideoRepository repository, VideoIndexServic
     public ObservableCollection<VideoFaceGroupViewModel> VideoFaceGroups { get; } = new();
     public ObservableCollection<PersonSummary> VideoPeople { get; } = new();
     private Func<Task>? _identityChanged;
+    private Task? _videoFaceThumbnailWorker;
+    private long _videoFaceThumbnailRequestTicks;
     private VideoItemViewModel[] _selectedVideos = [];
     private VideoFaceItemViewModel[] _selectedVideoFaces = [];
     [ObservableProperty] private VideoItemViewModel? _selectedVideo;
@@ -115,8 +117,8 @@ public partial class VideoViewModel(VideoRepository repository, VideoIndexServic
         {
             var item = new VideoFaceItemViewModel(face);
             VideoFaces.Add(item);
-            _ = item.LoadThumbnailAsync();
         }
+        ScheduleVideoFaceThumbnails();
         VideoPeople.Clear();
         foreach (var person in people ?? []) VideoPeople.Add(person);
         var selectedKey = SelectedVideoFaceGroup?.Key ?? "all";
@@ -143,6 +145,27 @@ public partial class VideoViewModel(VideoRepository repository, VideoIndexServic
         };
         FilteredVideoFaces.Clear();
         foreach (var face in values) FilteredVideoFaces.Add(face);
+    }
+
+    private void ScheduleVideoFaceThumbnails()
+    {
+        Volatile.Write(ref _videoFaceThumbnailRequestTicks, DateTime.UtcNow.Ticks);
+        if (_videoFaceThumbnailWorker is null || _videoFaceThumbnailWorker.IsCompleted)
+            _videoFaceThumbnailWorker = LoadVideoFaceThumbnailsWhenIdleAsync();
+    }
+
+    private async Task LoadVideoFaceThumbnailsWhenIdleAsync()
+    {
+        await Task.Delay(500);
+        while (true)
+        {
+            var remaining = Volatile.Read(ref _videoFaceThumbnailRequestTicks) + TimeSpan.TicksPerMillisecond * 500 - DateTime.UtcNow.Ticks;
+            if (remaining > 0) { await Task.Delay(TimeSpan.FromTicks(remaining)); continue; }
+            var pending = VideoFaces.Where(face => !face.HasThumbnail && !face.IsThumbnailLoading).Take(8).ToArray();
+            if (pending.Length == 0) return;
+            foreach (var face in pending) _ = face.LoadThumbnailAsync();
+            await Task.Delay(40);
+        }
     }
 
     [RelayCommand]
@@ -532,10 +555,14 @@ public sealed partial class VideoFaceItemViewModel(VideoFaceTimelineRecord recor
     };
     public bool HasSuggestion => Record.IsSuggested;
     [ObservableProperty] private ImageSource? _thumbnail;
+    [ObservableProperty] private bool _isThumbnailLoading;
+    public bool HasThumbnail => Thumbnail is not null;
 
     public async Task LoadThumbnailAsync()
     {
-        Thumbnail = await Task.Run(() =>
+        if (HasThumbnail || IsThumbnailLoading) return;
+        IsThumbnailLoading = true;
+        try { Thumbnail = await Task.Run(() =>
         {
             if (!File.Exists(Record.KeyframePath)) return null;
             using var stream = File.OpenRead(Record.KeyframePath);
@@ -552,6 +579,7 @@ public sealed partial class VideoFaceItemViewModel(VideoFaceTimelineRecord recor
             var crop = new CroppedBitmap(source, new Int32Rect(x, y, right - x, bottom - y));
             crop.Freeze();
             return (ImageSource)crop;
-        });
+        }); }
+        finally { IsThumbnailLoading = false; }
     }
 }
