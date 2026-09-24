@@ -71,6 +71,25 @@ public sealed class GeocodingTests : IDisposable
         Assert.True(GeoPlaceResolver.IsWithin("33.87,109.94", bounds.MinLatitude, bounds.MaxLatitude, bounds.MinLongitude, bounds.MaxLongitude));
     }
 
+    [Theory]
+    [InlineData("商县")]
+    [InlineData("蓝田")]
+    [InlineData("蓝田县")]
+    public void CommonAdministrativeAliases_ResolveForDirectSearch(string query)
+    {
+        var bounds = GeoPlaceResolver.Resolve(query);
+        Assert.NotNull(bounds);
+    }
+
+    [Fact]
+    public void LantianSearch_IncludesLantianCoordinate()
+    {
+        var bounds = GeoPlaceResolver.Resolve("蓝田");
+        Assert.NotNull(bounds);
+        Assert.True(GeoPlaceResolver.IsWithin("34.0741,109.2710", bounds.MinLatitude, bounds.MaxLatitude,
+            bounds.MinLongitude, bounds.MaxLongitude));
+    }
+
     [Fact]
     public async Task ReverseGeocoder_CachesResultAndSendsIdentifyingUserAgent()
     {

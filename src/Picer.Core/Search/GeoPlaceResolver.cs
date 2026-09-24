@@ -36,6 +36,9 @@ public static partial class GeoPlaceResolver
             , ["商洛市商州区"] = new("商洛市商州区", 33.48, 34.12, 109.45, 110.25)
             , ["商洛"] = new("商洛市", 32.95, 34.42, 108.55, 111.10, "shangluo")
             , ["商洛市"] = new("商洛市", 32.95, 34.42, 108.55, 111.10, "shangluo")
+            , ["商县"] = new("商洛市", 32.95, 34.42, 108.55, 111.10, "shangluo")
+            , ["蓝田"] = new("蓝田县", 33.75, 34.35, 109.05, 110.05, "lantian")
+            , ["蓝田县"] = new("蓝田县", 33.75, 34.35, 109.05, 110.05, "lantian")
         };
 
     public static GeoBounds? Resolve(string? query) =>
