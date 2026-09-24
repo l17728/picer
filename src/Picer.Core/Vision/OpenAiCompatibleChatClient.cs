@@ -1,6 +1,7 @@
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using System.Runtime.CompilerServices;
 
 namespace Picer.Core.Vision;
 
@@ -24,6 +25,44 @@ public sealed class OpenAiCompatibleChatClient(Uri endpoint, string apiKey, stri
         using var document = JsonDocument.Parse(responseText);
         var content = document.RootElement.GetProperty("choices")[0].GetProperty("message").GetProperty("content").GetString();
         return string.IsNullOrWhiteSpace(content) ? throw new InvalidDataException("AI 返回了空内容。") : StripFence(content);
+    }
+
+    public async IAsyncEnumerable<string> StreamAsync(string systemPrompt, string userPrompt,
+        int maximumTokens = 800, [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        var payload = new { model, temperature = 0, max_tokens = maximumTokens, stream = true,
+            messages = new[] { new { role = "system", content = systemPrompt }, new { role = "user", content = userPrompt } } };
+        using var request = new HttpRequestMessage(HttpMethod.Post, endpoint);
+        if (!string.IsNullOrWhiteSpace(apiKey)) request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+        request.Content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
+        using var response = await _client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
+        response.EnsureSuccessStatusCode();
+        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+        using var reader = new StreamReader(stream, Encoding.UTF8);
+        while (await reader.ReadLineAsync(cancellationToken).ConfigureAwait(false) is { } line)
+        {
+            if (string.IsNullOrWhiteSpace(line) || line.StartsWith(":", StringComparison.Ordinal)) continue;
+            if (line.StartsWith("data:", StringComparison.OrdinalIgnoreCase)) line = line[5..].TrimStart();
+            if (line == "[DONE]") yield break;
+            string? text = null;
+            try
+            {
+                using var document = JsonDocument.Parse(line);
+                var choices = document.RootElement.GetProperty("choices");
+                if (choices.GetArrayLength() == 0) continue;
+                var choice = choices[0];
+                if (choice.TryGetProperty("delta", out var delta) && delta.TryGetProperty("content", out var value))
+                {
+                    text = value.GetString();
+                }
+                else if (choice.TryGetProperty("message", out var message) && message.TryGetProperty("content", out var full))
+                {
+                    text = full.GetString();
+                }
+            }
+            catch (JsonException) { }
+            if (!string.IsNullOrEmpty(text)) yield return text;
+        }
     }
 
     public static string StripFence(string value)

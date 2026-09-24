@@ -44,6 +44,21 @@ public sealed class OpenAiCompatibleChatClientTests
             client.CompleteAsync("system", "question", cancellationToken: cancellation.Token));
     }
 
+    [Fact]
+    public async Task StreamAsync_ParsesSseDeltasInOrder()
+    {
+        var handler = new DelegateHandler((_, _) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("data: {\"choices\":[{\"delta\":{\"content\":\"你\"}}]}\n\ndata: {\"choices\":[{\"delta\":{\"content\":\"好\"}}]}\n\ndata: [DONE]\n\n", Encoding.UTF8, "text/event-stream")
+        }));
+        using var client = new OpenAiCompatibleChatClient(new Uri("http://127.0.0.1/chat"), "", "vl-model", new HttpClient(handler));
+
+        var chunks = new List<string>();
+        await foreach (var chunk in client.StreamAsync("system", "question")) chunks.Add(chunk);
+
+        Assert.Equal(["你", "好"], chunks);
+    }
+
     private sealed class DelegateHandler : HttpMessageHandler
     {
         private readonly Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> _callback;
