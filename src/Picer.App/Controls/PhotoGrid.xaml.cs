@@ -17,6 +17,7 @@ public partial class PhotoGrid : UserControl
     private Task? _prefetchWorker;
     private long _lastPrefetchRequestTicks;
     private long _lastPrefetchLogTicks;
+    private long _lastPrefetchBatchLogTicks;
     private INotifyCollectionChanged? _itemsNotifier;
     public static readonly DependencyProperty ItemsSourceProperty = DependencyProperty.Register(nameof(ItemsSource), typeof(IEnumerable), typeof(PhotoGrid), new PropertyMetadata(null, OnItemsSourceChanged));
     public static readonly DependencyProperty SelectedItemProperty = DependencyProperty.Register(nameof(SelectedItem), typeof(object), typeof(PhotoGrid), new FrameworkPropertyMetadata(null, FrameworkPropertyMetadataOptions.BindsTwoWayByDefault));
@@ -105,9 +106,9 @@ public partial class PhotoGrid : UserControl
                 var ordered = visible.Concat(all.Where(item => !visible.Contains(item))).ToArray();
                 var pending = ordered.Where(item => !item.HasThumbnail && !item.IsThumbnailLoading).Take(8).ToArray();
                 var batchNow = DateTime.UtcNow.Ticks;
-                if (batchNow - Volatile.Read(ref _lastPrefetchLogTicks) > TimeSpan.TicksPerSecond)
+                if (batchNow - Volatile.Read(ref _lastPrefetchBatchLogTicks) > TimeSpan.TicksPerSecond)
                 {
-                    Volatile.Write(ref _lastPrefetchLogTicks, batchNow);
+                    Volatile.Write(ref _lastPrefetchBatchLogTicks, batchNow);
                     AppLogger.Info($"Thumbnail prefetch batch; items={all.Length}; viewport={range.First}-{range.Last}; pending={pending.Length}");
                 }
                 if (pending.Length == 0) return;
