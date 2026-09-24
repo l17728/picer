@@ -460,7 +460,16 @@ public static class AppServices
                 && Uri.TryCreate(remoteBase.TrimEnd('/') + "/api/ai/v1/chat/stream", UriKind.Absolute, out var remoteEndpoint))
             {
                 AppLogger.Info($"AI chat client routed through IndexService; feature={featureId}");
-                return new OpenAiCompatibleChatClient(remoteEndpoint, backend.Token, model.Id);
+                var handler = new HttpClientHandler();
+                handler.ServerCertificateCustomValidationCallback = (_, certificate, _, _) =>
+                {
+                    if (certificate is null) return false;
+                    if (backend.SpkiPin is null) return true;
+                    var pin = HttpIndexGateway.ComputeSpkiPin(new System.Security.Cryptography.X509Certificates.X509Certificate2(certificate));
+                    return System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(pin, backend.SpkiPin);
+                };
+                var client = new HttpClient(handler) { Timeout = TimeSpan.FromMinutes(5) };
+                return new OpenAiCompatibleChatClient(remoteEndpoint, backend.Token, model.Id, client, disposeClient: true);
             }
             AppLogger.Warn($"AI chat client unavailable: remote IndexService endpoint missing; feature={featureId}");
             return null;

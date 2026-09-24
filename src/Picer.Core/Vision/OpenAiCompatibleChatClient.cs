@@ -5,10 +5,10 @@ using System.Runtime.CompilerServices;
 
 namespace Picer.Core.Vision;
 
-public sealed class OpenAiCompatibleChatClient(Uri endpoint, string apiKey, string model, HttpClient? client = null) : IDisposable
+public sealed class OpenAiCompatibleChatClient(Uri endpoint, string apiKey, string model, HttpClient? client = null, bool disposeClient = false) : IDisposable
 {
     private readonly HttpClient _client = client ?? new HttpClient { Timeout = TimeSpan.FromMinutes(5) };
-    private readonly bool _ownsClient = client is null;
+    private readonly bool _ownsClient = client is null || disposeClient;
     public string Model => model;
 
     public async Task<string> CompleteAsync(string systemPrompt, string userPrompt, int maximumTokens = 800,
