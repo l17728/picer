@@ -1569,6 +1569,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     ImageCount = count
                 });
             }
+            SortDirectoryChildren(node);
         }
         catch { }
     }
@@ -2046,7 +2047,20 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 parent = child;
             }
         }
+        SortDirectoryChildren(root);
         root.IsLoaded = true;
+    }
+
+    private static void SortDirectoryChildren(DirectoryNodeViewModel node)
+    {
+        foreach (var child in node.Children.Where(item => !item.IsSceneAnchor).ToArray())
+            SortDirectoryChildren(child);
+        var ordered = node.Children
+            .OrderBy(item => item.IsSceneAnchor ? 1 : 0)
+            .ThenBy(item => item.Name, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        node.Children.Clear();
+        foreach (var child in ordered) node.Children.Add(child);
     }
 
     private static string NormalizeRemotePath(string path) =>
