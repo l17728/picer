@@ -759,11 +759,18 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private async Task LoadMoreAsync()
     {
         if (_searchCursor is null) return;
-        var page = await AppServices.MediaSearch.ExecutePagedAsync(BuildSearchFilters(), cursor: _searchCursor);
+        var token = _searchCts?.Token ?? default;
+        var page = await AppServices.MediaSearch.ExecutePagedAsync(BuildSearchFilters(), cursor: _searchCursor, cancellationToken: token);
+        token.ThrowIfCancellationRequested();
+
+        // Do not rebuild/clear the already rendered page. Clearing the bound
+        // collection unloads virtualized cards, cancels their thumbnail tasks,
+        // and causes the previously visible remote thumbnails to disappear.
+        // Append only the new page so existing ImageItemViewModels, decoded
+        // bitmaps and scroll position remain alive.
         _searchLoadedRecords.AddRange(page.Items);
-        var rebuilt = await BuildBurstAwareItemsAsync(_searchLoadedRecords, _searchCts?.Token ?? default);
-        Images.Clear();
-        await UiWork.AddInBatchesAsync(rebuilt, Images.Add, batchSize: 8);
+        var appended = await BuildBurstAwareItemsAsync(page.Items, token);
+        await UiWork.AddInBatchesAsync(appended, Images.Add, batchSize: 8, cancellationToken: token);
         _searchCursor = page.NextCursor;
         HasMoreResults = _searchCursor is not null;
         OnPropertyChanged(nameof(TotalCount));
