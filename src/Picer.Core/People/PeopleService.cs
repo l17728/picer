@@ -57,6 +57,22 @@ public sealed class PeopleService(PicerDatabase database)
         return names;
     }
 
+    public IReadOnlyList<string> GetConfirmedPersonNamesForVideo(long videoId)
+    {
+        using var command = database.Command("""
+            SELECT DISTINCT p.display_name
+            FROM video_detected_faces f
+            JOIN people p ON p.id=f.assigned_person_id
+            WHERE f.video_id=$video AND f.assignment_state='confirmed'
+            ORDER BY p.display_name COLLATE NOCASE
+            """);
+        command.Parameters.AddWithValue("$video", videoId);
+        using var reader = command.ExecuteReader();
+        var names = new List<string>();
+        while (reader.Read()) names.Add(reader.GetString(0));
+        return names;
+    }
+
     public PersonRecord Create(string displayName, IEnumerable<string>? aliases = null)
     {
         displayName = NormalizeName(displayName);

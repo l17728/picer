@@ -581,12 +581,17 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [RelayCommand]
     public async Task SubmitAiQuestionAsync()
     {
+        if (IsAiQuestionRunning) return;
         var question = AiQuestionInput.Trim();
         if (question.Length == 0) { StatusText = "请输入问题后再提交"; return; }
         _searchCts?.Cancel();
         var cts = _searchCts = new CancellationTokenSource();
         var version = Interlocked.Increment(ref _searchVersion);
         IsAiQuestionRunning = true;
+        QuestionAnswerText = "## AI 问答\n\n正在启动后台查询，请稍候…";
+        StatusText = "AI 问答：后台正在处理！";
+        ProgressValue = 1;
+        await Task.Yield();
         try { await ApplyAiQuestionAsync(version, cts, question); }
         finally { IsAiQuestionRunning = false; }
     }

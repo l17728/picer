@@ -43,20 +43,25 @@ public sealed class AiMediaRetrievalService(PicerDatabase database, PeopleServic
         AppLogger.Info($"AiQuestion plan ready; hasPerson={(!string.IsNullOrWhiteSpace(plan.PersonName))}; hasLocation={(!string.IsNullOrWhiteSpace(plan.Location))}; hasDate={(!string.IsNullOrWhiteSpace(plan.StartDate) || !string.IsNullOrWhiteSpace(plan.EndDate))}; keywordCount={plan.Keywords.Count}; elapsedMs={stopwatch.ElapsedMilliseconds}");
 
         progress?.Report(("检索照片索引", 25));
-        var normalizedPerson = NormalizePlannerText(plan.PersonName);
+        // An explicit confirmed name in the user's question is authoritative.
+        // Do not let a planner typo or hallucination replace it.
+        var questionMention = people.FindMention(question);
+        var normalizedPerson = questionMention?.Person.DisplayName ?? NormalizePlannerText(plan.PersonName);
         var normalizedLocation = NormalizeLocation(plan.Location);
         plan = plan with { PersonName = normalizedPerson, Location = normalizedLocation };
         var locationTerms = (plan.LocationTerms ?? [])
             .Concat(normalizedLocation is null ? [] : [normalizedLocation])
             .Where(value => !string.IsNullOrWhiteSpace(value))
             .Select(value => value.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-        var mention = !string.IsNullOrWhiteSpace(normalizedPerson)
+        var mention = questionMention?.Person ?? (!string.IsNullOrWhiteSpace(normalizedPerson)
             ? people.FindByName(normalizedPerson) ??
               (people.GetAll().FirstOrDefault(person =>
                   string.Equals(NormalizePlannerText(person.DisplayName), normalizedPerson, StringComparison.OrdinalIgnoreCase)) is { } summary
                   ? people.Get(summary.Id)
                   : null)
-            : people.FindMention(question)?.Person;
+            : null);
+        if (questionMention is not null)
+            AppLogger.Info($"AiQuestion person constraint pinned to explicit mention; aliasLength={questionMention.MatchedName.Length}");
         var bounds = string.IsNullOrWhiteSpace(normalizedLocation) ? null : GeoPlaceResolver.Resolve(normalizedLocation);
         DateTime? start = DateTime.TryParse(plan.StartDate, out var startValue) ? startValue.Date.ToUniversalTime() : null;
         DateTime? end = DateTime.TryParse(plan.EndDate, out var endValue) ? endValue.Date.AddDays(1).AddTicks(-1).ToUniversalTime() : null;
@@ -118,13 +123,16 @@ public sealed class AiMediaRetrievalService(PicerDatabase database, PeopleServic
                 time = image.TakenUtc ?? image.CreatedUtc ?? image.ModifiedUtc,
                 gps = image.Gps,
                 location = GetLocationDisplay(image.Id),
+                confirmedPersonNames = people.GetConfirmedPersonNamesForImage(image.Id),
                 description = cloud.GetLatestCompleted(image.Id)?.Result.Summary }).ToArray(),
             videos = videoCandidates.Select(video => new { id = video.Id, file = Path.GetFileName(video.Path),
                 time = video.TakenUtc ?? video.ModifiedUtc, durationSeconds = video.DurationSeconds,
+                confirmedPersonNames = people.GetConfirmedPersonNamesForVideo(video.Id),
                 transcript = Truncate(videos.GetTranscript(video.Id), 500), summary = videos.GetSummary(video.Id) }).ToArray()
         };
         var reviewText = await chat.CompleteAsync("""
             你是私人媒体库检索复核器。只能从给定候选ID中选择，不得编造ID或人物身份。
+            confirmedPersonNames 是程序依据人工确认人脸生成的权威字段；问题指定人物时，必须保留该字段包含目标人物的候选，不能把目标人物改写成其他姓名。
             输出JSON：markdown、photoIds、videoIds。markdown使用中文Markdown，说明结论、命中依据和不确定项，照片与视频分节。
             没有可靠结果时明确说明。photoIds和videoIds必须是数字数组。
             """, JsonSerializer.Serialize(evidence), 900, cancellationToken).ConfigureAwait(false);
@@ -135,6 +143,16 @@ public sealed class AiMediaRetrievalService(PicerDatabase database, PeopleServic
         var allowedVideos = videoCandidates.ToDictionary(value => value.Id);
         var rankedPhotos = (review.PhotoIds ?? []).Where(allowedPhotos.ContainsKey).Distinct().Select(id => allowedPhotos[id]).ToArray();
         var rankedVideos = (review.VideoIds ?? []).Where(allowedVideos.ContainsKey).Distinct().Select(id => allowedVideos[id]).ToArray();
+        if (mention is not null && rankedPhotos.Length == 0 && rankedVideos.Length == 0)
+        {
+            rankedPhotos = photos.Where(image => people.GetConfirmedPersonNamesForImage(image.Id)
+                .Contains(mention.DisplayName, StringComparer.OrdinalIgnoreCase)).ToArray();
+            rankedVideos = videoCandidates.Where(video => people.GetConfirmedPersonNamesForVideo(video.Id)
+                .Contains(mention.DisplayName, StringComparer.OrdinalIgnoreCase)).ToArray();
+            AppLogger.Info($"AiQuestion reviewer fallback applied for confirmed person; photos={rankedPhotos.Length}; videos={rankedVideos.Length}");
+        }
+        if (mention is not null && (rankedPhotos.Length > 0 || rankedVideos.Length > 0))
+            review = review with { Markdown = (review.Markdown ?? "未生成回答") + $"\n\n> 索引确认：以上结果包含人工标记人物“{mention.DisplayName}”的媒体；人物标签来自本地确认记录。" };
         progress?.Report(("完成", 100));
         return new(review.Markdown ?? "未生成回答。", rankedPhotos, rankedVideos, plan);
     }
