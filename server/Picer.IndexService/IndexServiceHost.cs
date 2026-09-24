@@ -1,4 +1,5 @@
 using System.Net;
+using System.Diagnostics;
 using System.Net.WebSockets;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
@@ -422,8 +423,12 @@ public static class IndexServiceHost
         });
         app.MapPost("/api/ai/v1/chat/stream", async (HttpRequest request, HttpResponse response, string? agentId, CancellationToken cancellationToken) =>
         {
+            var requestId = request.Headers["X-Picer-Request-Id"].ToString();
+            if (string.IsNullOrWhiteSpace(requestId)) requestId = Guid.NewGuid().ToString("N");
+            var started = Stopwatch.StartNew();
             using var buffer = new MemoryStream();
             await request.Body.CopyToAsync(buffer, cancellationToken);
+            AppLogger.Info($"AI proxy accepted; requestId={requestId}; agentSpecified={!string.IsNullOrWhiteSpace(agentId)}; onlineAgents={agents.OnlineCount}; payloadBytes={buffer.Length}");
             response.StatusCode = StatusCodes.Status200OK;
             response.ContentType = "text/event-stream";
             response.Headers.CacheControl = "no-cache";
@@ -435,11 +440,12 @@ public static class IndexServiceHost
                     await response.Body.WriteAsync(chunk, cancellationToken);
                     await response.Body.FlushAsync(cancellationToken);
                 }, cancellationToken);
+                AppLogger.Info($"AI proxy completed; requestId={requestId}; elapsedMs={started.ElapsedMilliseconds}");
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
             catch (Exception exception)
             {
-                AppLogger.Warn($"AI stream proxy failed: {exception.GetType().Name}; message={exception.Message}");
+                AppLogger.Warn($"AI stream proxy failed; requestId={requestId}; elapsedMs={started.ElapsedMilliseconds}; onlineAgents={agents.OnlineCount}; exception={exception.GetType().Name}; inner={(exception.InnerException?.GetType().Name ?? "none")}; message={exception.Message}");
                 if (!response.HasStarted)
                 {
                     response.Clear();

@@ -82,7 +82,7 @@ internal sealed class AgentApplication : IDisposable
                 };
                 if (!string.IsNullOrWhiteSpace(_token)) socket.Options.SetRequestHeader("Authorization", "Bearer " + _token);
                 await socket.ConnectAsync(new Uri($"wss://{_serviceIp}:8445/api/agent/v1/connect"), cancellationToken);
-                Log("connected");
+                Log($"connected; socketState={socket.State}; processId={Environment.ProcessId}");
                 _icon.Text = "Picer 原图代理（已连接）";
                 await SendAsync(socket, new { type = "agent.register", agentId = Environment.MachineName, capabilities = new[] { "originalRead", "videoRead", "range" } }, cancellationToken);
                 var receive = ReceiveAsync(socket, cancellationToken);
@@ -107,10 +107,18 @@ internal sealed class AgentApplication : IDisposable
 
     private async Task HeartbeatAsync(ClientWebSocket socket, CancellationToken cancellationToken)
     {
-        while (socket.State == WebSocketState.Open && !cancellationToken.IsCancellationRequested)
+        try
         {
-            await SendAsync(socket, new { type = "agent.heartbeat", utc = DateTime.UtcNow }, cancellationToken);
-            await Task.Delay(TimeSpan.FromSeconds(15), cancellationToken);
+            while (socket.State == WebSocketState.Open && !cancellationToken.IsCancellationRequested)
+            {
+                await SendAsync(socket, new { type = "agent.heartbeat", utc = DateTime.UtcNow }, cancellationToken);
+                await Task.Delay(TimeSpan.FromSeconds(15), cancellationToken);
+            }
+        }
+        catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            Log($"heartbeat failed; socketState={socket.State}; exception={exception.GetType().Name}; inner={(exception.InnerException?.GetType().Name ?? "none")}");
+            throw;
         }
     }
 
@@ -176,6 +184,8 @@ internal sealed class AgentApplication : IDisposable
     {
         var requestId = request.TryGetProperty("requestId", out var id) ? id.GetString() : null;
         if (string.IsNullOrWhiteSpace(requestId) || !request.TryGetProperty("payloadBase64", out var payloadElement)) return;
+        var started = System.Diagnostics.Stopwatch.StartNew();
+        Log($"ai request accepted; requestId={requestId}; socketState={socket.State}");
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         if (!_aiRequests.TryAdd(requestId, linked)) return;
         try
@@ -190,6 +200,7 @@ internal sealed class AgentApplication : IDisposable
             };
             upstream.Content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/json");
             using var response = await _modelClient.SendAsync(upstream, HttpCompletionOption.ResponseHeadersRead, linked.Token);
+            Log($"ai upstream response; requestId={requestId}; endpoint={uri.Host}{uri.AbsolutePath}; status={(int)response.StatusCode}; elapsedMs={started.ElapsedMilliseconds}");
             if (!response.IsSuccessStatusCode) throw new InvalidOperationException($"model_http_{(int)response.StatusCode}");
             await using var stream = await response.Content.ReadAsStreamAsync(linked.Token);
             var buffer = new byte[32 * 1024];
@@ -197,10 +208,12 @@ internal sealed class AgentApplication : IDisposable
             while ((read = await stream.ReadAsync(buffer, linked.Token)) > 0)
                 await SendAsync(socket, new { type = "ai.chunk", requestId, contentBase64 = Convert.ToBase64String(buffer, 0, read) }, linked.Token);
             await SendAsync(socket, new { type = "ai.done", requestId }, cancellationToken);
+            Log($"ai request completed; requestId={requestId}; elapsedMs={started.ElapsedMilliseconds}");
         }
         catch (OperationCanceledException) when (linked.IsCancellationRequested) { }
         catch (Exception exception)
         {
+            Log($"ai request failed; requestId={requestId}; elapsedMs={started.ElapsedMilliseconds}; exception={exception.GetType().Name}; inner={(exception.InnerException?.GetType().Name ?? "none")}; message={exception.Message}");
             try { await SendAsync(socket, new { type = "ai.error", requestId, message = exception.Message }, cancellationToken); } catch { }
         }
         finally { _aiRequests.TryRemove(requestId, out _); }

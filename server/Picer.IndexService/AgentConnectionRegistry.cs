@@ -9,6 +9,7 @@ namespace Picer.IndexService;
 internal sealed class AgentConnectionRegistry
 {
     private readonly ConcurrentDictionary<string, AgentSession> _sessions = new(StringComparer.OrdinalIgnoreCase);
+    public int OnlineCount => _sessions.Count;
 
     public async Task HandleAsync(HttpContext context)
     {
@@ -72,9 +73,7 @@ internal sealed class AgentConnectionRegistry
 
     public async Task<(string ContentType, byte[] Content)?> RequestAsync(string? agentId, string path, CancellationToken cancellationToken)
     {
-        var session = !string.IsNullOrWhiteSpace(agentId)
-            ? _sessions.GetValueOrDefault(agentId)
-            : _sessions.Values.SingleOrDefault();
+        var session = await WaitForSessionAsync(agentId, cancellationToken);
         // A remote GUI does not necessarily know the source machine's agent id
         // (and a reconnect may replace the registered id).  This is a single-
         // tenant service, so safely fall back only when exactly one agent is
@@ -88,10 +87,24 @@ internal sealed class AgentConnectionRegistry
     public async Task StreamAiAsync(string? agentId, ReadOnlyMemory<byte> payload,
         Func<ReadOnlyMemory<byte>, Task> onChunk, CancellationToken cancellationToken)
     {
-        var session = !string.IsNullOrWhiteSpace(agentId) ? _sessions.GetValueOrDefault(agentId) : _sessions.Values.SingleOrDefault();
-        if (session is null && _sessions.Count == 1) session = _sessions.Values.Single();
+        var session = await WaitForSessionAsync(agentId, cancellationToken);
         if (session is null) throw new InvalidOperationException("media_agent_offline");
         await session.StreamAiAsync(payload, onChunk, cancellationToken);
+    }
+
+    private async Task<AgentSession?> WaitForSessionAsync(string? agentId, CancellationToken cancellationToken)
+    {
+        // A reconnect normally completes within a few seconds. Waiting here
+        // avoids turning a harmless WebSocket reconnect into an immediate 503.
+        for (var attempt = 0; attempt < 6; attempt++)
+        {
+            var session = !string.IsNullOrWhiteSpace(agentId)
+                ? _sessions.GetValueOrDefault(agentId)
+                : _sessions.Values.FirstOrDefault();
+            if (session is not null || (_sessions.Count > 1 && !string.IsNullOrWhiteSpace(agentId))) return session;
+            if (attempt < 5) await Task.Delay(TimeSpan.FromMilliseconds(500), cancellationToken);
+        }
+        return null;
     }
 
     private sealed class AgentSession(string agentId, WebSocket socket) : IDisposable
