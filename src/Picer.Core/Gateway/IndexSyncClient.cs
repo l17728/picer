@@ -73,14 +73,16 @@ public sealed class IndexSyncClient(HttpClient client) : IDisposable
         return done;
     }
 
-    public async Task PushMetadataAsync(PicerDatabase database, CancellationToken cancellationToken = default)
+    public async Task PushMetadataAsync(PicerDatabase database, CancellationToken cancellationToken = default,
+        bool publishSceneLayouts = true)
     {
         // Scene ordering is a local index result, not something the remote
         // mirror should recompute. Materialize layouts for every indexed
         // directory before sending metadata; both direct-directory and
         // recursive variants are retained so the remote UI can honor the
         // same classification preference.
-        await Task.Run(() => EnsureSceneLayoutSnapshots(database, cancellationToken), cancellationToken).ConfigureAwait(false);
+        if (publishSceneLayouts)
+            await Task.Run(() => EnsureSceneLayoutSnapshots(database, cancellationToken), cancellationToken).ConfigureAwait(false);
         // Face workflow projections reference detected_faces. Upload the face
         // rows first so a first-time mirror can apply review/candidate state
         // atomically without foreign-key failures.
@@ -128,7 +130,8 @@ public sealed class IndexSyncClient(HttpClient client) : IDisposable
     /// retry or a second client cannot duplicate records.
     /// </summary>
     public async Task<IndexSyncResult> PushIncrementalAsync(PicerDatabase database, string checkpointPath,
-        IProgress<string>? progress = null, CancellationToken cancellationToken = default)
+        IProgress<string>? progress = null, CancellationToken cancellationToken = default,
+        bool publishSceneLayouts = true)
     {
         var metadata = BuildMetadataRequest(database);
         var metadataFingerprint = Fingerprint(metadata with
@@ -160,7 +163,7 @@ public sealed class IndexSyncClient(HttpClient client) : IDisposable
         if (!string.Equals(previous.MetadataFingerprint, metadataFingerprint, StringComparison.Ordinal))
         {
             progress?.Report("正在增量同步人物、标签和分析元数据…");
-            await PushMetadataAsync(database, cancellationToken).ConfigureAwait(false);
+            await PushMetadataAsync(database, cancellationToken, publishSceneLayouts).ConfigureAwait(false);
         }
         var changed = !string.Equals(previous.MediaFingerprint, mediaFingerprint, StringComparison.Ordinal)
             || !string.Equals(previous.MetadataFingerprint, metadataFingerprint, StringComparison.Ordinal);

@@ -367,7 +367,8 @@ public static class AppServices
         if (SyncClient is null) return null;
         var checkpoint = Path.Combine(AppPaths.DataRoot,
             ServiceMode ? "remote-sync-checkpoint.json" : "index-sync-checkpoint.json");
-        var result = await SyncClient.PushIncrementalAsync(Db, checkpoint, progress, cancellationToken).ConfigureAwait(false);
+        var result = await SyncClient.PushIncrementalAsync(Db, checkpoint, progress, cancellationToken,
+            publishSceneLayouts: !ServiceMode).ConfigureAwait(false);
         await SyncClient.PushDirectoryClassificationAsync(
             new DirectoryClassificationPreferences(AppPaths.DirectoryClassificationSettingsPath).Snapshot(), cancellationToken).ConfigureAwait(false);
         AppLogger.Info($"增量索引发布完成：changed={result.Changed}; images={result.Images}; videos={result.Videos}");
