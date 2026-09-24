@@ -396,8 +396,7 @@ public static class IndexSearchEngine
         {
             conditions.Add("""
                 (EXISTS (SELECT 1 FROM image_locations il WHERE il.image_id=t.id AND il.search_text LIKE $geoName)
-                 OR (NOT EXISTS (SELECT 1 FROM image_locations il WHERE il.image_id=t.id)
-                     AND gps_in_area(t.gps, $areaKey) = 1))
+                 OR gps_in_area(t.gps, $areaKey) = 1)
                 """);
             parameters.Add(("geoName", "%" + bounds.Name + "%"));
             parameters.Add(("areaKey", bounds.AreaKey));

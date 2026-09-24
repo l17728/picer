@@ -399,4 +399,25 @@ public sealed class SearchTests : IDisposable
         Assert.EndsWith("shangzhou.jpg", shangluo[0].Path);
         Assert.Empty(xian.Select(image => image.Id).Intersect(shangluo.Select(image => image.Id)));
     }
+
+    [Fact]
+    public void AreaSearch_FallsBackToGpsWhenLocationTextIsIncomplete()
+    {
+        _db = new PicerDatabase(Path.Combine(_dataDir, "area-fallback.db"));
+        var source = _db.AddSource(Path.Combine(_dataDir, "photos"));
+        var image = _db.UpsertImage(new ImageRecord
+        {
+            SourceId = source.Id, Path = Path.Combine(source.Path, "shangluo.jpg"), FileSize = 100,
+            ModifiedUtc = DateTime.UtcNow, IndexedUtc = DateTime.UtcNow,
+            Status = ImageStatus.Active, Gps = "33.8700,109.9400"
+        });
+        // The location row is present but lacks the city name; GPS must still
+        // make the city-area search match.
+        _db.SetImageLocation(image.Id, new LocationHierarchyChoice("中国 / 陕西省 / 其他县", "中国", "陕西省", "其他县"));
+
+        var results = IndexSearchEngine.Search(_db, new SearchFilters { GeoBounds = GeoPlaceResolver.Resolve("商洛") });
+
+        Assert.Single(results);
+        Assert.Equal(image.Id, results[0].Id);
+    }
 }
