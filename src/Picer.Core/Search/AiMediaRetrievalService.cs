@@ -42,14 +42,17 @@ public sealed class AiMediaRetrievalService(PicerDatabase database, PeopleServic
         AppLogger.Info($"AiQuestion plan ready; hasPerson={(!string.IsNullOrWhiteSpace(plan.PersonName))}; hasLocation={(!string.IsNullOrWhiteSpace(plan.Location))}; hasDate={(!string.IsNullOrWhiteSpace(plan.StartDate) || !string.IsNullOrWhiteSpace(plan.EndDate))}; keywordCount={plan.Keywords.Count}; elapsedMs={stopwatch.ElapsedMilliseconds}");
 
         progress?.Report(("检索照片索引", 25));
-        var mention = !string.IsNullOrWhiteSpace(plan.PersonName)
-            ? people.FindByName(plan.PersonName.Trim()) ??
+        var normalizedPerson = NormalizePlannerText(plan.PersonName);
+        var normalizedLocation = NormalizeLocation(plan.Location);
+        plan = plan with { PersonName = normalizedPerson, Location = normalizedLocation };
+        var mention = !string.IsNullOrWhiteSpace(normalizedPerson)
+            ? people.FindByName(normalizedPerson) ??
               (people.GetAll().FirstOrDefault(person =>
-                  string.Equals(person.DisplayName.Trim(), plan.PersonName.Trim(), StringComparison.OrdinalIgnoreCase)) is { } summary
+                  string.Equals(NormalizePlannerText(person.DisplayName), normalizedPerson, StringComparison.OrdinalIgnoreCase)) is { } summary
                   ? people.Get(summary.Id)
                   : null)
             : people.FindMention(question)?.Person;
-        var bounds = string.IsNullOrWhiteSpace(plan.Location) ? null : GeoPlaceResolver.Resolve(plan.Location);
+        var bounds = string.IsNullOrWhiteSpace(normalizedLocation) ? null : GeoPlaceResolver.Resolve(normalizedLocation);
         DateTime? start = DateTime.TryParse(plan.StartDate, out var startValue) ? startValue.Date.ToUniversalTime() : null;
         DateTime? end = DateTime.TryParse(plan.EndDate, out var endValue) ? endValue.Date.AddDays(1).AddTicks(-1).ToUniversalTime() : null;
         var dayPart = ResolveDayPart(question, plan.Keywords);
@@ -64,7 +67,7 @@ public sealed class AiMediaRetrievalService(PicerDatabase database, PeopleServic
         var searchTerms = QueryRewrite.Expand(plan.Keywords.Where(term => !IsDayPartToken(term)))
             // Keep the literal location as a text fallback even when geocoding
             // returned bounds; older analyses may have place names but no GPS.
-            .Concat(!string.IsNullOrWhiteSpace(plan.Location) ? [plan.Location!] : [])
+            .Concat(!string.IsNullOrWhiteSpace(normalizedLocation) ? [normalizedLocation!] : [])
             .ToArray();
         var toolResult = new MediaSearchTool(database, videos).Execute(new MediaSearchRequest(
             MediaTypeFilter.Photo, mention is null ? null : [mention.Id], bounds, start, end,
@@ -76,13 +79,13 @@ public sealed class AiMediaRetrievalService(PicerDatabase database, PeopleServic
             if (image is not null) photoCandidates[image.Id] = image;
         }
         AppLogger.Info($"AiQuestion photo retrieval completed; primaryHits={toolResult.Items.Count}; uniquePhotos={photoCandidates.Count}; geoFilter={(bounds is not null)}; elapsedMs={stopwatch.ElapsedMilliseconds}");
-        if (bounds is not null && !string.IsNullOrWhiteSpace(plan.Location))
+        if (bounds is not null && !string.IsNullOrWhiteSpace(normalizedLocation))
         {
             // Preserve recall for legacy descriptions that contain a place name
             // but have no GPS; the second pass is still bounded by the FTS terms.
             var textFallback = new MediaSearchTool(database).Execute(new MediaSearchRequest(
                 MediaTypeFilter.Photo, mention is null ? null : [mention.Id], null, start, end,
-                baseFilter.TimeOfDay, Terms: [plan.Location!], IncludeMissing: false, Limit: 200,
+                baseFilter.TimeOfDay, Terms: [normalizedLocation!], IncludeMissing: false, Limit: 200,
                 SortDirection: SortDirection.Descending));
             foreach (var hit in textFallback.Items)
             {
@@ -128,6 +131,22 @@ public sealed class AiMediaRetrievalService(PicerDatabase database, PeopleServic
         var rankedVideos = (review.VideoIds ?? []).Where(allowedVideos.ContainsKey).Distinct().Select(id => allowedVideos[id]).ToArray();
         progress?.Report(("完成", 100));
         return new(review.Markdown ?? "未生成回答。", rankedPhotos, rankedVideos, plan);
+    }
+
+    private static string? NormalizePlannerText(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return null;
+        return value.Trim().Trim(' ', '，', ',', '。', '；', ';', '：', ':', '"', '\'');
+    }
+
+    private static string? NormalizeLocation(string? value)
+    {
+        var normalized = NormalizePlannerText(value);
+        if (string.IsNullOrWhiteSpace(normalized)) return null;
+        foreach (var suffix in new[] { "市", "省", "自治区", "特别行政区" })
+            if (normalized.EndsWith(suffix, StringComparison.Ordinal) && normalized.Length > suffix.Length)
+                return normalized[..^suffix.Length];
+        return normalized;
     }
 
     private IReadOnlyList<VideoRecord> RetrieveVideos(AiQueryPlan plan, long? personId, DateTime? start, DateTime? end)
