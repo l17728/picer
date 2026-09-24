@@ -1,4 +1,5 @@
 using System.Net.Http.Headers;
+using System.Net;
 using System.Text;
 using System.Text.Json;
 using System.Runtime.CompilerServices;
@@ -16,12 +17,11 @@ public sealed class OpenAiCompatibleChatClient(Uri endpoint, string apiKey, stri
     {
         var payload = new { model, temperature = 0, max_tokens = maximumTokens,
             messages = new[] { new { role = "system", content = systemPrompt }, new { role = "user", content = userPrompt } } };
-        using var request = new HttpRequestMessage(HttpMethod.Post, endpoint);
-        if (!string.IsNullOrWhiteSpace(apiKey)) request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
-        request.Content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
-        using var response = await _client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
+        var json = JsonSerializer.Serialize(payload);
+        using var response = await SendWithRetryAsync(() => CreateRequest(json), cancellationToken).ConfigureAwait(false);
         var responseText = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
-        if (!response.IsSuccessStatusCode) throw new InvalidOperationException($"AI 请求失败（{(int)response.StatusCode}）：{responseText}");
+        if (!response.IsSuccessStatusCode)
+            throw new InvalidOperationException($"AI 请求失败（{(int)response.StatusCode}）：{(string.IsNullOrWhiteSpace(responseText) ? response.ReasonPhrase : responseText)}");
         using var document = JsonDocument.Parse(responseText);
         var content = document.RootElement.GetProperty("choices")[0].GetProperty("message").GetProperty("content").GetString();
         return string.IsNullOrWhiteSpace(content) ? throw new InvalidDataException("AI 返回了空内容。") : StripFence(content);
@@ -32,11 +32,13 @@ public sealed class OpenAiCompatibleChatClient(Uri endpoint, string apiKey, stri
     {
         var payload = new { model, temperature = 0, max_tokens = maximumTokens, stream = true,
             messages = new[] { new { role = "system", content = systemPrompt }, new { role = "user", content = userPrompt } } };
-        using var request = new HttpRequestMessage(HttpMethod.Post, endpoint);
-        if (!string.IsNullOrWhiteSpace(apiKey)) request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
-        request.Content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
-        using var response = await _client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
-        response.EnsureSuccessStatusCode();
+        var json = JsonSerializer.Serialize(payload);
+        using var response = await SendWithRetryAsync(() => CreateRequest(json), cancellationToken).ConfigureAwait(false);
+        if (!response.IsSuccessStatusCode)
+        {
+            var detail = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+            throw new InvalidOperationException($"AI 流式请求失败（{(int)response.StatusCode}）：{(string.IsNullOrWhiteSpace(detail) ? response.ReasonPhrase : detail)}");
+        }
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
         using var reader = new StreamReader(stream, Encoding.UTF8);
         while (await reader.ReadLineAsync(cancellationToken).ConfigureAwait(false) is { } line)
@@ -64,6 +66,40 @@ public sealed class OpenAiCompatibleChatClient(Uri endpoint, string apiKey, stri
             if (!string.IsNullOrEmpty(text)) yield return text;
         }
     }
+
+    private HttpRequestMessage CreateRequest(string json)
+    {
+        var request = new HttpRequestMessage(HttpMethod.Post, endpoint);
+        if (!string.IsNullOrWhiteSpace(apiKey)) request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+        request.Content = new StringContent(json, Encoding.UTF8, "application/json");
+        return request;
+    }
+
+    private async Task<HttpResponseMessage> SendWithRetryAsync(Func<HttpRequestMessage> requestFactory, CancellationToken cancellationToken)
+    {
+        // Remote IndexService/MediaAgent can briefly reconnect. Retry only
+        // transport and gateway failures; never retry client errors or a
+        // cancelled request. The request content is buffered and reusable.
+        for (var attempt = 0; ; attempt++)
+        {
+            try
+            {
+                using var request = requestFactory();
+                var response = await _client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
+                if (!IsTransient(response.StatusCode) || attempt >= 2) return response;
+                response.Dispose();
+            }
+            catch (HttpRequestException) when (attempt < 2 && !cancellationToken.IsCancellationRequested)
+            {
+                // Includes intermittent TLS/socket failures while the remote
+                // service is restarting. Preserve the final exception.
+            }
+            await Task.Delay(TimeSpan.FromMilliseconds(250 * (attempt + 1)), cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private static bool IsTransient(HttpStatusCode statusCode) =>
+        statusCode is HttpStatusCode.BadGateway or HttpStatusCode.ServiceUnavailable or HttpStatusCode.GatewayTimeout;
 
     public static string StripFence(string value)
     {

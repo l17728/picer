@@ -46,11 +46,22 @@ public sealed class AiMediaRetrievalService(PicerDatabase database, PeopleServic
         // An explicit confirmed name in the user's question is authoritative.
         // Do not let a planner typo or hallucination replace it.
         var questionMention = people.FindMention(question);
+        // “我/本人” is a user-facing identity, not a literal free-text
+        // keyword. If the user has explicitly created a confirmed person
+        // with that name, bind the pronoun before retrieval so the reviewer
+        // cannot discard otherwise valid photos as unrelated people.
+        if (questionMention is null && ContainsSelfReference(question))
+        {
+            var self = people.FindByName("我") ?? people.FindByName("本人");
+            if (self is not null)
+                questionMention = new PersonQueryMention(self, "我", question.Replace("我", string.Empty, StringComparison.Ordinal));
+        }
         var normalizedPerson = questionMention?.Person.DisplayName ?? NormalizePlannerText(plan.PersonName);
         var normalizedLocation = NormalizeLocation(plan.Location);
         plan = plan with { PersonName = normalizedPerson, Location = normalizedLocation };
         var locationTerms = (plan.LocationTerms ?? [])
             .Concat(normalizedLocation is null ? [] : [normalizedLocation])
+            .Concat(ExpandKnownLocationAliases(normalizedLocation))
             .Where(value => !string.IsNullOrWhiteSpace(value))
             .Select(value => value.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         var mention = questionMention?.Person ?? (!string.IsNullOrWhiteSpace(normalizedPerson)
@@ -63,6 +74,7 @@ public sealed class AiMediaRetrievalService(PicerDatabase database, PeopleServic
         if (questionMention is not null)
             AppLogger.Info($"AiQuestion person constraint pinned to explicit mention; aliasLength={questionMention.MatchedName.Length}");
         var bounds = string.IsNullOrWhiteSpace(normalizedLocation) ? null : GeoPlaceResolver.Resolve(normalizedLocation);
+        AppLogger.Info($"AiQuestion constraints normalized; personBound={mention is not null}; locationResolved={bounds is not null}; locationTermCount={locationTerms.Length}; selfReference={ContainsSelfReference(question)}");
         DateTime? start = DateTime.TryParse(plan.StartDate, out var startValue) ? startValue.Date.ToUniversalTime() : null;
         DateTime? end = DateTime.TryParse(plan.EndDate, out var endValue) ? endValue.Date.AddDays(1).AddTicks(-1).ToUniversalTime() : null;
         var dayPart = ResolveDayPart(question, plan.Keywords);
@@ -172,6 +184,19 @@ public sealed class AiMediaRetrievalService(PicerDatabase database, PeopleServic
                 return normalized[..^suffix.Length];
         return normalized;
     }
+
+    private static IEnumerable<string> ExpandKnownLocationAliases(string? location)
+    {
+        // 商县 is the historical name commonly used for today's 商州区. Keep
+        // this bounded fallback only as a recall hint; the LLM reviewer and
+        // indexed GPS/location metadata remain authoritative.
+        if (string.Equals(location, "商县", StringComparison.OrdinalIgnoreCase))
+            return ["商州", "商州区", "商洛", "商洛市"];
+        return [];
+    }
+
+    private static bool ContainsSelfReference(string question) =>
+        question.Contains("我", StringComparison.Ordinal) || question.Contains("本人", StringComparison.Ordinal);
 
     private IReadOnlyList<VideoRecord> RetrieveVideos(AiQueryPlan plan, long? personId, DateTime? start, DateTime? end)
     {

@@ -59,6 +59,28 @@ public sealed class OpenAiCompatibleChatClientTests
         Assert.Equal(["你", "好"], chunks);
     }
 
+    [Fact]
+    public async Task CompleteAsync_RetriesTransientGatewayFailure()
+    {
+        var calls = 0;
+        var handler = new DelegateHandler((_, _) =>
+        {
+            calls++;
+            if (calls < 3)
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.ServiceUnavailable));
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("{\"choices\":[{\"message\":{\"content\":\"ok\"}}]}", Encoding.UTF8, "application/json")
+            });
+        });
+        using var client = new OpenAiCompatibleChatClient(new Uri("http://127.0.0.1/chat"), "", "test", new HttpClient(handler));
+
+        var result = await client.CompleteAsync("system", "question");
+
+        Assert.Equal("ok", result);
+        Assert.Equal(3, calls);
+    }
+
     private sealed class DelegateHandler : HttpMessageHandler
     {
         private readonly Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> _callback;
