@@ -7,6 +7,9 @@ install -D -m 0644 deploy/systemd/picer-index.service /etc/systemd/system/picer-
 install -D -m 0644 deploy/systemd/picer-index-health.service /etc/systemd/system/picer-index-health.service
 install -D -m 0644 deploy/systemd/picer-index-health.timer /etc/systemd/system/picer-index-health.timer
 install -D -m 0755 deploy/systemd/picer-index-healthcheck /usr/local/libexec/picer-index-healthcheck
+if ! id -u picer >/dev/null 2>&1; then
+  useradd --system --home-dir /var/lib/picer-index --shell /usr/sbin/nologin picer
+fi
 install -d -o picer -g picer /var/lib/picer-index /var/log/picer-index
 systemctl daemon-reload
 systemctl enable --now picer-index.service

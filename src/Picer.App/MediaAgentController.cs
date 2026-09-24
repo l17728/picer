@@ -25,7 +25,15 @@ internal static class MediaAgentController
                 var protectedValue = Convert.FromBase64String(value["dpapi:".Length..]);
                 return System.Text.Encoding.UTF8.GetString(ProtectedData.Unprotect(protectedValue, null, DataProtectionScope.CurrentUser));
             }
-            return null;
+            // Backward compatibility: early endpoint files stored the DPAPI
+            // payload as a bare Base64 string without a format prefix.
+            try
+            {
+                var protectedValue = Convert.FromBase64String(value);
+                return System.Text.Encoding.UTF8.GetString(ProtectedData.Unprotect(protectedValue, null, DataProtectionScope.CurrentUser));
+            }
+            catch (FormatException) { return null; }
+            catch (CryptographicException) { return null; }
         }) ?? "";
     }
 

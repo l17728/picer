@@ -2,6 +2,8 @@
 Description=Picer IndexService
 After=network-online.target
 Wants=network-online.target
+StartLimitIntervalSec=120
+StartLimitBurst=12
 
 [Service]
 Type=exec
@@ -10,11 +12,10 @@ Group=picer
 WorkingDirectory=/opt/picer-index
 Environment=PICER_INDEX_DATA_ROOT=/var/lib/picer-index
 Environment=PICER_INDEX_SERVICE_PORT=8445
+Environment=PICER_INDEX_SERVICE_BIND=0.0.0.0
 ExecStart=/opt/picer-index/Picer.IndexService
 Restart=always
 RestartSec=5
-StartLimitIntervalSec=120
-StartLimitBurst=12
 KillSignal=SIGINT
 TimeoutStopSec=30
 NoNewPrivileges=true

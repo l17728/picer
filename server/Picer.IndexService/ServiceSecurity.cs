@@ -90,6 +90,14 @@ public static class ServiceSecurity
 
     public static byte[] SafeUnprotectBase64(string base64)
     {
+        // SafeProtectText prefixes non-DPAPI fallbacks with a format marker.
+        // Strip it before decoding; older deployments persisted the marker
+        // verbatim and would otherwise crash during service startup.
+        if (base64.StartsWith("plain:", StringComparison.OrdinalIgnoreCase))
+            return Convert.FromBase64String(base64["plain:".Length..]);
+        if (base64.StartsWith("dpapi:", StringComparison.OrdinalIgnoreCase))
+            return Unprotect(Convert.FromBase64String(base64["dpapi:".Length..]));
+
         var bytes = Convert.FromBase64String(base64);
         if (bytes.Length > 6 && bytes[0] == 'd' && bytes[1] == 'p')
         {

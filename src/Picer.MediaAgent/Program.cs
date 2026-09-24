@@ -71,7 +71,7 @@ internal sealed class AgentApplication : IDisposable
         {
             try
             {
-                Log($"connecting ip={_serviceIp}, roots={string.Join(';', _roots)}");
+                Log($"connecting ip={_serviceIp}, roots={string.Join(';', _roots)}, tokenConfigured={!string.IsNullOrWhiteSpace(_token)}");
                 using var socket = new ClientWebSocket();
                 socket.Options.RemoteCertificateValidationCallback = (_, certificate, _, _) =>
                 {
