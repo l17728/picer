@@ -57,6 +57,23 @@ public sealed class AiMediaRetrievalService(PicerDatabase database, PeopleServic
                 questionMention = new PersonQueryMention(self, "我", question.Replace("我", string.Empty, StringComparison.Ordinal));
         }
         var normalizedPerson = questionMention?.Person.DisplayName ?? NormalizePlannerText(plan.PersonName);
+        // A natural-language query may name more than one confirmed person
+        // (for example, “我和牟”).  The planner schema intentionally keeps a
+        // primary person for compatibility, but retrieval must preserve the
+        // full explicit set and require their intersection.
+        var allPeople = people.GetAll();
+        var explicitPeople = allPeople
+            .Where(value => value.ConfirmedFaceCount > 0 &&
+                question.Contains(value.DisplayName, StringComparison.OrdinalIgnoreCase))
+            .DistinctBy(value => value.Id)
+            .ToArray();
+        if (questionMention is null && ContainsSelfReference(question))
+        {
+            var self = people.FindByName("我") ?? people.FindByName("本人");
+            if (self is not null && allPeople.FirstOrDefault(value => value.Id == self.Id) is { ConfirmedFaceCount: > 0 } selfSummary &&
+                explicitPeople.All(value => value.Id != selfSummary.Id))
+                explicitPeople = [selfSummary, .. explicitPeople];
+        }
         var normalizedLocation = NormalizeLocation(plan.Location);
         plan = plan with { PersonName = normalizedPerson, Location = normalizedLocation };
         var locationTerms = (plan.LocationTerms ?? [])
@@ -74,7 +91,12 @@ public sealed class AiMediaRetrievalService(PicerDatabase database, PeopleServic
         if (questionMention is not null)
             AppLogger.Info($"AiQuestion person constraint pinned to explicit mention; aliasLength={questionMention.MatchedName.Length}");
         var bounds = string.IsNullOrWhiteSpace(normalizedLocation) ? null : GeoPlaceResolver.Resolve(normalizedLocation);
-        AppLogger.Info($"AiQuestion constraints normalized; personBound={mention is not null}; locationResolved={bounds is not null}; locationTermCount={locationTerms.Length}; selfReference={ContainsSelfReference(question)}");
+        var requiredPeople = explicitPeople.Length > 0
+            ? explicitPeople
+            : mention is null
+                ? Array.Empty<PersonSummary>()
+                : allPeople.Where(value => value.Id == mention.Id).ToArray();
+        AppLogger.Info($"AiQuestion constraints normalized; personBound={mention is not null}; personConstraintCount={requiredPeople.Length}; locationResolved={bounds is not null}; locationTermCount={locationTerms.Length}; selfReference={ContainsSelfReference(question)}");
         DateTime? start = DateTime.TryParse(plan.StartDate, out var startValue) ? startValue.Date.ToUniversalTime() : null;
         DateTime? end = DateTime.TryParse(plan.EndDate, out var endValue) ? endValue.Date.AddDays(1).AddTicks(-1).ToUniversalTime() : null;
         var dayPart = ResolveDayPart(question, plan.Keywords);
@@ -98,7 +120,7 @@ public sealed class AiMediaRetrievalService(PicerDatabase database, PeopleServic
         foreach (var hit in toolResult.Items)
         {
             var image = database.GetImage(hit.Id);
-            if (image is not null) photoCandidates[image.Id] = image;
+            if (image is not null && HasAllRequiredPeople(image.Id, requiredPeople)) photoCandidates[image.Id] = image;
         }
         AppLogger.Info($"AiQuestion photo retrieval completed; primaryHits={toolResult.Items.Count}; uniquePhotos={photoCandidates.Count}; geoFilter={(bounds is not null)}; elapsedMs={stopwatch.ElapsedMilliseconds}");
         if (bounds is not null && locationTerms.Length > 0)
@@ -113,7 +135,7 @@ public sealed class AiMediaRetrievalService(PicerDatabase database, PeopleServic
             foreach (var hit in textFallback.Items)
             {
                 var image = database.GetImage(hit.Id);
-                if (image is not null) photoCandidates[image.Id] = image;
+                if (image is not null && HasAllRequiredPeople(image.Id, requiredPeople)) photoCandidates[image.Id] = image;
             }
         }
 
@@ -136,6 +158,7 @@ public sealed class AiMediaRetrievalService(PicerDatabase database, PeopleServic
                 gps = image.Gps,
                 location = GetLocationDisplay(image.Id),
                 confirmedPersonNames = people.GetConfirmedPersonNamesForImage(image.Id),
+                requiredPersonNames = requiredPeople.Select(value => value.DisplayName).ToArray(),
                 description = cloud.GetLatestCompleted(image.Id)?.Result.Summary }).ToArray(),
             videos = videoCandidates.Select(video => new { id = video.Id, file = Path.GetFileName(video.Path),
                 time = video.TakenUtc ?? video.ModifiedUtc, durationSeconds = video.DurationSeconds,
@@ -157,8 +180,7 @@ public sealed class AiMediaRetrievalService(PicerDatabase database, PeopleServic
         var rankedVideos = (review.VideoIds ?? []).Where(allowedVideos.ContainsKey).Distinct().Select(id => allowedVideos[id]).ToArray();
         if (mention is not null && rankedPhotos.Length == 0 && rankedVideos.Length == 0)
         {
-            rankedPhotos = photos.Where(image => people.GetConfirmedPersonNamesForImage(image.Id)
-                .Contains(mention.DisplayName, StringComparer.OrdinalIgnoreCase)).ToArray();
+            rankedPhotos = photos.Where(image => HasAllRequiredPeople(image.Id, requiredPeople)).ToArray();
             rankedVideos = videoCandidates.Where(video => people.GetConfirmedPersonNamesForVideo(video.Id)
                 .Contains(mention.DisplayName, StringComparer.OrdinalIgnoreCase)).ToArray();
             AppLogger.Info($"AiQuestion reviewer fallback applied for confirmed person; photos={rankedPhotos.Length}; videos={rankedVideos.Length}");
@@ -250,6 +272,13 @@ public sealed class AiMediaRetrievalService(PicerDatabase database, PeopleServic
         {
             return null;
         }
+    }
+
+    private bool HasAllRequiredPeople(long imageId, IReadOnlyList<PersonSummary> requiredPeople)
+    {
+        if (requiredPeople.Count == 0) return true;
+        var confirmed = people.GetConfirmedPersonNamesForImage(imageId);
+        return requiredPeople.All(person => confirmed.Contains(person.DisplayName, StringComparer.OrdinalIgnoreCase));
     }
 
     private sealed record Review(string? Markdown, IReadOnlyList<long>? PhotoIds, IReadOnlyList<long>? VideoIds);
