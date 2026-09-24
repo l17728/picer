@@ -1,0 +1,6 @@
+[Unit]
+Description=Probe Picer IndexService health
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/picer-index-healthcheck

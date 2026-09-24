@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+url="${PICER_INDEX_HEALTH_URL:-https://127.0.0.1:8445/health}"
+if curl --silent --show-error --fail --max-time 8 --insecure "$url" >/dev/null; then
+  exit 0
+fi
+
+logger -t picer-index "health probe failed; restarting picer-index.service"
+systemctl restart picer-index.service

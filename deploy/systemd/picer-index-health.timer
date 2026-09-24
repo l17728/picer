@@ -1,0 +1,10 @@
+[Unit]
+Description=Periodic Picer IndexService health probe
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=30s
+Unit=picer-index-health.service
+
+[Install]
+WantedBy=timers.target
