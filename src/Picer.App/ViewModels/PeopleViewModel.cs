@@ -41,6 +41,10 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
     private readonly SemaphoreSlim _analysisGate = new(1, 1);
     private readonly SemaphoreSlim _organizeGate = new(1, 1);
     private readonly SemaphoreSlim _thumbnailGate = new(6, 6);
+    // Face crops use a separate adapter/cache, but share the same bounded
+    // scheduling rule as media thumbnails so entering a large people group
+    // cannot start thousands of decoders at once.
+    private readonly SemaphoreSlim _faceCropLoadGate = new(8, 8);
     private CancellationTokenSource? _pageLoadCancellation;
     private CancellationTokenSource? _personLoadCancellation;
     private CancellationTokenSource? _clusterLoadCancellation;
@@ -1837,6 +1841,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
     {
         _collectionLoadCancellation?.Cancel();
         _collectionLoadCancellation?.Dispose();
+        _faceCropLoadGate.Dispose();
         SelectedPerson = null;
         SelectedCandidateCluster = null;
         DisplayedCollectionKind = DisplayedFaceCollectionKind.Ignored;
@@ -2294,6 +2299,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
 
     private async Task LoadDisplayedFaceThumbnailAsync(UnassignedFaceViewModel item, CancellationToken cancellationToken = default)
     {
+        await _faceCropLoadGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             if (!DisplayedFaces.Contains(item)) return;
@@ -2302,6 +2308,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             if (path is not null && DisplayedFaces.Contains(item)) item.FaceThumbnailPath = path;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
+        finally { _faceCropLoadGate.Release(); }
     }
 }
 
