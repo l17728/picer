@@ -1,0 +1,158 @@
+name: Offline release assets
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Existing draft release tag (for example v1.1.0)
+        required: true
+        type: string
+      overlaySha256:
+        description: SHA-256 of the runtime overlay asset in that draft
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: offline-release-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  offline-assets:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ inputs.version }}
+      OVERLAY_SHA256: ${{ inputs.overlaySha256 }}
+      DOTNET_CLI_TELEMETRY_OPTOUT: 1
+      DOTNET_NOLOGO: 1
+    steps:
+      - name: Validate dispatch inputs
+        shell: pwsh
+        run: |
+          if ($env:RELEASE_TAG -notmatch '^v\d+\.\d+\.\d+([-.][0-9A-Za-z.-]+)?$') { throw 'Invalid release tag' }
+          if ($env:OVERLAY_SHA256 -notmatch '^[0-9a-fA-F]{64}$') { throw 'Invalid overlay SHA-256' }
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.version }}
+          fetch-depth: 0
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Gate existing draft, exact tag and successful CI
+        shell: pwsh
+        run: |
+          $sha = git rev-parse "$env:RELEASE_TAG^{commit}"
+          if ($LASTEXITCODE -ne 0) { throw 'Tag does not resolve' }
+          $head = git rev-parse HEAD
+          if ($LASTEXITCODE -ne 0 -or $head -ne $sha) { throw 'Tag and checkout differ' }
+          $releaseJson = gh release view $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --json isDraft,tagName
+          if ($LASTEXITCODE -ne 0) { throw 'Existing release required' }
+          $release = $releaseJson | ConvertFrom-Json
+          if (-not $release.isDraft -or $release.tagName -cne $env:RELEASE_TAG) { throw 'Only an existing matching draft may be changed' }
+          # Address the workflow by file path, not a potentially ambiguous display name.
+          $runsJson = gh api "repos/$env:GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$sha&status=success&per_page=100"
+          if ($LASTEXITCODE -ne 0) { throw 'Unable to inspect CI evidence' }
+          $runs = $runsJson | ConvertFrom-Json
+          $passed = @($runs.workflow_runs | Where-Object { $_.head_sha -ceq $sha -and $_.status -eq 'completed' -and $_.conclusion -eq 'success' })
+          if ($passed.Count -eq 0) { throw 'No successful CI for this exact tag commit' }
+          "SOURCE_COMMIT=$sha" >> $env:GITHUB_ENV
+      - name: Download and safely assemble fixed runtime
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $downloads = Join-Path $env:RUNNER_TEMP 'offline-downloads'
+          New-Item -ItemType Directory -Path $downloads | Out-Null
+          gh release download runtime-v1 --repo $env:GITHUB_REPOSITORY --pattern Picer-runtime-win-x64.zip --dir $downloads
+          if ($LASTEXITCODE -ne 0) { throw 'Base runtime download failed' }
+          $base = Join-Path $downloads 'Picer-runtime-win-x64.zip'
+          if ((Get-Item -LiteralPath $base).Length -ne 508299995 -or (Get-FileHash -LiteralPath $base -Algorithm SHA256).Hash -ne '2f68ce7a731fa1950ead73eb172ee5e3931d670552d7fc1d524540ec8a65f8f7') { throw 'Base runtime integrity failed' }
+          $overlayName = "Picer-runtime-$env:RELEASE_TAG-overlay.zip"
+          gh release download $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --pattern $overlayName --dir $downloads
+          if ($LASTEXITCODE -ne 0) { throw 'Overlay download failed' }
+          $overlay = Join-Path $downloads $overlayName
+          if ((Get-FileHash -LiteralPath $overlay -Algorithm SHA256).Hash -ne $env:OVERLAY_SHA256) { throw 'Overlay integrity failed' }
+          gh release download $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --pattern OFFLINE-INSTALL.txt --dir $downloads
+          if ($LASTEXITCODE -ne 0) { throw 'Offline installation instructions are required' }
+          function Expand-SafeRuntime([string]$archive, [string]$destination) {
+              $root = [IO.Path]::GetFullPath($destination).TrimEnd('\') + '\'
+              New-Item -ItemType Directory -Path $root -Force | Out-Null
+              $zip = [IO.Compression.ZipFile]::OpenRead($archive)
+              try {
+                  $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+                  [long]$total = 0
+                  foreach ($entry in $zip.Entries) {
+                      $name = $entry.FullName.Replace('/', '\')
+                      if ([string]::IsNullOrWhiteSpace($name) -or [IO.Path]::IsPathRooted($name) -or $name.Contains(':') -or $name.Split('\') -contains '..') { throw 'Unsafe archive path' }
+                      if (($entry.ExternalAttributes -band 0xF0000000L) -eq 0xA0000000L) { throw 'Archive symbolic link forbidden' }
+                      $target = [IO.Path]::GetFullPath((Join-Path $root $name))
+                      if (-not $target.StartsWith($root, [StringComparison]::OrdinalIgnoreCase) -or -not $seen.Add($target)) { throw 'Archive path collision or escape' }
+                      $total += $entry.Length
+                      if ($total -gt 8000000000 -or $entry.Length -gt 2000000000) { throw 'Unexpected expanded archive size' }
+                      if ($name.EndsWith('\')) {
+                          New-Item -ItemType Directory -Path $target -Force | Out-Null
+                      } else {
+                          New-Item -ItemType Directory -Path (Split-Path -Parent $target) -Force | Out-Null
+                          [IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $target, $true)
+                      }
+                  }
+              } finally { $zip.Dispose() }
+          }
+          # Both archives contain paths relative to runtime/, without a runtime/ wrapper.
+          $runtime = Join-Path $env:GITHUB_WORKSPACE 'third_party/runtime'
+          Expand-SafeRuntime $base $runtime
+          Expand-SafeRuntime $overlay $runtime
+      - name: Publish through all fixed hash and license gates
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $gui = Join-Path $env:RUNNER_TEMP 'offline-gui'
+          $service = Join-Path $env:RUNNER_TEMP 'offline-service'
+          ./tools/publish-self-contained.ps1 -OutputDirectory $gui -ServiceOutputDirectory $service -SkipArchive
+          # The tagged script checks each native CLI exit code and every pinned runtime asset.
+      - name: Package full GUI, runtime and source manifest
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $assets = Join-Path $env:RUNNER_TEMP 'offline-assets'
+          New-Item -ItemType Directory -Path $assets | Out-Null
+          $gui = Join-Path $env:RUNNER_TEMP 'offline-gui'
+          $runtime = Join-Path $env:GITHUB_WORKSPACE 'third_party/runtime'
+          $instructions = Join-Path $env:RUNNER_TEMP 'offline-downloads/OFFLINE-INSTALL.txt'
+          $manifest = @{ releaseTag=$env:RELEASE_TAG; sourceCommit=$env:SOURCE_COMMIT; runtimeBaseTag='runtime-v1'; runtimeBaseSha256='2f68ce7a731fa1950ead73eb172ee5e3931d670552d7fc1d524540ec8a65f8f7'; overlaySha256=$env:OVERLAY_SHA256.ToLowerInvariant(); format='runtime-relative-paths'; generatedUtc=[DateTime]::UtcNow.ToString('O') } | ConvertTo-Json
+          foreach ($directory in @($gui, $runtime)) {
+              Copy-Item -LiteralPath $instructions -Destination (Join-Path $directory 'OFFLINE-INSTALL.txt')
+              $manifest | Set-Content -LiteralPath (Join-Path $directory 'OFFLINE-RELEASE-MANIFEST.json') -Encoding utf8
+          }
+          Compress-Archive -Path (Join-Path $gui '*') -DestinationPath (Join-Path $assets "Picer-$env:RELEASE_TAG-win-x64-full.zip") -CompressionLevel Optimal
+          Compress-Archive -Path (Join-Path $runtime '*') -DestinationPath (Join-Path $assets "Picer-runtime-$env:RELEASE_TAG-win-x64.zip") -CompressionLevel Optimal
+          Get-ChildItem -LiteralPath $assets -File | Sort-Object Name | ForEach-Object {
+              if ($_.Length -ge 2000000000) { throw 'Release asset reaches 2 GB limit' }
+              "$((Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant())  $($_.Name)"
+          } | Set-Content -LiteralPath (Join-Path $assets 'SHA256SUMS-OFFLINE.txt') -Encoding ascii
+      - name: Recheck draft and immutable tag, then upload only three assets
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $releaseJson = gh release view $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --json isDraft,tagName
+          if ($LASTEXITCODE -ne 0) { throw 'Release recheck failed' }
+          $release = $releaseJson | ConvertFrom-Json
+          if (-not $release.isDraft -or $release.tagName -cne $env:RELEASE_TAG) { throw 'Release is no longer the matching draft' }
+          git fetch origin "refs/tags/$env:RELEASE_TAG" --no-tags
+          if ($LASTEXITCODE -ne 0) { throw 'Remote tag recheck failed' }
+          $remoteCommit = git rev-parse 'FETCH_HEAD^{commit}'
+          if ($LASTEXITCODE -ne 0 -or $remoteCommit -cne $env:SOURCE_COMMIT) { throw 'Tag moved during packaging' }
+          $assets = Join-Path $env:RUNNER_TEMP 'offline-assets'
+          $files = @((Join-Path $assets "Picer-$env:RELEASE_TAG-win-x64-full.zip"), (Join-Path $assets "Picer-runtime-$env:RELEASE_TAG-win-x64.zip"), (Join-Path $assets 'SHA256SUMS-OFFLINE.txt'))
+          foreach ($file in $files) {
+              if ((Get-Item -LiteralPath $file).Length -ge 2000000000) { throw 'Asset size limit exceeded' }
+          }
+          gh release upload $env:RELEASE_TAG @files --repo $env:GITHUB_REPOSITORY --clobber
+          if ($LASTEXITCODE -ne 0) { throw 'Draft asset upload failed; do not publish until all hashes are verified' }
+          $afterJson = gh release view $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --json isDraft
+          if ($LASTEXITCODE -ne 0 -or -not ($afterJson | ConvertFrom-Json).isDraft) { throw 'Draft state verification failed' }
+          'Offline assets uploaded to draft only. Public release requires separate review.' >> $env:GITHUB_STEP_SUMMARY
