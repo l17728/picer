@@ -1,4 +1,4 @@
-# Picer v1.1.1 发布与安装
+﻿# Picer v1.1.2 发布与安装
 
 此文说明发布契约，不代表 GitHub CI、Release 或部署已经成功。以对应提交的 Actions 结果、最终 Release 资产和实际健康检查为准。
 
@@ -6,15 +6,15 @@
 
 | 资产 | 用途 |
 | --- | --- |
-| Picer-v1.1.1-win-x64-binary.zip | Windows GUI，内含 media-agent 子目录 |
-| Picer.MediaAgent-v1.1.1-win-x64-binary.zip | 独立 Windows 源媒体驻留代理 |
-| Picer.IndexService-v1.1.1-win-x64-binary.zip | Windows 索引服务 |
-| Picer.IndexService-v1.1.1-linux-x64-binary.tar.gz | Linux 索引/中转服务 |
-| Picer.ModelServer-v1.1.1-win-x64-binary.zip | Windows 模型 API 与 Python worker 源码 |
-| Picer.ModelServer-v1.1.1-linux-x64-binary.tar.gz | Linux 模型 API 与 Python worker 源码 |
+| Picer-v1.1.2-win-x64-binary.zip | Windows GUI，内含 media-agent 子目录 |
+| Picer.MediaAgent-v1.1.2-win-x64-binary.zip | 独立 Windows 源媒体驻留代理 |
+| Picer.IndexService-v1.1.2-win-x64-binary.zip | Windows 索引服务 |
+| Picer.IndexService-v1.1.2-linux-x64-binary.tar.gz | Linux 索引/中转服务 |
+| Picer.ModelServer-v1.1.2-win-x64-binary.zip | Windows 模型 API 与 Python worker 源码 |
+| Picer.ModelServer-v1.1.2-linux-x64-binary.tar.gz | Linux 模型 API 与 Python worker 源码 |
 | SHA256SUMS.txt | 二进制及安装说明的校验值 |
-| Picer-v1.1.1-win-x64-full.zip | Windows GUI、内置代理、自包含 .NET 与固定运行组件 |
-| Picer-runtime-v1.1.1-win-x64.zip / SHA256SUMS-OFFLINE.txt | Windows 离线工具与固定模型及校验清单 |
+| Picer-v1.1.2-win-x64-full.zip | Windows GUI、内置代理、自包含 .NET 与固定运行组件 |
+| Picer-runtime-v1.1.2-win-x64.zip / SHA256SUMS-OFFLINE.txt | Windows 离线工具与固定模型及校验清单 |
 
 这些是解压安装包，不是 MSI。二进制包含对应平台的 .NET 运行时及发布输出中的本机库，不包含全部 AI 模型、CUDA、Python 或外部模型服务。不要删除 DLL、runtimes、licenses 等依赖目录。Linux IndexService 主要通过 Windows MediaAgent 执行媒体工作，不能将 Windows 原生视觉库当作 Linux 本机推理能力。
 
@@ -59,3 +59,4 @@ tools/package-release.ps1 是明确的外置运行资产二进制发行模式，
 工作流创建 draft Release，发布负责人补齐通过原固定哈希校验的版本化运行资产、对应清单及安装冒烟证据后再公开。工作流手动重跑要求已有 tag，不自动给任意分支创建版本标签；已有同名 Release 时停止供人工核对，避免悄悄替换已发布资产。
 
 RuntimeComponent 检验和本轮真实部署独立于轻量包 CI。历史本机 605 分轮单元证据与 WPF 73/73 不能替代当前提交的 GitHub CI 结果，模型质量/硬件暂停验收也不因生成安装包自动完成。
+

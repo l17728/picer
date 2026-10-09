@@ -45,17 +45,43 @@ public sealed class DirectoryMediaChangeTrackerTests : IDisposable
         File.WriteAllText(Path.Combine(oldDirectory, "one.jpg"), "one");
         using var tracker = new DirectoryMediaChangeTracker();
         tracker.Read(_root, false, Photo, default);
-        Directory.Move(oldDirectory, Path.Combine(_root, "renamed"));
+        var renamed = Path.Combine(_root, "renamed");
+        Directory.Move(oldDirectory, renamed);
         var added = Directory.CreateDirectory(Path.Combine(_root, "added")).FullName;
         File.WriteAllText(Path.Combine(added, "two.jpg"), "two");
-        // Directory timestamps protect the immediate scan before watcher notifications drain.
+        // Native watcher delivery and directory timestamp updates are asynchronous.
+        // Require a complete, exact result after bounded settling, not an immediate
+        // snapshot that production intentionally treats as incomplete during changes.
+        var expected = new[] { Path.Combine(renamed, "one.jpg"), Path.Combine(added, "two.jpg") }
+            .Order(StringComparer.OrdinalIgnoreCase).ToArray();
         var changed = tracker.Read(_root, false, Photo, default);
+        var settling = System.Diagnostics.Stopwatch.StartNew();
+        while ((!changed.Complete || !changed.Files.SequenceEqual(expected, StringComparer.OrdinalIgnoreCase))
+            && settling.Elapsed < TimeSpan.FromSeconds(3))
+        {
+            await Task.Delay(20);
+            changed = tracker.Read(_root, false, Photo, default);
+        }
+        Assert.True(changed.Complete, "Added/renamed subtree notifications did not settle into a complete scan.");
         Assert.Equal(2, changed.Files.Length);
+        Assert.Equal(expected, changed.Files);
         Assert.Contains(Path.Combine(added, "two.jpg"), changed.Files);
+        Assert.Contains(Path.Combine(renamed, "one.jpg"), changed.Files);
         Assert.DoesNotContain(changed.Files, path => path.StartsWith(oldDirectory, StringComparison.OrdinalIgnoreCase));
-        Directory.Delete(Path.Combine(_root, "renamed"), true);
-        await Task.Delay(100);
-        Assert.Single(tracker.Read(_root, false, Photo, default).Files);
+        Directory.Delete(renamed, true);
+        var deleted = tracker.Read(_root, false, Photo, default);
+        settling.Restart();
+        var remaining = new[] { Path.Combine(added, "two.jpg") };
+        while ((!deleted.Complete || !deleted.Files.SequenceEqual(remaining, StringComparer.OrdinalIgnoreCase))
+            && settling.Elapsed < TimeSpan.FromSeconds(3))
+        {
+            await Task.Delay(20);
+            deleted = tracker.Read(_root, false, Photo, default);
+        }
+        Assert.True(deleted.Complete, "Deleted subtree notifications did not settle into a complete scan.");
+        Assert.Single(deleted.Files);
+        Assert.Equal(remaining, deleted.Files);
+        Assert.DoesNotContain(deleted.Files, path => path.StartsWith(renamed, StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]

@@ -9,9 +9,11 @@
 - [Release 工作流](https://github.com/l17728/picer/actions/runs/37928114114)：严格构建、两套非 RuntimeComponent 测试、六个组件打包及草稿上传全部成功。
 - 第一轮 CI 在 577 项通过后触发 60 秒无测试事件超时；第二轮在测试执行前触发 30 秒宿主连接超时。分别改为 10 分钟挂起诊断和 180 秒连接等待，保留全部测试。原始失败日志保留在本机 `artifacts/ci-run-*`。
 
+补充候选验证：`1f0e376` 修复视频内容缓存，采用卷日志代次与文件 USN；无法取得可信签名时重新读取内容。[v1.1.1 CI](https://github.com/l17728/picer/actions/runs/37932196317) 通过 **610/610 + 73/73**。发布流程重复测试时暴露目录通知测试的异步时序问题；现保留数量、路径和完整性断言，采用最长 3 秒等待通知收敛，严格构建及 6 项定向测试通过。最终候选调整为 `v1.1.2`，待修正提交完整 CI 通过后创建标签。
+
 ## 发布资产
 
-[v1.1.1 Release](https://github.com/l17728/picer/releases/tag/v1.1.1) 的组件与安装方式见[发布安装指南](RELEASE_GUIDE.md)。六个二进制包由 GitHub Actions 生成：Windows GUI（含代理）、独立 Windows MediaAgent、Windows/Linux IndexService、Windows/Linux ModelServer。另补充经固定运行组件检查的 Windows 完整包、版本化 runtime 包与独立校验清单。最终公开状态与资产核验在本轮收尾时记录。
+最终 `v1.1.2` 的组件与安装方式见[发布安装指南](RELEASE_GUIDE.md)。六个二进制包由 GitHub Actions 生成：Windows GUI（含代理）、独立 Windows MediaAgent、Windows/Linux IndexService、Windows/Linux ModelServer。另补充经固定运行组件检查的 Windows 完整包、版本化 runtime 包与独立校验清单。最终公开状态与资产核验在本轮收尾时记录。
 
 完整包的固定运行组件由 `tools/publish-self-contained.ps1` 校验文件大小、SHA-256、许可证和本机依赖；隔离 GUI 冒烟确认使用包内 `coreclr.dll`，窗口正常响应。固定 runtime 包只有 ffmpeg.exe，不含代理探测所需的 ffprobe.exe；代理需另备同目录的两个工具。外部 Python/CUDA、Qwen/InsightFace 等模型与实际模型端点仍需独立安装配置；这些不因提供 ModelServer 程序包而自动具备。包内安装说明是 CI 构建时快照，Release 顶层 INSTALL.md 修正了 FFprobe 安装说明，以顶层说明为准。
 
