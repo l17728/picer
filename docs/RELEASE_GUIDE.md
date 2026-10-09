@@ -1,4 +1,4 @@
-# Picer v1.1.0 发布与安装
+# Picer v1.1.1 发布与安装
 
 此文说明发布契约，不代表 GitHub CI、Release 或部署已经成功。以对应提交的 Actions 结果、最终 Release 资产和实际健康检查为准。
 
@@ -6,18 +6,19 @@
 
 | 资产 | 用途 |
 | --- | --- |
-| Picer-v1.1.0-win-x64-binary.zip | Windows GUI，内含 media-agent 子目录 |
-| Picer.MediaAgent-v1.1.0-win-x64-binary.zip | 独立 Windows 源媒体驻留代理 |
-| Picer.IndexService-v1.1.0-win-x64-binary.zip | Windows 索引服务 |
-| Picer.IndexService-v1.1.0-linux-x64-binary.tar.gz | Linux 索引/中转服务 |
-| Picer.ModelServer-v1.1.0-win-x64-binary.zip | Windows 模型 API 与 Python worker 源码 |
-| Picer.ModelServer-v1.1.0-linux-x64-binary.tar.gz | Linux 模型 API 与 Python worker 源码 |
+| Picer-v1.1.1-win-x64-binary.zip | Windows GUI，内含 media-agent 子目录 |
+| Picer.MediaAgent-v1.1.1-win-x64-binary.zip | 独立 Windows 源媒体驻留代理 |
+| Picer.IndexService-v1.1.1-win-x64-binary.zip | Windows 索引服务 |
+| Picer.IndexService-v1.1.1-linux-x64-binary.tar.gz | Linux 索引/中转服务 |
+| Picer.ModelServer-v1.1.1-win-x64-binary.zip | Windows 模型 API 与 Python worker 源码 |
+| Picer.ModelServer-v1.1.1-linux-x64-binary.tar.gz | Linux 模型 API 与 Python worker 源码 |
 | SHA256SUMS.txt | 二进制及安装说明的校验值 |
-| 本 Release 的版本化 runtime 包与配套 SHA-256 清单 | Windows 离线工具和固定模型，可能按组件分包 |
+| Picer-v1.1.1-win-x64-full.zip | Windows GUI、内置代理、自包含 .NET 与固定运行组件 |
+| Picer-runtime-v1.1.1-win-x64.zip / SHA256SUMS-OFFLINE.txt | Windows 离线工具与固定模型及校验清单 |
 
 这些是解压安装包，不是 MSI。二进制包含对应平台的 .NET 运行时及发布输出中的本机库，不包含全部 AI 模型、CUDA、Python 或外部模型服务。不要删除 DLL、runtimes、licenses 等依赖目录。Linux IndexService 主要通过 Windows MediaAgent 执行媒体工作，不能将 Windows 原生视觉库当作 Linux 本机推理能力。
 
-历史 runtime-v1/Picer-runtime-win-x64.zip 发布于 2026-09-15，不能视为本版本完整组件集。安装时使用本次 Release 明确列出的版本化 runtime 资产；若最终资产尚缺失，本地模型功能尚不具备完整安装条件，不要以旧包绕过检查。
+运行时基础资产 runtime-v1/Picer-runtime-win-x64.zip 经固定 SHA-256 和当前逐文件门禁验证后复用，不能只凭文件名或日期推断兼容性。安装使用本 Release 的版本化 runtime 资产。完整包不需要再次解压 runtime；额外的代理工具和模型端点仍按下文配置。
 
 ## 校验和 Windows 安装
 
@@ -34,7 +35,7 @@
 - PICER_INDEX_SERVICE_IP：索引服务地址，按服务配对配置填写。
 - PICER_INDEX_SERVICE_TOKEN 与 PICER_INDEX_SERVICE_SPKI_PIN：配对令牌和可信公钥指纹，不写入共享脚本或日志。
 - PICER_MEDIA_AGENT_ROOTS：允许读取的源根目录列表；分隔方式按当前代理配置，通常使用分号。
-- PICER_FFMPEG_PATH：完整路径指向已校验 runtime/ffmpeg/ffmpeg.exe。
+- PICER_FFMPEG_PATH：指向同时包含 ffmpeg.exe 与 ffprobe.exe 的可信 FFmpeg 工具目录中的 ffmpeg.exe。本次固定 runtime 只附带 ffmpeg.exe，独立代理的视频探测和能力注册还需另备 ffprobe.exe；GUI 组件自检通过不代表代理媒体依赖齐备。
 - PICER_LOCAL_ASR_ENDPOINT、PICER_LOCAL_VL_ENDPOINT、PICER_LOCAL_TTS_ENDPOINT、PICER_LOCAL_FACE_ENDPOINT：实际已启动的模型端点；未配置不等于能力 ready。
 
 GUI 内含的 media-agent 同样需要实际源访问权限和服务配置。代理执行扫描/抽帧不修改原媒体，缓存清除不删除原文件。
