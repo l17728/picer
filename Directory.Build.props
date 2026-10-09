@@ -1,5 +1,7 @@
 <Project>
   <PropertyGroup>
+    <!-- Web SDK content globs must not publish local test/build artifacts. -->
+    <DefaultItemExcludes>$(DefaultItemExcludes);**/artifacts/**;**/TestResults/**;**/__pycache__/**</DefaultItemExcludes>
     <!-- OpenCvSharp's optional analyzer targets a newer Roslyn than the pinned .NET 8 SDK. -->
     <NoWarn>$(NoWarn);CS9057</NoWarn>
   </PropertyGroup>
