@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Release tag, for example v1.0.0
+        description: Existing release tag (for example v1.1.0)
         required: true
         type: string
 
@@ -20,78 +20,69 @@ concurrency:
 jobs:
   release:
     runs-on: windows-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     env:
       DOTNET_CLI_TELEMETRY_OPTOUT: 1
       DOTNET_NOLOGO: 1
       GH_TOKEN: ${{ github.token }}
-      PICER_TEST_DATA_ROOT: ${{ github.workspace }}\.test-data
-
+      RELEASE_TAG: ${{ inputs.version || github.ref_name }}
+      PICER_DATA_ROOT: ${{ github.workspace }}\.test-data
+      PICER_TEST_TEMP: ${{ github.workspace }}\artifacts\test-temp
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
-      - name: Resolve version
-        id: version
+          ref: ${{ inputs.version || github.ref }}
+      - name: Verify existing tag and checked-out commit
         shell: pwsh
         run: |
-          $tag = if ('${{ github.event_name }}' -eq 'workflow_dispatch') { '${{ inputs.version }}' } else { '${{ github.ref_name }}' }
-          if ($tag -notmatch '^v\d+\.\d+\.\d+([-.][0-9A-Za-z.-]+)?$') { throw "Invalid release tag: $tag" }
-          "tag=$tag" >> $env:GITHUB_OUTPUT
-          "archive=Picer-$tag-win-x64.zip" >> $env:GITHUB_OUTPUT
-
-      - name: Setup .NET 8
-        uses: actions/setup-dotnet@v4
+          if ($env:RELEASE_TAG -notmatch '^v\d+\.\d+\.\d+([-.][0-9A-Za-z.-]+)?$') { throw 'Invalid release tag' }
+          $commit = git rev-parse "$env:RELEASE_TAG^{commit}"
+          if ($LASTEXITCODE -ne 0) { throw 'Release requires an existing tag' }
+          $head = git rev-parse HEAD
+          if ($LASTEXITCODE -ne 0 -or $commit -ne $head) { throw 'Tag/checkout mismatch' }
+      - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 8.0.x
-
-      - name: Download verified offline runtime
-        shell: pwsh
-        run: |
-          gh release download runtime-v1 --repo '${{ github.repository }}' --pattern 'Picer-runtime-win-x64.zip' --dir $env:RUNNER_TEMP
-          New-Item -ItemType Directory -Force third_party/runtime | Out-Null
-          Expand-Archive "$env:RUNNER_TEMP\Picer-runtime-win-x64.zip" third_party/runtime -Force
-
-      - name: Restore, build and test
+      - name: Restore, strict build and non-runtime tests
         shell: pwsh
         run: |
           dotnet restore picer.sln
-          dotnet build picer.sln --configuration Debug --no-restore --warnaserror
-          dotnet test tests/Picer.Tests/Picer.Tests.csproj --configuration Debug --no-build --no-restore
-          dotnet test tests/Picer.E2E/Picer.E2E.csproj --configuration Debug --no-build --no-restore
-
-      - name: Publish self-contained application
-        id: publish
+          if ($LASTEXITCODE -ne 0) { throw 'Restore failed' }
+          dotnet build picer.sln -c Debug --no-restore --warnaserror
+          if ($LASTEXITCODE -ne 0) { throw 'Build failed' }
+          dotnet test tests/Picer.Tests/Picer.Tests.csproj -c Debug --no-build --no-restore --filter "Category!=RuntimeComponent" --logger "trx;LogFileName=release-unit.trx" --blame-hang --blame-hang-timeout 10m
+          if ($LASTEXITCODE -ne 0) { throw 'Unit tests failed' }
+          dotnet test tests/Picer.E2E/Picer.E2E.csproj -c Debug --no-build --no-restore --filter "Category!=RuntimeComponent" --logger "trx;LogFileName=release-desktop.trx" --blame-hang --blame-hang-timeout 10m
+          if ($LASTEXITCODE -ne 0) { throw 'Desktop tests failed' }
+      - name: Package every component (external runtime distribution)
         shell: pwsh
-        run: |
-          $output = Join-Path $env:RUNNER_TEMP "Picer-${{ steps.version.outputs.tag }}-win-x64"
-          ./tools/publish-self-contained.ps1 -OutputDirectory $output
-          $sourceArchive = "$output.zip"
-          $releaseArchive = Join-Path $env:RUNNER_TEMP '${{ steps.version.outputs.archive }}'
-          Move-Item -LiteralPath $sourceArchive -Destination $releaseArchive
-          $hash = (Get-FileHash -LiteralPath $releaseArchive -Algorithm SHA256).Hash.ToLowerInvariant()
-          "$hash  ${{ steps.version.outputs.archive }}" | Set-Content -Encoding ascii (Join-Path $env:RUNNER_TEMP 'SHA256SUMS.txt')
-          "asset=$releaseArchive" >> $env:GITHUB_OUTPUT
-          "checksums=$(Join-Path $env:RUNNER_TEMP 'SHA256SUMS.txt')" >> $env:GITHUB_OUTPUT
-
-      - name: Upload workflow artifact
+        run: ./tools/package-release.ps1 -Version $env:RELEASE_TAG -OutputDirectory "$env:RUNNER_TEMP/release-assets"
+      - name: Upload binary packages
         uses: actions/upload-artifact@v4
         with:
-          name: Picer-${{ steps.version.outputs.tag }}-win-x64
+          name: release-binaries
           path: |
-            ${{ steps.publish.outputs.asset }}
-            ${{ steps.publish.outputs.checksums }}
+            ${{ runner.temp }}/release-assets/*.zip
+            ${{ runner.temp }}/release-assets/*.tar.gz
+            ${{ runner.temp }}/release-assets/*.txt
+            ${{ runner.temp }}/release-assets/INSTALL.md
           compression-level: 0
-          retention-days: 14
-
-      - name: Create GitHub Release
+          if-no-files-found: error
+      - name: Publish draft for final runtime and deployment verification
         shell: pwsh
         run: |
-          $tag = '${{ steps.version.outputs.tag }}'
-          if ('${{ github.event_name }}' -eq 'workflow_dispatch') {
-            git tag $tag '${{ github.sha }}'
-            git push origin $tag
-          }
-          gh release create $tag '${{ steps.publish.outputs.asset }}' '${{ steps.publish.outputs.checksums }}' --repo '${{ github.repository }}' --title "Picer $tag" --generate-notes --verify-tag
+          $assets = @(Get-ChildItem "$env:RUNNER_TEMP/release-assets" -File | ForEach-Object FullName)
+          gh release create $env:RELEASE_TAG @assets --repo $env:GITHUB_REPOSITORY --title "Picer $env:RELEASE_TAG" --notes-file docs/RELEASE_GUIDE.md --verify-tag --draft
+          if ($LASTEXITCODE -ne 0) { throw 'Release creation failed; inspect existing release before retrying' }
+      - name: Cleanup desktop processes
+        if: always()
+        shell: pwsh
+        run: Get-Process Picer.App,testhost,vstest.console -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+      - name: Upload test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-test-reports
+          path: '**/TestResults/*.trx'
+          if-no-files-found: warn
