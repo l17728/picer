@@ -39,7 +39,7 @@ function Publish-Binary($project, $rid, $destination) {
             Get-ChildItem -LiteralPath $packageRoot -Recurse -File | Where-Object {
                 $_.Name -match '(?i)license|notice|copying|\.nuspec$'
             } | ForEach-Object {
-                $relative = [IO.Path]::GetRelativePath($packageRoot, $_.FullName)
+                $relative = $_.FullName.Substring($packageRoot.TrimEnd('\', '/').Length + 1)
                 $target = Join-Path $licenseDestination $relative
                 New-Item -ItemType Directory -Path (Split-Path -Parent $target) -Force | Out-Null
                 Copy-Item -LiteralPath $_.FullName -Destination $target

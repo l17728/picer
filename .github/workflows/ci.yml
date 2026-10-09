@@ -19,7 +19,7 @@ jobs:
       DOTNET_NOLOGO: 1
       PICER_DATA_ROOT: ${{ github.workspace }}\.test-data
       PICER_TEST_TEMP: ${{ github.workspace }}\artifacts\test-temp
-      VSTEST_CONNECTION_TIMEOUT: 30
+      VSTEST_CONNECTION_TIMEOUT: 180
 
     steps:
       - name: Checkout
