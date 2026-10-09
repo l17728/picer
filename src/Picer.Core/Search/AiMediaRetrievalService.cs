@@ -12,29 +12,39 @@ namespace Picer.Core.Search;
 public sealed record AiQueryPlan(string? PersonName, string? Location, string? StartDate, string? EndDate,
     IReadOnlyList<string> Keywords, string Intent, IReadOnlyList<string>? LocationTerms = null);
 public sealed record AiMediaAnswer(string Markdown, IReadOnlyList<ImageRecord> Photos,
-    IReadOnlyList<VideoRecord> Videos, AiQueryPlan Plan);
+    IReadOnlyList<VideoRecord> Videos, AiQueryPlan Plan)
+{
+    public string ConfirmedMarkdown { get; init; } = "";
+    public string? AiExplanation { get; init; }
+
+    public static string ComposeMarkdown(string confirmedMarkdown, string? explanation)
+    {
+        if (string.IsNullOrWhiteSpace(explanation)) return confirmedMarkdown;
+        var quoted = string.Join('\n', explanation.Replace("\r\n", "\n").Split('\n').Select(line => "> " + line));
+        return confirmedMarkdown + "\n\n## AI 解释（非检索证据）\n\n以下为模型生成解释，可能与证据不一致；数量、人物条件及可打开的媒体以程序确认结果为准。\n\n" + quoted;
+    }
+}
 
 public sealed class AiMediaRetrievalService(PicerDatabase database, PeopleService people,
-    VideoRepository videos, CloudVisionRepository cloud, OpenAiCompatibleChatClient chat)
+    VideoRepository videos, CloudVisionRepository cloud, OpenAiCompatibleChatClient chat,
+    TimeSpan? modelPhaseTimeout = null)
 {
     private static readonly JsonSerializerOptions Json = new() { PropertyNameCaseInsensitive = true };
+    private readonly TimeSpan _modelPhaseTimeout = modelPhaseTimeout ?? TimeSpan.FromSeconds(90);
+    private static readonly TimeSpan ModelProgressInterval = TimeSpan.FromSeconds(3);
 
     public async Task<AiMediaAnswer> AskAsync(string question, bool includeVideos, DateTime today,
         IProgress<(string Stage, int Percent)>? progress = null, CancellationToken cancellationToken = default)
     {
         var stopwatch = Stopwatch.StartNew();
-        progress?.Report(("理解问题", 5));
-        // Only expose manually confirmed identities to the planner; candidate
-        // and unassigned clusters are not valid person filters.
-        var names = people.GetAll().Where(value => value.ConfirmedFaceCount > 0)
-            .Select(value => value.DisplayName).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-        var planText = await chat.CompleteAsync("""
+        progress?.Report(("准备查询", 2));
+        var planText = await CompleteWithProgressAsync("正在理解问题", "查询规划", """
             Output JSON field locationTerms as an array of alternative place names and administrative expressions for recall (for example Shanghai, Shanghai City). Do not use these terms as final proof; they are only candidate retrieval hints.
-            你是私人媒体库的查询规划器。只输出JSON：personName、location、startDate、endDate、keywords、intent。
+            你是私人媒体库的查询规划器。只输出JSON：personName、location、startDate、endDate、keywords、intent、locationTerms。只能抽取用户问题中明确出现的人物名，不得猜测或扩写人物名。人物身份会由本地人工确认索引核对。
             日期必须为yyyy-MM-dd；keywords是字符串数组，只保留人物/地点/日期之外的服装、颜色、活动、物体和场景词。
             不得虚构人物名称。无法确定的字段为null。
-            """, $"今天：{today:yyyy-MM-dd}\n已命名人物：{string.Join('、', names)}\n是否包含视频：{includeVideos}\n问题：{question}",
-            450, cancellationToken).ConfigureAwait(false);
+            """, $"今天：{today:yyyy-MM-dd}\n是否包含视频：{includeVideos}\n问题：{question}",
+            450, progress, cancellationToken).ConfigureAwait(false);
         AiQueryPlan plan;
         try { plan = JsonSerializer.Deserialize<AiQueryPlan>(OpenAiCompatibleChatClient.StripFence(planText), Json)!; }
         catch (Exception exception) { throw new InvalidDataException("AI 未能生成有效的结构化查询。", exception); }
@@ -45,35 +55,12 @@ public sealed class AiMediaRetrievalService(PicerDatabase database, PeopleServic
         progress?.Report(("检索照片索引", 25));
         // An explicit confirmed name in the user's question is authoritative.
         // Do not let a planner typo or hallucination replace it.
-        var questionMention = people.FindMention(question);
-        // “我/本人” is a user-facing identity, not a literal free-text
-        // keyword. If the user has explicitly created a confirmed person
-        // with that name, bind the pronoun before retrieval so the reviewer
-        // cannot discard otherwise valid photos as unrelated people.
-        if (questionMention is null && ContainsSelfReference(question))
-        {
-            var self = people.FindByName("我") ?? people.FindByName("本人");
-            if (self is not null)
-                questionMention = new PersonQueryMention(self, "我", question.Replace("我", string.Empty, StringComparison.Ordinal));
-        }
-        var normalizedPerson = questionMention?.Person.DisplayName ?? NormalizePlannerText(plan.PersonName);
-        // A natural-language query may name more than one confirmed person
-        // (for example, “我和牟”).  The planner schema intentionally keeps a
-        // primary person for compatibility, but retrieval must preserve the
-        // full explicit set and require their intersection.
+        var questionMentions = people.FindMentions(question);
+        var questionMention = questionMentions.FirstOrDefault();
+        var normalizedPerson = questionMention?.Person.DisplayName;
         var allPeople = people.GetAll();
-        var explicitPeople = allPeople
-            .Where(value => value.ConfirmedFaceCount > 0 &&
-                question.Contains(value.DisplayName, StringComparison.OrdinalIgnoreCase))
-            .DistinctBy(value => value.Id)
-            .ToArray();
-        if (questionMention is null && ContainsSelfReference(question))
-        {
-            var self = people.FindByName("我") ?? people.FindByName("本人");
-            if (self is not null && allPeople.FirstOrDefault(value => value.Id == self.Id) is { ConfirmedFaceCount: > 0 } selfSummary &&
-                explicitPeople.All(value => value.Id != selfSummary.Id))
-                explicitPeople = [selfSummary, .. explicitPeople];
-        }
+        var explicitIds = questionMentions.Select(value => value.Person.Id).ToHashSet();
+        var requiredPeople = allPeople.Where(value => explicitIds.Contains(value.Id)).ToArray();
         var normalizedLocation = NormalizeLocation(plan.Location);
         plan = plan with { PersonName = normalizedPerson, Location = normalizedLocation };
         var locationTerms = (plan.LocationTerms ?? [])
@@ -81,21 +68,10 @@ public sealed class AiMediaRetrievalService(PicerDatabase database, PeopleServic
             .Concat(ExpandKnownLocationAliases(normalizedLocation))
             .Where(value => !string.IsNullOrWhiteSpace(value))
             .Select(value => value.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-        var mention = questionMention?.Person ?? (!string.IsNullOrWhiteSpace(normalizedPerson)
-            ? people.FindByName(normalizedPerson) ??
-              (people.GetAll().FirstOrDefault(person =>
-                  string.Equals(NormalizePlannerText(person.DisplayName), normalizedPerson, StringComparison.OrdinalIgnoreCase)) is { } summary
-                  ? people.Get(summary.Id)
-                  : null)
-            : null);
+        var mention = questionMention?.Person;
         if (questionMention is not null)
             AppLogger.Info($"AiQuestion person constraint pinned to explicit mention; aliasLength={questionMention.MatchedName.Length}");
         var bounds = string.IsNullOrWhiteSpace(normalizedLocation) ? null : GeoPlaceResolver.Resolve(normalizedLocation);
-        var requiredPeople = explicitPeople.Length > 0
-            ? explicitPeople
-            : mention is null
-                ? Array.Empty<PersonSummary>()
-                : allPeople.Where(value => value.Id == mention.Id).ToArray();
         AppLogger.Info($"AiQuestion constraints normalized; personBound={mention is not null}; personConstraintCount={requiredPeople.Length}; locationResolved={bounds is not null}; locationTermCount={locationTerms.Length}; selfReference={ContainsSelfReference(question)}");
         DateTime? start = DateTime.TryParse(plan.StartDate, out var startValue) ? startValue.Date.ToUniversalTime() : null;
         DateTime? end = DateTime.TryParse(plan.EndDate, out var endValue) ? endValue.Date.AddDays(1).AddTicks(-1).ToUniversalTime() : null;
@@ -108,14 +84,15 @@ public sealed class AiMediaRetrievalService(PicerDatabase database, PeopleServic
         // otherwise matching photos because descriptions usually contain a clock
         // time (or no time phrase at all).
         baseFilter.TimeOfDay = dayPart switch { DayPart.Day => TimeOfDayFilter.Day, DayPart.Night => TimeOfDayFilter.Night, _ => TimeOfDayFilter.Any };
-        var searchTerms = QueryRewrite.Expand(plan.Keywords.Where(term => !IsDayPartToken(term)))
+        var visualTerms = QueryRewrite.Expand(plan.Keywords.Where(term => !IsDayPartToken(term))).ToArray();
+        var searchTerms = visualTerms
             // Keep the literal location as a text fallback even when geocoding
             // returned bounds; older analyses may have place names but no GPS.
             .Concat(QueryRewrite.Expand(locationTerms))
             .ToArray();
         var toolResult = new MediaSearchTool(database, videos).Execute(new MediaSearchRequest(
-            MediaTypeFilter.Photo, mention is null ? null : [mention.Id], bounds, start, end,
-            baseFilter.TimeOfDay, Terms: searchTerms, IncludeMissing: false, Limit: 200,
+            MediaTypeFilter.Photo, requiredPeople.Select(value => value.Id).ToArray(), bounds, start, end,
+            baseFilter.TimeOfDay, Terms: bounds is null ? searchTerms : visualTerms, AutoRelax: false, IncludeMissing: false, Limit: 200,
             SortDirection: SortDirection.Descending));
         foreach (var hit in toolResult.Items)
         {
@@ -129,7 +106,7 @@ public sealed class AiMediaRetrievalService(PicerDatabase database, PeopleServic
             // text-only pass keeps records whose descriptions say “上海” while
             // GPS is missing, coarse, or outside an imperfect city rectangle.
             var textFallback = new MediaSearchTool(database).Execute(new MediaSearchRequest(
-                MediaTypeFilter.Photo, mention is null ? null : [mention.Id], null, start, end,
+                MediaTypeFilter.Photo, requiredPeople.Select(value => value.Id).ToArray(), null, start, end,
                 baseFilter.TimeOfDay, Terms: searchTerms, IncludeMissing: false, Limit: 200,
                 SortDirection: SortDirection.Descending));
             foreach (var hit in textFallback.Items)
@@ -140,13 +117,13 @@ public sealed class AiMediaRetrievalService(PicerDatabase database, PeopleServic
         }
 
         progress?.Report(("检索视频索引", 45));
-        var videoCandidates = includeVideos ? RetrieveVideos(plan, mention?.Id, start, end).Take(50).ToArray() : [];
+        var videoCandidates = includeVideos ? RetrieveVideos(requiredPeople.Select(person => person.Id).ToArray(), bounds, visualTerms, searchTerms, locationTerms.Length > 0, start, end, baseFilter.TimeOfDay).Take(50).ToArray() : [];
         var photos = photoCandidates.Values.Take(50).ToArray();
         if (photos.Length == 0 && videoCandidates.Length == 0)
         {
             progress?.Report(("完成", 100));
             AppLogger.Info($"AiQuestion completed without evidence; photos=0; videos=0; elapsedMs={stopwatch.ElapsedMilliseconds}");
-            return new("## 未找到匹配内容\n\n当前索引中没有同时满足这些条件的照片或视频。", [], [], plan);
+            return CreateAnswer([], [], requiredPeople, plan, null);
         }
         progress?.Report(("AI复核候选", 65));
         var evidence = new
@@ -161,19 +138,23 @@ public sealed class AiMediaRetrievalService(PicerDatabase database, PeopleServic
                 requiredPersonNames = requiredPeople.Select(value => value.DisplayName).ToArray(),
                 description = cloud.GetLatestCompleted(image.Id)?.Result.Summary }).ToArray(),
             videos = videoCandidates.Select(video => new { id = video.Id, file = Path.GetFileName(video.Path),
-                time = video.TakenUtc ?? video.ModifiedUtc, durationSeconds = video.DurationSeconds,
+                time = video.TakenUtc ?? video.ModifiedUtc, durationSeconds = video.DurationSeconds, gps = video.Gps,
+                requiredPersonNames = requiredPeople.Select(value => value.DisplayName).ToArray(),
                 confirmedPersonNames = people.GetConfirmedPersonNamesForVideo(video.Id),
                 transcript = Truncate(videos.GetTranscript(video.Id), 500), summary = videos.GetSummary(video.Id) }).ToArray()
         };
-        var reviewText = await chat.CompleteAsync("""
+        var reviewText = await CompleteWithProgressAsync("正在核对候选结果", "结果复核", """
             你是私人媒体库检索复核器。只能从给定候选ID中选择，不得编造ID或人物身份。
             confirmedPersonNames 是程序依据人工确认人脸生成的权威字段；问题指定人物时，必须保留该字段包含目标人物的候选，不能把目标人物改写成其他姓名。
             输出JSON：markdown、photoIds、videoIds。markdown使用中文Markdown，说明结论、命中依据和不确定项，照片与视频分节。
             没有可靠结果时明确说明。photoIds和videoIds必须是数字数组。
-            """, JsonSerializer.Serialize(evidence), 900, cancellationToken).ConfigureAwait(false);
-        Review review;
-        try { review = JsonSerializer.Deserialize<Review>(OpenAiCompatibleChatClient.StripFence(reviewText), Json)!; }
-        catch { review = new Review($"## 检索结果\n\n找到 {photos.Length} 张候选照片和 {videoCandidates.Length} 个候选视频。", photos.Select(value => value.Id).ToArray(), videoCandidates.Select(value => value.Id).ToArray()); }
+            """, JsonSerializer.Serialize(evidence), 900, progress, cancellationToken).ConfigureAwait(false);
+        Review? review;
+        try { review = JsonSerializer.Deserialize<Review>(OpenAiCompatibleChatClient.StripFence(reviewText), Json); }
+        catch (JsonException) { review = null; }
+        if (review is null || review.PhotoIds is null || review.VideoIds is null || string.IsNullOrWhiteSpace(review.Markdown))
+            review = new Review($"找到 {photos.Length} 张候选照片和 {videoCandidates.Length} 个候选视频。AI 复核未返回完整结果，请核对候选内容。",
+                photos.Select(value => value.Id).ToArray(), videoCandidates.Select(value => value.Id).ToArray());
         var allowedPhotos = photos.ToDictionary(value => value.Id);
         var allowedVideos = videoCandidates.ToDictionary(value => value.Id);
         var rankedPhotos = (review.PhotoIds ?? []).Where(allowedPhotos.ContainsKey).Distinct().Select(id => allowedPhotos[id]).ToArray();
@@ -185,10 +166,65 @@ public sealed class AiMediaRetrievalService(PicerDatabase database, PeopleServic
                 .Contains(mention.DisplayName, StringComparer.OrdinalIgnoreCase)).ToArray();
             AppLogger.Info($"AiQuestion reviewer fallback applied for confirmed person; photos={rankedPhotos.Length}; videos={rankedVideos.Length}");
         }
-        if (mention is not null && (rankedPhotos.Length > 0 || rankedVideos.Length > 0))
-            review = review with { Markdown = (review.Markdown ?? "未生成回答") + $"\n\n> 索引确认：以上结果包含人工标记人物“{mention.DisplayName}”的媒体；人物标签来自本地确认记录。" };
         progress?.Report(("完成", 100));
-        return new(review.Markdown ?? "未生成回答。", rankedPhotos, rankedVideos, plan);
+        return CreateAnswer(rankedPhotos, rankedVideos, requiredPeople, plan, review.Markdown);
+    }
+
+    private static AiMediaAnswer CreateAnswer(IReadOnlyList<ImageRecord> photos, IReadOnlyList<VideoRecord> videos,
+        IReadOnlyList<PersonSummary> requiredPeople, AiQueryPlan plan, string? explanation)
+    {
+        var text = new System.Text.StringBuilder("## 程序确认结果\n\n");
+        text.Append($"返回照片 **{photos.Count} 张**、视频 **{videos.Count} 个**；下方媒体列表与这些数量一致。\n\n");
+        if (requiredPeople.Count > 0)
+            text.Append("人物条件：所有返回项均包含人工确认人物“")
+                .Append(string.Join("、", requiredPeople.Select(person => Inline(person.DisplayName)))).Append("”（交集）。\n\n");
+        if (!string.IsNullOrWhiteSpace(plan.StartDate) || !string.IsNullOrWhiteSpace(plan.EndDate))
+            text.Append("时间检索条件：").Append(Inline(plan.StartDate ?? "不限")).Append(" 至 ").Append(Inline(plan.EndDate ?? "不限")).Append("。\n\n");
+        if (!string.IsNullOrWhiteSpace(plan.Location))
+            text.Append("地点检索条件：").Append(Inline(plan.Location)).Append("；通过 GPS 或索引文字召回，地点文字命中仍需核对。\n\n");
+        if (plan.Keywords.Count > 0)
+            text.Append("文字检索条件：").Append(string.Join("、", plan.Keywords.Select(Inline))).Append("；候选描述匹配不等同于人工核实。\n\n");
+        if (photos.Count == 0 && videos.Count == 0)
+        {
+            text.Append("未找到可返回的匹配内容。当前没有可由媒体列表核实的命中，模型的命中声明未予采用。");
+            explanation = null;
+        }
+        var confirmed = text.ToString().TrimEnd();
+        return new(AiMediaAnswer.ComposeMarkdown(confirmed, explanation), photos, videos, plan)
+            { ConfirmedMarkdown = confirmed, AiExplanation = explanation };
+
+        static string Inline(string value) => value.Replace('\r', ' ').Replace('\n', ' ')
+            .Replace("\\", "\\\\").Replace("*", "\\*").Replace("_", "\\_").Replace("[", "\\[").Replace("]", "\\]").Replace("<", "&lt;").Replace(">", "&gt;");
+    }
+
+    private async Task<string> CompleteWithProgressAsync(string stage, string phase, string systemPrompt,
+        string userPrompt, int maximumTokens, IProgress<(string Stage, int Percent)>? progress,
+        CancellationToken cancellationToken)
+    {
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(_modelPhaseTimeout);
+        var stopwatch = Stopwatch.StartNew();
+        progress?.Report(($"{stage}（请求已发送，等待模型返回）", 10));
+        AppLogger.Info($"AiQuestion model phase started; phase={phase}; timeoutSeconds={_modelPhaseTimeout.TotalSeconds:0}");
+        var request = chat.CompleteAsync(systemPrompt, userPrompt, maximumTokens, timeout.Token);
+        while (!request.IsCompleted)
+        {
+            var delay = Task.Delay(ModelProgressInterval, cancellationToken);
+            if (await Task.WhenAny(request, delay).ConfigureAwait(false) == request) break;
+            cancellationToken.ThrowIfCancellationRequested();
+            progress?.Report(($"{stage}（模型处理中，已等待 {stopwatch.Elapsed.TotalSeconds:0} 秒）", 10));
+        }
+        try
+        {
+            var result = await request.ConfigureAwait(false);
+            AppLogger.Info($"AiQuestion model phase completed; phase={phase}; elapsedMs={stopwatch.ElapsedMilliseconds}");
+            return result;
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            AppLogger.Warn($"AiQuestion model phase timed out; phase={phase}; elapsedMs={stopwatch.ElapsedMilliseconds}");
+            throw new TimeoutException($"AI 问答的{stage}超过 {_modelPhaseTimeout.TotalSeconds:0} 秒未完成。请检查 IndexService/模型服务状态后重试。");
+        }
     }
 
     private static string? NormalizePlannerText(string? value)
@@ -220,21 +256,24 @@ public sealed class AiMediaRetrievalService(PicerDatabase database, PeopleServic
     private static bool ContainsSelfReference(string question) =>
         question.Contains("我", StringComparison.Ordinal) || question.Contains("本人", StringComparison.Ordinal);
 
-    private IReadOnlyList<VideoRecord> RetrieveVideos(AiQueryPlan plan, long? personId, DateTime? start, DateTime? end)
+    private IReadOnlyList<VideoRecord> RetrieveVideos(IReadOnlyList<long> personIds, GeoBounds? bounds,
+        IReadOnlyList<string> visualTerms, IReadOnlyList<string> searchTerms, bool hasLocationTerms,
+        DateTime? start, DateTime? end, TimeOfDayFilter timeOfDay)
     {
-        var terms = plan.Keywords.Concat(!string.IsNullOrWhiteSpace(plan.Location) ? [plan.Location!] : []).ToArray();
-        var candidates = terms.Length == 0 ? videos.GetAll() : terms.SelectMany(videos.Search).DistinctBy(value => value.Id).ToArray();
-        HashSet<long>? personVideos = null;
-        if (personId is not null)
+        var tool = new MediaSearchTool(database, videos);
+        var result = tool.Execute(new(MediaTypeFilter.Video, personIds, bounds,
+            StartDate: start, EndDate: end, TimeOfDay: timeOfDay,
+            Terms: bounds is null ? searchTerms : visualTerms, AutoRelax: false, Limit: 50));
+        var hits = result.Items.AsEnumerable();
+        if (bounds is not null && hasLocationTerms)
         {
-            using var command = database.Command("SELECT DISTINCT video_id FROM video_detected_faces WHERE assigned_person_id=$person AND assignment_state='confirmed'");
-            command.Parameters.AddWithValue("$person", personId.Value); personVideos = [];
-            using var reader = command.ExecuteReader(); while (reader.Read()) personVideos.Add(reader.GetInt64(0));
+            var fallback = tool.Execute(new(MediaTypeFilter.Video, personIds,
+                StartDate: start, EndDate: end, TimeOfDay: timeOfDay,
+                Terms: searchTerms, AutoRelax: false, Limit: 50));
+            hits = hits.Concat(fallback.Items);
         }
-        return candidates.Where(video => video.Status == "active" && (personVideos is null || personVideos.Contains(video.Id)))
-            .Where(video => start is null || (video.TakenUtc ?? video.ModifiedUtc) >= start)
-            .Where(video => end is null || (video.TakenUtc ?? video.ModifiedUtc) <= end)
-            .OrderByDescending(video => video.TakenUtc ?? video.ModifiedUtc).ToArray();
+        var records = videos.GetAll().ToDictionary(video => video.Id);
+        return hits.DistinctBy(hit => hit.Id).Where(hit => records.ContainsKey(hit.Id)).Take(50).Select(hit => records[hit.Id]).ToArray();
     }
 
     private static SearchFilters Clone(SearchFilters value) => new() { PersonId = value.PersonId, GeoBounds = value.GeoBounds,

@@ -10,6 +10,27 @@ namespace Picer.App.Controls;
 
 public partial class PhotoGrid : UserControl
 {
+    private void ContentReferences_Click(object sender, RoutedEventArgs e)
+    {
+        if (SelectedItem is ImageItemViewModel { IsVideo: false } item && (item.Record.ContentSha256 ?? item.Record.Sha256) is { Length: 64 } hash)
+            new Views.ContentReferencesWindow(hash) { Owner = Window.GetWindow(this) }.ShowDialog();
+    }
+    private async void PurgeMissing_Click(object sender, RoutedEventArgs e)
+    {
+        e.Handled = true;
+        if (sender is not Button { DataContext: ImageItemViewModel item } button || !item.IsMissing || item.IsVideo) return;
+        if (MessageBox.Show(Window.GetWindow(this), "彻底删除此位置的索引记录和关联缓存？若仍有相同文件的其他位置，共享内容索引将继续保留；最后一个位置删除后才会清除共享描述、分析和缩略图。",
+                "彻底删除此位置记录", MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No) != MessageBoxResult.Yes) return;
+        button.IsEnabled = false;
+        try
+        {
+            await AppServices.PurgeMissingImageAsync(item.Record);
+            var source = ItemsSource is System.ComponentModel.ICollectionView view ? view.SourceCollection : ItemsSource;
+            if (source is IList list && !list.IsReadOnly) list.Remove(item);
+        }
+        catch (Exception exception) { MessageBox.Show(Window.GetWindow(this), "删除未完成，可重试：" + exception.Message); }
+        finally { button.IsEnabled = true; }
+    }
     private Point _dragStartPoint;
     private int _dragStartIndex = -1;
     private bool _dragSelecting;

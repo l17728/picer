@@ -15,7 +15,12 @@
       <IncludeAssets>runtime; build; native; contentfiles; compile; buildtransitive</IncludeAssets>
     </PackageReference>
     <PackageReference Include="OpenCvSharp4.runtime.win" Version="4.13.0.20260627" />
-    <PackageReference Include="SixLabors.ImageSharp" Version="2.1.11" />
+    <PackageReference Include="Magick.NET-Q8-AnyCPU" Version="14.17.2" GeneratePathProperty="true" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="$(PkgMagick_NET-Q8-AnyCPU)/Notice.txt" Link="licenses/Magick.NET-Notice.txt"
+          CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

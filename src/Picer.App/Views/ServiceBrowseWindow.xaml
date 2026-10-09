@@ -4,8 +4,11 @@
         xmlns:controls="clr-namespace:Picer.App.Controls"
         xmlns:local="clr-namespace:Picer.App.ViewModels"
         Title="图库浏览（索引服务）" Width="960" Height="680" MinWidth="720" MinHeight="480" WindowStartupLocation="CenterOwner">
-    <DockPanel Margin="12">
-        <StackPanel DockPanel.Dock="Top" Orientation="Horizontal">
+    <Window.Resources>
+        <ResourceDictionary Source="/Picer.App;component/AccessibilityResources.xaml"/>
+    </Window.Resources>
+    <DockPanel Margin="12" PreviewKeyDown="Browse_PreviewKeyDown">
+        <WrapPanel DockPanel.Dock="Top" Margin="0,0,0,8">
             <TextBox x:Name="SearchBox" Width="320" Padding="0,4"
                      Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}"
                      AutomationProperties.Name="搜索图片">
@@ -14,19 +17,20 @@
                 </TextBox.InputBindings>
             </TextBox>
             <Button Content="搜索" Command="{Binding SearchCommand}" Margin="8,0" Padding="14,4"/>
-            <ComboBox Width="110" Margin="8,0" SelectedIndex="{Binding MediaFilterIndex, Mode=TwoWay}" SelectionChanged="MediaFilter_SelectionChanged">
+            <ComboBox AutomationProperties.Name="媒体类型过滤" Width="110" Margin="8,0" SelectedIndex="{Binding MediaFilterIndex, Mode=TwoWay}" SelectionChanged="MediaFilter_SelectionChanged">
                 <ComboBoxItem Content="图片"/><ComboBoxItem Content="视频"/><ComboBoxItem Content="全部"/>
             </ComboBox>
             <Button Content="加载更多" Command="{Binding LoadMoreCommand}" Padding="14,4"/>
-            <TextBlock Text="{Binding StatusText}" VerticalAlignment="Center" Margin="12,0,0,0" TextTrimming="CharacterEllipsis"/>
-        </StackPanel>
+            <Button Content="修复照片和视频索引…" Click="RepairIndex_Click" Padding="10,4" Margin="8,0"/>
+            <TextBlock Text="{Binding StatusText}" VerticalAlignment="Center" Margin="12,0,0,0" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite"/>
+        </WrapPanel>
         <Grid>
             <Grid.ColumnDefinitions><ColumnDefinition Width="280"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
             <Border Grid.Column="0" BorderBrush="#D5DDE7" BorderThickness="1" Margin="0,0,10,0" Padding="6">
                 <DockPanel>
                     <TextBlock DockPanel.Dock="Top" Text="目录浏览" FontSize="16" FontWeight="SemiBold" Margin="4,2,4,8"/>
                     <TreeView x:Name="SourcesTree" ItemsSource="{Binding Sources}" SelectedItemChanged="SourcesTree_SelectedItemChanged" AutomationProperties.Name="远程目录树">
-                        <TreeView.ItemTemplate><DataTemplate><StackPanel Orientation="Horizontal"><TextBlock Text="📁" Margin="0,0,5,0"/><TextBlock Text="{Binding Path}" TextTrimming="CharacterEllipsis" ToolTip="{Binding Path}"/><TextBlock Text="{Binding ImageCount, StringFormat=（{0}）}" Foreground="#777" Margin="5,0,0,0"/></StackPanel></DataTemplate></TreeView.ItemTemplate>
+                        <TreeView.ItemTemplate><DataTemplate><StackPanel Orientation="Horizontal"><TextBlock Text="📁" Margin="0,0,5,0"/><TextBlock Text="{Binding Path}" TextTrimming="CharacterEllipsis" ToolTip="{Binding Path}"/><TextBlock Text="{Binding ImageCount, StringFormat=（{0}）}" Foreground="{DynamicResource {x:Static SystemColors.ControlTextBrushKey}}" Margin="5,0,0,0"/></StackPanel></DataTemplate></TreeView.ItemTemplate>
                     </TreeView>
                 </DockPanel>
             </Border>
@@ -36,6 +40,9 @@
                  ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                  VirtualizingPanel.IsVirtualizing="True"
                  AutomationProperties.Name="图片网格">
+            <ListBox.ItemContainerStyle>
+                <Style TargetType="ListBoxItem"><Setter Property="AutomationProperties.Name" Value="{Binding Path}"/></Style>
+            </ListBox.ItemContainerStyle>
             <ListBox.ItemsPanel>
                 <ItemsPanelTemplate>
                     <controls:VirtualizingWrapPanel/>
@@ -47,9 +54,17 @@
                         <StackPanel.InputBindings>
                             <MouseBinding MouseAction="LeftDoubleClick" Command="{Binding DataContext.OpenOriginalCommand, RelativeSource={RelativeSource AncestorType=ListBox}}" CommandParameter="{Binding}"/>
                         </StackPanel.InputBindings>
-                        <Border Height="135" Background="#EEF2F7"><Grid><Image Source="{Binding Thumbnail}" Stretch="Uniform"/><TextBlock Text="{Binding MediaBadge}" HorizontalAlignment="Center" VerticalAlignment="Center" FontSize="22" Foreground="#52657A"/></Grid></Border>
-                        <TextBlock Text="{Binding Path}" TextTrimming="CharacterEllipsis" ToolTip="{Binding Path}" Foreground="#555"/>
+                        <Border Height="135" Background="{DynamicResource {x:Static SystemColors.ControlBrushKey}}"><Grid><Image Source="{Binding Thumbnail}" Stretch="Uniform"/><TextBlock Text="{Binding MediaBadge}" HorizontalAlignment="Center" VerticalAlignment="Center" FontSize="22" Foreground="{DynamicResource {x:Static SystemColors.ControlTextBrushKey}}"/></Grid></Border>
+                        <TextBlock Text="{Binding Path}" TextTrimming="CharacterEllipsis" ToolTip="{Binding Path}" Foreground="{DynamicResource {x:Static SystemColors.ControlTextBrushKey}}"/>
+                        <StackPanel x:Name="MissingActions" Visibility="Collapsed">
+                            <TextBlock Text="已删除或移动" Foreground="#A04020" HorizontalAlignment="Center"/>
+                            <Button x:Name="PurgeReference" Content="彻底删除此位置记录" Click="PurgeReference_Click"/>
+                        </StackPanel>
                     </StackPanel>
+                    <DataTemplate.Triggers>
+                        <DataTrigger Binding="{Binding IsMissing}" Value="True"><Setter TargetName="MissingActions" Property="Visibility" Value="Visible"/></DataTrigger>
+                        <DataTrigger Binding="{Binding IsVideo}" Value="True"><Setter TargetName="PurgeReference" Property="Visibility" Value="Collapsed"/></DataTrigger>
+                    </DataTemplate.Triggers>
                 </DataTemplate>
             </ListBox.ItemTemplate>
             </ListBox>

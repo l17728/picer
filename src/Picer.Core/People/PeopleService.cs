@@ -1,11 +1,11 @@
-using Picer.Core.Data;
+﻿using Picer.Core.Data;
 
 namespace Picer.Core.People;
 
 public sealed record PersonRecord(long Id, string DisplayName, string Description, IReadOnlyList<string> Aliases);
 public sealed record PersonSummary(long Id, string DisplayName, int ConfirmedFaceCount, int PhotoCount);
 public sealed record FaceMoveResult(int Requested, int Changed, int AlreadyAssigned);
-public sealed record ConfirmedVideoFaceEmbedding(long VideoFaceId, long PersonId, float[] Embedding);
+public sealed record ConfirmedVideoFaceEmbedding(long VideoFaceId, long PersonId, string ModelVersion, float[] Embedding);
 public sealed record FaceIgnoreResult(int Requested, int Changed, int AlreadyIgnored);
 public sealed record PersonQueryMention(PersonRecord Person, string MatchedName, string RemainingQuery);
 
@@ -66,7 +66,7 @@ public sealed class PeopleService(PicerDatabase database)
             WHERE f.video_id=$video AND f.assignment_state='confirmed'
             ORDER BY p.display_name COLLATE NOCASE
             """);
-        command.Parameters.AddWithValue("$video", videoId);
+        command.Parameters.AddWithValue("$video", new VideoContentRepository(database).GetContentId(videoId));
         using var reader = command.ExecuteReader();
         var names = new List<string>();
         while (reader.Read()) names.Add(reader.GetString(0));
@@ -147,6 +147,7 @@ public sealed class PeopleService(PicerDatabase database)
         update.Parameters.AddWithValue("$now", Format(DateTime.UtcNow));
         update.Parameters.AddWithValue("$id", personId);
         update.ExecuteNonQuery();
+        database.RecordMetadataEdit("person", personId, "name", displayName, transaction);
         AddAliasCore(personId, displayName, transaction);
         transaction.Commit();
     }
@@ -161,11 +162,15 @@ public sealed class PeopleService(PicerDatabase database)
 
     public void SetDescription(long personId, string? description)
     {
+        using var transaction = database.BeginTransaction();
         using var command = database.Command("UPDATE people SET description=$description, updated_utc=$now WHERE id=$id");
+        command.Transaction = transaction;
         command.Parameters.AddWithValue("$description", (description ?? string.Empty).Trim());
         command.Parameters.AddWithValue("$now", Format(DateTime.UtcNow));
         command.Parameters.AddWithValue("$id", personId);
         if (command.ExecuteNonQuery() == 0) throw new InvalidOperationException("人物不存在。");
+        database.RecordMetadataEdit("person", personId, "description", (description ?? string.Empty).Trim(), transaction);
+        transaction.Commit();
     }
 
     public void Merge(long sourcePersonId, long targetPersonId)
@@ -482,29 +487,69 @@ public sealed class PeopleService(PicerDatabase database)
         return value is null ? null : Get(Convert.ToInt64(value));
     }
 
-    public PersonQueryMention? FindMention(string query)
+    public PersonQueryMention? FindMention(string query) => FindMentions(query).FirstOrDefault();
+
+    /// <summary>Resolve explicit, non-overlapping names/aliases without guessing identity.</summary>
+    public IReadOnlyList<PersonQueryMention> FindMentions(string query)
     {
-        if (string.IsNullOrWhiteSpace(query)) return null;
+        if (string.IsNullOrWhiteSpace(query)) return [];
         using var command = database.Command("""
-            SELECT p.id, a.alias
-            FROM person_aliases a JOIN people p ON p.id=a.person_id
-            ORDER BY length(a.alias) DESC
+            SELECT id,display_name FROM people
+            UNION SELECT person_id,alias FROM person_aliases
             """);
-        using var reader = command.ExecuteReader();
-        while (reader.Read())
+        var names = new List<(long Id, string Name)>();
+        using (var reader = command.ExecuteReader())
+            while (reader.Read()) names.Add((reader.GetInt64(0), reader.GetString(1)));
+        // An explicitly named self profile may also be addressed by the other pronoun.
+        var self = names.Where(value => value.Name is "我" or "本人").Select(value => value.Id).Distinct().ToArray();
+        if (self.Length == 1) { names.Add((self[0], "我")); names.Add((self[0], "本人")); }
+        var candidates = new List<(long Id, string Name, int Position)>();
+        foreach (var name in names.Distinct().Where(value => value.Name.Length > 0))
         {
-            var personId = reader.GetInt64(0);
-            var alias = reader.GetString(1);
-            var position = query.IndexOf(alias, StringComparison.OrdinalIgnoreCase);
-            if (position < 0) continue;
-            var remaining = query.Remove(position, alias.Length)
+            for (var from = 0; from <= query.Length - name.Name.Length;)
+            {
+                var position = query.IndexOf(name.Name, from, StringComparison.OrdinalIgnoreCase);
+                if (position < 0) break;
+                from = position + name.Name.Length;
+                if (HasMentionBoundary(query, position, name.Name)) candidates.Add((name.Id, name.Name, position));
+            }
+        }
+        var occupied = new bool[query.Length];
+        var selected = new List<(long Id, string Name, int Position)>();
+        foreach (var group in candidates.GroupBy(value => (value.Position, Length: value.Name.Length))
+                     .OrderByDescending(group => group.Key.Length).ThenBy(group => group.Key.Position))
+        {
+            if (group.Any(value => occupied.Skip(value.Position).Take(value.Name.Length).Any(flag => flag))) continue;
+            // Ambiguous aliases still reserve their span: do not fall back to a shorter name inside them.
+            Array.Fill(occupied, true, group.Key.Position, group.Key.Length);
+            if (group.Select(value => value.Id).Distinct().Count() == 1) selected.Add(group.First());
+        }
+        return selected.OrderBy(value => value.Position).DistinctBy(value => value.Id).Select(value =>
+        {
+            var remaining = query.Remove(value.Position, value.Name.Length)
                 .Replace("找一下", "", StringComparison.OrdinalIgnoreCase)
                 .Replace("查找", "", StringComparison.OrdinalIgnoreCase)
                 .Replace("照片", "", StringComparison.OrdinalIgnoreCase)
                 .Trim(' ', '，', ',', '。', '的', '在');
-            return new PersonQueryMention(Get(personId)!, alias, remaining);
-        }
-        return null;
+            return new PersonQueryMention(Get(value.Id)!, value.Name, remaining);
+        }).ToArray();
+    }
+
+    private static bool HasMentionBoundary(string query, int position, string name)
+    {
+        static bool Word(char value) => char.IsLetterOrDigit(value) || value == '_';
+        static bool Han(char value) => value is >= '\u3400' and <= '\u9fff';
+        var end = position + name.Length;
+        if (!Han(name[0]) && position > 0 && !Han(query[position - 1]) && Word(query[position - 1])) return false;
+        if (!Han(name[^1]) && end < query.Length && !Han(query[end]) && Word(query[end])) return false;
+        if (!name.Any(Han)) return true;
+        var left = position == 0 || !Word(query[position - 1]) ||
+            new[] { "找一下", "查找", "看看", "寻找", "关于", "包含", "中的", "找", "看", "和", "与", "及", "跟", "的", "是" }
+                .Any(prefix => query[..position].EndsWith(prefix, StringComparison.Ordinal));
+        var right = end == query.Length || !Word(query[end]) ||
+            new[] { "的", "在", "和", "与", "及", "跟", "穿", "戴", "于", "一起", "照片", "视频", "合影" }
+                .Any(suffix => query[end..].StartsWith(suffix, StringComparison.Ordinal));
+        return left && right;
     }
 
     public IReadOnlyList<long> GetImageIds(long personId, bool confirmedOnly = true)
@@ -563,20 +608,22 @@ public sealed class PeopleService(PicerDatabase database)
         return people;
     }
 
-    public IReadOnlyList<ConfirmedVideoFaceEmbedding> GetConfirmedVideoFaceEmbeddings()
+    public IReadOnlyList<ConfirmedVideoFaceEmbedding> GetConfirmedVideoFaceEmbeddings(string? modelVersion = null)
     {
         using var command = database.Command("""
-            SELECT id,assigned_person_id,embedding FROM video_detected_faces
+            SELECT id,assigned_person_id,model_version,embedding FROM video_detected_faces
             WHERE assignment_state='confirmed' AND assigned_person_id IS NOT NULL AND embedding IS NOT NULL
+              AND ($model IS NULL OR model_version=$model)
             """);
+        command.Parameters.AddWithValue("$model", (object?)modelVersion ?? DBNull.Value);
         using var reader = command.ExecuteReader();
         var values = new List<ConfirmedVideoFaceEmbedding>();
         while (reader.Read())
         {
-            var bytes = (byte[])reader[2];
+            var bytes = (byte[])reader[3];
             var embedding = new float[bytes.Length / sizeof(float)];
             Buffer.BlockCopy(bytes, 0, embedding, 0, bytes.Length);
-            values.Add(new ConfirmedVideoFaceEmbedding(reader.GetInt64(0), reader.GetInt64(1), embedding));
+            values.Add(new ConfirmedVideoFaceEmbedding(reader.GetInt64(0), reader.GetInt64(1), reader.GetString(2), embedding));
         }
         return values;
     }
@@ -611,6 +658,8 @@ public sealed class PeopleService(PicerDatabase database)
         review.Transaction = transaction;
         review.Parameters.AddWithValue("$face", faceId);
         review.ExecuteNonQuery();
+        if (state == "confirmed" && assignedBy == "user")
+            InsertCorrection(faceId, null, personId, "review_active", transaction);
     }
 
     private void AddAliasCore(long personId, string alias, Microsoft.Data.Sqlite.SqliteTransaction transaction)
@@ -621,6 +670,7 @@ public sealed class PeopleService(PicerDatabase database)
         command.Parameters.AddWithValue("$alias", alias);
         command.Parameters.AddWithValue("$now", Format(DateTime.UtcNow));
         command.ExecuteNonQuery();
+        database.RecordMetadataEdit("person", personId, PicerDatabase.AliasField(alias), alias, transaction);
     }
 
     private void InsertCorrection(long faceId, long? oldPersonId, long? newPersonId, string action,

@@ -1,4 +1,4 @@
-using System.Text;
+﻿using System.Text;
 using Picer.Core.Data;
 using Picer.Core.Models;
 using Picer.Core.Video;
@@ -42,7 +42,7 @@ public sealed class MediaTextIndexRepository
     public void UpsertVideo(VideoRecord video, IEnumerable<string?> fields, string sourceVersion = "v1")
     {
         var content = string.Join(" ", fields.Where(value => !string.IsNullOrWhiteSpace(value)).Select(value => value!.Trim()).Distinct(StringComparer.OrdinalIgnoreCase));
-        var key = -video.Id; // image ids are positive; negative keys avoid cross-media collisions.
+        var key = -new VideoContentRepository(_database).GetContentId(video.Id); // image ids are positive; negative keys avoid cross-media collisions.
         var fingerprint = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(
             $"video:{video.Id}|{video.FileSize}|{video.ModifiedUtc:o}|{sourceVersion}|{content}")));
         using var tx = _database.BeginTransaction();

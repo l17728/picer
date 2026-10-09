@@ -1,7 +1,7 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
-using Picer.App.Security;
+using Picer.Core.Security;
 
 namespace Picer.App;
 
@@ -21,8 +21,15 @@ public partial class CloudVisionSettingsWindow : Window
     public CloudVisionSettingsWindow(string settingsPath,ICredentialStore? credentials=null)
     {
         InitializeComponent();_settingsPath=settingsPath;_credentials=credentials??new WindowsCredentialStore();_settings=CloudVisionSettings.Load(settingsPath);
+        if (AppServices.ServiceMode)
+        {
+            EnabledBox.IsEnabled = false; FeatureBox.IsEnabled = false; ProviderBox.IsEnabled = false;
+            ModelBox.IsEnabled = false; ApiKeyBox.IsEnabled = false;
+            ImportOpenCodeButton.IsEnabled = false; DeleteKeyButton.IsEnabled = false; SaveButton.IsEnabled = false;
+            ImportStatusText.Text = "远程模式：模型配置由统一 Service 管理";
+        }
         EnabledBox.IsChecked=_settings.Enabled;MaximumBox.Text=_settings.MaximumImagesPerRun.ToString();PreciseGpsBox.IsChecked=_settings.IncludePreciseGps;
-        FaceTrainingEndpointBox.Text=_settings.FaceTrainingEndpoint;
+        FaceTrainingEndpointBox.Text=AppServices.TrainingServiceEndpoint ?? "尚未配对服务";
         DailyBudgetBox.Text=_settings.DailyBudgetYuan.ToString("0.##");MonthlyBudgetBox.Text=_settings.MonthlyBudgetYuan.ToString("0.##");FeatureBox.ItemsSource=_features;FeatureBox.SelectedIndex=0;
     }
 
@@ -73,12 +80,10 @@ public partial class CloudVisionSettingsWindow : Window
     private void Save_Click(object sender,RoutedEventArgs e)
     {
         SaveCurrentSelection();if(!int.TryParse(MaximumBox.Text,out var maximum)||maximum is<1 or>1000){Warn("单批上限必须是 1 到 1000 之间的整数。");return;}
-        if(!Uri.TryCreate(FaceTrainingEndpointBox.Text.Trim(),UriKind.Absolute,out var trainingEndpoint)||trainingEndpoint.Scheme is not ("http" or "https")){Warn("人脸训练提交地址必须是有效的 HTTP/HTTPS 地址。");return;}
-        if(trainingEndpoint.Scheme == "http" && !trainingEndpoint.IsLoopback){Warn("远程人脸训练平台必须使用 HTTPS；仅允许 127.0.0.1/localhost 使用 HTTP。");return;}
         if(!decimal.TryParse(DailyBudgetBox.Text,out var daily)||daily<.1m||!decimal.TryParse(MonthlyBudgetBox.Text,out var monthly)||monthly<daily){Warn("每日预算至少 0.1 元；每月预算不得低于每日预算。");return;}
         if(EnabledBox.IsChecked==true)
             foreach(var feature in _features){var resolved=_settings.Resolve(feature.Id);if(resolved is null){Warn($"请为“{feature.Name}”选择模型。");return;}if(!AiProviderIds.IsLocal(resolved.Value.Provider.Id)&&ReadProviderKey(resolved.Value.Provider.Id) is not{Length:>0}){Warn($"“{feature.Name}”使用的服务商尚未保存 API Key。");return;}}
-        _settings.Enabled=EnabledBox.IsChecked==true;_settings.MaximumImagesPerRun=maximum;_settings.IncludePreciseGps=PreciseGpsBox.IsChecked==true;_settings.DailyBudgetYuan=daily;_settings.MonthlyBudgetYuan=monthly;_settings.FaceTrainingEndpoint=trainingEndpoint.ToString().TrimEnd('/');_settings.Save(_settingsPath);DialogResult=true;
+        _settings.Enabled=EnabledBox.IsChecked==true;_settings.MaximumImagesPerRun=maximum;_settings.IncludePreciseGps=PreciseGpsBox.IsChecked==true;_settings.DailyBudgetYuan=daily;_settings.MonthlyBudgetYuan=monthly;_settings.Save(_settingsPath);DialogResult=true;
     }
     private void Warn(string message)=>MessageBox.Show(this,message,"AI 模型设置",MessageBoxButton.OK,MessageBoxImage.Warning);
     private sealed record FeatureItem(string Id,string Name,string TypeLabel,string Description,AiModelCapability Capability);

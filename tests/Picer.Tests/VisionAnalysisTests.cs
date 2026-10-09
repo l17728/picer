@@ -1,3 +1,4 @@
+using Picer.Core.Imaging;
 using Microsoft.Data.Sqlite;
 using Picer.Core.Data;
 using Picer.Core.Models;
@@ -5,8 +6,6 @@ using Picer.Core.People;
 using Picer.Core.Search;
 using Picer.Core.Vision;
 using Picer.Core.Indexing;
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.PixelFormats;
 
 namespace Picer.Tests;
 
@@ -560,9 +559,10 @@ public sealed class VisionAnalysisTests : IDisposable
         Assert.Single(repository.GetConfirmedFaces(person.Id));
         Assert.Equal(new FaceWorkQueueCounts(0, 0, 0), repository.GetFaceWorkQueueCounts());
 
-        foreach (var faceId in repository.GetFaceIds(_image.Id).Concat(repository.GetFaceIds(copy.Id)))
-            people.IgnoreFace(faceId);
+        var duplicateFaceIds = repository.GetFaceIds(_image.Id).Concat(repository.GetFaceIds(copy.Id)).ToArray();
+        people.IgnoreFaces(duplicateFaceIds);
         Assert.Single(repository.GetIgnoredFaces());
+        Assert.Equal(duplicateFaceIds.Order(), repository.GetIgnoredFaceIds(duplicateFaceIds).Order());
     }
 
     [Fact]
@@ -701,7 +701,7 @@ public sealed class VisionAnalysisTests : IDisposable
         var recognizer = Path.Combine(modelRoot, "face_recognition_sface_2021dec.onnx");
         if (!File.Exists(detector) || !File.Exists(recognizer)) return;
         var path = Path.Combine(_root, "blank.png");
-        using (var image = new Image<Rgb24>(320, 320, Color.White)) image.SaveAsPng(path);
+        using (var image = new RasterImage(320, 320, new RgbPixel(255, 255, 255))) image.SaveAsPng(path);
         var info = new FileInfo(path);
         var record = new ImageRecord { Path = path, FileSize = info.Length, ModifiedUtc = info.LastWriteTimeUtc };
         using var analyzer = new YuNetSFaceAnalyzer(detector, recognizer);
@@ -717,7 +717,7 @@ public sealed class VisionAnalysisTests : IDisposable
     public async Task FaceThumbnail_IsCroppedCachedAndDoesNotModifySource()
     {
         var path = Path.Combine(_root, "crop-source.png");
-        using (var image = new Image<Rgb24>(400, 300, Color.CornflowerBlue)) image.SaveAsPng(path);
+        using (var image = new RasterImage(400, 300, new RgbPixel(100, 149, 237))) image.SaveAsPng(path);
         var before = File.ReadAllBytes(path);
         var service = new FaceThumbnailService(Path.Combine(_root, "face-cache"));
         var face = new UnassignedFaceRecord(99, _image.Id, path, null, 0,
@@ -730,7 +730,7 @@ public sealed class VisionAnalysisTests : IDisposable
         Assert.Equal(first, second);
         Assert.True(File.Exists(first));
         Assert.Equal(before, File.ReadAllBytes(path));
-        using var crop = Image.Load(first);
+        using var crop = RasterImage.Load(first);
         Assert.Equal(160, crop.Width);
         Assert.Equal(160, crop.Height);
     }
@@ -794,6 +794,49 @@ public sealed class VisionAnalysisTests : IDisposable
         var matches = IndexSearchEngine.Search(_database, new SearchFilters { PersonId = person.Id });
         Assert.Equal(2, matches.Count);
         Assert.Equal(person.Id, people.FindByName("老婆")!.Id);
+    }
+
+    [Fact]
+    public void SuggestionsNeverUseConfirmedVectorsFromAnotherModelSpace()
+    {
+        var repository = new VisionAnalysisRepository(_database);
+        var people = new PeopleService(_database);
+        var person = people.Create("model-space-boundary");
+        var source = _database.GetSources().Single();
+        var otherImagePath = Path.Combine(_root, "insight-candidate.jpg");
+        File.WriteAllBytes(otherImagePath, [7, 6, 5]);
+        var candidateImage = _database.UpsertImage(new ImageRecord
+        {
+            SourceId = source.Id, Path = otherImagePath, FileSize = 3,
+            ModifiedUtc = File.GetLastWriteTimeUtc(otherImagePath), Status = ImageStatus.Active,
+            IndexedUtc = DateTime.UtcNow
+        });
+        var vector = new byte[2 * sizeof(float)];
+        Buffer.BlockCopy(new[] { 1f, 0f }, 0, vector, 0, vector.Length);
+
+        long InsertFace(long imageId, string modelVersion)
+        {
+            using var command = _database.Command("""
+                INSERT INTO detected_faces(image_id,model_version,ordinal,box_x,box_y,box_width,box_height,confidence,embedding,created_utc)
+                VALUES($image,$model,0,.1,.1,.5,.5,.99,$embedding,$created);
+                SELECT last_insert_rowid();
+                """);
+            command.Parameters.AddWithValue("$image", imageId);
+            command.Parameters.AddWithValue("$model", modelVersion);
+            command.Parameters.AddWithValue("$embedding", vector);
+            command.Parameters.AddWithValue("$created", DateTime.UtcNow.ToString("O"));
+            return (long)command.ExecuteScalar()!;
+        }
+
+        var confirmedSFace = InsertFace(_image.Id, "sface");
+        _ = InsertFace(candidateImage.Id, "insightface-arcface");
+        people.ConfirmFace(confirmedSFace, person.Id);
+
+        var result = new FaceSuggestionEngine(repository, people).Suggest(modelVersion: "insightface-arcface");
+
+        Assert.Equal(1, result.Considered);
+        Assert.Equal(0, result.Suggested);
+        Assert.Empty(repository.GetSuggestedPersonGroups());
     }
 
     [Fact]

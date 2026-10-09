@@ -45,6 +45,9 @@ public sealed class ServiceBrowseWindowTests
         public Task<VideoRecord?> GetVideoAsync(long id, CancellationToken cancellationToken = default) =>
             Task.FromResult<VideoRecord?>(null);
 
+        public Task<Stream?> OpenVideoKeyframeAsync(long keyframeId, CancellationToken cancellationToken = default) =>
+            Task.FromResult<Stream?>(null);
+
         public async Task<GatewayPage> SearchAsync(SearchFilters filters, int pageSize = 200, string? cursor = null, CancellationToken cancellationToken = default)
         {
             var items = string.IsNullOrEmpty(filters.Query)
@@ -120,6 +123,76 @@ public sealed class ServiceBrowseWindowTests
         thread.SetApartmentState(ApartmentState.STA);
         thread.Start();
         Assert.True(thread.Join(TimeSpan.FromSeconds(30)), "服务浏览窗口测试超时");
+        if (failure is not null) throw failure;
+    }
+
+    [Theory]
+    [InlineData(1.0)]
+    [InlineData(1.5)]
+    [InlineData(2.0)]
+    public void Accessibility_KeyboardFocusAndMinimumLayout(double scale)
+    {
+        Exception? failure = null;
+        var thread = new Thread(() =>
+        {
+            SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext());
+            ServiceBrowseWindow? window = null;
+            try
+            {
+                window = new ServiceBrowseWindow(new StubGateway(), autoLoad: false)
+                { Width = 720 * scale, Height = 480 * scale, ShowInTaskbar = false };
+                ((FrameworkElement)window.Content).LayoutTransform = new System.Windows.Media.ScaleTransform(scale, scale);
+                window.Show();
+                window.Activate();
+                window.UpdateLayout();
+                var search = (System.Windows.Controls.TextBox)window.FindName("SearchBox");
+                search.Text = "keyboard query";
+                Assert.True(window.HandleShortcut(System.Windows.Input.Key.F, System.Windows.Input.ModifierKeys.Control));
+                Assert.True(search.IsKeyboardFocusWithin);
+                Assert.Equal(search.Text, search.SelectedText);
+                Assert.Equal("搜索图片", System.Windows.Automation.Peers.UIElementAutomationPeer.CreatePeerForElement(search)!.GetName());
+                Assert.NotNull(window.FindResource(SystemParameters.FocusVisualStyleKey));
+                Assert.True(window.HandleShortcut(System.Windows.Input.Key.L, System.Windows.Input.ModifierKeys.Control));
+                Assert.True(((System.Windows.Controls.TreeView)window.FindName("SourcesTree")).IsKeyboardFocusWithin);
+                Assert.False(window.HandleShortcut(System.Windows.Input.Key.Delete, System.Windows.Input.ModifierKeys.None));
+                Assert.False(window.HandleShortcut(System.Windows.Input.Key.F, System.Windows.Input.ModifierKeys.Control | System.Windows.Input.ModifierKeys.Alt));
+                window.HandleShortcut(System.Windows.Input.Key.F, System.Windows.Input.ModifierKeys.Control);
+                Assert.True(window.HandleShortcut(System.Windows.Input.Key.Escape, System.Windows.Input.ModifierKeys.None));
+                Assert.Empty(search.Text);
+                WaitUntil(window, () => !window.ViewModel.IsBusy, TimeSpan.FromSeconds(10));
+                window.UpdateLayout();
+                var bounds = search.TransformToAncestor(window).TransformBounds(new Rect(search.RenderSize));
+                Assert.True(bounds.Right <= window.ActualWidth, "最小窗口下搜索框必须完整可见");
+                Assert.True(((System.Windows.Controls.ListBox)window.FindName("Photos")).ActualWidth >= 192);
+            }
+            catch (Exception exception) { failure = exception; }
+            finally { window?.Close(); }
+        });
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        Assert.True(thread.Join(TimeSpan.FromSeconds(20)), "无障碍焦点测试超时");
+        if (failure is not null) throw failure;
+    }
+
+    [Fact]
+    public void RemoteMainWindow_LocalSearchEventsDoNotDereferenceMissingViewModel()
+    {
+        Exception? failure = null;
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                var window = new Picer.App.MainWindow();
+                ((System.Windows.Controls.TextBox)window.FindName("SearchBox")).Text = "query";
+                ((System.Windows.Controls.ComboBox)window.FindName("MediaTypeBox")).SelectedIndex = 1;
+                Assert.False(window.HandleLocalShortcut(System.Windows.Input.Key.Escape, System.Windows.Input.ModifierKeys.None));
+                window.Close();
+            }
+            catch (Exception exception) { failure = exception; }
+        });
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        Assert.True(thread.Join(TimeSpan.FromSeconds(20)));
         if (failure is not null) throw failure;
     }
 

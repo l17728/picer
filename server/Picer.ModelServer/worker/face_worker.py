@@ -3,6 +3,7 @@ import base64, json, os, sys, uuid, datetime
 import torch
 
 _SESSION_CACHE = {}
+_DETECTOR_CACHE = {}
 
 def field(sample, camel, pascal):
     if camel in sample:
@@ -25,6 +26,8 @@ def enrich_insightface_embeddings(samples, model_version):
                and not s.get("faceImageBase64") and not s.get("FaceImageBase64")]
     if missing:
         raise ValueError("InsightFace requires faceImageBase64 for samples without embeddings")
+    if all(s.get("embedding") or s.get("Embedding") for s in samples):
+        return samples
     import cv2, numpy as np, onnxruntime as ort
     env_name = {
         "sface": "PICER_SFACE_MODEL_PATH",
@@ -56,12 +59,34 @@ def enrich_insightface_embeddings(samples, model_version):
     session = _SESSION_CACHE.get(cache_key)
     if session is None:
         session = ort.InferenceSession(model_path, providers=providers)
+        if "CUDAExecutionProvider" in providers and "CUDAExecutionProvider" not in session.get_providers():
+            raise RuntimeError("CUDA was requested but the model fell back to CPU")
         _SESSION_CACHE[cache_key] = session
     input_name = session.get_inputs()[0].name
     input_shape = session.get_inputs()[0].shape
     output = list(samples)
     pending = []
     tensors = []
+    # Respect static exports and bound both decoded crops and inference memory.
+    static_batch = input_shape[0] if isinstance(input_shape[0], int) and input_shape[0] > 0 else None
+    batch_size = static_batch or 16
+    def flush():
+        if not tensors:
+            return
+        count = len(tensors)
+        padded = tensors + [tensors[-1]] * (batch_size - count) if static_batch else tensors
+        vectors = np.asarray(session.run(None, {input_name: np.concatenate(padded, axis=0)})[0])
+        if vectors.ndim != 2 or vectors.shape[0] != len(padded) or vectors.shape[1] == 0:
+            raise ValueError("face model returned an invalid embedding shape")
+        norms = np.linalg.norm(vectors[:count], axis=1)
+        if not np.isfinite(vectors[:count]).all() or not np.isfinite(norms).all() or (norms <= 1e-12).any():
+            raise ValueError("face model returned invalid embeddings")
+        for index, vector, norm in zip(pending, vectors, norms):
+            enriched = dict(samples[index])
+            enriched["embedding"] = (vector / norm).astype(float).tolist()
+            output[index] = enriched
+        pending.clear()
+        tensors.clear()
     for index, sample in enumerate(samples):
         if sample.get("embedding") or sample.get("Embedding"):
             continue
@@ -86,17 +111,81 @@ def enrich_insightface_embeddings(samples, model_version):
         tensor = image[None, ...] if input_shape[-1] == 3 else image.transpose(2, 0, 1)[None, ...]
         pending.append(index)
         tensors.append(tensor)
-    if tensors:
-        batch = np.concatenate(tensors, axis=0)
-        vectors = session.run(None, {input_name: batch})[0]
-        for index, vector in zip(pending, vectors):
-            vector = vector / (np.linalg.norm(vector) + 1e-12)
-            enriched = dict(samples[index])
-            enriched["embedding"] = vector.astype(float).tolist()
-            output[index] = enriched
+        if len(tensors) == batch_size:
+            flush()
+    flush()
     return output
 
+def detect_and_embed(request):
+    model_version = request.get("modelVersion", "insightface-arcface")
+    encoded = (request.get("images") or [None])[0]
+    if not encoded:
+        raise ValueError("image_required")
+    import cv2, numpy as np
+    detector_path = os.environ.get(
+        "PICER_YUNET_MODEL_PATH",
+        r"D:\picer\third_party\runtime\models\face\face_detection_yunet_2023mar.onnx")
+    if not os.path.isfile(detector_path):
+        raise ValueError("yunet_detector_not_configured")
+    detector = _DETECTOR_CACHE.get(detector_path)
+    if detector is None:
+        detector = cv2.FaceDetectorYN.create(detector_path, "", (320, 320), 0.65, 0.3, 5000)
+        _DETECTOR_CACHE[detector_path] = detector
+    raw = base64.b64decode(encoded, validate=True)
+    image = cv2.imdecode(np.frombuffer(raw, dtype=np.uint8), cv2.IMREAD_COLOR)
+    if image is None:
+        raise ValueError("invalid_image")
+    source_height, source_width = image.shape[:2]
+    scale = min(1.0, 1280.0 / max(source_width, source_height))
+    if scale < 1.0:
+        image = cv2.resize(image, (round(source_width * scale), round(source_height * scale)),
+                           interpolation=cv2.INTER_AREA)
+    height, width = image.shape[:2]
+    detector.setInputSize((width, height))
+    _, rows = detector.detect(image)
+    faces = []
+    target = np.asarray([[38.2946, 51.6963], [73.5318, 51.5014], [56.0252, 71.7366],
+                         [41.5493, 92.3655], [70.7299, 92.2041]], dtype=np.float32)
+    aligned_images = []
+    boxes = []
+    for ordinal, row in enumerate(rows if rows is not None else []):
+        x, y, box_width, box_height = [float(value) for value in row[:4]]
+        x0, y0 = max(0.0, x), max(0.0, y)
+        x1, y1 = min(float(width), x + box_width), min(float(height), y + box_height)
+        if x1 <= x0 or y1 <= y0:
+            continue
+        landmarks = np.asarray(row[4:14], dtype=np.float32).reshape(5, 2)
+        transform, _ = cv2.estimateAffinePartial2D(landmarks, target, method=cv2.LMEDS)
+        if transform is not None:
+            aligned = cv2.warpAffine(image, transform, (112, 112), flags=cv2.INTER_LINEAR,
+                                     borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0))
+        else:
+            crop = image[int(y0):int(y1), int(x0):int(x1)]
+            aligned = cv2.resize(crop, (112, 112), interpolation=cv2.INTER_AREA)
+        ok, encoded_crop = cv2.imencode(".jpg", aligned, [cv2.IMWRITE_JPEG_QUALITY, 95])
+        if not ok:
+            raise ValueError("face_crop_encode_failed")
+        aligned_images.append(base64.b64encode(encoded_crop.tobytes()).decode("ascii"))
+        boxes.append({"ordinal": ordinal, "x": x0 / width, "y": y0 / height,
+                      "width": (x1 - x0) / width, "height": (y1 - y0) / height,
+                      "confidence": float(row[-1])})
+    if aligned_images:
+        enriched = enrich_insightface_embeddings(
+            [{"faceImageBase64": value} for value in aligned_images], model_version)
+        for box, sample in zip(boxes, enriched):
+            box["embedding"] = sample["embedding"]
+            faces.append(box)
+    return {"schemaVersion": "picer.face.v1", "operation": "detect",
+            "modelVersion": model_version, "faces": faces}
+
 def process(request):
+    if request.get("operation") == "runtime":
+        return {"cudaRequested": os.environ.get("PICER_GPU_WORKER_USE_CUDA", "").lower() in {"1", "true", "yes"},
+                "torchCudaAvailable": torch.cuda.is_available(),
+                "sessions": [{"modelVersion": key[0], "providers": session.get_providers()}
+                             for key, session in _SESSION_CACHE.items()]}
+    if request.get("operation") == "detect":
+        return detect_and_embed(request)
     if request.get("operation") == "embed":
         model_version = request.get("modelVersion", "insightface-arcface")
         samples = [{"faceImageBase64": value} for value in request.get("images", [])]
@@ -111,64 +200,81 @@ def process(request):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     train = [s for s in samples if s.get("split", s.get("Split")) == "train" and label_of(s) != "negative"]
     if not train:
-        train = [s for s in samples if label_of(s) != "negative"] or samples
+        raise ValueError("independent training samples are required")
     groups = {}
     for s in train:
         person_id = int(field(s, "personId", "PersonId"))
         embedding = field(s, "embedding", "Embedding")
-        groups.setdefault(person_id, []).append(torch.tensor(embedding, dtype=torch.float32, device=device))
+        groups.setdefault(person_id, []).append(embedding)
     prototypes = []
     for person, vectors in groups.items():
-        centroid = torch.stack(vectors).mean(0)
-        sims = [cosine(v, centroid) for v in vectors]
+        matrix = torch.tensor(vectors, dtype=torch.float32, device=device)
+        centroid = matrix.mean(0)
+        sims = torch.nn.functional.cosine_similarity(matrix, centroid.unsqueeze(0), dim=1).cpu().tolist()
         # Calibrate each person's threshold from training positives. Hard
         # negatives are evaluated separately; they must never form a centroid.
         positives = sorted(sims)
         threshold = positives[max(0, int(len(positives) * .05) - 1)] if positives else .5
         prototypes.append({"personId": person, "centroid": centroid.detach().cpu().tolist(), "threshold": max(0.25, min(.90, threshold)), "sampleCount": len(vectors)})
-    evals = [s for s in samples if s.get("split", s.get("Split")) == "validation"] or samples
-    def evaluate(scale):
-        correct = 0
-        false_positive = 0
-        false_negative = 0
-        for s in evals:
-            v = torch.tensor(field(s, "embedding", "Embedding"), dtype=torch.float32, device=device)
-            best = max(prototypes, key=lambda p: cosine(v, torch.tensor(p["centroid"], device=device)))
-            similarity = cosine(v, torch.tensor(best["centroid"], device=device))
-            accepted = similarity >= best["threshold"] * scale
-            is_negative = label_of(s) == "negative"
-            expected = int(field(s, "personId", "PersonId"))
-            if is_negative:
-                if accepted: false_positive += 1
-                else: correct += 1
-            elif expected == best["personId"] and accepted: correct += 1
-            elif accepted: false_negative += 1
-        # Explicit exclusive/unknown negatives are never allowed to become a
-        # prototype.  Evaluate them against every prototype and use their own
-        # denominator; this makes FAR meaningful instead of diluting it by the
-        # number of positive validation images.
-        negative_false_accepts = 0
-        for s in negative_samples:
-            v = torch.tensor(field(s, "embedding", "Embedding"), dtype=torch.float32, device=device)
-            best = max(prototypes, key=lambda p: cosine(v, torch.tensor(p["centroid"], device=device)))
-            if cosine(v, torch.tensor(best["centroid"], device=device)) >= best["threshold"] * scale:
-                negative_false_accepts += 1
-        negative_total = len(negative_samples)
-        total = len(evals) or 1
-        far_denominator = negative_total + sum(1 for s in evals if label_of(s) == "negative")
-        far = (false_positive + negative_false_accepts) / (far_denominator or 1)
-        return correct / total, far, false_negative / total
+    evals = [s for s in samples if s.get("split", s.get("Split")) == "validation"]
+    if not any(label_of(s) != "negative" for s in evals):
+        raise ValueError("independent positive validation samples are required")
+    # Cache batched scores once. Per-vector CUDA .item() calls forced thousands
+    # of host/device synchronizations per threshold and timed out real datasets.
+    centers = torch.tensor([p["centroid"] for p in prototypes], dtype=torch.float32, device=device)
+    centers = torch.nn.functional.normalize(centers, dim=1)
+    thresholds = torch.tensor([p["threshold"] for p in prototypes], device=device)
+    identities = torch.tensor([p["personId"] for p in prototypes], device=device)
+    def scores(items):
+        matrix = torch.tensor([field(s, "embedding", "Embedding") for s in items], dtype=torch.float32, device=device)
+        return torch.nn.functional.normalize(matrix, dim=1) @ centers.T
+    heldout_negatives = [s for s in negative_samples if s.get("split", "validation") == "validation"]
+    negative_scores = scores(heldout_negatives) if heldout_negatives else None
+    negative_targets = torch.tensor([[s.get("kind", "exclusive") != "exclusive" or
+        p["personId"] == s.get("targetPersonId", s.get("TargetPersonId")) for p in prototypes]
+        for s in heldout_negatives], dtype=torch.bool, device=device) if heldout_negatives else None
+    score_cache = {}
+    def evaluate(scale, evaluation_samples=None):
+        items = evals if evaluation_samples is None else evaluation_samples
+        cache_key = id(items)
+        if cache_key not in score_cache:
+            best_scores, best_indices = scores(items).max(dim=1)
+            expected = torch.tensor([int(field(s, "personId", "PersonId")) for s in items], device=device)
+            is_negative = torch.tensor([label_of(s) == "negative" for s in items], dtype=torch.bool, device=device)
+            score_cache[cache_key] = best_scores, best_indices, expected, is_negative
+        best_scores, best_indices, expected, is_negative = score_cache[cache_key]
+        accepted = best_scores >= thresholds[best_indices] * scale
+        correct_identity = identities[best_indices] == expected
+        correct = ((~is_negative & accepted & correct_identity) | (is_negative & ~accepted)).sum().item()
+        positive_total = (~is_negative).sum().item()
+        false_negative = (~is_negative & ~(accepted & correct_identity)).sum().item()
+        wrong_identity = (~is_negative & accepted & ~correct_identity).sum().item()
+        false_accepts = (is_negative & accepted).sum().item()
+        if negative_scores is not None:
+            false_accepts += ((negative_scores >= thresholds.unsqueeze(0) * scale) & negative_targets).any(dim=1).sum().item()
+        negative_total = len(heldout_negatives) + is_negative.sum().item()
+        far = false_accepts / negative_total if negative_total else 1.0
+        far = max(far, wrong_identity / (positive_total or 1))
+        return correct / len(items), far, false_negative / (positive_total or 1)
 
     accuracy, far, frr = evaluate(1.0)
-    sweep = [(evaluate(scale), scale) for scale in [0.50, 0.60, 0.70, 0.80, 0.90, 1.00, 1.10, 1.20]]
-    eligible = [(metrics, scale) for metrics, scale in sweep if metrics[1] <= .01]
-    best_metrics, best_scale = max(eligible or sweep, key=lambda item: item[0][0])
-    action = "calibrate-threshold" if best_metrics[0] >= .90 else "upgrade-model"
+    # Use validation only. The previous sweep stopped at 1.2 and merely reported
+    # its winner: the artifact still contained the original unsafe thresholds.
+    sweep = [(evaluate(scale), scale) for scale in [0.5 + step * .025 for step in range(61)]]
+    eligible = [(metrics, scale) for metrics, scale in sweep if metrics[0] >= .90 and metrics[1] <= .01 and metrics[2] <= .10]
+    best_metrics, best_scale = max(eligible or sweep, key=lambda item: (item[0][0], -item[0][1], -item[0][2]))
+    action = "calibrate-threshold" if best_metrics[0] >= .90 and best_metrics[1] <= .01 and best_metrics[2] <= .10 else "upgrade-model"
+    if eligible:
+        accuracy, far, frr = best_metrics
+        for prototype in prototypes:
+            prototype["threshold"] *= best_scale
+    applied_scale = best_scale if eligible else 1.0
     diagnostics = {"recommendedAction": action, "thresholdSweepBestAccuracy": best_metrics[0],
                    "thresholdSweepBestScale": best_scale, "thresholdSweepBestFar": best_metrics[1],
                    "thresholdSweepBestFrr": best_metrics[2], "currentAccuracy": accuracy,
-                   "explanation": "阈值可达 90%，优先校准阈值" if action == "calibrate-threshold" else "阈值扫描仍低于 90%，停止重复调阈值并评测更强基模"}
-    return {"artifactId": "artifact-" + uuid.uuid4().hex[:12], "algorithm": "prototype-calibration-gpu", "modelVersion": model_version, "createdUtc": datetime.datetime.now(datetime.timezone.utc).isoformat(), "prototypes": prototypes, "diagnostics": diagnostics, "metrics": {"totalSamples": len(samples) + len(negative_samples), "totalPersons": len(prototypes), "trainAccuracy": accuracy, "validationAccuracy": accuracy, "falseAcceptRate": far, "falseRejectRate": frr, "meanSimilaritySame": 0.0, "meanSimilarityDiff": 0.0}}
+                   "appliedThresholdScale": applied_scale,
+                   "explanation": "阈值通过准确率、误识率和拒识率门禁，写入候选制品" if action == "calibrate-threshold" else "阈值扫描无法同时通过准确率、误识率和拒识率门禁，保留原阈值并评测更强基模"}
+    return {"artifactId": "artifact-" + uuid.uuid4().hex[:12], "algorithm": "prototype-calibration-gpu", "modelVersion": model_version, "createdUtc": datetime.datetime.now(datetime.timezone.utc).isoformat(), "prototypes": prototypes, "diagnostics": diagnostics, "metrics": {"totalSamples": len(samples) + len(negative_samples), "totalPersons": len(prototypes), "trainAccuracy": evaluate(applied_scale, train)[0], "validationAccuracy": accuracy, "falseAcceptRate": far, "falseRejectRate": frr, "meanSimilaritySame": 0.0, "meanSimilarityDiff": 0.0}}
 
 def main():
     if "--server" in sys.argv:

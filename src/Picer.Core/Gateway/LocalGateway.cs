@@ -15,6 +15,22 @@ public sealed class LocalGateway(PicerDatabase db, ThumbnailService thumbnails, 
     private readonly VideoRepository _videos = new(db);
 
     public void Dispose() { }
+    public Task<GatewayChangePage> GetChangesAsync(GatewayChangeRequest request, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        using var independent = db.OpenIndependentConnection();
+        return Task.FromResult(independent.ReadMirrorChanges(request));
+    }
+    public async Task<bool> PurgeVideoAsync(long id, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var purger = new VideoRecordPurger(db); var snapshot = purger.Inspect(id);
+        if (snapshot is null) return true;
+        using var removal = await VideoOperationLifetime.BeginPurgeAsync(snapshot.Path, cancellationToken);
+        return purger.Purge(id);
+    }
+    public Task<bool> PurgeMissingImageAsync(long id, CancellationToken cancellationToken = default)
+    { cancellationToken.ThrowIfCancellationRequested(); return Task.FromResult(new ImageRecordPurger(db).Purge(id)); }
     public Task<GatewayHealth> GetHealthAsync(CancellationToken cancellationToken = default) =>
         Task.FromResult(new GatewayHealth("ok", PicerDatabase.CurrentSchemaVersion, "1.0", typeof(LocalGateway).Assembly.GetName().Version?.ToString() ?? "unknown"));
 
@@ -33,7 +49,7 @@ public sealed class LocalGateway(PicerDatabase db, ThumbnailService thumbnails, 
         if (record is null) return Task.FromResult<Stream?>(null);
         try
         {
-            var cached = thumbnails.GetOrCreate(record.Path, imageId);
+            var cached = thumbnails.GetOrCreate(record.Path, imageId, record.Sha256);
             Stream? stream = cached is not null && File.Exists(cached) ? File.OpenRead(cached) : null;
             return Task.FromResult(stream);
         }
@@ -65,6 +81,14 @@ public sealed class LocalGateway(PicerDatabase db, ThumbnailService thumbnails, 
     public Task<Stream?> OpenVideoThumbnailAsync(long videoId, string? agentId = null, CancellationToken cancellationToken = default)
     {
         var path = _videos.GetKeyframes(videoId).FirstOrDefault()?.Path;
+        return Task.FromResult<Stream?>(path is not null && File.Exists(path) ? File.OpenRead(path) : null);
+    }
+
+    public Task<Stream?> OpenVideoKeyframeAsync(long keyframeId, CancellationToken cancellationToken = default)
+    {
+        using var command = db.Command("SELECT path FROM video_keyframes WHERE id=$id");
+        command.Parameters.AddWithValue("$id", keyframeId);
+        var path = command.ExecuteScalar() as string;
         return Task.FromResult<Stream?>(path is not null && File.Exists(path) ? File.OpenRead(path) : null);
     }
 
@@ -112,7 +136,8 @@ public sealed class LocalGateway(PicerDatabase db, ThumbnailService thumbnails, 
             db.GetAllMirroredFaces(), db.GetAllMirroredFaceAssignments(), db.GetAllMirroredVideoKeyframes(),
             db.GetAllMirroredVideoTranscripts(), db.GetAllMirroredVideoSummaries(), db.GetAllMirroredVideoFaces(),
             db.GetAllMirroredCloudVisionAnalyses(), db.GetAllMirroredSceneGroupDescriptions(),
-            db.GetAllMirroredFaceReviewStates(), db.GetAllMirroredFaceCandidateClusters(), db.GetAllMirroredFaceCandidateMembers()));
+            db.GetAllMirroredFaceReviewStates(), db.GetAllMirroredFaceCandidateClusters(), db.GetAllMirroredFaceCandidateMembers(),
+            FaceReviewDecisions: db.GetFaceReviewDecisions()));
     }
 
     public Task<IReadOnlyList<PersonSummary>> ListPeopleAsync(CancellationToken cancellationToken = default) =>

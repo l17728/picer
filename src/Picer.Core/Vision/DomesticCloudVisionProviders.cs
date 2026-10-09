@@ -44,7 +44,8 @@ public sealed record CloudVisionRunPolicy(
     int MaximumImagesPerRun = 100,
     bool IncludePreciseGps = false,
     decimal DailyBudgetYuan = 2m,
-    decimal MonthlyBudgetYuan = 20m)
+    decimal MonthlyBudgetYuan = 20m,
+    decimal EstimatedRequestCostYuan = 0.02m)
 {
     public int ClampCount(int requested) => !Enabled ? 0 : Math.Clamp(requested, 0, Math.Max(0, MaximumImagesPerRun));
 }

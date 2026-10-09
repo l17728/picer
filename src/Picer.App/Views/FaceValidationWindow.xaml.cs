@@ -267,9 +267,8 @@ public partial class FaceValidationWindow : Window
         SFaceProgressPanel.Visibility = Visibility.Visible;
         try
         {
-            var settings = CloudVisionSettings.Load(AppPaths.CloudVisionSettingsPath);
-            if (!Uri.TryCreate(settings.FaceTrainingEndpoint, UriKind.Absolute, out var endpoint))
-                throw new InvalidOperationException("请先在 AI 模型设置中配置有效的人脸训练提交地址。");
+            var serviceEndpoint = AppServices.TrainingServiceEndpoint ?? throw new InvalidOperationException("请先配对索引服务。");
+            var endpoint = new Uri(serviceEndpoint.TrimEnd('/') + "/api/service/v1/training/api/face-training/");
             Status.Text = "正在冻结训练数据快照…";
             var plan = await UiWork.RunDatabaseAsync(_training.Prepare);
             var warning = plan.Warnings.Count == 0 ? "数据检查通过" : string.Join("；", plan.Warnings);

@@ -12,12 +12,15 @@ public sealed record GatewayVideoPage(IReadOnlyList<VideoRecord> Items, string? 
 
 public interface IIndexGateway : IDisposable
 {
+    Task<GatewayChangePage> GetChangesAsync(GatewayChangeRequest request, CancellationToken cancellationToken = default)
+        => Task.FromException<GatewayChangePage>(new NotSupportedException("mirror_change_feed_unavailable"));
     Task<GatewayHealth> GetHealthAsync(CancellationToken cancellationToken = default);
     Task<GatewayPage> ListImagesAsync(long? sourceId = null, bool includeMissing = false, int pageSize = 200, string? cursor = null, CancellationToken cancellationToken = default);
     Task<ImageRecord?> GetImageAsync(long id, CancellationToken cancellationToken = default);
     Task<Stream?> OpenThumbnailAsync(long imageId, CancellationToken cancellationToken = default);
     Task<GatewayVideoPage> ListVideosAsync(long? sourceId = null, int pageSize = 200, string? cursor = null, CancellationToken cancellationToken = default);
     Task<VideoRecord?> GetVideoAsync(long id, CancellationToken cancellationToken = default);
+    Task<Stream?> OpenVideoKeyframeAsync(long keyframeId, CancellationToken cancellationToken = default);
     Task<GatewayPage> SearchAsync(SearchFilters filters, int pageSize = 200, string? cursor = null, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<SourceFolder>> ListSourcesAsync(CancellationToken cancellationToken = default);
     Task<IReadOnlyList<Tag>> ListTagsAsync(CancellationToken cancellationToken = default);
@@ -31,4 +34,8 @@ public interface IIndexGateway : IDisposable
     Task<bool> CancelScanAsync(string jobId, CancellationToken cancellationToken = default);
     Task<int> RemoveRecycledRecordsAsync(IReadOnlyList<long> imageIds, CancellationToken cancellationToken = default);
     Task<string> BackupAsync(string destinationPath, CancellationToken cancellationToken = default);
+    Task<bool> PurgeVideoAsync(long id, CancellationToken cancellationToken = default)
+        => Task.FromException<bool>(new NotSupportedException("video_purge_unavailable"));
+    Task<bool> PurgeMissingImageAsync(long id, CancellationToken cancellationToken = default)
+        => Task.FromException<bool>(new NotSupportedException("当前网关不支持彻底删除缺失记录。"));
 }

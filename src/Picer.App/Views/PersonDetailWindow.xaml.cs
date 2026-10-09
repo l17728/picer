@@ -1,3 +1,4 @@
+using Picer.App.Infrastructure;
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
@@ -19,14 +20,14 @@ public partial class PersonDetailWindow : Window
     public PersonDetailWindow(long personId, PicerDatabase database, PeopleService people, VisionAnalysisRepository faces)
     {
         InitializeComponent(); _personId = personId; _database = database; _people = people; _faces = faces;
-        Loaded += async (_, _) => await RefreshAsync();
+        Loaded += async (_, _) => { try { await RefreshAsync(); } catch (Exception exception) { Status.Text = "加载失败：" + exception.Message; } };
     }
 
     public bool PeopleChanged { get; private set; }
 
     private async Task RefreshAsync()
     {
-        var snapshot = await Task.Run(() =>
+        var snapshot = await UiWork.RunDatabaseAsync(() =>
         {
             var person = _people.Get(_personId);
             if (person is null) return null;
@@ -65,19 +66,19 @@ public partial class PersonDetailWindow : Window
 
     private async void Rename_Click(object sender, RoutedEventArgs e)
     {
-        try { var name = NameBox.Text; await Task.Run(() => _people.Rename(_personId, name)); PeopleChanged = true; Status.Text = "人物名称已更新。"; await RefreshAsync(); }
+        try { var name = NameBox.Text; await UiWork.RunDatabaseAsync(() => _people.Rename(_personId, name)); PeopleChanged = true; Status.Text = "人物名称已更新。"; await RefreshAsync(); }
         catch (Exception ex) { Status.Text = ex.Message; }
     }
 
     private async void AddAlias_Click(object sender, RoutedEventArgs e)
     {
-        try { var alias = AliasBox.Text; await Task.Run(() => _people.AddAlias(_personId, alias)); AliasBox.Clear(); PeopleChanged = true; Status.Text = "别名已加入检索。"; await RefreshAsync(); }
+        try { var alias = AliasBox.Text; await UiWork.RunDatabaseAsync(() => _people.AddAlias(_personId, alias)); AliasBox.Clear(); PeopleChanged = true; Status.Text = "别名已加入检索。"; await RefreshAsync(); }
         catch (Exception ex) { Status.Text = ex.Message; }
     }
 
     private async void SaveDescription_Click(object sender, RoutedEventArgs e)
     {
-        try { var description = DescriptionBox.Text; await Task.Run(() => _people.SetDescription(_personId, description)); PeopleChanged = true; Status.Text = "人物描述已保存。"; }
+        try { var description = DescriptionBox.Text; await UiWork.RunDatabaseAsync(() => _people.SetDescription(_personId, description)); PeopleChanged = true; Status.Text = "人物描述已保存。"; }
         catch (Exception ex) { Status.Text = ex.Message; }
     }
 
@@ -86,7 +87,7 @@ public partial class PersonDetailWindow : Window
         if (MergeTarget.SelectedItem is not PersonSummary target) { Status.Text = "请选择合并目标。"; return; }
         if (MessageBox.Show($"将“{Heading.Text}”的全部已确认人脸和别名合并到“{target.DisplayName}”。当前人物条目随后移除。是否继续？",
                 "确认合并人物", MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No) != MessageBoxResult.Yes) return;
-        try { await Task.Run(() => _people.Merge(_personId, target.Id)); _personId = target.Id; PeopleChanged = true; Status.Text = "人物已合并，可在照片中继续逐脸纠错。"; await RefreshAsync(); }
+        try { await UiWork.RunDatabaseAsync(() => _people.Merge(_personId, target.Id)); _personId = target.Id; PeopleChanged = true; Status.Text = "人物已合并，可在照片中继续逐脸纠错。"; await RefreshAsync(); }
         catch (Exception ex) { Status.Text = ex.Message; }
     }
 
@@ -97,11 +98,15 @@ public partial class PersonDetailWindow : Window
         // the detail window was opened without an initial face id and always
         // selected the first face in the source image, which made navigation jump
         // away from the user's current position.
-        var initialFaceId = await Task.Run(() =>
-            _faces.GetFaces(item.Record.Id)
-                .FirstOrDefault(face => face.PersonId == _personId)?.FaceId);
-        new FaceDetailWindow(item.Record, _faces, _people, initialFaceId) { Owner = this }.ShowDialog();
-        PeopleChanged = true; await RefreshAsync();
+        try
+        {
+            var initialFaceId = await UiWork.RunDatabaseAsync(() =>
+                _faces.GetFaces(item.Record.Id)
+                    .FirstOrDefault(face => face.PersonId == _personId)?.FaceId);
+            new FaceDetailWindow(item.Record, _faces, _people, initialFaceId) { Owner = this }.ShowDialog();
+            PeopleChanged = true; await RefreshAsync();
+        }
+        catch (Exception exception) { Status.Text = "打开人脸详情失败：" + exception.Message; }
     }
 
     private sealed class PersonPhotoItem

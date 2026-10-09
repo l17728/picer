@@ -16,10 +16,27 @@ public sealed class GpuEmbeddingService : IDisposable
     public async Task<IReadOnlyList<float[]>> GenerateAsync(string modelVersion, string[] images, CancellationToken ct = default)
     {
         if (images.Length == 0) return [];
+        var result = await ExecuteAsync(new { operation = "embed", modelVersion, images }, ct).ConfigureAwait(false);
+        if (!result.TryGetProperty("embeddings", out var values))
+            throw new InvalidOperationException("GPU worker returned no embeddings");
+        return values.EnumerateArray().Select(value => value.EnumerateArray().Select(item => item.GetSingle()).ToArray()).ToArray();
+    }
+
+    public Task<JsonElement> GetRuntimeAsync(CancellationToken ct = default) =>
+        ExecuteAsync(new { operation = "runtime" }, ct);
+
+    public Task<JsonElement> DetectFacesAsync(string modelVersion, string[] images, CancellationToken ct = default)
+    {
+        if (images.Length == 0) throw new ArgumentException("At least one image is required", nameof(images));
+        return ExecuteAsync(new { operation = "detect", modelVersion, images }, ct);
+    }
+
+    private async Task<JsonElement> ExecuteAsync(object payload, CancellationToken ct)
+    {
         await _gate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            var request = JsonSerializer.Serialize(new { operation = "embed", modelVersion, images });
+            var request = JsonSerializer.Serialize(payload);
             for (var attempt = 0; attempt < 2; attempt++)
             {
                 try
@@ -32,9 +49,7 @@ public sealed class GpuEmbeddingService : IDisposable
                     using var document = JsonDocument.Parse(line);
                     if (document.RootElement.TryGetProperty("error", out var error))
                         throw new InvalidOperationException(error.GetString() ?? "GPU worker failed");
-                    if (!document.RootElement.TryGetProperty("embeddings", out var values))
-                        throw new InvalidOperationException("GPU worker returned no embeddings");
-                    return values.EnumerateArray().Select(value => value.EnumerateArray().Select(item => item.GetSingle()).ToArray()).ToArray();
+                    return document.RootElement.Clone();
                 }
                 catch when (attempt == 0) { StopWorker(); }
             }

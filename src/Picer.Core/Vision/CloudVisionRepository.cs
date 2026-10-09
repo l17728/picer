@@ -5,9 +5,13 @@ using Picer.Core.Search;
 
 namespace Picer.Core.Vision;
 
-public sealed class CloudVisionRepository(PicerDatabase database)
+public sealed partial class CloudVisionRepository(PicerDatabase database)
 {
+    internal string DatabaseIdentity => database.DatabasePath == ":memory:"
+        ? "memory:" + System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(database)
+        : Path.GetFullPath(database.DatabasePath);
     private readonly MediaTextIndexRepository _textIndex = new(database);
+    public AnalysisBillingRepository Billing { get; } = new(database);
     public sealed record TaskRecord(long ImageId, string ImagePath, string Provider, string ModelVersion,
         string Status, string? Reason, string? Summary, string? ErrorCode, DateTime UpdatedUtc,
         long InputTokens, long OutputTokens, decimal EstimatedCostYuan);
@@ -15,7 +19,9 @@ public sealed class CloudVisionRepository(PicerDatabase database)
     public IReadOnlyList<TaskRecord> GetRecentTasks(int limit = 500)
     {
         using var command = database.Command("""
-            SELECT c.image_id,i.path,c.provider,c.model_version,c.status,c.reason,c.summary,c.error_code,c.updated_utc,
+            SELECT c.image_id,i.path,c.provider,c.model_version,
+                   CASE WHEN c.status='queued' AND c.error_code='user_canceled' THEN 'canceled' ELSE c.status END,
+                   c.reason,c.summary,c.error_code,c.updated_utc,
                    c.input_tokens,c.output_tokens,c.estimated_cost_yuan
             FROM cloud_vision_analyses c JOIN images i ON i.id=c.image_id
             ORDER BY c.updated_utc DESC LIMIT $limit
@@ -33,9 +39,7 @@ public sealed class CloudVisionRepository(PicerDatabase database)
 
     public decimal GetEstimatedCostSince(DateTime sinceUtc)
     {
-        using var command = database.Command("SELECT COALESCE(SUM(estimated_cost_yuan),0) FROM cloud_vision_analyses WHERE status='completed' AND updated_utc >= $since");
-        command.Parameters.AddWithValue("$since", sinceUtc.ToUniversalTime().ToString("o"));
-        return Convert.ToDecimal(command.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture);
+        return Billing.GetCostSince(sinceUtc);
     }
 
     public IReadOnlyList<string> GetSuggestedTags(long imageId)
@@ -69,6 +73,7 @@ public sealed class CloudVisionRepository(PicerDatabase database)
 
     public bool IsCurrent(ImageRecord image, ICloudVisionAnalyzer analyzer, string locationFingerprint)
     {
+        RestoreSharedDescription(image, analyzer.Provider, analyzer.ModelVersion, analyzer.PromptVersion, locationFingerprint);
         using var command = database.Command("""
             SELECT 1 FROM cloud_vision_analyses
             WHERE image_id=$image AND provider=$provider AND model_version=$model
@@ -78,6 +83,52 @@ public sealed class CloudVisionRepository(PicerDatabase database)
             """);
         AddIdentity(command, image, analyzer, locationFingerprint);
         return command.ExecuteScalar() is not null;
+    }
+
+    public bool HasCurrentDescription(ImageRecord image)
+    {
+        RestoreSharedDescription(image);
+        using var command = database.Command("""
+            SELECT 1 FROM cloud_vision_analyses WHERE image_id=$id AND status='completed'
+              AND summary IS NOT NULL AND trim(summary)<>''
+              AND source_file_size=$size AND source_modified_utc=$modified LIMIT 1
+            """);
+        command.Parameters.AddWithValue("$id", image.Id);
+        command.Parameters.AddWithValue("$size", image.FileSize);
+        command.Parameters.AddWithValue("$modified", image.ModifiedUtc.ToUniversalTime().ToString("o"));
+        return command.ExecuteScalar() is not null;
+    }
+
+    private void RestoreSharedDescription(ImageRecord image, string? provider = null, string? model = null,
+        string? prompt = null, string? location = null)
+    {
+        if (image.Sha256 is null && image.ContentSha256 is null) return;
+        // A compatibility projection for the requesting path. The durable result
+        // remains keyed once by content/model/prompt; copying it incurs no AI cost.
+        using var command = database.Command("""
+            INSERT OR IGNORE INTO cloud_vision_analyses(image_id,provider,model_version,prompt_version,
+                source_file_size,source_modified_utc,location_fingerprint,status,reason,summary,result_json,error_code,updated_utc,
+                input_tokens,output_tokens,estimated_cost_yuan)
+            SELECT i.id,json_extract(d.payload,'$.provider'),json_extract(d.payload,'$.model_version'),json_extract(d.payload,'$.prompt_version'),
+                i.file_size,i.modified_utc,json_extract(d.payload,'$.location_fingerprint'),'completed','content-reference',
+                json_extract(d.payload,'$.summary'),json_extract(d.payload,'$.result_json'),NULL,json_extract(d.payload,'$.updated_utc'),0,0,0
+            FROM images i JOIN content_derivatives d ON d.content_sha256=COALESCE(i.content_sha256,i.sha256)
+            WHERE i.id=$id AND d.kind='cloud_vision_analyses' AND json_extract(d.payload,'$.status')='completed'
+                AND length(trim(json_extract(d.payload,'$.summary')))>0
+                AND json_extract(d.payload,'$.source_file_size')=i.file_size
+                AND length(json_extract(d.payload,'$.source_modified_utc'))>0
+                AND ($provider IS NULL OR json_extract(d.payload,'$.provider')=$provider)
+                AND ($model IS NULL OR json_extract(d.payload,'$.model_version')=$model)
+                AND ($prompt IS NULL OR json_extract(d.payload,'$.prompt_version')=$prompt)
+                AND ($location IS NULL OR json_extract(d.payload,'$.location_fingerprint')=$location)
+            ORDER BY d.recorded_utc DESC
+            """);
+        command.Parameters.AddWithValue("$id", image.Id);
+        command.Parameters.AddWithValue("$provider", (object?)provider ?? DBNull.Value);
+        command.Parameters.AddWithValue("$model", (object?)model ?? DBNull.Value);
+        command.Parameters.AddWithValue("$prompt", (object?)prompt ?? DBNull.Value);
+        command.Parameters.AddWithValue("$location", (object?)location ?? DBNull.Value);
+        command.ExecuteNonQuery();
     }
 
     public void Queue(ImageRecord image, ICloudVisionAnalyzer analyzer, string locationFingerprint, string reason)
@@ -91,8 +142,9 @@ public sealed class CloudVisionRepository(PicerDatabase database)
     }
 
     public void Save(ImageRecord image, ICloudVisionAnalyzer analyzer, string locationFingerprint,
-        string? reason, CloudVisionResult result)
+        string? reason, CloudVisionResult result, string? requestId = null)
     {
+        Billing.Record(requestId ?? Guid.NewGuid().ToString("N"), analyzer, result.Usage);
         Upsert(image, analyzer, locationFingerprint, "completed", reason, result.Summary,
             JsonSerializer.Serialize(result), null);
         _textIndex.UpsertImage(image, [image.Path, image.Camera, image.Gps, image.TakenUtc?.ToString("O"), result.Summary,
@@ -106,9 +158,13 @@ public sealed class CloudVisionRepository(PicerDatabase database)
         Upsert(image, analyzer, locationFingerprint, "failed", reason, null, null, errorCode);
     }
 
+    public void MarkCanceled(ImageRecord image, ICloudVisionAnalyzer analyzer, string locationFingerprint, string? reason)
+        // Keep the legacy CHECK constraint intact; cancellation is a resumable queued row.
+        => Upsert(image, analyzer, locationFingerprint, "queued", reason, null, null, "user_canceled");
+
     public (string Status, string? Summary, string? ResultJson)? Get(long imageId, string provider)
     {
-        using var command = database.Command("SELECT status,summary,result_json FROM cloud_vision_analyses WHERE image_id=$image AND provider=$provider");
+        using var command = database.Command("SELECT CASE WHEN status='queued' AND error_code='user_canceled' THEN 'canceled' ELSE status END,summary,result_json FROM cloud_vision_analyses WHERE image_id=$image AND provider=$provider");
         command.Parameters.AddWithValue("$image", imageId);
         command.Parameters.AddWithValue("$provider", provider);
         using var reader = command.ExecuteReader();

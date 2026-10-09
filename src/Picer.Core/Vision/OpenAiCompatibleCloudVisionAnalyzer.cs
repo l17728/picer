@@ -1,10 +1,8 @@
+using Picer.Core.Imaging;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using System.Text.Encodings.Web;
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.Formats.Jpeg;
-using SixLabors.ImageSharp.Processing;
 
 namespace Picer.Core.Vision;
 
@@ -23,13 +21,13 @@ public sealed class OpenAiCompatibleCloudVisionAnalyzer : ICloudVisionAnalyzer, 
     private readonly HttpClient _client;
     private readonly bool _ownsClient;
 
-    public OpenAiCompatibleCloudVisionAnalyzer(CloudVisionApiOptions options, HttpClient? client = null)
+    public OpenAiCompatibleCloudVisionAnalyzer(CloudVisionApiOptions options, HttpClient? client = null, bool disposeClient = false)
     {
         if (string.IsNullOrWhiteSpace(options.ApiKey)) throw new ArgumentException("API key is required.", nameof(options));
         if (options.MaximumImageEdge is < 256 or > 4096) throw new ArgumentOutOfRangeException(nameof(options));
         _options = options;
         _client = client ?? new HttpClient { Timeout = TimeSpan.FromMinutes(2) };
-        _ownsClient = client is null;
+        _ownsClient = client is null || disposeClient;
     }
 
     public string Provider => _options.Provider;
@@ -70,14 +68,16 @@ public sealed class OpenAiCompatibleCloudVisionAnalyzer : ICloudVisionAnalyzer, 
         message.Content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
         using var response = await _client.SendAsync(message, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
-        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
-        using var envelope = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken).ConfigureAwait(false);
-        var content = envelope.RootElement.GetProperty("choices")[0].GetProperty("message").GetProperty("content").GetString();
+        var responseText = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+        using var envelope = TryParseJson(responseText);
+        var content = envelope is not null
+            ? envelope.RootElement.GetProperty("choices")[0].GetProperty("message").GetProperty("content").GetString()
+            : ExtractStreamContent(responseText);
         if (string.IsNullOrWhiteSpace(content)) throw new InvalidDataException("The vision API returned empty content.");
         var result = JsonSerializer.Deserialize<CloudVisionResult>(StripMarkdownFence(content), JsonOptions);
         if (result is null) throw new InvalidDataException("The vision API returned invalid JSON.");
         var inputTokens = 0L; var outputTokens = 0L;
-        if (envelope.RootElement.TryGetProperty("usage", out var usage))
+        if (envelope is not null && envelope.RootElement.TryGetProperty("usage", out var usage))
         {
             if (usage.TryGetProperty("prompt_tokens", out var input)) inputTokens = input.GetInt64();
             if (usage.TryGetProperty("completion_tokens", out var output)) outputTokens = output.GetInt64();
@@ -85,21 +85,43 @@ public sealed class OpenAiCompatibleCloudVisionAnalyzer : ICloudVisionAnalyzer, 
         return result with { Usage = DomesticCloudVisionPricing.Calculate(_options.Provider, _options.Model, inputTokens, outputTokens) };
     }
 
+    private static JsonDocument? TryParseJson(string text)
+    {
+        try { return JsonDocument.Parse(text); } catch (JsonException) { return null; }
+    }
+
+    private static string? ExtractStreamContent(string text)
+    {
+        var builder = new StringBuilder();
+        foreach (var line in text.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
+        {
+            var payload = line.StartsWith("data:", StringComparison.OrdinalIgnoreCase) ? line[5..].Trim() : line.Trim();
+            if (payload is "[DONE]" or "") continue;
+            try
+            {
+                using var chunk = JsonDocument.Parse(payload);
+                var choice = chunk.RootElement.GetProperty("choices")[0];
+                if (choice.TryGetProperty("delta", out var delta) && delta.TryGetProperty("content", out var value)) builder.Append(value.GetString());
+                else if (choice.TryGetProperty("message", out var message) && message.TryGetProperty("content", out var full)) builder.Append(full.GetString());
+            }
+            catch (JsonException) { }
+        }
+        return builder.Length == 0 ? null : builder.ToString();
+    }
+
     private async Task<string> CreateSanitizedImageDataUrlAsync(string path, CancellationToken cancellationToken)
     {
         await using var source = File.OpenRead(path);
-        using var image = await Image.LoadAsync(source, cancellationToken).ConfigureAwait(false);
+        using var image = await RasterImage.LoadAsync(source, cancellationToken).ConfigureAwait(false);
         if (Math.Max(image.Width, image.Height) > _options.MaximumImageEdge)
         {
             var scale = (double)_options.MaximumImageEdge / Math.Max(image.Width, image.Height);
-            image.Mutate(operation => operation.Resize(Math.Max(1, (int)(image.Width * scale)),
-                Math.Max(1, (int)(image.Height * scale))));
+            image.Resize(Math.Max(1, (int)(image.Width * scale)),
+                Math.Max(1, (int)(image.Height * scale)));
         }
-        image.Metadata.ExifProfile = null;
-        image.Metadata.IccProfile = null;
-        image.Metadata.XmpProfile = null;
+        image.StripMetadata();
         await using var output = new MemoryStream();
-        await image.SaveAsJpegAsync(output, new JpegEncoder { Quality = 82 }, cancellationToken).ConfigureAwait(false);
+        await image.SaveAsJpegAsync(output, 82, cancellationToken).ConfigureAwait(false);
         return "data:image/jpeg;base64," + Convert.ToBase64String(output.ToArray());
     }
 

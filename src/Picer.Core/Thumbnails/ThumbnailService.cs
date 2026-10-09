@@ -1,5 +1,4 @@
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.Processing;
+using Picer.Core.Imaging;
 
 namespace Picer.Core.Thumbnails;
 
@@ -21,9 +20,14 @@ public sealed class ThumbnailService
 
     public string GetCachePath(long imageId) => Path.Combine(_cacheDir, $"{imageId}.v{CacheVersion}.jpg");
 
-    public string? GetOrCreate(string sourcePath, long imageId)
+    public string GetCachePath(long imageId, string? sha256) =>
+        sha256 is { Length: 64 } && sha256.All(Uri.IsHexDigit)
+            ? Path.Combine(_cacheDir, $"sha256-{sha256.ToLowerInvariant()}.s{_maxSize}.v{CacheVersion}.jpg")
+            : GetCachePath(imageId);
+
+    public string? GetOrCreate(string sourcePath, long imageId, string? sha256 = null)
     {
-        var dest = GetCachePath(imageId);
+        var dest = GetCachePath(imageId, sha256);
         if (File.Exists(dest))
             return dest;
 
@@ -32,8 +36,8 @@ public sealed class ThumbnailService
             if (File.Exists(dest)) return dest;
             try
             {
-                using var image = Image.Load(sourcePath);
-                image.Mutate(ctx => ctx.Resize(new ResizeOptions { Mode = ResizeMode.Max, Size = new Size(_maxSize, _maxSize) }));
+                using var image = RasterImage.Load(sourcePath);
+                image.ResizeToFit(_maxSize, _maxSize);
                 SaveAtomic(image, dest);
                 return dest;
             }
@@ -41,9 +45,9 @@ public sealed class ThumbnailService
         }
     }
 
-    public string? GetOrCreate(Stream stream, long imageId)
+    public string? GetOrCreate(Stream stream, long imageId, string? sha256 = null)
     {
-        var dest = GetCachePath(imageId);
+        var dest = GetCachePath(imageId, sha256);
         if (File.Exists(dest))
             return dest;
 
@@ -52,8 +56,8 @@ public sealed class ThumbnailService
             if (File.Exists(dest)) return dest;
             try
             {
-                using var image = Image.Load(stream);
-                image.Mutate(ctx => ctx.Resize(new ResizeOptions { Mode = ResizeMode.Max, Size = new Size(_maxSize, _maxSize) }));
+                using var image = RasterImage.Load(stream);
+                image.ResizeToFit(_maxSize, _maxSize);
                 SaveAtomic(image, dest);
                 return dest;
             }
@@ -61,9 +65,9 @@ public sealed class ThumbnailService
         }
     }
 
-    public string? GetOrCreateFromImage(Image image, long imageId)
+    public string? GetOrCreateFromImage(RasterImage image, long imageId, string? sha256 = null)
     {
-        var dest = GetCachePath(imageId);
+        var dest = GetCachePath(imageId, sha256);
         if (File.Exists(dest))
             return dest;
 
@@ -72,7 +76,7 @@ public sealed class ThumbnailService
             if (File.Exists(dest)) return dest;
             try
             {
-                using var resized = image.Clone(ctx => ctx.Resize(new ResizeOptions { Mode = ResizeMode.Max, Size = new Size(_maxSize, _maxSize) }));
+                using var resized = image.Clone().ResizeToFit(_maxSize, _maxSize);
                 SaveAtomic(resized, dest);
                 return dest;
             }
@@ -85,7 +89,7 @@ public sealed class ThumbnailService
         foreach (var path in Directory.EnumerateFiles(_cacheDir, $"{imageId}.*")) File.Delete(path);
     }
 
-    private static void SaveAtomic(Image image, string destination)
+    private static void SaveAtomic(RasterImage image, string destination)
     {
         var temp = destination + "." + Guid.NewGuid().ToString("N") + ".tmp";
         try { image.SaveAsJpeg(temp); File.Move(temp, destination, true); }

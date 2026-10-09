@@ -1,11 +1,9 @@
+using Picer.Core.Imaging;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.ML.OnnxRuntime;
 using Microsoft.ML.OnnxRuntime.Tensors;
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.PixelFormats;
-using SixLabors.ImageSharp.Processing;
 
 namespace Picer.Core.Vision;
 
@@ -79,9 +77,16 @@ public sealed class FlorenceInferenceService : IDisposable
     private static long ArgMax(ReadOnlySpan<float> values) { var index = 0; for (var i = 1; i < values.Length; i++) if (values[i] > values[index]) index = i; return index; }
     private static float[] Preprocess(string path)
     {
-        using var image = Image.Load<Rgb24>(path); image.Mutate(x => x.Resize(new ResizeOptions { Size = new Size(768, 768), Mode = ResizeMode.Stretch, Sampler = KnownResamplers.Bicubic }));
+        using var image = RasterImage.Load(path); image.Resize(768, 768);
         var result = new float[3 * 768 * 768]; float[] mean = [.485f, .456f, .406f], std = [.229f, .224f, .225f];
-        image.ProcessPixelRows(rows => { for (var y = 0; y < 768; y++) { var row = rows.GetRowSpan(y); for (var x = 0; x < 768; x++) { var p = row[x]; var i = y * 768 + x; result[i] = (p.R / 255f - mean[0]) / std[0]; result[768 * 768 + i] = (p.G / 255f - mean[1]) / std[1]; result[2 * 768 * 768 + i] = (p.B / 255f - mean[2]) / std[2]; } } }); return result;
+        var rgb = image.CopyRgbPixels();
+        for (var i = 0; i < 768 * 768; i++)
+        {
+            result[i] = (rgb[i * 3] / 255f - mean[0]) / std[0];
+            result[768 * 768 + i] = (rgb[i * 3 + 1] / 255f - mean[1]) / std[1];
+            result[2 * 768 * 768 + i] = (rgb[i * 3 + 2] / 255f - mean[2]) / std[2];
+        }
+        return result;
     }
     private static SessionOptions CreateOptions(FlorenceExecutionProvider provider) { var options = new SessionOptions { GraphOptimizationLevel = GraphOptimizationLevel.ORT_ENABLE_ALL }; if (provider == FlorenceExecutionProvider.DirectML) { options.EnableMemoryPattern = false; options.ExecutionMode = ExecutionMode.ORT_SEQUENTIAL; options.AppendExecutionProvider_DML(0); } return options; }
     public void Dispose() { _decoder.Dispose(); _encoder.Dispose(); _embedding.Dispose(); _vision.Dispose(); }

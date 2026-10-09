@@ -1,5 +1,11 @@
 # 多模型人脸候选与真实 InsightFace Worker 实施记录
 
+<!-- historical-status-2026-10-09 -->
+> **历史资料，2026-10-09 状态对照**：正文保留该阶段设计、测试和部署证据；其中“当前”“待办”“已部署”及验收数字按当时语境理解，不代表最新程序状态。
+> 当前能力见[当前能力与验证状态](CURRENT_CAPABILITIES_2026-10-09.md)，后续结果见[最新代码修复与验证](RESIDUAL_CODE_FIXES_2026-10-09.md)。当前源码 schema 45；605 项单元用例由完整回归与补测分轮去重核验，WPF 73/73，不是一次全量 605/605，也不证明历史部署包包含新代码。
+> 验收边界：本文训练或人脸准确率数字仅对应当时模型、数据分区和设备，不能代替当前质量门禁；人脸质量等四项旧 P2 验收仍暂停，模型向量保持版本隔离。
+<!-- /historical-status-2026-10-09 -->
+
 ## 2026-09-17 部署收口
 
 ArcFace、AdaFace、ArcFace-Paddle（MobileFace-Paddle 128 维）和 FaceX-Zoo ResNet50-IR 已完成真实权重转换、哈希记录和 ONNX Runtime 验收。统一平台现由 Local Model Console `8090` 代理，Picer ModelServer 后端监听 `8091`；四个模型均已通过 `/picer/api/face-training/embeddings` 端到端请求。Worker 在未显式设置环境变量时使用 D 盘已校验模型路径，避免平台启动脚本与直连脚本产生不同的可用模型集合。

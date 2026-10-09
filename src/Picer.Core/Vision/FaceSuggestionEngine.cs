@@ -13,17 +13,21 @@ public sealed class FaceSuggestionEngine(VisionAnalysisRepository repository, Pe
         IProgress<(int Completed, int Total)>? progress = null, string? modelVersion = null)
     {
         if (cosineThreshold is < 0 or > 1) throw new ArgumentOutOfRangeException(nameof(cosineThreshold));
-        var embeddings = repository.GetEmbeddingsForMatching(modelVersion);
-        var selectedVersion = modelVersion ?? embeddings.Where(face => face.AssignmentState == "confirmed")
+        var initialEmbeddings = repository.GetEmbeddingsForMatching(modelVersion);
+        var selectedVersion = modelVersion ?? initialEmbeddings.Where(face => face.AssignmentState == "confirmed")
             .GroupBy(face => face.ModelVersion).OrderByDescending(group => group.Count())
             .Select(group => group.Key).FirstOrDefault();
+        // Once a space is selected, all positives and candidates must come
+        // from that exact vector space.  A null model argument selects one
+        // dominant space; it must never mean “compare every space together”.
+        var embeddings = selectedVersion is null ? [] : repository.GetEmbeddingsForMatching(selectedVersion);
         var appliedThreshold = cosineThreshold ?? (selectedVersion is null ? null : repository.GetFaceMatchThreshold(selectedVersion)) ?? 0.55;
         var adapter = selectedVersion is null ? null : repository.GetActiveFaceAdapter(selectedVersion);
         var confirmed = embeddings
             .Where(face => face.AssignmentState == "confirmed" && face.PersonId is not null)
             .Select(face => (PersonId: face.PersonId!.Value, Embedding: ApplyAdapter(face.Embedding, adapter)))
-            .Concat(modelVersion is null
-                ? people.GetConfirmedVideoFaceEmbeddings().Select(face =>
+            .Concat(selectedVersion is not null
+                ? people.GetConfirmedVideoFaceEmbeddings(selectedVersion).Select(face =>
                     (PersonId: face.PersonId, Embedding: ApplyAdapter(face.Embedding, adapter)))
                 : []);
         var prototypes = confirmed
@@ -37,12 +41,22 @@ public sealed class FaceSuggestionEngine(VisionAnalysisRepository repository, Pe
             if (prototypes.TryGetValue(policy.PersonId, out var existing))
                 prototypes[policy.PersonId] = existing.Concat([policy.Prototype]).ToArray();
         }
-        var negativePrototypes = repository.GetRejectedFaceEmbeddings()
+        var trainedPolicies = selectedVersion is null ? [] : repository.GetTrainedFacePrototypes(selectedVersion);
+        foreach (var policy in trainedPolicies)
+        {
+            var prototype = ApplyAdapter(policy.Centroid, adapter);
+            if (prototypes.TryGetValue(policy.PersonId, out var existing))
+                prototypes[policy.PersonId] = existing.Concat([prototype]).ToArray();
+            else prototypes[policy.PersonId] = [prototype];
+        }
+        var negativePrototypes = repository.GetRejectedFaceEmbeddings(selectedVersion)
             .GroupBy(face => face.PersonId)
             .ToDictionary(group => group.Key, group => BuildPrototypes(group.Select(face => ApplyAdapter(face.Embedding, adapter)), 12));
         var adaptiveThresholds = BuildAdaptiveThresholds(appliedThreshold, prototypes, negativePrototypes);
         foreach (var policy in learnedPolicies.Values)
             adaptiveThresholds[policy.PersonId] = Math.Max(appliedThreshold, policy.MatchThreshold);
+        foreach (var policy in trainedPolicies)
+            adaptiveThresholds[policy.PersonId] = Math.Max(adaptiveThresholds.GetValueOrDefault(policy.PersonId, appliedThreshold), policy.Threshold);
         var candidates = embeddings.Where(face => face.AssignmentState is null or "suggested").ToArray();
         var suggested = 0;
         var below = 0;
@@ -59,6 +73,12 @@ public sealed class FaceSuggestionEngine(VisionAnalysisRepository repository, Pe
                 .Select(pair => (PersonId: pair.Key, Score: pair.Value.Max(prototype => Cosine(candidateEmbedding, prototype))))
                 .OrderByDescending(value => value.Score)
                 .Take(2).ToArray();
+            if (matches.Length == 0)
+            {
+                below++;
+                if (face.AssignmentState == "suggested") staleSuggestionIds.Add(face.FaceId);
+                continue;
+            }
             var match = matches.FirstOrDefault();
             var secondBestScore = matches.Length > 1 ? matches[1].Score : -1;
             var requiredThreshold = QualityAdjustedThreshold(appliedThreshold, face);
@@ -89,6 +109,66 @@ public sealed class FaceSuggestionEngine(VisionAnalysisRepository repository, Pe
         return new FaceSuggestionResult(candidates.Length, suggested, below, appliedThreshold,
             lowQualityDeferred, ambiguousDeferred, negativeConflictDeferred,
             prototypes.Count(pair => pair.Value.Count > 1), negativePrototypes.Sum(pair => pair.Value.Count));
+    }
+
+    /// <summary>Builds an immutable, model-scoped matcher for video detections.</summary>
+    public Matcher CreateMatcher(string modelVersion)
+    {
+        if (string.IsNullOrWhiteSpace(modelVersion)) throw new ArgumentException("Model version is required.", nameof(modelVersion));
+        var threshold = repository.GetFaceMatchThreshold(modelVersion) ?? 0.55;
+        var adapter = repository.GetActiveFaceAdapter(modelVersion);
+        var positives = repository.GetEmbeddingsForMatching(modelVersion)
+            .Where(face => face.AssignmentState == "confirmed" && face.PersonId is not null)
+            .Select(face => (face.PersonId!.Value, Embedding: ApplyAdapter(face.Embedding, adapter)))
+            .Concat(people.GetConfirmedVideoFaceEmbeddings(modelVersion)
+                .Select(face => (face.PersonId, Embedding: ApplyAdapter(face.Embedding, adapter))));
+        var prototypes = positives.GroupBy(face => face.Item1)
+            .ToDictionary(group => group.Key, group => BuildPrototypes(group.Select(face => face.Embedding)));
+        var personThresholds = new Dictionary<long, double>();
+        foreach (var policy in repository.GetLearnedFacePolicies(modelVersion).Values)
+        {
+            if (prototypes.TryGetValue(policy.PersonId, out var existing))
+                prototypes[policy.PersonId] = existing.Concat([ApplyAdapter(policy.Prototype, adapter)]).ToArray();
+            personThresholds[policy.PersonId] = Math.Max(threshold, policy.MatchThreshold);
+        }
+        foreach (var policy in repository.GetTrainedFacePrototypes(modelVersion))
+        {
+            if (prototypes.TryGetValue(policy.PersonId, out var existing))
+                prototypes[policy.PersonId] = existing.Concat([ApplyAdapter(policy.Centroid, adapter)]).ToArray();
+            else prototypes[policy.PersonId] = [ApplyAdapter(policy.Centroid, adapter)];
+            personThresholds[policy.PersonId] = Math.Max(personThresholds.GetValueOrDefault(policy.PersonId, threshold), policy.Threshold);
+        }
+        var negatives = repository.GetRejectedFaceEmbeddings(modelVersion)
+            .GroupBy(face => face.PersonId)
+            .ToDictionary(group => group.Key, group => BuildPrototypes(group.Select(face => ApplyAdapter(face.Embedding, adapter)), 12));
+        return new Matcher(modelVersion, threshold, adapter, prototypes, negatives, personThresholds);
+    }
+
+    public sealed class Matcher(string modelVersion, double threshold, float[]? adapter,
+        IReadOnlyDictionary<long, IReadOnlyList<float[]>> prototypes,
+        IReadOnlyDictionary<long, IReadOnlyList<float[]>> negatives,
+        IReadOnlyDictionary<long, double> personThresholds)
+    {
+        public string ModelVersion { get; } = modelVersion;
+
+        public (long? PersonId, double? Score) Match(IReadOnlyList<float>? embedding,
+            float detectionConfidence, double relativeArea)
+        {
+            if (embedding is null || prototypes.Count == 0) return (null, null);
+            var candidate = ApplyAdapter(embedding.ToArray(), adapter);
+            var matches = prototypes.Select(pair => (PersonId: pair.Key,
+                    Score: pair.Value.Max(prototype => Cosine(candidate, prototype))))
+                .OrderByDescending(match => match.Score).Take(2).ToArray();
+            var best = matches[0];
+            var second = matches.Length > 1 ? matches[1].Score : -1;
+            var required = QualityAdjustedThreshold(threshold, detectionConfidence, relativeArea);
+            if (best.Score < required || best.Score - second < 0.025) return (null, best.Score);
+            var perPerson = personThresholds.GetValueOrDefault(best.PersonId, threshold);
+            var negativeSimilarity = negatives.TryGetValue(best.PersonId, out var excluded)
+                ? excluded.Max(prototype => Cosine(candidate, prototype)) : -1;
+            if (best.Score < perPerson || best.Score - negativeSimilarity < 0.03) return (null, best.Score);
+            return (best.PersonId, best.Score);
+        }
     }
 
     private static float[] Mean(IEnumerable<float[]> vectors)
@@ -126,12 +206,15 @@ public sealed class FaceSuggestionEngine(VisionAnalysisRepository repository, Pe
         return prototypes;
     }
 
-    private static double QualityAdjustedThreshold(double baseline, FaceEmbeddingRecord face)
+    private static double QualityAdjustedThreshold(double baseline, FaceEmbeddingRecord face) =>
+        QualityAdjustedThreshold(baseline, face.DetectionConfidence, face.RelativeArea);
+
+    private static double QualityAdjustedThreshold(double baseline, float detectionConfidence, double relativeArea)
     {
         var adjustment = 0d;
-        if (face.DetectionConfidence < 0.85f) adjustment += 0.04;
-        if (face.RelativeArea < 0.01f) adjustment += 0.05;
-        else if (face.RelativeArea < 0.025f) adjustment += 0.03;
+        if (detectionConfidence < 0.85f) adjustment += 0.04;
+        if (relativeArea < 0.01f) adjustment += 0.05;
+        else if (relativeArea < 0.025f) adjustment += 0.03;
         return Math.Min(0.98, baseline + adjustment);
     }
 
@@ -154,8 +237,8 @@ public sealed class FaceSuggestionEngine(VisionAnalysisRepository repository, Pe
 
     private static double Cosine(float[] left, float[] right)
     {
-        var length = Math.Min(left.Length, right.Length);
-        if (length == 0) return -1;
+        if (left.Length == 0 || left.Length != right.Length) return -1;
+        var length = left.Length;
         double dot = 0, leftNorm = 0, rightNorm = 0;
         for (var index = 0; index < length; index++)
         {

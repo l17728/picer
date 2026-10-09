@@ -131,12 +131,19 @@
                             </DockPanel>
                         </Border>
                     </Popup>
+                    <StackPanel x:Name="MissingBadge" Visibility="Collapsed" VerticalAlignment="Center" HorizontalAlignment="Center" Background="#E6333333">
+                        <TextBlock Text="已删除或移动" Foreground="White" Margin="8,4" HorizontalAlignment="Center"/>
+                        <Button x:Name="PurgeMissingButton" Content="彻底删除此位置记录" Click="PurgeMissing_Click" Margin="4" Padding="5,3"/>
+                    </StackPanel>
                     <Border x:Name="TimelineAnchor" Visibility="Collapsed" Background="#E7F0FA" BorderBrush="#BCD0E5"
                             BorderThickness="0,0,0,1" Padding="12,8" Margin="3,7,3,3">
                         <TextBlock Text="{Binding Label}" FontSize="15" FontWeight="SemiBold" Foreground="#294A69"/>
                     </Border>
                     </Grid>
                     <DataTemplate.Triggers>
+                        <DataTrigger Binding="{Binding IsMissing}" Value="True">
+                            <Setter TargetName="MissingBadge" Property="Visibility" Value="Visible"/>
+                        </DataTrigger>
                         <DataTrigger Binding="{Binding IsTimelineAnchor}" Value="True">
                             <Setter TargetName="PhotoCard" Property="Visibility" Value="Collapsed"/>
                             <Setter TargetName="TimelineAnchor" Property="Visibility" Value="Visible"/>
@@ -148,6 +155,7 @@
                             <Setter TargetName="BurstToggle" Property="Visibility" Value="Visible"/>
                         </DataTrigger>
                         <DataTrigger Binding="{Binding IsVideo}" Value="True">
+                            <Setter TargetName="PurgeMissingButton" Property="Visibility" Value="Collapsed"/>
                             <Setter TargetName="VideoPlayOverlay" Property="Visibility" Value="Visible"/>
                             <Setter TargetName="MediaBadge" Property="Visibility" Value="Visible"/>
                             <Setter TargetName="PhotoCard" Property="BorderBrush" Value="#3D78A8"/>
@@ -159,6 +167,7 @@
             <ListBox.ContextMenu>
                 <ContextMenu Opened="ContextMenu_Opened">
                     <MenuItem x:Name="DetailsMenuItem" Header="查看图片信息" Click="Details_Click"/>
+                    <MenuItem Header="查看同一照片的所有位置…" Click="ContentReferences_Click"/>
                     <MenuItem x:Name="EditLocationMenuItem" Header="编辑地点…" Click="EditLocation_Click"/>
                     <MenuItem x:Name="EditTagsMenuItem" Header="编辑标签…" Click="EditTags_Click"/>
                     <Separator/>

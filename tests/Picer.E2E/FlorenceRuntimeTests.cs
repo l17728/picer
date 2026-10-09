@@ -1,9 +1,8 @@
+using Picer.Core.Imaging;
 using Picer.Core.Vision;
 using System;
 using System.IO;
 using System.Threading.Tasks;
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.PixelFormats;
 
 namespace Picer.E2E;
 
@@ -40,7 +39,7 @@ public sealed class FlorenceRuntimeTests
         var path = Path.Combine(Path.GetTempPath(), $"florence-{Guid.NewGuid():N}.png");
         try
         {
-            using (var image = new Image<Rgb24>(96, 96, new Rgb24(30, 140, 220))) image.SaveAsPng(path);
+            using (var image = new RasterImage(96, 96, new RgbPixel(30, 140, 220))) image.SaveAsPng(path);
             using var service = new FlorenceInferenceService(directory, FlorenceExecutionProvider.Cpu);
             var result = await service.RunAsync(path, FlorenceTask.Caption, 8);
             Assert.True(result.GeneratedTokens >= 3);

@@ -67,7 +67,12 @@ public static class IndexSearchEngine
             // gate it on a small built-in place dictionary: arbitrary
             // administrative names (including newly resolved locations) must
             // be searchable as soon as their metadata is present.
-            AddFilterConditions(filters, conditions, parameters, includeAuxiliaryText: true);
+            // Auxiliary text is sparse in most indexes.  Avoid adding six
+            // correlated EXISTS branches when none of those tables contains
+            // data; on a large library those branches otherwise force a full
+            // scan for both the page and count queries.
+            AddFilterConditions(filters, conditions, parameters,
+                includeAuxiliaryText: HasAuxiliaryText(connection));
 
         var orderCol = SortColumn(filters.SortBy);
         var direction = filters.SortDir == SortDirection.Ascending ? "ASC" : "DESC";
@@ -115,7 +120,8 @@ public static class IndexSearchEngine
 
         // Text search on path filename, camera, gps
         if (!string.IsNullOrWhiteSpace(filters.Query))
-            AddTextCondition(filters.Query, conditions, parameters, includeAuxiliary: true);
+            AddTextCondition(filters.Query, conditions, parameters,
+                includeAuxiliary: HasAuxiliaryText(db));
         AddGeoConditions(filters, conditions, parameters);
 
         // Source filter
@@ -224,7 +230,8 @@ public static class IndexSearchEngine
         var parameters = new List<(string Name, object Value)>();
 
         if (!string.IsNullOrWhiteSpace(filters.Query))
-            AddTextCondition(filters.Query, conditions, parameters, includeAuxiliary: true);
+            AddTextCondition(filters.Query, conditions, parameters,
+                includeAuxiliary: HasAuxiliaryText(connection));
         AddGeoConditions(filters, conditions, parameters);
         if (filters.SourceId.HasValue && filters.SourceId.Value > 0)
         {
@@ -371,6 +378,12 @@ public static class IndexSearchEngine
                 OR EXISTS(SELECT 1 FROM media_text_fts)
             """;
         return Convert.ToInt32(command.ExecuteScalar()) != 0;
+    }
+
+    private static bool HasAuxiliaryText(PicerDatabase db)
+    {
+        using var connection = db.OpenReadConnection();
+        return HasAuxiliaryText(connection);
     }
 
     private static string SortColumn(SortField field) => field switch

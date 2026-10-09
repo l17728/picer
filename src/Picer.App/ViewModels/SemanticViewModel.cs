@@ -11,6 +11,7 @@ namespace Picer.App.ViewModels;
 
 public partial class SemanticViewModel : ObservableObject
 {
+    private readonly ClientServices _services;
     [ObservableProperty]
     private ObservableCollection<TagItemViewModel> _tags = new();
 
@@ -50,8 +51,9 @@ public partial class SemanticViewModel : ObservableObject
     private CancellationTokenSource? _selectionCancellation;
     private int _initialized;
 
-    public SemanticViewModel(PicerDatabase db, Action? changed = null)
+    public SemanticViewModel(PicerDatabase db, Action? changed = null, ClientServices? services = null)
     {
+        _services = services ?? new();
         _db = db;
         _changed = changed;
     }
@@ -94,7 +96,7 @@ public partial class SemanticViewModel : ObservableObject
             var suggestions = await UiWork.RunDatabaseAsync(() =>
             {
                 var local = SemanticEngine.ExtractAISuggestions(_db, imageId).ToList();
-                foreach (var name in AppServices.CloudVisionRepository.GetSuggestedTags(imageId)
+                foreach (var name in _services.CloudVisionRepository.GetSuggestedTags(imageId)
                              .Where(name => local.All(existing => !string.Equals(existing.TagName, name, StringComparison.OrdinalIgnoreCase))))
                     local.Add(new SuggestedTag(name, Confidence.Medium));
                 return local;

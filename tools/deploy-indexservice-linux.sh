@@ -1,0 +1,245 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+standalone=0
+if (( $# == 0 )); then
+    script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+    shopt -s nullglob
+    packages=("$script_dir"/picer-index-*.zip)
+    (( ${#packages[@]} == 1 )) || { echo 'standalone mode requires exactly one picer-index-*.zip beside the script' >&2; exit 2; }
+    archive=${packages[0]}
+    manifest_tmp=$(mktemp)
+    unzip -p "$archive" deployment.json > "$manifest_tmp"
+    expected_hash=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["binarySha256"])' "$manifest_tmp")
+    deployment_id=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["deploymentId"])' "$manifest_tmp")
+    rm -f "$manifest_tmp"
+    standalone=1
+else
+    archive=${1:?usage: deploy-indexservice-linux.sh [ARCHIVE SHA256 DEPLOYMENT_ID]}
+    expected_hash=${2:?missing expected executable sha256}
+    deployment_id=${3:?missing deployment id}
+fi
+[[ $expected_hash =~ ^[a-f0-9]{64}$ ]] || { echo 'invalid expected SHA-256' >&2; exit 2; }
+[[ $deployment_id =~ ^[0-9]{8}T[0-9]{9}Z$ ]] || { echo 'invalid deployment id' >&2; exit 2; }
+if (( standalone == 0 )); then
+    [[ $archive == "/tmp/picer-index-$deployment_id.zip" ]] || { echo 'unexpected package path' >&2; exit 2; }
+fi
+[[ $EUID -eq 0 ]] || { echo 'run this installer as root' >&2; exit 2; }
+
+install_dir=/opt/picer-index
+service=picer-index.service
+timer=picer-index-health.timer
+health_unit=picer-index-health.service
+stage="/tmp/picer-index-stage-$deployment_id"
+backup="/opt/picer-index.backup-$deployment_id"
+new_binary="$install_dir/Picer.IndexService.new-$deployment_id"
+new_manifest="$install_dir/deployment.json.new-$deployment_id"
+previous_timer_state=inactive
+changed=0
+success=0
+stopped=0
+stage_created=0
+backup_ready=0
+rollback_ok=1
+data_root=${PICER_DEPLOY_DATA_ROOT:-/var/lib/picer-index}
+[[ "$data_root" == /var/lib/picer-index ]] || { echo 'unexpected database root' >&2; exit 2; }
+read -r -a extra_writers <<< "${PICER_DEPLOY_WRITER_UNITS:-}"
+for unit in "${extra_writers[@]}"; do
+    [[ $unit =~ ^[a-zA-Z0-9_.@-]+\.service$ ]] || { echo 'invalid additional writer service name' >&2; exit 2; }
+done
+active_writers=()
+command -v flock >/dev/null
+exec 9>/run/lock/picer-index-deploy.lock
+flock -n 9 || { echo 'another deployment is already running' >&2; exit 2; }
+
+assert_database_closed() {
+    local file result
+    for file in "$data_root/picer.db" "$data_root/picer.db-wal" "$data_root/picer.db-shm" "$data_root/picer.db.access"; do
+        [[ -e "$file" ]] || continue
+        result=0
+        fuser "$file" >/dev/null 2>&1 || result=$?
+        (( result == 1 )) || { echo 'database still has an open handle, or holder inspection failed; refusing file copy' >&2; return 1; }
+    done
+}
+
+# SQLite uses POSIX byte locks. Lock all existing DB/WAL/SHM files while
+# copying so a late independent writer cannot change the closed snapshot.
+database_copy() {
+    python3 - "$1" "$data_root" "$backup/database" <<'PYDB'
+import fcntl, os, pathlib, shutil, sys
+mode, root, backup = sys.argv[1], pathlib.Path(sys.argv[2]), pathlib.Path(sys.argv[3])
+handles={}
+try:
+    for suffix in ('', '-wal', '-shm'):
+        path=root/('picer.db'+suffix)
+        if path.exists():
+            handle=open(path,'r+b'); handles[suffix]=handle
+            fcntl.lockf(handle,fcntl.LOCK_EX|fcntl.LOCK_NB)
+    for suffix in ('', '-wal', '-shm'):
+        source=(root if mode=='backup' else backup)/('picer.db'+suffix)
+        target=(backup if mode=='backup' else root)/('picer.db'+suffix)
+        if source.exists():
+            temporary=target.with_name(target.name+'.deploy-tmp')
+            if mode=='backup':
+                # Closing another descriptor for the same inode would release
+                # this process's POSIX locks. Read through the locked handle.
+                handle=handles[suffix]; handle.seek(0)
+                with open(temporary,'wb') as output: shutil.copyfileobj(handle,output)
+                shutil.copystat(source,temporary)
+            else: shutil.copy2(source,temporary)
+            st=source.stat(); os.chown(temporary,st.st_uid,st.st_gid)
+            with open(temporary,'r+b') as output: os.fsync(output.fileno())
+            os.replace(temporary,target)
+        elif mode=='restore' and target.exists(): target.unlink()
+    descriptor=os.open(str(backup if mode=='backup' else root),os.O_RDONLY)
+    try: os.fsync(descriptor)
+    finally: os.close(descriptor)
+finally:
+    for handle in reversed(list(handles.values())): handle.close()
+PYDB
+}
+
+
+cleanup() {
+    status=$?
+    trap - EXIT
+    if (( changed == 1 && success == 0 )); then
+        echo 'Upgrade failed; restoring the closed database and previous executable.' >&2
+        systemctl stop "$health_unit" >/dev/null 2>&1 || true
+        systemctl stop "$service" || rollback_ok=0
+        for unit in "${extra_writers[@]}"; do systemctl stop "$unit" || rollback_ok=0; done
+        assert_database_closed || rollback_ok=0
+        if (( backup_ready == 1 && rollback_ok == 1 )); then
+            (cd "$backup/database" && sha256sum --check SHA256SUMS >/dev/null) || rollback_ok=0
+            if (( rollback_ok == 1 )); then database_copy restore || rollback_ok=0; fi
+            if [[ -f "$data_root/picer.db.migration.pending.json" ]]; then
+                mv "$data_root/picer.db.migration.pending.json" "$backup/failed-migration.pending.json" || rollback_ok=0
+            fi
+            if (( rollback_ok == 1 )); then
+                install -m 0755 "$backup/Picer.IndexService" "$install_dir/Picer.IndexService.rollback-$deployment_id" &&
+                    mv -f "$install_dir/Picer.IndexService.rollback-$deployment_id" "$install_dir/Picer.IndexService" || rollback_ok=0
+                if [[ -f "$backup/deployment.json" ]]; then
+                    cp -p "$backup/deployment.json" "$install_dir/deployment.json" || rollback_ok=0
+                else rm -f "$install_dir/deployment.json"; fi
+            fi
+        else rollback_ok=0; fi
+    fi
+    if (( stopped == 1 && rollback_ok == 1 )); then
+        systemctl start "$service" || { rollback_ok=0; status=6; }
+        if (( rollback_ok == 1 )); then
+            for unit in "${active_writers[@]}"; do systemctl start "$unit" || { rollback_ok=0; status=6; }; done
+        fi
+    fi
+    if (( rollback_ok == 1 )); then
+        if [[ $previous_timer_state == active ]]; then systemctl start "$timer" || status=6; fi
+    else
+        echo 'Automatic recovery incomplete; services/timer remain stopped. Preserve the deployment backup for manual recovery.' >&2
+        status=6
+    fi
+    rm -f "$new_binary" "$new_manifest"
+    if (( stage_created == 1 )); then rm -rf "$stage"; fi
+    if (( success == 1 && standalone == 0 )); then rm -f "$archive" "/tmp/picer-index-$deployment_id.sh"; fi
+    exit "$status"
+}
+trap cleanup EXIT
+
+[[ -f "$archive" ]] || { echo "package not found: $archive" >&2; exit 2; }
+command -v unzip >/dev/null
+command -v sha256sum >/dev/null
+command -v curl >/dev/null
+command -v python3 >/dev/null
+command -v fuser >/dev/null
+[[ ! -e "$stage" && ! -e "$backup" ]] || { echo 'deployment ID already used; create a fresh package' >&2; exit 2; }
+[[ ! -e "$data_root/picer.db.migration.pending.json" ]] || { echo 'recover the interrupted previous migration before deploying' >&2; exit 2; }
+systemctl cat "$service" >/dev/null
+mkdir -p "$install_dir"
+if systemctl is-active --quiet "$timer"; then previous_timer_state=active; fi
+
+mkdir -p "$stage"
+stage_created=1
+python3 - "$archive" <<'PYZIP'
+import stat,sys,zipfile
+with zipfile.ZipFile(sys.argv[1]) as archive:
+    expected={'Picer.IndexService','deployment.json','licenses/Magick.NET-Notice.txt'}
+    entries=archive.infolist()
+    if len(entries)!=len(expected) or {item.filename for item in entries}!=expected or any(stat.S_ISLNK(item.external_attr>>16) for item in entries):
+        raise SystemExit('unexpected archive entries')
+PYZIP
+unzip -q "$archive" -d "$stage"
+binary="$stage/Picer.IndexService"
+manifest="$stage/deployment.json"
+[[ -f "$binary" && -f "$manifest" ]] || { echo 'package missing executable or deployment manifest' >&2; exit 2; }
+actual_hash=$(sha256sum "$binary" | cut -d ' ' -f 1)
+[[ "$actual_hash" == "$expected_hash" ]] || { echo 'uploaded executable SHA-256 mismatch' >&2; exit 3; }
+manifest_hash=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["binarySha256"])' "$manifest")
+manifest_id=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["deploymentId"])' "$manifest")
+[[ "$manifest_hash" == "$expected_hash" && "$manifest_id" == "$deployment_id" ]] || { echo 'deployment manifest does not match uploaded package' >&2; exit 3; }
+
+if [[ -e "$backup" ]]; then
+    [[ -f "$backup/Picer.IndexService" ]] || { echo 'existing backup is incomplete; refusing to overwrite it' >&2; exit 2; }
+else
+    mkdir -m 0750 "$backup"
+    if [[ -f "$install_dir/Picer.IndexService" ]]; then cp -p "$install_dir/Picer.IndexService" "$backup/Picer.IndexService"; fi
+    if [[ -f "$install_dir/deployment.json" ]]; then cp -p "$install_dir/deployment.json" "$backup/deployment.json"; fi
+fi
+echo "Backup created: $backup"
+
+# Prevent the periodic health timer from racing the controlled stop/replacement.
+stopped=1
+systemctl stop "$timer"
+systemctl stop "$health_unit" || true
+for unit in "${extra_writers[@]}"; do
+    if systemctl is-active --quiet "$unit"; then active_writers+=("$unit"); fi
+    systemctl stop "$unit"
+done
+systemctl stop "$service"
+stopped=1
+for _ in {1..20}; do
+    if ! systemctl is-active --quiet "$service"; then break; fi
+    sleep 0.5
+done
+if systemctl is-active --quiet "$service"; then echo 'service did not stop; refusing to replace executable' >&2; exit 4; fi
+
+# Schema migrations require a closed-database whole-file backup, including WAL/SHM.
+assert_database_closed
+db_backup="$backup/database"
+mkdir -m 0700 "$db_backup"
+database_copy backup
+[[ -f "$db_backup/picer.db" ]] || { echo 'database backup missing' >&2; exit 4; }
+(cd "$db_backup" && sha256sum picer.db* > SHA256SUMS)
+backup_ready=1
+[[ -f "$backup/Picer.IndexService" ]] || { echo 'previous executable required for rollback' >&2; exit 4; }
+[[ -f "$stage/licenses/Magick.NET-Notice.txt" ]] || { echo 'Magick license notice missing' >&2; exit 4; }
+mkdir -p "$install_dir/licenses"
+install -m 0644 "$stage/licenses/Magick.NET-Notice.txt" "$install_dir/licenses/Magick.NET-Notice.txt"
+
+install -m 0755 "$binary" "$new_binary"
+install -m 0644 "$manifest" "$new_manifest"
+changed=1
+mv -f "$new_binary" "$install_dir/Picer.IndexService"
+mv -f "$new_manifest" "$install_dir/deployment.json"
+systemctl start "$service"
+
+verified=0
+for attempt in {1..300}; do
+    if (( attempt % 15 == 0 )); then echo "Waiting for schema migration and service health ($attempt/300)..."; fi
+    if systemctl is-active --quiet "$service"; then
+        version=$(curl --insecure --silent --show-error --max-time 3 https://127.0.0.1:8445/version 2>/dev/null || true)
+        health=$(curl --insecure --silent --show-error --max-time 3 https://127.0.0.1:8445/health 2>/dev/null || true)
+        if [[ "$version" == *"$expected_hash"* && "$version" == *"$deployment_id"* && "$health" == *'"status":"ok"'* ]]; then
+            verified=1
+            break
+        fi
+    fi
+    sleep 2
+done
+
+if (( verified != 1 )); then
+    echo 'new service did not report the expected deployment identity and healthy status' >&2
+    echo 'Inspect the service journal locally; deployment output intentionally omits application logs.' >&2
+    exit 5
+fi
+
+success=1
+echo "Upgrade successful: deploymentId=$deployment_id sha256=$expected_hash"
+echo "Version endpoint: https://127.0.0.1:8445/version"

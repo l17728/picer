@@ -1,6 +1,5 @@
+using Picer.Core.Imaging;
 using Picer.Core.SemanticSearch;
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.PixelFormats;
 
 namespace Picer.Tests;
 
@@ -29,7 +28,7 @@ public sealed class ClipSemanticTests
         var path = Path.Combine(Path.GetTempPath(), $"picer-clip-{Guid.NewGuid():N}.png");
         try
         {
-            using (var image = new Image<Rgb24>(32, 32, new Rgb24(40, 120, 220))) image.SaveAsPng(path);
+            using (var image = new RasterImage(32, 32, new RgbPixel(40, 120, 220))) image.SaveAsPng(path);
             using var encoder = new ChineseClipEncoder(model, vocabulary);
             var vector = encoder.EncodeImage(path);
             Assert.Equal(512, vector.Length);

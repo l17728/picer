@@ -1,5 +1,4 @@
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.Processing;
+using Picer.Core.Imaging;
 
 namespace Picer.Core.Vision;
 
@@ -10,13 +9,13 @@ public static class FaceThumbnailCropper
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
-            using var image = Image.Load(source);
+            using var image = RasterImage.Load(source);
             var paddingX = box.Width * .25f; var paddingY = box.Height * .25f;
             var left = Math.Clamp(box.X - paddingX, 0, 1); var top = Math.Clamp(box.Y - paddingY, 0, 1);
             var right = Math.Clamp(box.X + box.Width + paddingX, 0, 1); var bottom = Math.Clamp(box.Y + box.Height + paddingY, 0, 1);
-            var rectangle = new Rectangle(Math.Clamp((int)(left * image.Width), 0, image.Width - 1), Math.Clamp((int)(top * image.Height), 0, image.Height - 1), Math.Max(1, (int)((right - left) * image.Width)), Math.Max(1, (int)((bottom - top) * image.Height)));
+            var rectangle = new System.Drawing.Rectangle(Math.Clamp((int)(left * image.Width), 0, image.Width - 1), Math.Clamp((int)(top * image.Height), 0, image.Height - 1), Math.Max(1, (int)((right - left) * image.Width)), Math.Max(1, (int)((bottom - top) * image.Height)));
             rectangle.Width = Math.Min(rectangle.Width, image.Width - rectangle.X); rectangle.Height = Math.Min(rectangle.Height, image.Height - rectangle.Y);
-            image.Mutate(context => context.Crop(rectangle).Resize(new ResizeOptions { Mode = ResizeMode.Crop, Size = new Size(160, 160) }));
+            image.Crop(rectangle.X, rectangle.Y, rectangle.Width, rectangle.Height).ResizeToFill(160, 160);
             var output = new MemoryStream(); image.SaveAsJpeg(output); output.Position = 0; return output;
         }
         catch (OperationCanceledException) { throw; }

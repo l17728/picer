@@ -4,6 +4,7 @@ using Picer.Core.Models;
 using Picer.Core.People;
 using Picer.Core.Video;
 using Picer.Core.Vision;
+using Picer.Core.Gateway;
 using System.Net;
 
 namespace Picer.Tests;
@@ -50,9 +51,145 @@ public sealed class VideoIndexTests : IDisposable
         Assert.Equal(3L, (long)tables.ExecuteScalar()!);
     }
 
+    [Fact]
+    public void FaceReviewSummary_ReportsIndependentTranscriptAndSummaryFlags()
+    {
+        var source = _database.AddSource(_root);
+        var path = Path.Combine(_root, "analysis-flags.mp4");
+        File.WriteAllBytes(path, [1, 2, 3]);
+        var repository = new VideoRepository(_database);
+        var video = repository.Upsert(source.Id, path);
+        repository.SavePersonAnalysisStatus(video.Id, "completed");
+        repository.SaveTranscript(video.Id, "test-asr", "{\"text\":\"hello\"}");
+
+        var transcriptOnly = repository.GetFaceReviewSummaries()[video.Id];
+        Assert.Equal("completed", transcriptOnly.AnalysisStatus);
+        Assert.True(transcriptOnly.HasTranscript);
+        Assert.False(transcriptOnly.HasSummary);
+
+        using var command = _database.Command("""
+            INSERT INTO video_summaries(video_id,provider,model_version,prompt_version,source_file_size,
+                source_modified_utc,summary,result_json,created_utc)
+            VALUES($video,'test','test','test',0,'','summary','{}',$now)
+            """);
+        command.Parameters.AddWithValue("$video", video.Id);
+        command.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("o"));
+        command.ExecuteNonQuery();
+
+        var completed = repository.GetFaceReviewSummaries()[video.Id];
+        Assert.True(completed.HasTranscript);
+        Assert.True(completed.HasSummary);
+    }
+
+    [Fact]
+    public void RemoteVideoCatalogBatchRefresh_PreservesKeyframesTranscriptPeopleAndSummary()
+    {
+        var source = _database.AddSource(_root);
+        var path = Path.Combine(_root, "mirrored.mp4");
+        var framePath = Path.Combine(_root, "frame.jpg");
+        File.WriteAllBytes(path, [1, 2, 3]);
+        File.WriteAllBytes(framePath, [4, 5, 6]);
+        var repository = new VideoRepository(_database);
+        var original = repository.Upsert(source.Id, path);
+        repository.SaveKeyframes(original.Id, [new VideoKeyframe(1.25, framePath)]);
+        repository.SavePersonAnalysisStatus(original.Id, "completed");
+        repository.SaveTranscript(original.Id, "asr-v1", "{\"text\":\"spoken words\"}");
+        using (var summary = _database.Command("""
+                   INSERT INTO video_summaries(video_id,provider,model_version,prompt_version,source_file_size,
+                       source_modified_utc,summary,result_json,created_utc)
+                   VALUES($video,'test','vl-v1','prompt-v1',3,'','family picnic','{\"summary\":\"family picnic\"}',$now)
+                   """))
+        {
+            summary.Parameters.AddWithValue("$video", original.Id);
+            summary.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("O"));
+            summary.ExecuteNonQuery();
+        }
+
+        var remoteRefresh = original with
+        {
+            Path = Path.Combine(_root, "mirrored-from-service.mp4"),
+            // A path/probe refresh preserves derivatives only when the content
+            // signature is unchanged. Changed sizes are covered by invalidation tests.
+            FileSize = original.FileSize,
+            DurationSeconds = 12.5,
+            Width = 1280,
+            Height = 720
+        };
+        repository.UpsertMirroredBatch([remoteRefresh], source.Id);
+        repository.UpsertMirroredBatch([remoteRefresh], source.Id); // retry must be idempotent
+
+        var video = Assert.Single(repository.GetAll());
+        var keyframe = Assert.Single(repository.GetKeyframes(original.Id, existingOnly: false));
+        var review = Assert.Single(repository.GetFaceReviewSummaries()).Value;
+        Assert.Equal(remoteRefresh.Path, video.Path);
+        Assert.Equal(1.25, keyframe.TimestampSeconds);
+        Assert.Equal("{\"text\":\"spoken words\"}", repository.GetTranscript(original.Id));
+        Assert.Equal("family picnic", repository.GetSummary(original.Id));
+        Assert.Equal("completed", review.AnalysisStatus);
+        Assert.True(review.HasTranscript);
+        Assert.True(review.HasSummary);
+    }
+
     [Theory]
     [InlineData("a.mp4")][InlineData("a.MOV")][InlineData("a.m2ts")]
     public void VideoFormats_AcceptsCommonFamilyVideoFormats(string path) => Assert.True(VideoFormats.IsSupported(path));
+
+    [Fact]
+    public void VideoMetadataMirror_PreservesModelNamespaceAndPreviouslyDownloadedVectors()
+    {
+        var source = _database.AddSource(_root);
+        var path = Path.Combine(_root, "namespace.mp4");
+        File.WriteAllBytes(path, [1]);
+        var repository = new VideoRepository(_database);
+        var video = repository.Upsert(source.Id, path);
+        var now = DateTime.UtcNow.ToString("O");
+        var face = new GatewayVideoFace(10, video.Id, 20, 1, 0, .1, .1, .5, .5, .99,
+            [1, 2, 3, 4], null, null, null, "ignored", now, now) { ModelVersion = "insightface-arcface" };
+        var metadata = new GatewayMetadata([], [], [], [], [],
+            [new GatewayVideoKeyframe(20, video.Id, 1, "frame.jpg", 0)], [], [], [face]);
+        _database.UpsertMirroredVideoMetadata(metadata);
+        _database.UpsertMirroredVideoMetadata(metadata with { VideoFaces = [face with { Embedding = null }] });
+        var mirrored = Assert.Single(_database.GetAllMirroredVideoFaces());
+        Assert.Equal("insightface-arcface", mirrored.ModelVersion);
+        Assert.Equal(face.Embedding, mirrored.Embedding);
+        Assert.Equal("ignored", mirrored.AssignmentState);
+        // A legacy server omitting the optional model field cannot erase it.
+        _database.UpsertMirroredVideoMetadata(metadata with { VideoFaces = [face with { ModelVersion = "", Embedding = null }] });
+        Assert.Equal("insightface-arcface", Assert.Single(_database.GetAllMirroredVideoFaces()).ModelVersion);
+    }
+
+    [Fact]
+    public void RemoteVideoWithoutFaces_StillRetainsCompletedAnalysisStatus()
+    {
+        var source = _database.AddSource(_root);
+        var repository = new VideoRepository(_database);
+        var record = new VideoRecord(100, source.Id, Path.Combine(_root, "empty.mp4"), 0, DateTime.UtcNow,
+            null, 0, 0, null, null, "active")
+        { PersonAnalysisStatus = "completed", PersonAnalyzedUtc = DateTime.UtcNow.ToString("O") };
+        repository.UpsertMirroredBatch([record], source.Id);
+        Assert.Equal("completed", Assert.Single(repository.GetAll()).PersonAnalysisStatus);
+        Assert.Equal("completed", Assert.Single(repository.GetFaceReviewSummaries()).Value.AnalysisStatus);
+        // Old servers have no status fields: a catalog refresh must not reset them.
+        repository.UpsertMirrored(record with { PersonAnalysisStatus = null, PersonAnalyzedUtc = null }, source.Id);
+        Assert.Equal("completed", Assert.Single(repository.GetAll()).PersonAnalysisStatus);
+    }
+
+    [Fact]
+    public void MirroredImageBatch_IsIdempotentAndPreservesIdentifiers()
+    {
+        var source = _database.AddSource(_root);
+        var records = Enumerable.Range(1, 50).Select(id => new ImageRecord
+        {
+            Id = id, SourceId = source.Id, Path = Path.Combine(_root, $"{id}.jpg"),
+            ModifiedUtc = DateTime.UtcNow, IndexedUtc = DateTime.UtcNow
+        }).ToArray();
+        _database.UpsertMirroredImageBatch(records);
+        var changes = Convert.ToInt64(_database.Command("SELECT total_changes()").ExecuteScalar());
+        _database.UpsertMirroredImageBatch(records);
+        Assert.Equal(changes, Convert.ToInt64(_database.Command("SELECT total_changes()").ExecuteScalar()));
+        Assert.Equal(50, _database.GetImages().Count);
+        Assert.Equal(records.Select(record => record.Id).Order(), _database.GetImages().Select(record => record.Id).Order());
+    }
 
     [Fact]
     public void FfmpegProbeFallback_ParsesDurationAndResolution()
@@ -134,13 +271,52 @@ public sealed class VideoIndexTests : IDisposable
         Assert.Equal("completed", noFaces.AnalysisStatus);
     }
 
+    [Fact]
+    public async Task VideoTimeline_PrefersConfiguredSpaceAndFallsBackOnlyWhenItIsEmpty()
+    {
+        var source = _database.AddSource(_root);
+        var videoPath = Path.Combine(_root, "model-fallback.mp4");
+        File.WriteAllBytes(videoPath, [1, 2, 3]);
+        var videos = new VideoRepository(_database);
+        var video = videos.Upsert(source.Id, videoPath);
+        var frames = Enumerable.Range(0, 2).Select(index =>
+        {
+            var path = Path.Combine(_root, $"model-fallback-{index}.jpg");
+            File.WriteAllBytes(path, [4, 5, (byte)index]);
+            return new VideoKeyframe(index + 1, path);
+        }).ToArray();
+        videos.SaveKeyframes(video.Id, frames);
+        var repository = new VisionAnalysisRepository(_database);
+        var fallback = new VideoFaceTimelineService(_database, new StubFaceAnalyzer("sface-fallback", faceCount: 5), repository);
+        var preferredFallback = new VideoFaceTimelineService(_database, new StubFaceAnalyzer("adaface-fallback", faceCount: 1), repository);
+        var preferred = new VideoFaceTimelineService(_database, new StubFaceAnalyzer("insightface-default"), repository);
+
+        await fallback.AnalyzeAsync(video);
+        await preferredFallback.AnalyzeAsync(video);
+        var fallbackRows = preferred.GetTimeline(video.Id);
+        Assert.Equal(2, fallbackRows.Count);
+        Assert.All(fallbackRows, face => Assert.Equal("adaface-fallback", face.ModelVersion));
+
+        await preferred.AnalyzeAsync(video);
+        var preferredRows = preferred.GetTimeline(video.Id);
+        Assert.Equal(2, preferredRows.Count);
+        Assert.All(preferredRows, face => Assert.Equal("insightface-default", face.ModelVersion));
+    }
+
     private sealed class StubFaceAnalyzer : IImageFaceAnalyzer
     {
+        private readonly int _faceCount;
+        public StubFaceAnalyzer(string modelVersion = "stub-v1", int faceCount = 1)
+        {
+            ModelVersion = modelVersion;
+            _faceCount = faceCount;
+        }
         public string AnalyzerName => "stub";
-        public string ModelVersion => "stub-v1";
+        public string ModelVersion { get; }
         public Task<FaceAnalysisResult> AnalyzeAsync(ImageRecord image, CancellationToken cancellationToken) =>
-            Task.FromResult(new FaceAnalysisResult([new FaceDetection(new NormalizedFaceBox(.1f, .1f, .3f, .3f), .9f,
-                Embedding: [1f, 0f, 0f])]));
+            Task.FromResult(new FaceAnalysisResult(Enumerable.Range(0, _faceCount)
+                .Select(index => new FaceDetection(new NormalizedFaceBox(.1f + index * .02f, .1f, .3f, .3f), .9f,
+                    Embedding: [1f, 0f, 0f])).ToArray()));
     }
 
     [Fact]

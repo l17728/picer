@@ -31,8 +31,8 @@ public sealed class NominatimReverseGeocoder : IReverseGeocoder, IDisposable
     private static DateTime _lastRequestUtc = DateTime.MinValue;
     private readonly HttpClient _client;
     private readonly string _cachePath;
-    private readonly Dictionary<string, ReverseGeocodingResult> _cache;
-    private readonly Dictionary<string, GeoBounds> _placeCache;
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, ReverseGeocodingResult> _cache;
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, GeoBounds> _placeCache;
     private readonly bool _ownsClient;
 
     public NominatimReverseGeocoder(string cachePath, HttpClient? client = null)
@@ -43,8 +43,8 @@ public sealed class NominatimReverseGeocoder : IReverseGeocoder, IDisposable
         _client.DefaultRequestHeaders.UserAgent.Clear();
         _client.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("Picer", "1.0"));
         _client.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("(desktop-photo-manager)"));
-        _cache = LoadCache(cachePath);
-        _placeCache = LoadPlaceCache(cachePath + ".places");
+        _cache = new(LoadCache(cachePath));
+        _placeCache = new(LoadPlaceCache(cachePath + ".places"), StringComparer.OrdinalIgnoreCase);
     }
 
     public async Task<GeoBounds?> ResolvePlaceAsync(string query, CancellationToken cancellationToken = default)

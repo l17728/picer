@@ -16,6 +16,7 @@ public partial class ServicePhotoItem : ObservableObject
     public long Id { get; init; }
     public long MediaId { get; init; }
     public bool IsVideo { get; init; }
+    public bool IsMissing { get; init; }
     public string Path { get; init; } = "";
     public long FileSize { get; init; }
     public string? Sha256 { get; init; }
@@ -39,6 +40,7 @@ public sealed class RemoteDirectoryNode
 
 public partial class ServiceBrowseViewModel : ObservableObject
 {
+    private readonly ClientServices _services;
     private readonly IIndexGateway _gateway;
     private readonly SemaphoreSlim _thumbnailGate = new(4);
     private string? _cursor;
@@ -75,7 +77,7 @@ public partial class ServiceBrowseViewModel : ObservableObject
     [ObservableProperty]
     private RemoteDirectoryNode? _selectedDirectory;
 
-    public ServiceBrowseViewModel(IIndexGateway gateway) => _gateway = gateway;
+    public ServiceBrowseViewModel(IIndexGateway gateway, ClientServices? services = null) { _gateway = gateway; _services = services ?? new(); }
 
     [RelayCommand]
     public async Task SearchAsync()
@@ -109,7 +111,7 @@ public partial class ServiceBrowseViewModel : ObservableObject
         var cts = _loadCts = new CancellationTokenSource();
         try
         {
-            var filters = new SearchFilters { IncludeMissing = false, Query = SearchText, SourceId = SelectedSource?.Id };
+            var filters = new SearchFilters { IncludeMissing = true, Query = SearchText, SourceId = SelectedSource?.Id };
             var page = MediaFilterIndex == 1
                 ? await SearchVideosAsync(filters, cts.Token)
                 : MediaFilterIndex == 2
@@ -123,7 +125,7 @@ public partial class ServiceBrowseViewModel : ObservableObject
             {
                 var isVideo = record.Id < 0;
                 var mediaId = isVideo ? -record.Id : record.Id;
-                var item = new ServicePhotoItem { Id = record.Id, MediaId = mediaId, IsVideo = isVideo, Path = record.Path, FileSize = record.FileSize, Sha256 = record.ContentSha256 ?? record.Sha256 };
+                var item = new ServicePhotoItem { Id = record.Id, MediaId = mediaId, IsVideo = isVideo, IsMissing = record.Status == ImageStatus.Missing, Path = record.Path, FileSize = record.FileSize, Sha256 = record.ContentSha256 ?? record.Sha256 };
                 Items.Add(item);
             }
             ScheduleThumbnailPrefetch();
@@ -354,8 +356,8 @@ public partial class ServiceBrowseViewModel : ObservableObject
             try
             {
                 var record = new ImageRecord { Id = item.MediaId, Path = item.Path, ContentSha256 = item.Sha256 };
-                var path = AppServices.RemoteThumbnails.TryGet(record) ?? await AppServices.RemoteThumbnails.GetOrDownloadAsync(
-                    record, () => _gateway.OpenThumbnailAsync(item.Id, cancellationToken), cancellationToken);
+                var path = _services.RemoteThumbnails.TryGet(record) ?? await _services.RemoteThumbnails.GetOrDownloadAsync(
+                    record, downloadToken => _gateway.OpenThumbnailAsync(item.Id, downloadToken), cancellationToken);
                 if (path is null || !File.Exists(path)) return;
                 var image = new BitmapImage();
                 image.BeginInit();

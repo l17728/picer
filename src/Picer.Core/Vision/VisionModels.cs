@@ -10,7 +10,13 @@ public sealed record FaceDetection(
     IReadOnlyList<float>? Landmarks = null,
     IReadOnlyList<float>? Embedding = null);
 
-public sealed record FaceAnalysisResult(IReadOnlyList<FaceDetection> Faces);
+public sealed record FaceAnalysisResult(IReadOnlyList<FaceDetection> Faces)
+{
+    /// <summary>The exact embedding space reported by the model service.</summary>
+    public string? ModelVersion { get; init; }
+}
+
+public sealed record TrainedFacePrototype(long PersonId, float[] Centroid, double Threshold, int SampleCount);
 
 public sealed record VisionAnalysisRecord(
     long ImageId,

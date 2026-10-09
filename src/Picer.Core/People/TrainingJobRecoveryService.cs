@@ -3,7 +3,7 @@ using Picer.Core.Vision;
 namespace Picer.Core.People;
 
 /// <summary>Resumes monitoring of remote jobs that survived an application restart.</summary>
-public sealed class TrainingJobRecoveryService(VisionAnalysisRepository repository)
+public sealed class TrainingJobRecoveryService(VisionAnalysisRepository repository, Func<FaceTrainingSubmissionService>? clientFactory = null)
 {
     public Task<IReadOnlyList<Task>> ResumeAsync(CancellationToken cancellationToken = default)
     {
@@ -15,7 +15,7 @@ public sealed class TrainingJobRecoveryService(VisionAnalysisRepository reposito
     {
         try
         {
-            using var client = new FaceTrainingSubmissionService(job.Endpoint, Environment.GetEnvironmentVariable("PICER_MODEL_SERVER_API_KEY") ?? "");
+            using var client = clientFactory?.Invoke() ?? new FaceTrainingSubmissionService(job.Endpoint, Environment.GetEnvironmentVariable("PICER_MODEL_SERVER_API_KEY") ?? "");
             var monitor = new TrainingJobMonitor(client);
             var result = await monitor.WaitAsync(job.JobId, cancellationToken: token).ConfigureAwait(false);
             repository.UpsertTrainingJob(job.JobId, job.Endpoint, result.Status, result.Status, result.Status == "completed" ? 100 : job.Progress, result.ArtifactId, result.Error);

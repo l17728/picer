@@ -10,5 +10,6 @@ internal static class TestEnvironment
         Directory.CreateDirectory(root);
         Environment.SetEnvironmentVariable("TEMP", root);
         Environment.SetEnvironmentVariable("TMP", root);
+        Environment.SetEnvironmentVariable("PICER_SCAN_CACHE_ROOT", Path.Combine(root, "scan-manifests-" + Environment.ProcessId));
     }
 }

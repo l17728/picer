@@ -1,15 +1,13 @@
+using Picer.Core.Imaging;
 using System.Text;
 using Microsoft.ML.OnnxRuntime;
 using Microsoft.ML.OnnxRuntime.Tensors;
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.PixelFormats;
-using SixLabors.ImageSharp.Processing;
 
 namespace Picer.Core.SemanticSearch;
 
 public sealed class ChineseClipEncoder : IDisposable
 {
-    public const string ModelVersion = "OFA-Chinese-CLIP-ViT-B-16/Xenova-f269048-int8";
+    public const string ModelVersion = "OFA-Chinese-CLIP-ViT-B-16/Xenova-f269048-int8/magick-catrom-v1";
     private readonly InferenceSession _session;
     private readonly Dictionary<string, long> _vocabulary;
 
@@ -33,25 +31,18 @@ public sealed class ChineseClipEncoder : IDisposable
 
     public float[] EncodeImage(string path)
     {
-        using var image = Image.Load<Rgb24>(path);
-        image.Mutate(x => x.Resize(new ResizeOptions { Size = new Size(224, 224), Mode = ResizeMode.Stretch }));
+        using var image = RasterImage.Load(path);
+        image.Resize(224, 224);
         var values = new float[3 * 224 * 224];
         var mean = new[] { .48145466f, .4578275f, .40821073f };
         var std = new[] { .26862954f, .26130258f, .27577711f };
-        image.ProcessPixelRows(rows =>
+        var rgb = image.CopyRgbPixels();
+        for (var offset = 0; offset < 224 * 224; offset++)
         {
-            for (var y = 0; y < 224; y++)
-            {
-                var row = rows.GetRowSpan(y);
-                for (var x = 0; x < 224; x++)
-                {
-                    var pixel = row[x]; var offset = y * 224 + x;
-                    values[offset] = (pixel.R / 255f - mean[0]) / std[0];
-                    values[224 * 224 + offset] = (pixel.G / 255f - mean[1]) / std[1];
-                    values[2 * 224 * 224 + offset] = (pixel.B / 255f - mean[2]) / std[2];
-                }
-            }
-        });
+            values[offset] = (rgb[offset * 3] / 255f - mean[0]) / std[0];
+            values[224 * 224 + offset] = (rgb[offset * 3 + 1] / 255f - mean[1]) / std[1];
+            values[2 * 224 * 224 + offset] = (rgb[offset * 3 + 2] / 255f - mean[2]) / std[2];
+        }
         var ids = new DenseTensor<long>(new long[] { 101, 102 }, [1, 2]);
         var mask = new DenseTensor<long>(new long[] { 1, 1 }, [1, 2]);
         var pixels = new DenseTensor<float>(values, [1, 3, 224, 224]);

@@ -1,3 +1,4 @@
+using Picer.Core.Imaging;
 using Microsoft.Data.Sqlite;
 using System.Net;
 using System.Text;
@@ -8,13 +9,129 @@ using Picer.Core.Models;
 using Picer.Core.People;
 using Picer.Core.Search;
 using Picer.Core.Vision;
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.PixelFormats;
 
 namespace Picer.Tests;
 
 public sealed class CloudVisionTests : IDisposable
 {
+    [Fact]
+    public async Task UserCancellationPersistsCompatibleQueuedStateAndReleasesBudgetWithoutCompleting()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var repository = new CloudVisionRepository(_database);
+        var analyzer = new CancelingAnalyzer(cancellation);
+        var service = new CloudVisionAnalysisService(repository, analyzer, new FakeGeocoder());
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => service.AnalyzeAsync(
+            [(_image, (IReadOnlyList<VisualConceptScore>)[], "test-cancel")], cancellationToken: cancellation.Token));
+
+        Assert.Equal("canceled", repository.Get(_image.Id, analyzer.Provider)!.Value.Status);
+        var task = Assert.Single(repository.GetRecentTasks());
+        Assert.Equal("canceled", task.Status); Assert.Equal("user_canceled", task.ErrorCode);
+        using (var stored = _database.Command("SELECT status FROM cloud_vision_analyses WHERE image_id=$id"))
+        { stored.Parameters.AddWithValue("$id", _image.Id); Assert.Equal("queued", stored.ExecuteScalar()); }
+        using (var reserved = _database.Command("SELECT COUNT(*) FROM analysis_budget_reservations")) Assert.Equal(0L, reserved.ExecuteScalar());
+        using (var charged = _database.Command("SELECT COUNT(*) FROM analysis_billing_events")) Assert.Equal(0L, charged.ExecuteScalar());
+        Assert.Null(repository.GetLatestCompleted(_image.Id));
+
+        repository.Queue(_image, analyzer, "", "retry");
+        Assert.Equal("queued", repository.Get(_image.Id, analyzer.Provider)!.Value.Status);
+        Assert.Null(Assert.Single(repository.GetRecentTasks()).ErrorCode);
+        repository.SaveFailure(_image, analyzer, "", "failed", "ordinary_failure");
+        Assert.Equal("failed", repository.Get(_image.Id, analyzer.Provider)!.Value.Status);
+        Assert.Equal("failed", Assert.Single(repository.GetRecentTasks()).Status);
+    }
+
+    private sealed class CancelingAnalyzer(CancellationTokenSource cancellation) : ICloudVisionAnalyzer
+    {
+        public string Provider => "test-cancel";
+        public string ModelVersion => "test";
+        public string PromptVersion => "test";
+        public Task<CloudVisionResult> AnalyzeAsync(CloudVisionRequest request, CancellationToken cancellationToken)
+        {
+            cancellation.Cancel();
+            return Task.FromCanceled<CloudVisionResult>(cancellationToken);
+        }
+    }
+
+    [Fact]
+    public async Task SharedDatabaseExecutorWaitsForMirrorTransactionBeforeSavingDescriptions()
+    {
+        var other = _database.UpsertImage(new ImageRecord { SourceId = _image.SourceId,
+            Path = Path.Combine(_root, "mirror-concurrency.jpg"), FileSize = 3,
+            ModifiedUtc = _image.ModifiedUtc, Status = ImageStatus.Active });
+        using var gate = new SemaphoreSlim(1, 1);
+        var queuedSave = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var mirrorActive = false;
+        async Task DatabaseWork(Action work, CancellationToken token)
+        {
+            if (mirrorActive) queuedSave.TrySetResult();
+            await gate.WaitAsync(token);
+            try { work(); } finally { gate.Release(); }
+        }
+        var analyzer = new ConcurrentAnalyzer();
+        var first = new CloudVisionAnalysisService(new CloudVisionRepository(_database), analyzer,
+            new FakeGeocoder(), databaseWork: DatabaseWork);
+        var second = new CloudVisionAnalysisService(new CloudVisionRepository(_database), analyzer,
+            new FakeGeocoder(), databaseWork: DatabaseWork);
+        var firstRun = first.AnalyzeAsync([(_image, (IReadOnlyList<VisualConceptScore>)[], "test")]);
+        var secondRun = second.AnalyzeAsync([(other, (IReadOnlyList<VisualConceptScore>)[], "test")]);
+        await analyzer.BothStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await gate.WaitAsync();
+        try
+        {
+            using var transaction = _database.BeginTransaction();
+            mirrorActive = true;
+            analyzer.Release.TrySetResult();
+            await queuedSave.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.False(firstRun.IsCompleted);
+            Assert.False(secondRun.IsCompleted);
+            transaction.Commit();
+        }
+        finally { mirrorActive = false; gate.Release(); }
+        var results = await Task.WhenAll(firstRun, secondRun).WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal(2, results.Sum(result => result.Completed));
+        Assert.Equal(0, results.Sum(result => result.Failed));
+    }
+
+    [Fact]
+    public async Task ConcurrentAnalysisOverlapsDistinctContentButReusesSameContent()
+    {
+        var first = _image;
+        first.Sha256 = new string('a', 64);
+        _database.UpsertImage(first);
+        var other = _database.UpsertImage(new ImageRecord { SourceId = first.SourceId, Path = Path.Combine(_root, "other.jpg"),
+            FileSize = 3, ModifiedUtc = first.ModifiedUtc, Sha256 = new string('b', 64), Status = ImageStatus.Active });
+        var copy = _database.UpsertImage(new ImageRecord { SourceId = first.SourceId, Path = Path.Combine(_root, "copy.jpg"),
+            FileSize = 3, ModifiedUtc = first.ModifiedUtc, Sha256 = first.Sha256, Gps = first.Gps, Status = ImageStatus.Active });
+        var analyzer = new ConcurrentAnalyzer();
+        var service = new CloudVisionAnalysisService(new CloudVisionRepository(_database), analyzer, new FakeGeocoder(), allowConcurrent: true);
+        Task<CloudVisionBatchResult> Run(ImageRecord image) => service.AnalyzeAsync([(image, (IReadOnlyList<VisualConceptScore>)[], "test")]);
+        var tasks = new[] { Run(first), Run(other), Run(copy) };
+        await analyzer.BothStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(2, analyzer.Calls);
+        analyzer.Release.TrySetResult();
+        var results = await Task.WhenAll(tasks).WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal(2, results.Sum(result => result.Completed));
+        Assert.Equal(1, results.Sum(result => result.Skipped));
+        Assert.Equal(2, analyzer.Calls);
+    }
+
+    private sealed class ConcurrentAnalyzer : ICloudVisionAnalyzer
+    {
+        public string Provider => "test-concurrent";
+        public string ModelVersion => "test";
+        public string PromptVersion => "test";
+        public int Calls;
+        public TaskCompletionSource BothStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public async Task<CloudVisionResult> AnalyzeAsync(CloudVisionRequest request, CancellationToken cancellationToken)
+        {
+            if (Interlocked.Increment(ref Calls) == 2) BothStarted.TrySetResult();
+            await Release.Task.WaitAsync(cancellationToken);
+            return new CloudVisionResult("并发测试照片", [], [], [], []);
+        }
+    }
+
     private readonly string _root = Path.Combine(Path.GetTempPath(), "picer-cloud-" + Guid.NewGuid().ToString("N"));
     private readonly PicerDatabase _database;
     private readonly ImageRecord _image;
@@ -279,7 +396,7 @@ public sealed class CloudVisionTests : IDisposable
     public async Task CompatibleAnalyzer_SanitizesImageAndSendsStructuredGpsContext()
     {
         var path = Path.Combine(_root, "valid.png");
-        using (var image = new Image<Rgb24>(1600, 900, Color.CornflowerBlue)) image.SaveAsPng(path);
+        using (var image = new RasterImage(1600, 900, new RgbPixel(100, 149, 237))) image.SaveAsPng(path);
         _image.Path = path;
         var handler = new ApiHandler();
         using var client = new HttpClient(handler);
@@ -338,6 +455,7 @@ public sealed class CloudVisionTests : IDisposable
             Descriptions = descriptions;
             return Task.FromResult(new SceneSummaryResult("旅行场景", "按顺序生成的整体总结", ["旅行"]));
         }
+        public void Dispose() { }
     }
 
     private sealed class FakeGeocoder : IReverseGeocoder

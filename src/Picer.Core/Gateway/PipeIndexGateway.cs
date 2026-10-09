@@ -29,6 +29,10 @@ public sealed class PipeIndexGateway : IIndexGateway, IDisposable
     public async Task<GatewayHealth> GetHealthAsync(CancellationToken cancellationToken = default) =>
         await CallAsync<GatewayHealth>("health", null, cancellationToken) ?? throw new InvalidOperationException("Empty health payload.");
 
+    public async Task<GatewayChangePage> GetChangesAsync(GatewayChangeRequest request, CancellationToken cancellationToken = default) =>
+        await CallAsync<GatewayChangePage>("changes", request, cancellationToken)
+            ?? throw new InvalidDataException("mirror_change_feed_empty");
+
     public async Task<GatewayPage> ListImagesAsync(long? sourceId = null, bool includeMissing = false, int pageSize = 200, string? cursor = null, CancellationToken cancellationToken = default) =>
         await CallAsync<GatewayPage>("list", new { sourceId, includeMissing, pageSize = Math.Clamp(pageSize, 1, 500), cursor }, cancellationToken)
             ?? throw new InvalidOperationException("Empty list payload.");
@@ -52,6 +56,9 @@ public sealed class PipeIndexGateway : IIndexGateway, IDisposable
 
     public Task<VideoRecord?> GetVideoAsync(long id, CancellationToken cancellationToken = default) =>
         CallAsync<VideoRecord>("video", new { id }, cancellationToken);
+
+    public Task<Stream?> OpenVideoKeyframeAsync(long keyframeId, CancellationToken cancellationToken = default) =>
+        Task.FromResult<Stream?>(null);
 
     public async Task<GatewayPage> SearchAsync(SearchFilters filters, int pageSize = 200, string? cursor = null, CancellationToken cancellationToken = default) =>
         await CallAsync<GatewayPage>("search", new { filters, pageSize = Math.Clamp(pageSize, 1, 500), cursor }, cancellationToken)
@@ -146,5 +153,9 @@ public sealed class PipeIndexGateway : IIndexGateway, IDisposable
         return result?.Path ?? throw new InvalidOperationException("Empty backup payload.");
     }
 
+    public async Task<bool> PurgeVideoAsync(long id, CancellationToken cancellationToken = default)
+        => (await CallAsync<PipeFlagResponse>("purge_video", new { id }, cancellationToken))?.Value == true;
+    public async Task<bool> PurgeMissingImageAsync(long id, CancellationToken cancellationToken = default)
+        => (await CallAsync<PipeFlagResponse>("purge_missing", new { id }, cancellationToken))?.Value == true;
     public void Dispose() => _stream?.Dispose();
 }

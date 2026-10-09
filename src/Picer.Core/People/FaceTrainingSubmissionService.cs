@@ -48,10 +48,12 @@ public sealed class FaceTrainingSubmissionService : IDisposable
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
     private readonly HttpClient _client;
 
+    /// <summary>Owns the supplied authenticated, certificate-validated client.</summary>
+    public FaceTrainingSubmissionService(HttpClient client) => _client = client;
+
     public FaceTrainingSubmissionService(string baseUrl, string apiKey)
     {
         var handler = new HttpClientHandler();
-        handler.ServerCertificateCustomValidationCallback = (_, _, _, _) => true;
         _client = new HttpClient(handler) { BaseAddress = new Uri(NormalizeBaseUrl(baseUrl)), Timeout = TimeSpan.FromMinutes(10) };
         var resolvedKey = string.IsNullOrWhiteSpace(apiKey) ? ModelServerApiKey.Load() : apiKey.Trim();
         if (!string.IsNullOrWhiteSpace(resolvedKey))

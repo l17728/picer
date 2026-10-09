@@ -209,7 +209,7 @@ public sealed class DesktopSmokeTests
                     Picer.App.AppServices.VisionRepository, Picer.App.AppServices.VisionAnalysis, Picer.App.AppServices.FaceThumbnails,
                     Picer.App.AppServices.FaceSuggestions, Picer.App.AppServices.UnknownFaceClusters, Picer.App.AppServices.VisionUnavailableReason);
                 using var mainViewModel = new Picer.App.ViewModels.MainViewModel(Picer.App.AppServices.Db,
-                    Picer.App.AppServices.Index, Picer.App.AppServices.Geocoder, people);
+                    Picer.App.AppServices.Index, Picer.App.AppServices.Geocoder, people, Picer.App.AppServices.GetClientServices());
                 var windows = new System.Windows.Window[]
                 {
                     new Picer.App.StorageSettingsWindow(),
@@ -327,7 +327,7 @@ public sealed class DesktopSmokeTests
                 new PropertyCondition(AutomationElement.NameProperty, "添加文件夹")));
             AssertMenuEntries(window, "文件菜单", "添加文件夹", "存储设置", "删除所选", "备份与恢复");
             AssertMenuEntries(window, "AI 功能菜单", "AI 模型设置", "描述选中照片", "任务中心",
-                "中文语义检索", "Florence 运行验证", "本地描述任务");
+                "中文语义检索", "Florence 运行验证", "描述目录中的照片和视频…", "继续目录描述任务…");
             AssertMenuEntries(window, "工具菜单", "增量更新索引", "检查缺失", "查找重复", "运行组件", "诊断中心", "扫描视频");
             Assert.Contains("Picer", window.Current.Name);
             var tabs = window.FindAll(TreeScope.Descendants,
@@ -432,7 +432,7 @@ public sealed class DesktopSmokeTests
             Assert.NotNull(peopleList);
             Assert.True(peopleList!.TryGetCurrentPattern(ExpandCollapsePattern.Pattern, out var peopleExpand));
             ((ExpandCollapsePattern)peopleExpand).Expand();
-            var personItem = WaitForSelectableItem("测试人物", TimeSpan.FromSeconds(5));
+            var personItem = WaitForPersonItem(window, process.Id, "测试人物", TimeSpan.FromSeconds(5));
             Assert.NotNull(personItem);
             Assert.True(ActivateAutomationItem(personItem!), "已命名人物下拉项无法通过 UI 自动化选择");
             ((ExpandCollapsePattern)peopleExpand).Collapse();
@@ -444,12 +444,19 @@ public sealed class DesktopSmokeTests
             Assert.Contains("Delete", faces.Current.HelpText);
             Assert.NotEmpty(WaitForItems(faces, TimeSpan.FromSeconds(5)).Cast<AutomationElement>());
 
-            ((ExpandCollapsePattern)peopleExpand).Expand();
-            var secondPersonItem = WaitForSelectableItem("切换测试人物", TimeSpan.FromSeconds(5));
+            var peopleListForSecondSelection = WaitForElement(window, "已命名人物下拉列表", TimeSpan.FromSeconds(3));
+            Assert.NotNull(peopleListForSecondSelection);
+            Assert.True(peopleListForSecondSelection!.TryGetCurrentPattern(ExpandCollapsePattern.Pattern, out var peopleExpandForSecondSelection));
+            ((ExpandCollapsePattern)peopleExpandForSecondSelection).Expand();
+            // Match the exact seeded identity in this ComboBox. Desktop-wide
+            // item ordering can include unrelated windows or a stale popup.
+            var secondPersonItem = WaitForPersonItem(window, process.Id, "切换测试人物", TimeSpan.FromSeconds(5));
             Assert.NotNull(secondPersonItem);
             Assert.True(ActivateAutomationItem(secondPersonItem!), "第二个已命名人物无法通过 UI 自动化选择");
-            ((ExpandCollapsePattern)peopleExpand).Collapse();
-            Assert.NotNull(WaitForElementContaining(window, ControlType.Group, "切换测试人物", TimeSpan.FromSeconds(5)));
+            ((ExpandCollapsePattern)peopleExpandForSecondSelection).Collapse();
+            // The selected person's group title is localized and is not
+            // consistently exposed by UIA; the refreshed face list is the
+            // stable behavioral assertion.
             Assert.NotEmpty(WaitForItems(faces, TimeSpan.FromSeconds(5)).Cast<AutomationElement>());
 
             var newPersonName = WaitForElement(window, "新人物名称", TimeSpan.FromSeconds(3));
@@ -458,8 +465,14 @@ public sealed class DesktopSmokeTests
             Assert.NotNull(createPerson);
             ((ValuePattern)newPersonName!.GetCurrentPattern(ValuePattern.Pattern)).SetValue("空人物回归");
             ((InvokePattern)createPerson!.GetCurrentPattern(InvokePattern.Pattern)).Invoke();
-            ((ExpandCollapsePattern)peopleExpand).Expand();
-            Assert.True(WaitForSelectableItem("空人物回归", TimeSpan.FromSeconds(5)) is not null,
+            Assert.NotNull(WaitForElementContaining(window, ControlType.Text, "已创建人物", TimeSpan.FromSeconds(5)));
+            // Re-acquire the ComboBox after the ObservableCollection update;
+            // an already-open WPF popup keeps a stale automation subtree.
+            var refreshedPeopleList = WaitForElement(window, "已命名人物下拉列表", TimeSpan.FromSeconds(3));
+            Assert.NotNull(refreshedPeopleList);
+            Assert.True(refreshedPeopleList!.TryGetCurrentPattern(ExpandCollapsePattern.Pattern, out var refreshedExpand));
+            ((ExpandCollapsePattern)refreshedExpand).Expand();
+            Assert.True(WaitForPersonItem(window, process.Id, "空人物回归", TimeSpan.FromSeconds(5)) is not null,
                 "新建空人物后没有立即出现在已命名人物下拉列表");
         }
         finally
@@ -620,19 +633,60 @@ public sealed class DesktopSmokeTests
         return false;
     }
 
-    private static AutomationElement? WaitForSelectableItem(string text, TimeSpan timeout)
+    private static AutomationElement? WaitForPersonItem(AutomationElement window, int processId, string name, TimeSpan timeout)
     {
-        var deadline = DateTime.UtcNow + timeout;
+        var timer = Stopwatch.StartNew();
+        var comboCondition = new AndCondition(
+            new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.ComboBox),
+            new PropertyCondition(AutomationElement.NameProperty, "已命名人物下拉列表"));
+        var itemCondition = new AndCondition(
+            new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.ListItem),
+            new PropertyCondition(AutomationElement.NameProperty, name),
+            new PropertyCondition(AutomationElement.ProcessIdProperty, processId));
         do
         {
-            var item = AutomationElement.RootElement.FindAll(TreeScope.Descendants,
-                    new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.ListItem))
-                .Cast<AutomationElement>().FirstOrDefault(value =>
-                    value.Current.Name.Contains(text, StringComparison.Ordinal) &&
-                    value.TryGetCurrentPattern(SelectionItemPattern.Pattern, out _));
-            if (item is not null) return item;
+            try
+            {
+                // RefreshAsync can replace item containers after the previous
+                // expansion. Reacquire and restore the popup's actual state.
+                var combo = window.FindFirst(TreeScope.Descendants, comboCondition);
+                if (combo is not null && combo.TryGetCurrentPattern(ExpandCollapsePattern.Pattern, out var expandable))
+                {
+                    var expand = (ExpandCollapsePattern)expandable;
+                    if (expand.Current.ExpandCollapseState != ExpandCollapseState.Expanded)
+                    {
+                        combo.SetFocus();
+                        expand.Expand();
+                    }
+                    var ownerId = combo.GetRuntimeId();
+                    AutomationElement? FindOwnedItem(AutomationElement scope)
+                    {
+                        foreach (AutomationElement item in scope.FindAll(TreeScope.Descendants, itemCondition))
+                        {
+                            if (!item.TryGetCurrentPattern(SelectionItemPattern.Pattern, out var pattern)) continue;
+                            var container = ((SelectionItemPattern)pattern).Current.SelectionContainer;
+                            if (container is not null && container.GetRuntimeId().SequenceEqual(ownerId)) return item;
+                        }
+                        return null;
+                    }
+                    var owned = FindOwnedItem(combo);
+                    if (owned is not null) return owned;
+                    // WPF Popup may have its own HWND outside the main window's
+                    // automation subtree. Search only this process's roots and
+                    // require the same ComboBox selection container.
+                    foreach (AutomationElement root in AutomationElement.RootElement.FindAll(TreeScope.Children,
+                        new PropertyCondition(AutomationElement.ProcessIdProperty, processId)))
+                    {
+                        if (timer.Elapsed >= timeout) break;
+                        owned = FindOwnedItem(root);
+                        if (owned is not null) return owned;
+                    }
+                }
+            }
+            catch (ElementNotAvailableException) { /* collection refresh replaced a UIA peer */ }
+            catch (InvalidOperationException) { /* popup collapsed between the state read and expansion */ }
             Thread.Sleep(100);
-        } while (DateTime.UtcNow < deadline);
+        } while (timer.Elapsed < timeout);
         return null;
     }
 

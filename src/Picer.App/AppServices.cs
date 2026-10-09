@@ -2,7 +2,7 @@ using System.IO;
 using System.Net.Http;
 using Microsoft.ML.OnnxRuntime;
 using Picer.App.FileOperations;
-using Picer.App.Security;
+using Picer.Core.Security;
 using Picer.Core.Data;
 using Picer.Core.FileOperations;
 using Picer.Core.Gateway;
@@ -16,12 +16,16 @@ using Picer.Core.Vision;
 using Picer.Core.Video;
 using Picer.Core.SemanticSearch;
 using Picer.Core.Search;
+using Picer.App.Infrastructure;
 
 namespace Picer.App;
 
-public static class AppServices
+public static partial class AppServices
 {
+    private static readonly SemaphoreSlim RemoteMirrorGate = new(1, 1);
     private static bool _remoteMediaBootstrapped;
+    private static int _remoteSyncRequested;
+    private static int _remoteSyncWorkerRunning;
     public static IIndexGateway Gateway { get; private set; } = null!;
     private static IIndexGateway? SyncGateway { get; set; }
     public static IndexSyncClient? SyncClient { get; private set; }
@@ -49,7 +53,7 @@ public static class AppServices
     public static VisualConceptRepository VisualConceptRepository { get; private set; } = null!;
     public static VideoRepository Videos { get; private set; } = null!;
     public static VideoIndexService VideoIndex { get; private set; } = null!;
-    public static FfmpegKeyframeService? VideoKeyframes { get; private set; }
+    public static IVideoMediaProcessor? VideoKeyframes { get; private set; }
     public static IVideoTranscriptionService? VideoTranscription { get; private set; }
     public static VideoFaceTimelineService? VideoFaceTimeline { get; private set; }
     public static VideoSummaryService VideoSummaries { get; private set; } = null!;
@@ -64,6 +68,8 @@ public static class AppServices
 
     public static void Initialize()
     {
+        if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("PICER_SCAN_CACHE_ROOT")))
+            Environment.SetEnvironmentVariable("PICER_SCAN_CACHE_ROOT", Path.Combine(AppPaths.DataRoot, "scan-manifests"));
         AppLogger.Initialize(Path.Combine(AppPaths.DataRoot, "logs"));
         AppLogger.Info("AppServices 初始化开始");
 
@@ -92,15 +98,38 @@ public static class AppServices
             FaceSuggestions = new FaceSuggestionEngine(VisionRepository, People);
             UnknownFaceClusters = new UnknownFaceClusterer(VisionRepository);
             FaceValidation = new FaceValidationService(Db, VisionRepository);
-            FaceTraining = new FaceTrainingService(VisionRepository);
+            FaceTraining = new FaceTrainingService(VisionRepository, clientFactory: CreateTrainingHttpClient);
             CloudVisionRepository = new CloudVisionRepository(Db);
             VisualConceptRepository = new VisualConceptRepository(Db);
             Videos = new VideoRepository(Db);
             MediaSearch = new MediaSearchTool(Db, Videos);
             VideoIndex = new VideoIndexService(Db, Videos);
-            VideoSummaries = new VideoSummaryService(Videos, Path.Combine(AppPaths.DataRoot, "remote-video-summary-cache"));
+            VideoSummaries = new VideoSummaryService(Videos, Path.Combine(AppPaths.DataRoot, "remote-video-summary-cache"),
+                (work, token) => Infrastructure.UiWork.RunDatabaseAsync(work, token));
             ClipRepository = new ClipSemanticRepository(Db);
             FlorenceResults = new FlorenceResultRepository(Db);
+            // Remote mode still needs a read-only timeline analyzer so the
+            // mirrored video faces are shown. No face inference runs here;
+            // the service analyzer is only used for its model identity while
+            // VideoFaceTimelineService reads synchronized face rows.
+            try
+            {
+                if (backend.BaseUrl is not { Length: > 0 } remoteFaceUrl
+                    || !Uri.TryCreate(remoteFaceUrl.TrimEnd('/') + "/", UriKind.Absolute, out var remoteFaceEndpoint))
+                    throw new InvalidOperationException("IndexService face endpoint is not configured");
+                FaceAnalyzer = new ServiceFaceAnalyzer(remoteFaceEndpoint, RequireToken(backend), backend.SpkiPin, "insightface-arcface");
+                VideoFaceTimeline = new VideoFaceTimelineService(Db, FaceAnalyzer, VisionRepository, People, includeAllModels: false);
+                AppLogger.Info("remote mode video face timeline initialized from mirrored metadata");
+            }
+            catch (Exception exception) when (exception is InvalidOperationException or UriFormatException)
+            {
+                VideoFaceTimeline = null;
+                AppLogger.Warn("remote mode video face timeline unavailable: " + exception.Message);
+            }
+            // The WPF shell starts exactly one mirror bootstrap after it is
+            // visible. Starting another pull here raced that bootstrap against
+            // People/Video queries on the same SQLite connection and could
+            // leave panels stuck on their loading placeholder.
             return;
         }
 
@@ -157,29 +186,40 @@ public static class AppServices
         FaceSuggestions = new FaceSuggestionEngine(VisionRepository, People);
         UnknownFaceClusters = new UnknownFaceClusterer(VisionRepository);
         FaceValidation = new FaceValidationService(Db, VisionRepository);
-        FaceTraining = new FaceTrainingService(VisionRepository);
+        FaceTraining = new FaceTrainingService(VisionRepository, clientFactory: CreateTrainingHttpClient);
         CloudVisionRepository = new CloudVisionRepository(Db);
         VisualConceptRepository = new VisualConceptRepository(Db);
         Videos = new VideoRepository(Db);
         MediaSearch = new MediaSearchTool(Db, Videos);
         VideoIndex = new VideoIndexService(Db, Videos);
-        VideoSummaries = new VideoSummaryService(Videos, Path.Combine(AppPaths.DataRoot, "video-summary-cache"));
+        VideoSummaries = new VideoSummaryService(Videos, Path.Combine(AppPaths.DataRoot, "video-summary-cache"),
+            (work, token) => Infrastructure.UiWork.RunDatabaseAsync(work, token));
         ClipRepository = new ClipSemanticRepository(Db);
         FlorenceResults = new FlorenceResultRepository(Db);
-        var ffmpeg = new FfmpegLocator().Find();
-        VideoKeyframes = ffmpeg is null ? null : new FfmpegKeyframeService(ffmpeg, Path.Combine(AppPaths.DataRoot, "video-keyframes"));
-        var whisper = AppPaths.BundledWhisperPath;
-        var whisperModel = AppPaths.BundledWhisperModelPath;
-        VideoTranscription = ffmpeg is not null && File.Exists(whisper) && File.Exists(whisperModel)
-            ? new WhisperTranscriptionService(ffmpeg, whisper, whisperModel, Path.Combine(AppPaths.DataRoot, "video-audio")) : null;
+        if (TryGetAiServiceBackend(out var mediaBackend)
+            && mediaBackend.BaseUrl is { Length: > 0 } mediaService
+            && Uri.TryCreate(mediaService.TrimEnd('/') + "/", UriKind.Absolute, out var mediaServiceEndpoint))
+        {
+            VideoKeyframes = new ServiceVideoMediaProcessor(
+                mediaServiceEndpoint, mediaBackend.Token ?? "", Path.Combine(AppPaths.DataRoot, "video-keyframes"));
+            VideoTranscription = null; // resolved on demand by CreateVideoTranscriptionService
+        }
+        else
+        {
+            VideoKeyframes = null;
+            VideoTranscription = null;
+        }
         try
         {
-            var fast = new YuNetSFaceAnalyzer(AppPaths.YuNetModelPath, AppPaths.SFaceModelPath, 320);
-            var fallback = new YuNetSFaceAnalyzer(AppPaths.YuNetModelPath, AppPaths.SFaceModelPath, 640);
-            FaceAnalyzer = new AdaptiveFaceAnalyzer(fast, fallback);
+            if (!TryGetAiServiceBackend(out var faceBackend)
+                || faceBackend.BaseUrl is not { Length: > 0 } faceService
+                || !Uri.TryCreate(faceService.TrimEnd('/') + "/", UriKind.Absolute, out var faceServiceEndpoint))
+                throw new InvalidOperationException("IndexService face endpoint is not configured");
+            FaceAnalyzer = new ServiceFaceAnalyzer(faceServiceEndpoint, faceBackend.Token ?? "", faceBackend.SpkiPin, "insightface-arcface");
             VisionAnalysis = new VisionAnalysisService(VisionRepository, FaceAnalyzer);
-            VideoFaceTimeline = new VideoFaceTimelineService(Db, FaceAnalyzer, VisionRepository, People);
+            VideoFaceTimeline = new VideoFaceTimelineService(Db, FaceAnalyzer, VisionRepository, People, includeAllModels: false);
             VisionUnavailableReason = null;
+            AppLogger.Info("face analysis routed through IndexService; local GUI does not load ONNX weights");
         }
         catch (Exception ex) when (ex is FileNotFoundException or InvalidOperationException)
         {
@@ -199,6 +239,7 @@ public static class AppServices
         Storage = provider;
         Index = new IndexEngine(Db, Storage, Thumbnails);
         if (!ServiceMode) Gateway = new LocalGateway(Db, Thumbnails, Index);
+        GetClientServices();
     }
 
     public static string? GetWebDavPassword() => new WindowsCredentialStore().Read(PicerCredentialTargets.WebDav);
@@ -220,9 +261,7 @@ public static class AppServices
         if (ClipSemantic is not null) return ClipSemantic;
         try
         {
-            ClipEncoder = new ChineseClipEncoder(AppPaths.ChineseClipModelPath, AppPaths.ChineseClipVocabularyPath);
-            ClipSemantic = new ClipSemanticService(Db, ClipRepository, ClipEncoder);
-            ClipUnavailableReason = null;
+            throw new InvalidOperationException("IndexService CLIP endpoint is not registered");
         }
         catch (Exception ex) when (ex is FileNotFoundException or OnnxRuntimeException or InvalidOperationException)
         {
@@ -236,11 +275,36 @@ public static class AppServices
             ? Path.GetFullPath(configured)
             : Path.Combine(AppPaths.DataRoot, "cache");
 
-    public static async Task SyncRemoteMirrorAsync(CancellationToken cancellationToken = default)
+    public static async Task SyncRemoteMirrorAsync(CancellationToken cancellationToken = default, bool requireMetadataSync = false, bool refreshMedia = false)
+    {
+        await RemoteMirrorGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (refreshMedia) Volatile.Write(ref _remoteMediaBootstrapped, false);
+            await SyncRemoteMirrorCoreAsync(cancellationToken, requireMetadataSync).ConfigureAwait(false);
+        }
+        finally { RemoteMirrorGate.Release(); }
+    }
+
+    private static async Task SyncRemoteMirrorCoreAsync(CancellationToken cancellationToken, bool requireMetadataSync)
     {
         var mirrorGateway = ServiceMode ? Gateway : SyncGateway;
-        if (mirrorGateway is null) return;
-        var fullMediaReconciliation = !Volatile.Read(ref _remoteMediaBootstrapped);
+        if (mirrorGateway is null)
+        {
+            if (requireMetadataSync) throw new InvalidOperationException("remote_mirror_gateway_unavailable");
+            return;
+        }
+        if (SyncClient is not null)
+        {
+            try { await SyncClient.PushMetadataEditsAsync(Db, cancellationToken).ConfigureAwait(false); }
+            catch (Exception exception) when (exception is HttpRequestException or InvalidOperationException)
+            { AppLogger.Warn("Manual metadata sync pending: " + exception.GetType().Name); }
+            try { await SyncClient.PushFaceReviewDecisionsAsync(Db, cancellationToken).ConfigureAwait(false); }
+            catch (HttpRequestException)
+            {
+                AppLogger.Warn("人工人脸状态同步未完成，保留本地操作日志并等待重试");
+            }
+        }
         var sources = await mirrorGateway.ListSourcesAsync(cancellationToken).ConfigureAwait(false);
         try
         {
@@ -254,54 +318,81 @@ public static class AppServices
         {
             AppLogger.Warn("Remote directory classification preferences unavailable: " + exception.Message);
         }
+        var incremental = await RefreshChangedMediaAsync(mirrorGateway, sources, cancellationToken).ConfigureAwait(false);
+        if (incremental.Supported && incremental.Checkpoint?.MetadataRevision == incremental.MetadataRevision)
+        {
+            Volatile.Write(ref _remoteMediaBootstrapped, true);
+            return;
+        }
+        var metadataComplete = true;
         // Metadata routes were added after the initial index-service deployment. Keep
         // image/video mirroring compatible with an older service while it is being
         // upgraded; each collection is optional and can be retried on the next sync.
         try
         {
-            foreach (var tag in await mirrorGateway.ListTagsAsync(cancellationToken).ConfigureAwait(false))
-                Db.UpsertMirroredTag(tag);
+            var tags = await mirrorGateway.ListTagsAsync(cancellationToken).ConfigureAwait(false);
+            await UiWork.RunDatabaseAsync("RemoteMirror.Tags", () =>
+            {
+                foreach (var tag in tags) Db.UpsertMirroredTag(tag);
+                Db.ReconcileMirroredCatalog("tag", tags.Select(item => item.Id), ServiceMode && incremental.Supported, SyncClient?.AcknowledgedMetadataOperations);
+            }, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is HttpRequestException or InvalidOperationException)
         {
             AppLogger.Warn("Remote tag metadata is unavailable; continuing media sync: " + ex.Message);
+            metadataComplete = false;
         }
         try
         {
-            foreach (var album in await mirrorGateway.ListAlbumsAsync(cancellationToken).ConfigureAwait(false))
-                Db.UpsertMirroredAlbum(album);
+            var albums = await mirrorGateway.ListAlbumsAsync(cancellationToken).ConfigureAwait(false);
+            await UiWork.RunDatabaseAsync("RemoteMirror.Albums", () =>
+            {
+                foreach (var album in albums) Db.UpsertMirroredAlbum(album);
+                Db.ReconcileMirroredCatalog("album", albums.Select(item => item.Id), ServiceMode && incremental.Supported, SyncClient?.AcknowledgedMetadataOperations);
+            }, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is HttpRequestException or InvalidOperationException)
         {
             AppLogger.Warn("Remote album metadata is unavailable; continuing media sync: " + ex.Message);
+            metadataComplete = false;
         }
         try
         {
-            foreach (var person in await mirrorGateway.ListPeopleAsync(cancellationToken).ConfigureAwait(false))
-                Db.UpsertMirroredPerson(person);
+            var people = await mirrorGateway.ListPeopleAsync(cancellationToken).ConfigureAwait(false);
+            await UiWork.RunDatabaseAsync("RemoteMirror.People", () =>
+            {
+                foreach (var person in people) Db.UpsertMirroredPerson(person);
+                Db.ReconcileMirroredCatalog("person", people.Select(item => item.Id), ServiceMode && incremental.Supported, SyncClient?.AcknowledgedMetadataOperations);
+            }, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is HttpRequestException or InvalidOperationException)
         {
             AppLogger.Warn("Remote people metadata is unavailable; continuing media sync: " + ex.Message);
+            metadataComplete = false;
         }
-        foreach (var source in sources)
+        foreach (var source in incremental.Supported ? [] : sources)
         {
-            var existingSources = Db.GetSources();
-            var localSource = existingSources.FirstOrDefault(item => string.Equals(item.Path, source.Path, StringComparison.OrdinalIgnoreCase))
-                ?? (existingSources.Count == 1 && existingSources[0].ImageCount == source.ImageCount
-                    ? existingSources[0]
-                    : Db.AddSource(source.Path));
-            var mediaComplete = !fullMediaReconciliation && localSource.ImageCount == source.ImageCount && source.ImageCount > 0;
+            var localSource = await UiWork.RunDatabaseAsync("RemoteMirror.AddSource",
+                () =>
+                {
+                    var local = Db.AddSource(source.Path, reconcileAliases: true);
+                    local.ImageCount = Db.GetImageCount(local.Id);
+                    return local;
+                }, cancellationToken).ConfigureAwait(false);
             string? cursor = null;
-            if (!mediaComplete)
+            // Counts cannot detect renames, replacements or metadata edits.
             {
                 do
                 {
-                    var page = await mirrorGateway.ListImagesAsync(source.Id, false, 500, cursor, cancellationToken).ConfigureAwait(false);
-                    foreach (var image in page.Items)
+                    var page = await mirrorGateway.ListImagesAsync(source.Id, true, 500, cursor, cancellationToken).ConfigureAwait(false);
+                    foreach (var batch in page.Items.Chunk(50))
                     {
-                        image.SourceId = localSource.Id;
-                        Db.UpsertMirroredImage(image);
+                        foreach (var image in batch) image.SourceId = localSource.Id;
+                        await UiWork.RunDatabaseAsync("RemoteMirror.Images.UpsertBatch", () =>
+                        {
+                            foreach (var image in batch) ValidateLocalMirrorIdentity("image", image.Id, image.Path);
+                            Db.UpsertMirroredImageBatch(batch);
+                        }, cancellationToken).ConfigureAwait(false);
                     }
                     cursor = page.NextCursor;
                 } while (cursor is not null);
@@ -313,68 +404,200 @@ public static class AppServices
                 do
                 {
                     var page = await mirrorGateway.ListVideosAsync(source.Id, 500, cursor, cancellationToken).ConfigureAwait(false);
-                    foreach (var video in page.Items)
-                        Videos.UpsertMirrored(video, localSource.Id);
+                    foreach (var batch in page.Items.Chunk(50))
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        await UiWork.RunDatabaseAsync("RemoteMirror.Videos.UpsertBatch", () =>
+                        {
+                            foreach (var video in batch) ValidateLocalMirrorIdentity("video", video.Id, video.Path);
+                            Videos.UpsertMirroredBatch(batch, localSource.Id);
+                        }, cancellationToken).ConfigureAwait(false);
+                    }
                     cursor = page.NextCursor;
                 } while (cursor is not null);
             }
             catch (Exception ex) when (ex is HttpRequestException or InvalidOperationException or Microsoft.Data.Sqlite.SqliteException)
             {
+                if (requireMetadataSync) throw;
                 AppLogger.Warn("Remote video mirror deferred; image metadata sync will continue: " + ex.Message);
             }
         }
-        Volatile.Write(ref _remoteMediaBootstrapped, true);
         try
         {
             // Apply relationships only after all mirrored media rows exist; the
             // foreign keys intentionally protect against partial remote syncs.
-            var metadata = await mirrorGateway.GetMetadataAsync(cancellationToken).ConfigureAwait(false);
+            var httpMirror = mirrorGateway as HttpIndexGateway;
+            var metadata = httpMirror is null
+                ? await mirrorGateway.GetMetadataAsync(cancellationToken).ConfigureAwait(false)
+                : await httpMirror.GetMetadataAsync(cancellationToken, includeEmbeddings: false, includeFaceModels: true).ConfigureAwait(false);
             // The normal mirror payload omits vectors for speed. Fetch them
             // once when this mirror has not yet populated a model space; later
             // 30-second refreshes keep the existing vectors via COALESCE.
-            if (mirrorGateway is HttpIndexGateway httpGateway && metadata.Faces.Count > 0)
+            if (httpMirror is not null && metadata.Faces.Count > 0)
             {
-                var missingModelVectors = metadata.Faces.Select(face => face.ModelVersion)
+                var missingModelVectors = await UiWork.RunDatabaseAsync("RemoteMirror.VectorCoverage", () => metadata.Faces.Select(face => face.ModelVersion)
                     .Distinct(StringComparer.OrdinalIgnoreCase)
-                    .Any(model => VisionRepository.GetFaceEmbeddingCount(model) == 0);
+                    .Any(model => VisionRepository.GetFaceEmbeddingCount(model) == 0), cancellationToken).ConfigureAwait(false);
                 if (missingModelVectors)
                 {
                     AppLogger.Info("Remote mirror is missing face vectors; requesting one full vector payload");
-                    metadata = await httpGateway.GetMetadataAsync(cancellationToken, includeEmbeddings: true).ConfigureAwait(false);
+                    metadata = await httpMirror.GetMetadataAsync(cancellationToken, includeEmbeddings: true, includeFaceModels: true).ConfigureAwait(false);
                 }
             }
-            AppLogger.Info($"Remote metadata projection: faces={metadata.Faces.Count}, reviews={metadata.FaceReviewStatesOrEmpty.Count}, candidateClusters={metadata.FaceCandidateClustersOrEmpty.Count}, candidateMembers={metadata.FaceCandidateMembersOrEmpty.Count}, scenes={metadata.SceneGroupDescriptionsOrEmpty.Count}");
+            AppLogger.Info($"Remote metadata projection: faces={metadata.Faces.Count}, reviews={metadata.FaceReviewStatesOrEmpty.Count}, candidateClusters={metadata.FaceCandidateClustersOrEmpty.Count}, candidateMembers={metadata.FaceCandidateMembersOrEmpty.Count}, scenes={metadata.SceneGroupDescriptionsOrEmpty.Count}, videoKeyframes={metadata.VideoKeyframes.Count}, videoFaces={metadata.VideoFacesOrEmpty.Count}, transcripts={metadata.VideoTranscripts.Count}, summaries={metadata.VideoSummaries.Count}");
             // Face rows are part of the mirrored index, not local-only state. They
             // must be applied before assignments so the same people/faces are
             // visible in the remote client and can be searched there.
-            Db.UpsertMirroredFaces(metadata.Faces, metadata.FaceAssignments);
-            Db.ReplaceMirroredFaceWorkflow(metadata);
-            Db.UpsertMirroredVideoMetadata(metadata);
-            AppLogger.Info($"Remote metadata applied: scenes={Db.GetAllMirroredSceneGroupDescriptions().Count}; analyses={Db.GetAllMirroredCloudVisionAnalyses().Count}; faces={Db.GetAllMirroredFaces().Count}");
-            foreach (var link in metadata.AlbumImages)
-                SemanticEngine.AddToAlbum(Db, link.AlbumId, link.ImageId);
-            foreach (var link in metadata.ImageTags)
-                Db.UpsertMirroredImageTag(link.ImageId, link.TagId);
-            Db.UpsertMirroredLocations(metadata.Locations);
+            if (incremental.Supported)
+                await UiWork.RunDatabaseAsync("RemoteMirror.ReconcileRelationships", () =>
+                    Db.ReconcileMirroredPhotoMetadata(metadata, authoritativeCatalog: ServiceMode && incremental.Supported), cancellationToken).ConfigureAwait(false);
+            await UiWork.RunDatabaseAsync("RemoteMirror.Faces", () =>
+                Db.UpsertMirroredFaces(metadata.Faces, metadata.FaceAssignments), cancellationToken).ConfigureAwait(false);
+            await UiWork.RunDatabaseAsync("RemoteMirror.FaceWorkflow", () =>
+                Db.ReplaceMirroredFaceWorkflow(metadata), cancellationToken).ConfigureAwait(false);
+            if (metadata.FaceTrainingArtifacts is not null && metadata.FacePersonPrototypes is not null &&
+                metadata.FacePersonPolicies is not null && metadata.FaceModelSettings is not null)
+                await UiWork.RunDatabaseAsync("RemoteMirror.FaceTrainingMetadata", () =>
+                    Db.UpsertMirroredFaceTrainingMetadata(metadata), cancellationToken).ConfigureAwait(false);
+            await UiWork.RunDatabaseAsync("RemoteMirror.VideoMetadata", () =>
+                Db.UpsertMirroredVideoMetadata(metadata, authoritative: ServiceMode && incremental.Supported), cancellationToken).ConfigureAwait(false);
+            AppLogger.Info($"Remote metadata applied: scenes={metadata.SceneGroupDescriptionsOrEmpty.Count}; analyses={metadata.CloudVisionAnalysesOrEmpty.Count}; faces={metadata.Faces.Count}; videoKeyframes={metadata.VideoKeyframes.Count}; videoFaces={metadata.VideoFacesOrEmpty.Count}");
+            foreach (var batch in metadata.AlbumImages.Chunk(50))
+                await UiWork.RunDatabaseAsync("RemoteMirror.AlbumLinks", () =>
+                {
+                    foreach (var link in batch) SemanticEngine.AddToAlbum(Db, link.AlbumId, link.ImageId, recordEdit: false);
+                }, cancellationToken).ConfigureAwait(false);
+            foreach (var batch in metadata.ImageTags.Chunk(50))
+                await UiWork.RunDatabaseAsync("RemoteMirror.TagLinks", () =>
+                {
+                    foreach (var link in batch) Db.UpsertMirroredImageTag(link.ImageId, link.TagId);
+                }, cancellationToken).ConfigureAwait(false);
+            await UiWork.RunDatabaseAsync("RemoteMirror.Locations", () =>
+                Db.UpsertMirroredLocations(metadata.Locations), cancellationToken).ConfigureAwait(false);
+            await UiWork.RunDatabaseAsync("RemoteMirror.ManualEdits", Db.ReplayMetadataEdits, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is HttpRequestException or InvalidOperationException or Microsoft.Data.Sqlite.SqliteException)
         {
+            if (requireMetadataSync) throw;
             AppLogger.Warn("Remote metadata links are unavailable; continuing media sync: " + ex.Message);
+            metadataComplete = false;
+        }
+        if (metadataComplete && incremental.Checkpoint is { } completedCheckpoint)
+            await UiWork.RunDatabaseAsync("RemoteMirror.MetadataCheckpoint", () =>
+                Db.SaveMirrorCheckpoint(completedCheckpoint with { MetadataRevision = incremental.MetadataRevision }), cancellationToken).ConfigureAwait(false);
+        Volatile.Write(ref _remoteMediaBootstrapped, true);
+    }
+
+    /// <summary>
+    /// Refreshes only the remote video catalog. Video scan must not trigger the
+    /// expensive full metadata/vector mirror; that operation can take minutes
+    /// for a large library and previously made the Scan Videos button appear
+    /// hung.
+    /// </summary>
+    public static async Task SyncRemoteVideosAsync(CancellationToken cancellationToken = default)
+    {
+        var mirrorGateway = ServiceMode ? Gateway : SyncGateway;
+        if (mirrorGateway is null) return;
+        var sources = await mirrorGateway.ListSourcesAsync(cancellationToken).ConfigureAwait(false);
+        foreach (var source in sources)
+        {
+            var localSource = await UiWork.RunDatabaseAsync("RemoteVideos.AddSource",
+                () => Db.AddSource(source.Path, reconcileAliases: true), cancellationToken).ConfigureAwait(false);
+            string? cursor = null;
+            do
+            {
+                var page = await mirrorGateway.ListVideosAsync(source.Id, 500, cursor, cancellationToken).ConfigureAwait(false);
+                foreach (var batch in page.Items.Chunk(50))
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    await UiWork.RunDatabaseAsync("RemoteVideos.UpsertBatch", () =>
+                    {
+                        foreach (var video in batch) ValidateLocalMirrorIdentity("video", video.Id, video.Path);
+                        Videos.UpsertMirroredBatch(batch, localSource.Id);
+                    }, cancellationToken).ConfigureAwait(false);
+                }
+                AppLogger.Info($"远程视频镜像写入进度：source={source.Id}; batch={page.Items.Count}; cursor={page.NextCursor ?? "end"}");
+                cursor = page.NextCursor;
+            } while (cursor is not null);
         }
     }
 
     public static async Task<IndexSyncClient.IndexSyncResult?> SyncLocalChangesToRemoteAsync(
         CancellationToken cancellationToken = default, IProgress<string>? progress = null)
     {
+        await RemoteMirrorGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try { return await SyncLocalChangesToRemoteCoreAsync(cancellationToken, progress).ConfigureAwait(false); }
+        finally { RemoteMirrorGate.Release(); }
+    }
+
+    private static async Task<IndexSyncClient.IndexSyncResult?> SyncLocalChangesToRemoteCoreAsync(
+        CancellationToken cancellationToken = default, IProgress<string>? progress = null)
+    {
         if (SyncClient is null) return null;
+        if (ServiceMode && !Volatile.Read(ref _remoteMediaBootstrapped))
+            await SyncRemoteMirrorCoreAsync(cancellationToken, requireMetadataSync: true).ConfigureAwait(false);
         var checkpoint = Path.Combine(AppPaths.DataRoot,
             ServiceMode ? "remote-sync-checkpoint.json" : "index-sync-checkpoint.json");
         var result = await SyncClient.PushIncrementalAsync(Db, checkpoint, progress, cancellationToken,
-            publishSceneLayouts: !ServiceMode).ConfigureAwait(false);
+            publishSceneLayouts: !ServiceMode, publishMedia: !ServiceMode).ConfigureAwait(false);
         await SyncClient.PushDirectoryClassificationAsync(
             new DirectoryClassificationPreferences(AppPaths.DirectoryClassificationSettingsPath).Snapshot(), cancellationToken).ConfigureAwait(false);
         AppLogger.Info($"增量索引发布完成：changed={result.Changed}; images={result.Images}; videos={result.Videos}");
         return result;
+    }
+
+    /// <summary>Publishes a committed index/calibration change without blocking the UI.
+    /// In local mode this is active only when the user paired a remote IndexService.</summary>
+    public static void QueueImmediateRemoteSync(string reason)
+    {
+        if (SyncClient is null) return;
+        // A vector/media upload may already be in flight for minutes. Manual
+        // review decisions have their own serialized small request path.
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await SyncClient.PushFaceReviewDecisionsAsync(Db).ConfigureAwait(false);
+                AppLogger.Info("人工人脸状态同步完成");
+            }
+            catch (Exception exception) when (exception is HttpRequestException or InvalidOperationException or Microsoft.Data.Sqlite.SqliteException)
+            {
+                AppLogger.Warn("人工人脸状态同步未完成，操作日志已保留等待重试");
+            }
+        });
+        Interlocked.Exchange(ref _remoteSyncRequested, 1);
+        if (Interlocked.CompareExchange(ref _remoteSyncWorkerRunning, 1, 0) != 0) return;
+        _ = Task.Run(() => RunImmediateRemoteSyncAsync(reason));
+    }
+
+    private static async Task RunImmediateRemoteSyncAsync(string reason)
+    {
+        try
+        {
+            do
+            {
+                Interlocked.Exchange(ref _remoteSyncRequested, 0);
+                try
+                {
+                    AppLogger.Info($"远程索引即时同步开始：reason={reason}");
+                    await SyncLocalChangesToRemoteAsync().ConfigureAwait(false);
+                    AppLogger.Info($"远程索引即时同步完成：reason={reason}");
+                }
+                catch (Exception exception)
+                {
+                    AppLogger.Warn($"远程索引即时同步失败，将由后台重试：reason={reason}; {exception.Message}");
+                }
+            } while (Volatile.Read(ref _remoteSyncRequested) != 0);
+        }
+        finally
+        {
+            Volatile.Write(ref _remoteSyncWorkerRunning, 0);
+            // A write may arrive between the loop's final check and clearing
+            // the worker flag. Re-arm the worker without losing that request.
+            if (Volatile.Read(ref _remoteSyncRequested) != 0 &&
+                Interlocked.CompareExchange(ref _remoteSyncWorkerRunning, 1, 0) == 0)
+                _ = Task.Run(() => RunImmediateRemoteSyncAsync(reason));
+        }
     }
 
     public static (CloudVisionAnalysisService Service, OpenAiCompatibleCloudVisionAnalyzer Analyzer, CloudVisionRunPolicy Policy, string ProviderLabel, bool IsLocal)? CreateCloudVisionService(string featureId = AiFeatureIds.PhotoAnalysis)
@@ -385,63 +608,71 @@ public static class AppServices
         if (resolved is null) return null;
         var provider = resolved.Value.Provider;
         var model = resolved.Value.Model;
-        var credentials = new WindowsCredentialStore();
         var isLocal = AiProviderIds.IsLocal(provider.Id);
-        var key = isLocal ? "local-proxy" : credentials.Read(PicerCredentialTargets.AiProvider(provider.Id));
-        if (string.IsNullOrWhiteSpace(key) && provider.Id.Equals("bailian", StringComparison.OrdinalIgnoreCase)) key = credentials.Read(PicerCredentialTargets.Bailian);
-        if (string.IsNullOrWhiteSpace(key) && provider.Id.Equals("zhipu", StringComparison.OrdinalIgnoreCase)) key = credentials.Read(PicerCredentialTargets.Zhipu);
-        if (string.IsNullOrWhiteSpace(key)) return null;
-        var baseUrl = provider.BaseUrl.TrimEnd('/');
-        var endpointText = isLocal || baseUrl.EndsWith("/chat/completions", StringComparison.OrdinalIgnoreCase)
-            ? baseUrl : baseUrl + "/chat/completions";
-        if (!Uri.TryCreate(endpointText, UriKind.Absolute, out var endpoint)) return null;
-        var options = new CloudVisionApiOptions(endpoint, key, model.Id, provider.Id, PromptVersion: "picer-photo-v2-concise");
-        var analyzer = new OpenAiCompatibleCloudVisionAnalyzer(options);
-        return (new CloudVisionAnalysisService(CloudVisionRepository, analyzer, Geocoder, People), analyzer,
-            new CloudVisionRunPolicy(true, settings.MaximumImagesPerRun, settings.IncludePreciseGps,
-                isLocal ? decimal.MaxValue : settings.DailyBudgetYuan,
-                isLocal ? decimal.MaxValue : settings.MonthlyBudgetYuan),
-            $"{provider.Name} / {model.Name}", isLocal);
+        TryGetAiServiceBackend(out var serviceBackend);
+        if (serviceBackend.BaseUrl is { Length: > 0 } configuredService
+            && Uri.TryCreate(configuredService.TrimEnd('/') + "/api/ai/v1/chat/stream", UriKind.Absolute, out var configuredEndpoint))
+        {
+            var routedClient = CreatePinnedServiceClient(serviceBackend, TimeSpan.FromMinutes(5));
+            var routed = new OpenAiCompatibleCloudVisionAnalyzer(new CloudVisionApiOptions(configuredEndpoint, serviceBackend.Token ?? "", model.Id, "index-service", PromptVersion: "picer-photo-v2-concise"), routedClient, disposeClient: true);
+            return (new CloudVisionAnalysisService(CloudVisionRepository, routed, Geocoder, People,
+                databaseWork: (work, ct) => UiWork.RunDatabaseAsync(work, ct)), routed,
+                new CloudVisionRunPolicy(true, settings.MaximumImagesPerRun, settings.IncludePreciseGps,
+                    isLocal ? decimal.MaxValue : settings.DailyBudgetYuan, isLocal ? decimal.MaxValue : settings.MonthlyBudgetYuan,
+                    EstimatedRequestCostYuan: isLocal ? 0m : 0.02m),
+                $"IndexService / {model.Name}", isLocal);
+        }
+        AppLogger.Warn($"AI视觉请求未通过 IndexService，已拒绝客户端直连；feature={featureId}; provider={provider.Id}");
+        return null;
     }
 
-    public static OpenAiCompatibleSceneSummarizer? CreateSceneGroupSummarizer()
+    public static ISceneGroupSummarizer? CreateSceneGroupSummarizer()
     {
-        var settings = CloudVisionSettings.Load(AppPaths.CloudVisionSettingsPath);
-        if (!settings.Enabled) return null;
-        var resolved = settings.Resolve(AiFeatureIds.SceneDescription);
-        if (resolved is null) return null;
-        var provider = resolved.Value.Provider;
-        var model = resolved.Value.Model;
-        var credentials = new WindowsCredentialStore();
-        var isLocal = AiProviderIds.IsLocal(provider.Id);
-        var key = isLocal ? "local-proxy" : credentials.Read(PicerCredentialTargets.AiProvider(provider.Id));
-        if (string.IsNullOrWhiteSpace(key) && provider.Id.Equals("bailian", StringComparison.OrdinalIgnoreCase)) key = credentials.Read(PicerCredentialTargets.Bailian);
-        if (string.IsNullOrWhiteSpace(key) && provider.Id.Equals("zhipu", StringComparison.OrdinalIgnoreCase)) key = credentials.Read(PicerCredentialTargets.Zhipu);
-        if (string.IsNullOrWhiteSpace(key)) return null;
-        var baseUrl = provider.BaseUrl.TrimEnd('/');
-        var endpointText = isLocal || baseUrl.EndsWith("/chat/completions", StringComparison.OrdinalIgnoreCase)
-            ? baseUrl : baseUrl + "/chat/completions";
-        if (!Uri.TryCreate(endpointText, UriKind.Absolute, out var endpoint)) return null;
-        return new OpenAiCompatibleSceneSummarizer(new CloudVisionApiOptions(endpoint, key, model.Id, provider.Id));
+        if (TryGetAiServiceBackend(out var configuredBackend)
+            && configuredBackend.BaseUrl is { Length: > 0 } configuredService
+            && Uri.TryCreate(configuredService.TrimEnd('/') + "/", UriKind.Absolute, out var configuredServiceEndpoint))
+            return new ServiceSceneGroupSummarizer(configuredServiceEndpoint, configuredBackend.Token ?? "", client: CreatePinnedServiceClient(configuredBackend, TimeSpan.FromMinutes(5)));
+        if (ServiceMode)
+        {
+            var backend = AppPaths.LoadIndexBackend();
+            if (backend.BaseUrl is { Length: > 0 } remoteUrl && Uri.TryCreate(remoteUrl.TrimEnd('/') + "/", UriKind.Absolute, out var serviceEndpoint))
+            {
+                AppLogger.Info("远程场景摘要使用 IndexService VL 路由");
+                return new ServiceSceneGroupSummarizer(serviceEndpoint, backend.Token ?? "", client: CreatePinnedServiceClient(backend, TimeSpan.FromMinutes(5)));
+            }
+            AppLogger.Warn("远程场景摘要不可用：IndexService 端点未配置");
+            return null;
+        }
+        if (!TryGetAiServiceBackend(out _))
+        {
+            AppLogger.Warn("场景摘要未配置 IndexService，已拒绝客户端直连");
+            return null;
+        }
+        AppLogger.Warn("场景摘要 IndexService 端点不可用");
+        return null;
     }
 
     public static IVideoTranscriptionService? CreateVideoTranscriptionService()
     {
-        var ffmpeg = new FfmpegLocator().Find();
-        if (ffmpeg is null) return null;
-        var settings = CloudVisionSettings.Load(AppPaths.CloudVisionSettingsPath);
-        var resolved = settings.Resolve(AiFeatureIds.VideoTranscription);
-        if (resolved is not null && AiProviderIds.IsLocal(resolved.Value.Provider.Id))
+        if (TryGetAiServiceBackend(out var configuredBackend)
+            && configuredBackend.BaseUrl is { Length: > 0 } configuredService
+            && Uri.TryCreate(configuredService.TrimEnd('/') + "/", UriKind.Absolute, out var configuredServiceEndpoint))
         {
-            if (resolved.Value.Provider.Id.Equals(AiProviderIds.LocalQwenAsr, StringComparison.OrdinalIgnoreCase) &&
-                Uri.TryCreate(resolved.Value.Provider.BaseUrl, UriKind.Absolute, out var endpoint))
-                return new QwenAsrTranscriptionService(ffmpeg, endpoint, resolved.Value.Model.Id,
-                    Path.Combine(AppPaths.DataRoot, "video-audio"));
-            if (resolved.Value.Provider.Id.Equals(AiProviderIds.BundledWhisper, StringComparison.OrdinalIgnoreCase) &&
-                File.Exists(AppPaths.BundledWhisperPath) && File.Exists(AppPaths.BundledWhisperModelPath))
-                return new WhisperTranscriptionService(ffmpeg, AppPaths.BundledWhisperPath,
-                    AppPaths.BundledWhisperModelPath, Path.Combine(AppPaths.DataRoot, "video-audio"));
+            AppLogger.Info($"视频转写统一使用 IndexService 中继；mode={(ServiceMode ? "remote" : "local")}");
+            return new ServiceVideoTranscriptionService(configuredServiceEndpoint, configuredBackend.Token ?? "");
         }
+        if (ServiceMode)
+        {
+            var backend = AppPaths.LoadIndexBackend();
+            if (backend.BaseUrl is { Length: > 0 } baseUrl && Uri.TryCreate(baseUrl.TrimEnd('/') + "/", UriKind.Absolute, out var serviceEndpoint))
+            {
+                AppLogger.Info("远程视频转写使用 IndexService Service 路由");
+                return new ServiceVideoTranscriptionService(serviceEndpoint, backend.Token ?? "");
+            }
+            AppLogger.Warn("远程视频转写不可用：IndexService 端点未配置");
+            return null;
+        }
+        AppLogger.Warn("视频转写未配置 IndexService，已拒绝客户端直连");
         return null;
     }
 
@@ -453,9 +684,8 @@ public static class AppServices
         if (resolved is null) { AppLogger.Warn($"AI chat client unavailable: feature binding missing; feature={featureId}"); return null; }
         var provider = resolved.Value.Provider; var model = resolved.Value.Model;
         var isLocal = AiProviderIds.IsLocal(provider.Id);
-        if (ServiceMode)
+        if (TryGetAiServiceBackend(out var backend))
         {
-            var backend = AppPaths.LoadIndexBackend();
             if (backend.BaseUrl is { Length: > 0 } remoteBase && !string.IsNullOrWhiteSpace(backend.Token)
                 && Uri.TryCreate(remoteBase.TrimEnd('/') + "/api/ai/v1/chat/stream", UriKind.Absolute, out var remoteEndpoint))
             {
@@ -474,15 +704,8 @@ public static class AppServices
             AppLogger.Warn($"AI chat client unavailable: remote IndexService endpoint missing; feature={featureId}");
             return null;
         }
-        var key = isLocal ? "local-proxy" : new WindowsCredentialStore().Read(PicerCredentialTargets.AiProvider(provider.Id));
-        if (string.IsNullOrWhiteSpace(key)) { AppLogger.Warn($"AI chat client unavailable: credential missing; provider={provider.Id}"); return null; }
-        var baseUrl = provider.BaseUrl.TrimEnd('/');
-        var target = isLocal || baseUrl.EndsWith("/chat/completions", StringComparison.OrdinalIgnoreCase)
-            ? baseUrl : baseUrl + "/chat/completions";
-        if (!Uri.TryCreate(target, UriKind.Absolute, out var endpoint))
-        { AppLogger.Warn($"AI chat client unavailable: endpoint invalid; provider={provider.Id}"); return null; }
-        AppLogger.Info($"AI chat client created; feature={featureId}; provider={provider.Id}; local={isLocal}");
-        return new OpenAiCompatibleChatClient(endpoint, key, model.Id);
+        AppLogger.Warn($"AI chat client unavailable: IndexService endpoint missing; feature={featureId}");
+        return null;
     }
 
     public static void Shutdown()
@@ -495,9 +718,80 @@ public static class AppServices
         }
         VisionAnalysis?.Dispose();
         FaceTraining?.Dispose();
+        (VideoKeyframes as IDisposable)?.Dispose();
+        (VideoTranscription as IDisposable)?.Dispose();
         (FaceAnalyzer as IDisposable)?.Dispose();
         ClipEncoder?.Dispose();
         Db?.Dispose();
         (Geocoder as IDisposable)?.Dispose();
+    }
+
+    /// <summary>
+    /// Resolves the IndexService endpoint for both GUI modes.  Local mode
+    /// keeps its own SQLite/index, but AI requests still use the paired
+    /// service endpoint; there is intentionally no localhost model fallback.
+    /// </summary>
+    private static bool TryGetAiServiceBackend(out IndexBackendOptions backend)
+    {
+        try
+        {
+            var configured = AppPaths.LoadIndexBackend();
+            if (configured.BaseUrl is { Length: > 0 })
+            {
+                backend = configured;
+                return true;
+            }
+
+            var paired = IndexBackendConfig.LoadConfiguredServiceEndpoint(
+                AppPaths.ServiceEndpointPath,
+                static cipher => System.Security.Cryptography.ProtectedData.Unprotect(
+                    cipher, null, System.Security.Cryptography.DataProtectionScope.CurrentUser));
+            if (paired?.BaseUrl is { Length: > 0 })
+            {
+                backend = paired;
+                return true;
+            }
+        }
+        catch (Exception exception)
+        {
+            AppLogger.Warn("IndexService endpoint unavailable for AI relay: " + exception.GetType().Name);
+        }
+
+        backend = new IndexBackendOptions(IndexBackendConfig.LocalMode, null, null, null);
+        return false;
+    }
+
+    /// <summary>
+    /// Creates the HTTP client used for AI calls through IndexService. The
+    /// service is intentionally certificate-pinned rather than relying on the
+    /// machine trust store, because the paired endpoint uses a private cert.
+    /// </summary>
+    public static string? TrainingServiceEndpoint => TryGetAiServiceBackend(out var backend) ? backend.BaseUrl : null;
+
+    public static FaceTrainingSubmissionService CreateTrainingSubmissionService() => new(CreateTrainingHttpClient());
+
+    public static HttpClient CreateTrainingHttpClient()
+    {
+        if (!TryGetAiServiceBackend(out var backend)) throw new InvalidOperationException("训练服务尚未配对");
+        var client = CreatePinnedServiceClient(backend, TimeSpan.FromMinutes(10));
+        client.BaseAddress = new Uri(backend.BaseUrl!.TrimEnd('/') + "/api/service/v1/training/");
+        return client;
+    }
+
+    internal static HttpClient CreatePinnedServiceClient(IndexBackendOptions backend, TimeSpan timeout)
+    {
+        var handler = new HttpClientHandler
+        {
+            ServerCertificateCustomValidationCallback = (_, certificate, _, _) =>
+            {
+                if (certificate is null) return false;
+                if (backend.SpkiPin is null || backend.SpkiPin.Length == 0) return false;
+                var actual = HttpIndexGateway.ComputeSpkiPin(new System.Security.Cryptography.X509Certificates.X509Certificate2(certificate));
+                return System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(actual, backend.SpkiPin);
+            }
+        };
+        var client = new HttpClient(handler) { Timeout = timeout };
+        client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", backend.Token ?? "");
+        return client;
     }
 }

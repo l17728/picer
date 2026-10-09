@@ -1,3 +1,4 @@
+using Picer.Core.Imaging;
 using System.IO;
 using System.IO.Compression;
 using Picer.App;
@@ -10,8 +11,6 @@ using Picer.Core.SemanticSearch;
 using Picer.Core.Storage;
 using Picer.Core.Thumbnails;
 using Picer.Core.Vision;
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.PixelFormats;
 
 namespace Picer.E2E;
 
@@ -26,8 +25,8 @@ public sealed class LifecycleScenarioTests : IDisposable
         var data = Path.Combine(_root, "data");
         Directory.CreateDirectory(photos);
         Directory.CreateDirectory(data);
-        CreateImage(Path.Combine(photos, "family-beach.png"), new Rgb24(30, 110, 220));
-        CreateImage(Path.Combine(photos, "city-night.jpg"), new Rgb24(20, 20, 40));
+        CreateImage(Path.Combine(photos, "family-beach.png"), new RgbPixel(30, 110, 220));
+        CreateImage(Path.Combine(photos, "city-night.jpg"), new RgbPixel(20, 20, 40));
 
         var dbPath = Path.Combine(data, "picer.db");
         long beachId;
@@ -98,7 +97,7 @@ public sealed class LifecycleScenarioTests : IDisposable
     {
         Directory.CreateDirectory(_root);
         var imagePath = Path.Combine(_root, "group.jpg");
-        CreateImage(imagePath, new Rgb24(160, 110, 80));
+        CreateImage(imagePath, new RgbPixel(160, 110, 80));
         var dbPath = Path.Combine(_root, "people.db");
         long imageId;
         long correctPersonId;
@@ -135,7 +134,7 @@ public sealed class LifecycleScenarioTests : IDisposable
 
             var clip = new ClipSemanticRepository(database);
             clip.Upsert(image, "scenario-clip", [1f, 0f, 0f]);
-            var hit = Assert.Single(clip.Search([1f, 0f, 0f]));
+            var hit = Assert.Single(clip.Search([1f, 0f, 0f], modelVersion: "scenario-clip"));
             Assert.Equal(image.Id, hit.Image.Id);
             clip.SaveEvaluation("家庭海边", "scenario-clip", 1, [(hit, true)]);
         }
@@ -148,9 +147,9 @@ public sealed class LifecycleScenarioTests : IDisposable
             new SearchFilters { Query = "海边合影", PersonId = correctPersonId, IncludeMissing = false }));
     }
 
-    private static void CreateImage(string path, Rgb24 color)
+    private static void CreateImage(string path, RgbPixel color)
     {
-        using var image = new Image<Rgb24>(48, 32, color);
+        using var image = new RasterImage(48, 32, color);
         if (Path.GetExtension(path).Equals(".jpg", StringComparison.OrdinalIgnoreCase)) image.SaveAsJpeg(path);
         else image.SaveAsPng(path);
     }

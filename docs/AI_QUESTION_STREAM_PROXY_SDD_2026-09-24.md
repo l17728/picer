@@ -1,21 +1,29 @@
 # Picer AI 问答流式代理 SDD
 
+<!-- historical-status-2026-10-09 -->
+> **历史资料，2026-10-09 状态对照**：正文保留该阶段设计、测试和部署证据；其中“当前”“待办”“已部署”及验收数字按当时语境理解，不代表最新程序状态。
+> 当前能力见[当前能力与验证状态](CURRENT_CAPABILITIES_2026-10-09.md)，后续结果见[最新代码修复与验证](RESIDUAL_CODE_FIXES_2026-10-09.md)。当前源码 schema 45；605 项单元用例由完整回归与补测分轮去重核验，WPF 73/73，不是一次全量 605/605，也不证明历史部署包包含新代码。
+> 后续替代：MediaAgent 已提供授权的本地模型 HTTP 代理和任务执行，正文“目前只读取原图/视频”是早期设计基线。流式问答和取消行为以当前实现及最新验证为准。
+<!-- /historical-status-2026-10-09 -->
+
 版本：1.0  
 日期：2026-09-24  
-状态：设计评审中，评审通过后实施
+状态：核心流式代理已实现；本文中的初始缺口与分阶段计划为历史记录，路由以 2026-10-04 代码核对说明为准。
+
+> 架构校正（2026-10-04，以现行代码为准）：本文早期方案中“Local GUI 直接连接本地模型”的描述已过时。Local/Remote GUI 的 AI 问答现在都通过配对的 IndexService；Local 模式仍使用本机 SQLite/LocalGateway 作为索引事实源，远程 IndexService 只承担 AI 中继（以及用户显式启用时的索引同步）。模型调用由 IndexService 通过 MediaAgent WSS 转发到 Agent 的 loopback endpoint。`AppServices.TryGetAiServiceBackend` 没有 localhost 模型直连回退；未配置 IndexService 时 AI 功能不可用。注意 MediaAgent 当前通过进程环境变量 `PICER_LOCAL_MODEL_ENDPOINT` 选择问答上游，默认 `http://127.0.0.1:8090/api/vl/chat`；IndexService 广播的运行时配置不会覆盖此变量。
 
 ## 1. 目标与范围
 
 本设计把 AI 问答纳入 Picer 的客户端/IndexService/本地驻留代理架构，使本地和远程 GUI 使用同一套问答协议。
 
-- 本地 GUI：访问本机统一模型平台的 VL 服务。
-- 远程 GUI：只访问 HTTPS IndexService，由 IndexService 通过本地 MediaAgent 转发到源机器的 `127.0.0.1` 模型服务。
+- 本地 GUI：AI 问答访问配对的 HTTPS IndexService；索引查询仍使用本机索引。
+- 远程 GUI：访问 HTTPS IndexService；索引与 AI 均按远程模式的服务契约处理。
 - 原图、视频和 AI 请求共用同一个 MediaAgent 长连接，但请求 ID、权限和生命周期彼此隔离。
 - 问答必须支持阶段进度、文本增量、媒体结果、取消和错误事件。
 
 本设计不允许远程 GUI 直接访问源机器的 `127.0.0.1`，也不允许 IndexService 代持本地模型 API Key。
 
-## 2. 当前缺口
+## 2. 初始缺口（历史记录）
 
 1. `OpenAiCompatibleChatClient` 当前缓冲完整响应，不支持 token 流。
 2. `HttpIndexGateway` 没有 AI 流式接口。
@@ -26,11 +34,14 @@
 ## 3. 总体架构
 
 ```text
-Local GUI ───────────────HTTP/SSE──────────────> Local ModelService
-                                                127.0.0.1:8090
+Local GUI ──本地 SQLite 检索
+    └──────HTTPS/SSE──────┐
+                          v
+                    Remote IndexService ──WSS──> 本机 MediaAgent
+                                                  └─HTTP──> 配置的 loopback 模型端点
 
-Remote GUI ──HTTPS/SSE──> IndexService ──WSS──> MediaAgent
-                                             └─HTTP──> 127.0.0.1:8090
+Remote GUI ──HTTPS/SSE────> Remote IndexService ──WSS──> 源机 MediaAgent
+                                                       └─HTTP──> 配置的 loopback 模型端点
 ```
 
 ### 3.1 统一应用接口
@@ -43,7 +54,7 @@ IAsyncEnumerable<AiQuestionEvent> AskStreamingAsync(
     CancellationToken cancellationToken);
 ```
 
-本地实现直接连接模型服务；远程实现连接 IndexService。上层 `MainViewModel` 不感知网络拓扑。
+现行实现两种 GUI 模式都由 `AppServices.CreateAiChatClient` 解析 IndexService endpoint 并创建流式客户端；GUI 不直接连接模型 endpoint。此处取代早期方案中的 `LocalAiQuestionClient` 直连设计。
 
 ### 3.2 事件协议
 
@@ -92,17 +103,18 @@ IndexService 与 MediaAgent 使用已有 WSS 长连接，新增：
 
 ## 5. 本地/远程路由
 
-### 本地模式
+### 本地模式（现行代码）
 
-- `LocalAiQuestionClient` 使用统一模型平台的本地 HTTP 接口。
-- API Key 和模型配置只在本机读取。
+- `OpenAiCompatibleChatClient` 请求配对 IndexService 的 `/api/ai/v1/chat/stream`；检索侧仍使用本机 SQLite。
+- IndexService 经在线 MediaAgent 转发到该 Agent 配置的 loopback 模型 endpoint。IndexService/Agent 未配置时，客户端拒绝直接连本地模型并报告服务不可用。
+- GUI 提交所选模型标识与问答请求；模型端点及凭据由服务/Agent 侧配置，问答请求不会让 GUI 指定任意目标主机。
 - 仍转换为相同 `AiQuestionEvent`，保证 UI 逻辑一致。
 
 ### 远程模式
 
-- `RemoteAiQuestionClient` 请求 `IndexService /api/ai/question/stream`。
+- `OpenAiCompatibleChatClient` 请求 `IndexService /api/ai/v1/chat/stream`。
 - IndexService 校验 Bearer token，选择唯一在线 MediaAgent。
-- MediaAgent 使用 HttpClient 请求 `127.0.0.1:8090/api/vl/chat`。
+- MediaAgent 使用 HttpClient 请求 `PICER_LOCAL_MODEL_ENDPOINT` 指定的 loopback endpoint；未设置时默认 `http://127.0.0.1:8090/api/vl/chat`。该值来自 MediaAgent 进程环境变量，不是 GUI 或 IndexService 的动态模型选择。
 - 响应块沿 WSS 和 SSE 原样转发，IndexService 不解析模型私有 token 格式。
 
 ## 6. 取消、超时与恢复
@@ -140,9 +152,9 @@ IndexService 与 MediaAgent 使用已有 WSS 长连接，新增：
 - API Key 不出现在 IndexService 请求和日志中。
 - 规划/复核半截 JSON 不会展示为最终答案。
 
-### 集成测试
+### 集成测试（现行路由）
 
-- Local GUI → 本地模型服务 → 流式事件。
+- Local GUI → 本机索引检索 + 配对 IndexService → MediaAgent → loopback 模型服务 → 流式事件。
 - Remote GUI → IndexService → MediaAgent → `127.0.0.1` 模型服务 → Remote GUI。
 - 远程机器没有本地模型端口时返回明确错误。
 - 同一 requestId 的事件顺序正确，不同请求互不串流。
@@ -155,7 +167,7 @@ IndexService 与 MediaAgent 使用已有 WSS 长连接，新增：
 4. 断开 MediaAgent，UI 显示代理离线，不挂死窗口。
 5. 检查日志和抓包，确认没有 API Key、原始路径和问题全文泄露。
 
-## 10. 分阶段实施
+## 10. 原始分阶段实施记录（历史）
 
 1. 抽象 `IAiQuestionClient` 和事件模型。
 2. 实现本地模型 SSE 客户端和回答阶段流式生成。

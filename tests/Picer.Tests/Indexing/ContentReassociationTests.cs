@@ -1,6 +1,4 @@
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.PixelFormats;
-using SixLabors.ImageSharp.Formats.Png;
+using Picer.Core.Imaging;
 using Picer.Core.Data;
 using Picer.Core.Indexing;
 using Picer.Core.Models;
@@ -35,9 +33,9 @@ public sealed class ContentReassociationTests : IDisposable
 
     private static byte[] ImageBytes(byte seed)
     {
-        using var image = new Image<Rgb24>(2, 1, new Rgb24(seed, (byte)(seed + 1), (byte)(seed + 2)));
+        using var image = new RasterImage(2, 1, new RgbPixel(seed, (byte)(seed + 1), (byte)(seed + 2)));
         using var encoded = new MemoryStream();
-        image.Save(encoded, new PngEncoder());
+        image.SaveAsPng(encoded);
         return encoded.ToArray();
     }
 

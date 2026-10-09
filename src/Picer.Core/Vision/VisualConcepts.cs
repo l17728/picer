@@ -16,6 +16,7 @@ public interface IImageSemanticAnalyzer
 
 public static class VisualConceptCatalog
 {
+    public static IReadOnlyDictionary<string, string> DisplayNames => Terms.ToDictionary(pair => pair.Key, pair => pair.Value[0]);
     private static readonly IReadOnlyDictionary<string, string[]> Terms = new Dictionary<string, string[]>
     {
         ["season.summer"] = ["夏天", "夏季"],

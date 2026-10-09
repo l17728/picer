@@ -177,42 +177,11 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
 
     public void SaveCompleted(ImageRecord image, IImageFaceAnalyzer analyzer, FaceAnalysisResult result)
     {
+        if (result.ModelVersion is not null && !string.Equals(result.ModelVersion, analyzer.ModelVersion, StringComparison.Ordinal))
+            throw new InvalidDataException("face_result_model_mismatch");
         var uniqueFaces = DeduplicateDetections(result.Faces);
         using var transaction = database.BeginTransaction();
-        // Model versions are independent. Rebuilding InsightFace must not
-        // remove the existing SFace (or another candidate model) records.
-        DeleteFaces(image.Id, analyzer.ModelVersion, transaction);
-
-        for (var ordinal = 0; ordinal < uniqueFaces.Count; ordinal++)
-        {
-            var face = uniqueFaces[ordinal];
-            Validate(face);
-            using var insert = database.Command("""
-                INSERT INTO detected_faces
-                    (image_id, model_version, ordinal, box_x, box_y, box_width, box_height,
-                     confidence, landmarks_json, embedding, created_utc)
-                VALUES
-                    ($image_id, $model_version, $ordinal, $x, $y, $width, $height,
-                     $confidence, $landmarks, $embedding, $created_utc)
-                """);
-            insert.Transaction = transaction;
-            insert.Parameters.AddWithValue("$image_id", image.Id);
-            insert.Parameters.AddWithValue("$model_version", analyzer.ModelVersion);
-            insert.Parameters.AddWithValue("$ordinal", ordinal);
-            insert.Parameters.AddWithValue("$x", face.Box.X);
-            insert.Parameters.AddWithValue("$y", face.Box.Y);
-            insert.Parameters.AddWithValue("$width", face.Box.Width);
-            insert.Parameters.AddWithValue("$height", face.Box.Height);
-            insert.Parameters.AddWithValue("$confidence", face.Confidence);
-            insert.Parameters.AddWithValue("$landmarks", face.Landmarks is null
-                ? DBNull.Value
-                : JsonSerializer.Serialize(face.Landmarks));
-            insert.Parameters.Add("$embedding", SqliteType.Blob).Value = face.Embedding is null
-                ? DBNull.Value
-                : ToBytes(face.Embedding);
-            insert.Parameters.AddWithValue("$created_utc", Format(DateTime.UtcNow));
-            insert.ExecuteNonQuery();
-        }
+        FaceDetectionReconciler.Save(database, image.Id, analyzer.ModelVersion, uniqueFaces, transaction);
 
         UpsertAnalysis(image, analyzer, "completed", uniqueFaces.Count, null, transaction);
         transaction.Commit();
@@ -272,14 +241,14 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
 
     public int GetFaceCount(long imageId)
     {
-        using var command = database.Command("SELECT COUNT(*) FROM detected_faces WHERE image_id = $image_id");
+        using var command = database.Command("SELECT COUNT(*) FROM detected_faces WHERE is_archived=0 AND image_id = $image_id");
         command.Parameters.AddWithValue("$image_id", imageId);
         return Convert.ToInt32(command.ExecuteScalar());
     }
 
     public IReadOnlyList<long> GetFaceIds(long imageId)
     {
-        using var command = database.Command("SELECT id FROM detected_faces WHERE image_id = $image_id ORDER BY ordinal");
+        using var command = database.Command("SELECT id FROM detected_faces WHERE is_archived=0 AND image_id = $image_id ORDER BY ordinal");
         command.Parameters.AddWithValue("$image_id", imageId);
         var ids = new List<long>();
         using var reader = command.ExecuteReader();
@@ -314,7 +283,7 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
                 SELECT DISTINCT f.image_id, f.ordinal
                 FROM detected_faces f
                 JOIN images i ON i.id=f.image_id AND i.status='active'
-                WHERE f.model_version=$model
+                WHERE f.is_archived=0 AND f.model_version=$model
             )
             SELECT
                 EXISTS(SELECT 1 FROM detected_faces rf JOIN face_review_states rr ON rr.face_id=rf.id
@@ -358,7 +327,7 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
                              THEN 1 ELSE 0 END,
                         f.id) AS duplicate_rank
                 FROM detected_faces f JOIN images i ON i.id=f.image_id AND i.status='active'
-                WHERE ($model IS NULL OR f.model_version=$model)
+                WHERE f.is_archived=0 AND ($model IS NULL OR f.model_version=$model)
                   AND NOT EXISTS (
                       SELECT 1 FROM face_candidate_members cm
                       JOIN face_candidate_clusters cc ON cc.id=cm.cluster_id
@@ -424,7 +393,7 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
                 JOIN images i ON i.id=f.image_id AND i.status='active'
                 LEFT JOIN face_person_assignments a ON a.face_id=f.id
                 LEFT JOIN face_review_states r ON r.face_id=f.id
-                WHERE ($model IS NULL OR f.model_version=$model)
+                WHERE f.is_archived=0 AND ($model IS NULL OR f.model_version=$model)
             )
             SELECT assignment_state, sha256, ahash, width, height,
                    f.box_x, f.box_y, f.box_width, f.box_height, f.confidence
@@ -460,7 +429,7 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
                    f.box_x, f.box_y, f.box_width, f.box_height, f.confidence
             FROM face_candidate_members cm
             JOIN face_candidate_clusters cc ON cc.id=cm.cluster_id
-            JOIN detected_faces f ON f.id=cm.face_id AND f.model_version=cc.model_version
+            JOIN detected_faces f ON f.id=cm.face_id AND f.model_version=cc.model_version AND f.is_archived=0
             JOIN images i ON i.id=f.image_id AND i.status='active'
             LEFT JOIN face_person_assignments a ON a.face_id=f.id
             LEFT JOIN face_review_states r ON r.face_id=f.id
@@ -492,7 +461,7 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
                     PARTITION BY f.model_version, COALESCE(NULLIF(i.sha256,''), printf('image:%d', i.id)), f.ordinal
                     ORDER BY f.id) AS duplicate_rank
                 FROM detected_faces f JOIN images i ON i.id=f.image_id AND i.status='active'
-                WHERE $model IS NULL OR f.model_version=$model
+                WHERE f.is_archived=0 AND ($model IS NULL OR f.model_version=$model)
             )
             SELECT f.id, f.image_id, i.path, i.thumb_path, f.ordinal,
                    f.box_x, f.box_y, f.box_width, f.box_height, f.confidence,
@@ -568,26 +537,31 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
     public IReadOnlyList<UnassignedFaceRecord> GetPersonFaces(long personId, int limit = 500, string? modelVersion = null)
     {
         using var command = database.Command("""
-            WITH ranked_faces AS (
+            WITH person_faces AS (
+                SELECT f.*,a.person_id,a.state
+                FROM face_person_assignments a
+                JOIN detected_faces f ON f.id=a.face_id
+                JOIN images i ON i.id=f.image_id AND i.status='active'
+                WHERE a.person_id=$person AND a.state IN ('confirmed','suggested')
+                  AND ($model IS NULL OR f.model_version=$model)
+            ), ranked_faces AS (
                 SELECT f.*, ROW_NUMBER() OVER (
                     PARTITION BY f.model_version, COALESCE(NULLIF(i.sha256,''), printf('image:%d', i.id)), f.ordinal
                     ORDER BY f.id) AS duplicate_rank
-                FROM detected_faces f JOIN images i ON i.id=f.image_id AND i.status='active'
-                WHERE $model IS NULL OR f.model_version=$model
+                FROM person_faces f JOIN images i ON i.id=f.image_id AND i.status='active'
             )
             SELECT f.id, f.image_id, i.path, i.thumb_path, f.ordinal,
                    f.box_x, f.box_y, f.box_width, f.box_height, f.confidence,
-                   a.person_id,
+                   f.person_id,
                    p.display_name,
-                   a.state,
+                   f.state,
                    i.sha256, i.ahash, i.width, i.height
-            FROM face_person_assignments a
-            JOIN ranked_faces f ON f.id=a.face_id AND f.duplicate_rank=1
+            FROM ranked_faces f
             JOIN images i ON i.id=f.image_id AND i.status='active'
-            JOIN people p ON p.id=a.person_id
-            WHERE a.person_id=$person AND a.state IN ('confirmed','suggested')
+            JOIN people p ON p.id=f.person_id
+            WHERE f.duplicate_rank=1
               AND ($model IS NULL OR f.model_version=$model)
-            ORDER BY CASE a.state WHEN 'suggested' THEN 0 ELSE 1 END, f.created_utc DESC, f.id DESC
+            ORDER BY CASE f.state WHEN 'suggested' THEN 0 ELSE 1 END, f.created_utc DESC, f.id DESC
             LIMIT $limit
             """);
         command.Parameters.AddWithValue("$person", personId);
@@ -619,7 +593,7 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
                     PARTITION BY f.model_version, COALESCE(NULLIF(i.sha256,''), printf('image:%d', i.id)), f.ordinal
                     ORDER BY f.id) AS duplicate_rank
                 FROM detected_faces f JOIN images i ON i.id=f.image_id AND i.status='active'
-                WHERE $model IS NULL OR f.model_version=$model
+                WHERE f.is_archived=0 AND ($model IS NULL OR f.model_version=$model)
             )
             SELECT f.id, f.image_id, i.path, i.thumb_path, f.ordinal,
                    f.box_x, f.box_y, f.box_width, f.box_height, f.confidence,
@@ -655,7 +629,7 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
             WITH shared_confirmed AS (
                 SELECT f2.image_id, f2.ordinal, MIN(a2.person_id) AS person_id
                 FROM detected_faces f2
-                JOIN face_person_assignments a2 ON a2.face_id=f2.id AND a2.state='confirmed'
+                JOIN face_person_assignments a2 ON a2.face_id=f2.id AND a2.state='confirmed' AND f2.is_archived=0
                 GROUP BY f2.image_id, f2.ordinal
             )
             SELECT f.id, f.image_id, f.model_version,
@@ -669,7 +643,7 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
             LEFT JOIN face_person_assignments a ON a.face_id=f.id
             LEFT JOIN shared_confirmed shared ON shared.image_id=f.image_id AND shared.ordinal=f.ordinal
             LEFT JOIN face_review_states r ON r.face_id=f.id
-            WHERE f.embedding IS NOT NULL AND r.face_id IS NULL
+            WHERE f.is_archived=0 AND f.embedding IS NOT NULL AND r.face_id IS NULL
               AND ($model IS NULL OR f.model_version=$model)
               AND (a.face_id IS NULL OR a.state IN ('suggested','confirmed') OR shared.person_id IS NOT NULL)
             ORDER BY f.id
@@ -698,7 +672,7 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
         foreach (var batch in ids.Chunk(400))
         {
             var names = batch.Select((_, index) => $"$face{index}").ToArray();
-            using var command = database.Command($"SELECT id,embedding FROM detected_faces WHERE embedding IS NOT NULL AND id IN ({string.Join(',', names)})");
+            using var command = database.Command($"SELECT id,embedding FROM detected_faces WHERE is_archived=0 AND embedding IS NOT NULL AND id IN ({string.Join(',', names)})");
             for (var index = 0; index < batch.Length; index++) command.Parameters.AddWithValue(names[index], batch[index]);
             using var reader = command.ExecuteReader();
             while (reader.Read()) result[reader.GetInt64(0)] = FromBytes((byte[])reader[1]);
@@ -709,20 +683,35 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
     public IReadOnlyList<UnassignedFaceRecord> OrderByFeature(IReadOnlyList<UnassignedFaceRecord> faces) =>
         FaceFeatureOrderer.Order(faces, GetFaceEmbeddings(faces.Select(face => face.FaceId)));
 
-    public IReadOnlyList<RejectedFaceEmbeddingRecord> GetRejectedFaceEmbeddings()
+    public IReadOnlyList<RejectedFaceEmbeddingRecord> GetRejectedFaceEmbeddings(string? modelVersion = null)
     {
         using var command = database.Command("""
             SELECT f.id, f.image_id, f.model_version, r.person_id, f.embedding,f.confidence,f.box_width*f.box_height
             FROM face_person_rejections r
             JOIN detected_faces f ON f.id=r.face_id
             JOIN images i ON i.id=f.image_id AND i.status='active'
-            WHERE f.embedding IS NOT NULL
+            WHERE f.is_archived=0 AND f.embedding IS NOT NULL AND ($model IS NULL OR f.model_version=$model)
             ORDER BY r.person_id, r.face_id
             """);
+        command.Parameters.AddWithValue("$model", (object?)modelVersion ?? DBNull.Value);
         var values = new List<RejectedFaceEmbeddingRecord>();
         using var reader = command.ExecuteReader();
         while (reader.Read()) values.Add(new RejectedFaceEmbeddingRecord(reader.GetInt64(0), reader.GetInt64(1),
             reader.GetString(2), reader.GetInt64(3), FromBytes((byte[])reader[4]), reader.GetFloat(5), reader.GetFloat(6)));
+        return values;
+    }
+
+    public IReadOnlyList<TrainedFacePrototype> GetTrainedFacePrototypes(string modelVersion)
+    {
+        using var command = database.Command("""
+            SELECT person_id,centroid,threshold,sample_count
+            FROM face_person_prototypes WHERE model_version=$model ORDER BY person_id
+            """);
+        command.Parameters.AddWithValue("$model", modelVersion);
+        using var reader = command.ExecuteReader();
+        var values = new List<TrainedFacePrototype>();
+        while (reader.Read()) values.Add(new TrainedFacePrototype(reader.GetInt64(0),
+            FromBytes((byte[])reader[1]), reader.GetDouble(2), reader.GetInt32(3)));
         return values;
     }
 
@@ -752,20 +741,21 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
         return result;
     }
 
-    public IReadOnlyList<VideoTrainingFaceRecord> GetVideoTrainingFaces()
+    public IReadOnlyList<VideoTrainingFaceRecord> GetVideoTrainingFaces(string? modelVersion = null)
     {
         using var command = database.Command("""
-            SELECT vf.id,vf.video_id,vf.assigned_person_id,'positive',vf.embedding,vf.confidence,vf.box_width*vf.box_height
-            FROM video_detected_faces vf JOIN videos v ON v.id=vf.video_id AND v.status='active'
-            WHERE vf.assignment_state='confirmed' AND vf.assigned_person_id IS NOT NULL AND vf.embedding IS NOT NULL
+            SELECT DISTINCT vf.id,vf.video_id,vf.assigned_person_id,'positive',vf.embedding,vf.confidence,vf.box_width*vf.box_height
+            FROM video_detected_faces vf JOIN videos v ON v.content_id=vf.video_id AND v.status='active'
+            WHERE ($model IS NULL OR vf.model_version=$model) AND vf.assignment_state='confirmed' AND vf.assigned_person_id IS NOT NULL AND vf.embedding IS NOT NULL
             UNION ALL
-            SELECT vf.id,vf.video_id,r.person_id,'negative',vf.embedding,vf.confidence,vf.box_width*vf.box_height
+            SELECT DISTINCT vf.id,vf.video_id,r.person_id,'negative',vf.embedding,vf.confidence,vf.box_width*vf.box_height
             FROM video_face_person_rejections r
             JOIN video_detected_faces vf ON vf.id=r.video_face_id
-            JOIN videos v ON v.id=vf.video_id AND v.status='active'
-            WHERE vf.embedding IS NOT NULL
+            JOIN videos v ON v.content_id=vf.video_id AND v.status='active'
+            WHERE ($model IS NULL OR vf.model_version=$model) AND vf.embedding IS NOT NULL
             ORDER BY 2,1,3
             """);
+        command.Parameters.AddWithValue("$model", (object?)modelVersion ?? DBNull.Value);
         var result = new List<VideoTrainingFaceRecord>();
         using var reader = command.ExecuteReader();
         while (reader.Read()) result.Add(new(reader.GetInt64(0), reader.GetInt64(1), reader.GetInt64(2),
@@ -1108,6 +1098,26 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
         return Convert.ToInt32(command.ExecuteScalar());
     }
 
+    /// <summary>Verifies exact face IDs without display pagination or duplicate-photo
+    /// collapsing. UI collections intentionally show one representative per source
+    /// photo, so they are not suitable for confirming a batch mutation.</summary>
+    public IReadOnlySet<long> GetIgnoredFaceIds(IEnumerable<long> faceIds)
+    {
+        var ids = faceIds.Distinct().ToArray();
+        var ignored = new HashSet<long>();
+        const int batchSize = 400;
+        for (var offset = 0; offset < ids.Length; offset += batchSize)
+        {
+            var batch = ids.Skip(offset).Take(batchSize).ToArray();
+            var placeholders = Enumerable.Range(0, batch.Length).Select(index => $"$id{index}");
+            using var command = database.Command($"SELECT face_id FROM face_review_states WHERE state='ignored' AND face_id IN ({string.Join(',', placeholders)})");
+            for (var index = 0; index < batch.Length; index++) command.Parameters.AddWithValue($"$id{index}", batch[index]);
+            using var reader = command.ExecuteReader();
+            while (reader.Read()) ignored.Add(reader.GetInt64(0));
+        }
+        return ignored;
+    }
+
     public void RemoveFaceFromCandidateCluster(long clusterId, long faceId)
     {
         using var command = database.Command("DELETE FROM face_candidate_members WHERE cluster_id=$cluster AND face_id=$face");
@@ -1124,7 +1134,7 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
             FROM detected_faces f
             LEFT JOIN face_person_assignments a ON a.face_id=f.id
             LEFT JOIN people p ON p.id=a.person_id
-            WHERE f.image_id=$image
+            WHERE f.is_archived=0 AND f.image_id=$image
             ORDER BY f.ordinal
             """);
         command.Parameters.AddWithValue("$image", imageId);
@@ -1143,7 +1153,7 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
         using var command = database.Command("""
             SELECT f.id,f.image_id,i.path,f.ordinal,f.box_x,f.box_y,f.box_width,f.box_height,f.confidence
             FROM detected_faces f JOIN images i ON i.id=f.image_id
-            WHERE f.model_version=$model AND i.status='active'
+            WHERE f.is_archived=0 AND f.model_version=$model AND i.status='active'
             ORDER BY f.image_id,f.ordinal
             """);
         command.Parameters.AddWithValue("$model", modelVersion);
@@ -1156,7 +1166,7 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
 
     public IReadOnlyList<string> GetFaceModelVersions()
     {
-        using var command = database.Command("SELECT DISTINCT model_version FROM detected_faces ORDER BY model_version");
+        using var command = database.Command("SELECT DISTINCT model_version FROM detected_faces WHERE is_archived=0 ORDER BY model_version");
         using var reader = command.ExecuteReader();
         var versions = new List<string>();
         while (reader.Read()) versions.Add(reader.GetString(0));
@@ -1168,7 +1178,7 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
     {
         using var command = database.Command("""
             SELECT model_version, COUNT(*)
-            FROM detected_faces
+            FROM detected_faces WHERE is_archived=0
             GROUP BY model_version
             ORDER BY model_version
             """);
@@ -1180,7 +1190,7 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
 
     public int GetFaceEmbeddingCount(string modelVersion)
     {
-        using var command = database.Command("SELECT COUNT(*) FROM detected_faces WHERE model_version=$model AND embedding IS NOT NULL");
+        using var command = database.Command("SELECT COUNT(*) FROM detected_faces WHERE is_archived=0 AND model_version=$model AND embedding IS NOT NULL");
         command.Parameters.AddWithValue("$model", modelVersion);
         return Convert.ToInt32(command.ExecuteScalar());
     }
@@ -1268,7 +1278,7 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
 
     private void DeleteFaces(long imageId, string modelVersion, SqliteTransaction transaction)
     {
-        using var command = database.Command("DELETE FROM detected_faces WHERE image_id = $image_id AND model_version = $model_version");
+        using var command = database.Command("DELETE FROM detected_faces WHERE is_archived=0 AND image_id = $image_id AND model_version = $model_version");
         command.Transaction = transaction;
         command.Parameters.AddWithValue("$image_id", imageId);
         command.Parameters.AddWithValue("$model_version", modelVersion);

@@ -1,9 +1,9 @@
+using Picer.Core.Imaging;
 using MetadataExtractor;
 using MetadataExtractor.Formats.Exif;
 using MetadataExtractor.Formats.Iptc;
 using System.Globalization;
 using Picer.Core.Models;
-using SixLabors.ImageSharp;
 using Meta = MetadataExtractor.ImageMetadataReader;
 
 namespace Picer.Core.Metadata;
@@ -25,12 +25,9 @@ public static class ImageMetadataReader
 
         try
         {
-            var info = Image.Identify(stream);
-            if (info != null)
-            {
-                width = info.Width;
-                height = info.Height;
-            }
+            var info = RasterImage.Identify(stream);
+            width = info.Width;
+            height = info.Height;
         }
         catch (Exception)
         {

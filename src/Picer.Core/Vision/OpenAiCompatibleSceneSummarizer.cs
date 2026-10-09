@@ -10,7 +10,7 @@ public sealed record SceneRepresentativeDescription(
 
 public sealed record SceneSummaryResult(string SceneName, string Summary, IReadOnlyList<string> SearchTerms);
 
-public interface ISceneGroupSummarizer
+public interface ISceneGroupSummarizer : IDisposable
 {
     string Provider { get; }
     string ModelVersion { get; }

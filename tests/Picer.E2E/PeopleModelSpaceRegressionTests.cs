@@ -9,9 +9,9 @@ using Picer.Core.Vision;
 namespace Picer.E2E;
 
 /// <summary>
-/// Regression coverage for the model-space boundary.  This intentionally uses
-/// two different face counts so a stale SFace collection cannot pass as an
-/// InsightFace refresh.
+/// Regression coverage for the supported InsightFace space. SFace records may
+/// remain in storage for provenance, but must never appear as an alternate UI
+/// space or leak into the displayed InsightFace collection.
 /// </summary>
 public sealed class PeopleModelSpaceRegressionTests
 {
@@ -49,40 +49,33 @@ public sealed class PeopleModelSpaceRegressionTests
 
             var modelCombo = WaitForElement(window, "人脸模型空间下拉列表", TimeSpan.FromSeconds(8));
             Assert.NotNull(modelCombo);
-            var insight = ExpandAndFind(modelCombo!, name => name.Contains("InsightFace", StringComparison.OrdinalIgnoreCase), TimeSpan.FromSeconds(8));
-            Assert.NotNull(insight);
 
-            // First show the SFace queue and record its intentionally different size.
+            // SFace records remain in storage, but only InsightFace is exposed.
+            var insightTitle = WaitFor(window, ControlType.Text,
+                name => name.Contains("模型空间", StringComparison.OrdinalIgnoreCase)
+                        && name.Contains("InsightFace", StringComparison.OrdinalIgnoreCase)
+                        && !name.Contains("SFace", StringComparison.OrdinalIgnoreCase),
+                TimeSpan.FromSeconds(15));
+            Assert.NotNull(insightTitle);
+
             var pending = WaitForElement(window, "待处理人脸", TimeSpan.FromSeconds(8));
             Assert.NotNull(pending);
             ((InvokePattern)pending!.GetCurrentPattern(InvokePattern.Pattern)).Invoke();
             var faceList = WaitForElement(window, "人物人脸列表", TimeSpan.FromSeconds(8));
             Assert.NotNull(faceList);
-            var sfaceCount = WaitForListItems(faceList!, TimeSpan.FromSeconds(8));
-            Assert.Equal(2, sfaceCount);
-
-            SelectSecondModelOption(window!, modelCombo!);
-
-            // The old list must disappear while the new space loads; allow
-            // one dispatcher turn for the binding callback.
-            // The switch itself is asserted below; the final list count is
-            // the authoritative stale-content check after the async refresh.
-            Assert.True(WaitFor(window, ControlType.Text,
-                name => name.Contains("模型空间", StringComparison.OrdinalIgnoreCase)
-                        && name.Contains("InsightFace", StringComparison.OrdinalIgnoreCase)
-                        && !name.Contains("SFace", StringComparison.OrdinalIgnoreCase),
-                TimeSpan.FromSeconds(15)) is not null,
-                "模型空间标题没有切换到 InsightFace，可能仍在使用旧模型空间");
+            Assert.Equal(1, WaitForListItems(faceList!, TimeSpan.FromSeconds(15)));
+            Assert.Null(ExpandAndFind(modelCombo!, name => name.Contains("SFace", StringComparison.OrdinalIgnoreCase), TimeSpan.FromSeconds(2)));
+            Assert.NotNull(ExpandAndFind(modelCombo!, name => name.Contains("InsightFace", StringComparison.OrdinalIgnoreCase), TimeSpan.FromSeconds(5)));
+            Key(0x1B); // close model selector popup
 
             // The seeded InsightFace artifact must populate the model-scoped
             // history list; an empty list is the production bug this test guards.
             var historyCombo = WaitForElement(window, "模型历史制品下拉列表", TimeSpan.FromSeconds(15));
             Assert.NotNull(historyCombo);
-            var historyItems = ExpandItems(historyCombo!, TimeSpan.FromSeconds(5));
-            Assert.Contains(historyItems, item => item.Current.Name.Contains("93", StringComparison.OrdinalIgnoreCase));
+            var historyItem = FindPopupItemContaining(historyCombo!, "93", TimeSpan.FromSeconds(15));
+            Assert.NotNull(historyItem);
 
-            ((InvokePattern)pending.GetCurrentPattern(InvokePattern.Pattern)).Invoke();
-            Assert.Equal(1, WaitForListItems(faceList!, TimeSpan.FromSeconds(15)));
+            Assert.Equal(1, CountListItems(faceList!));
         }
         finally
         {
@@ -210,12 +203,25 @@ public sealed class PeopleModelSpaceRegressionTests
         throw new InvalidOperationException($"UI 元素不支持选择或点击：{element.Current.Name}; patterns={patterns}");
     }
 
-    private static void SelectSecondModelOption(AutomationElement window, AutomationElement combo)
+    private static void SelectModelOption(AutomationElement window, AutomationElement combo, string displayName)
     {
         SetForegroundWindow(new IntPtr(window.Current.NativeWindowHandle));
+        // SetFocus alone is not reliable when another WPF popup owned focus;
+        // click the actual ComboBox first, then use keyboard navigation.
+        ClickElement(window, combo);
         combo.SetFocus();
-        Key(0x73); // F4: open the focused ComboBox without relying on popup UIA patterns
-        Key(0x24); // HOME: InsightFace is first alphabetically in the fixture
+        if (combo.TryGetCurrentPattern(ExpandCollapsePattern.Pattern, out var expandPattern) &&
+            expandPattern is ExpandCollapsePattern expander &&
+            expander.Current.ExpandCollapseState != ExpandCollapseState.Expanded)
+            expander.Expand();
+        // WPF's popup item may expose neither SelectionItemPattern nor a
+        // usable bounding rectangle.  The fixture has exactly two options;
+        // The fixture exposes InsightFace as the first option; HOME selects
+        // it without depending on popup UIA implementation details.
+        if (displayName.Contains("InsightFace", StringComparison.OrdinalIgnoreCase))
+        {
+            Key(0x24); // HOME: deterministic first option
+        }
         Key(0x0D); // ENTER
     }
 

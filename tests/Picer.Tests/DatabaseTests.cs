@@ -1,4 +1,4 @@
-using System.IO;
+﻿using System.IO;
 using Picer.Core.Data;
 using Picer.Core.Geocoding;
 using Picer.Core.Logging;
@@ -22,6 +22,19 @@ public sealed class DatabaseTests : IDisposable
     {
         _db.Dispose();
         try { File.Delete(_dbPath); } catch { }
+    }
+
+    [Fact]
+    public void ColdInitialization_CompletesSchemaWithoutWeakeningDurabilityOrForeignKeys()
+    {
+        Assert.Equal(PicerDatabase.CurrentSchemaVersion, Convert.ToInt32(_db.Command("PRAGMA user_version").ExecuteScalar()));
+        Assert.Equal(1, Convert.ToInt32(_db.Command("PRAGMA foreign_keys").ExecuteScalar()));
+        Assert.Equal(2, Convert.ToInt32(_db.Command("PRAGMA synchronous").ExecuteScalar()));
+        Assert.Equal("wal", _db.Command("PRAGMA journal_mode").ExecuteScalar());
+        Assert.Null(_db.Command("PRAGMA foreign_key_check").ExecuteScalar());
+        var source = _db.AddSource(Path.GetDirectoryName(_dbPath)!);
+        using var reopened = new PicerDatabase(_dbPath);
+        Assert.Equal(source.Id, Assert.Single(reopened.GetSources()).Id);
     }
 
     [Fact]
@@ -236,7 +249,66 @@ public sealed class DatabaseTests : IDisposable
             {
                 legacy.Open();
                 using var command = legacy.CreateCommand();
-                command.CommandText = "PRAGMA user_version = 34";
+                // Historical video schema through v34: v9 frames/transcripts,
+                // v10 faces, v12 summaries, v21 review decisions and v22 status.
+                // These tables must exist before exercising the later migrations.
+                command.CommandText = """
+                    CREATE TABLE videos (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        source_id INTEGER NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+                        path TEXT NOT NULL UNIQUE, file_size INTEGER NOT NULL,
+                        modified_utc TEXT NOT NULL, duration_seconds REAL,
+                        width INTEGER NOT NULL DEFAULT 0, height INTEGER NOT NULL DEFAULT 0,
+                        taken_utc TEXT, gps TEXT, status TEXT NOT NULL DEFAULT 'active',
+                        indexed_utc TEXT NOT NULL, person_analysis_status TEXT CHECK(person_analysis_status IN ('completed','failed')), person_analyzed_utc TEXT);
+                    CREATE TABLE video_summaries(
+                        video_id INTEGER PRIMARY KEY REFERENCES videos(id) ON DELETE CASCADE,
+                        provider TEXT NOT NULL, model_version TEXT NOT NULL, prompt_version TEXT NOT NULL,
+                        source_file_size INTEGER NOT NULL, source_modified_utc TEXT NOT NULL,
+                        summary TEXT NOT NULL, result_json TEXT NOT NULL,
+                        input_tokens INTEGER NOT NULL DEFAULT 0, output_tokens INTEGER NOT NULL DEFAULT 0,
+                        estimated_cost_yuan REAL NOT NULL DEFAULT 0, created_utc TEXT NOT NULL);
+                    CREATE TABLE video_keyframes (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        video_id INTEGER NOT NULL REFERENCES videos(id) ON DELETE CASCADE,
+                        timestamp_seconds REAL NOT NULL, path TEXT NOT NULL,
+                        dhash INTEGER NOT NULL DEFAULT 0, created_utc TEXT NOT NULL,
+                        UNIQUE(video_id,timestamp_seconds));
+                    CREATE TABLE video_transcripts (
+                        video_id INTEGER PRIMARY KEY REFERENCES videos(id) ON DELETE CASCADE,
+                        model_version TEXT NOT NULL, transcript_json TEXT NOT NULL,
+                        created_utc TEXT NOT NULL);
+                    CREATE INDEX idx_videos_source_status ON videos(source_id,status);
+                    CREATE INDEX idx_video_keyframes_video ON video_keyframes(video_id,timestamp_seconds);
+                    CREATE TABLE video_detected_faces (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        video_id INTEGER NOT NULL REFERENCES videos(id) ON DELETE CASCADE,
+                        keyframe_id INTEGER NOT NULL REFERENCES video_keyframes(id) ON DELETE CASCADE,
+                        timestamp_seconds REAL NOT NULL, ordinal INTEGER NOT NULL,
+                        box_x REAL NOT NULL, box_y REAL NOT NULL, box_width REAL NOT NULL, box_height REAL NOT NULL,
+                        confidence REAL NOT NULL, embedding BLOB,
+                        suggested_person_id INTEGER REFERENCES people(id) ON DELETE SET NULL,
+                        match_confidence REAL, created_utc TEXT NOT NULL,
+                        assigned_person_id INTEGER REFERENCES people(id) ON DELETE SET NULL,
+                        assignment_state TEXT CHECK(assignment_state IN ('confirmed','ignored')),
+                        updated_utc TEXT, UNIQUE(keyframe_id,ordinal));
+                    CREATE TABLE video_face_person_rejections (
+                        video_face_id INTEGER NOT NULL REFERENCES video_detected_faces(id) ON DELETE CASCADE,
+                        person_id INTEGER NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+                        created_utc TEXT NOT NULL, PRIMARY KEY(video_face_id,person_id));
+                    CREATE INDEX idx_video_faces_timeline ON video_detected_faces(video_id,timestamp_seconds);
+                    CREATE INDEX idx_video_faces_assigned_person ON video_detected_faces(assigned_person_id,assignment_state);
+                    CREATE TABLE cloud_vision_analyses(
+                        image_id INTEGER NOT NULL REFERENCES images(id) ON DELETE CASCADE,
+                        provider TEXT NOT NULL, model_version TEXT NOT NULL, prompt_version TEXT NOT NULL,
+                        source_file_size INTEGER NOT NULL, source_modified_utc TEXT NOT NULL,
+                        location_fingerprint TEXT NOT NULL, status TEXT NOT NULL,
+                        reason TEXT, summary TEXT, result_json TEXT, error_code TEXT, updated_utc TEXT NOT NULL,
+                        input_tokens INTEGER NOT NULL DEFAULT 0, output_tokens INTEGER NOT NULL DEFAULT 0,
+                        estimated_cost_yuan REAL NOT NULL DEFAULT 0,
+                        PRIMARY KEY(image_id,provider));
+                    PRAGMA user_version = 34;
+                    """;
                 command.ExecuteNonQuery();
             }
 
@@ -245,6 +317,8 @@ public sealed class DatabaseTests : IDisposable
             Assert.Equal(1L, (long)check.ExecuteScalar()!);
             using var version = migrated.Command("PRAGMA user_version");
             Assert.Equal((long)PicerDatabase.CurrentSchemaVersion, (long)version.ExecuteScalar()!);
+            using var integrity = migrated.Command("PRAGMA foreign_key_check");
+            Assert.Null(integrity.ExecuteScalar());
         }
         finally
         {

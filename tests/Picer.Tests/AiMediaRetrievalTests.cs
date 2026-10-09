@@ -104,6 +104,23 @@ public sealed class AiMediaRetrievalTests : IDisposable
         Assert.Contains(answer.Photos, value => value.Id == both.Id);
     }
 
+    [Fact]
+    public async Task SlowPlannerReportsWaitingStateAndTimesOutInsteadOfStallingAtInitialProgress()
+    {
+        var progress = new RecordingProgress();
+        using var http = new HttpClient(new StalledPlannerHandler());
+        using var chat = new OpenAiCompatibleChatClient(new Uri("http://127.0.0.1/chat"), "", "test", http);
+        var service = new AiMediaRetrievalService(_database, new PeopleService(_database),
+            new VideoRepository(_database), new CloudVisionRepository(_database), chat,
+            modelPhaseTimeout: TimeSpan.FromMilliseconds(100));
+
+        var exception = await Assert.ThrowsAsync<TimeoutException>(() => service.AskAsync(
+            "测试查询", includeVideos: false, DateTime.Today, progress));
+
+        Assert.Contains("理解问题", exception.Message);
+        Assert.Contains(progress.Values, value => value.Percent == 10 && value.Stage.Contains("等待模型返回", StringComparison.Ordinal));
+    }
+
     public void Dispose()
     {
         _database.Dispose();
@@ -125,5 +142,20 @@ public sealed class AiMediaRetrievalTests : IDisposable
                 Content = new StringContent(content, Encoding.UTF8, "application/json")
             });
         }
+    }
+
+    private sealed class StalledPlannerHandler : HttpMessageHandler
+    {
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            throw new InvalidOperationException("Unreachable");
+        }
+    }
+
+    private sealed class RecordingProgress : IProgress<(string Stage, int Percent)>
+    {
+        public List<(string Stage, int Percent)> Values { get; } = [];
+        public void Report((string Stage, int Percent) value) => Values.Add(value);
     }
 }

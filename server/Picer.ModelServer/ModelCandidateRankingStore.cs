@@ -10,7 +10,7 @@ public sealed record ModelCandidateRound(string ModelVersion, string AlgorithmId
 public sealed record ModelCandidateRanking(string ModelVersion, string AlgorithmId, bool Available,
     int Rounds, int PassedRounds, double BestValidationAccuracy, double BestFar,
     double BestFrr, bool Retained, string? LastArtifactId, int Rank = 0,
-    int Wins = 0, double CompositeScore = 0, int LastRound = 0);
+    int Wins = 0, double CompositeScore = 0, int LastRound = 0, bool SingleModelSelected = false);
 
 public sealed record ModelCandidateRoundResult(string EvaluationId, string ModelVersion,
     string AlgorithmId, int Rank, double Score, double ValidationAccuracy,
@@ -43,13 +43,10 @@ public sealed class ModelCandidateRankingStore
     {
         lock (_gate)
         {
-            IReadOnlyList<ModelCandidateRound> rounds = File.Exists(_path)
-                ? File.ReadLines(_path).Select(line => JsonSerializer.Deserialize<ModelCandidateRound>(line, _json))
-                    .Where(x => x is not null).Cast<ModelCandidateRound>().ToArray()
-                : [];
+            var rounds = ReadRounds();
             var roundGroups = rounds.Where(r => string.IsNullOrWhiteSpace(scenario) ||
                     string.Equals(r.Scenario, scenario, StringComparison.OrdinalIgnoreCase))
-                .GroupBy(RoundKey, StringComparer.OrdinalIgnoreCase)
+                .GroupBy(r => $"{r.Scenario}|{RoundKey(r)}", StringComparer.OrdinalIgnoreCase)
                 .Select(group => group.OrderByDescending(Score).ThenByDescending(r => r.ValidationAccuracy)
                     .ThenBy(r => r.ModelVersion, StringComparer.OrdinalIgnoreCase).ToArray())
                 .ToArray();
@@ -65,15 +62,23 @@ public sealed class ModelCandidateRankingStore
                     values.Length, values.Count(r => r.GatePassed), best?.ValidationAccuracy ?? 0,
                     best?.FalseAcceptRate ?? 1, best?.FalseRejectRate ?? 1, false, best?.ArtifactId,
                     Rank: 0, Wins: wins, CompositeScore: composite, LastRound: values.Length == 0 ? 0 : values.Max(r => r.Iterations));
-            }).OrderByDescending(x => Score(x)).ThenByDescending(x => x.Wins)
+            }).OrderByDescending(x => x.Available).ThenByDescending(x => Score(x)).ThenByDescending(x => x.Wins)
                 .ThenByDescending(x => x.BestValidationAccuracy).ToList();
             measured = measured.Select((value, index) => value with { Rank = index + 1 }).ToList();
-            var retainedCount = roundGroups.Length >= 20 ? 1 : 3;
+            var available = measured.Where(x => x.Available).Select(x => x.ModelVersion).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var winner = measured.FirstOrDefault(x => x.Available);
+            var comparablePassedRounds = winner is null ? 0 : roundGroups.Count(group =>
+                available.IsSubsetOf(group.Select(x => x.ModelVersion)) &&
+                group.Any(x => x.ModelVersion.Equals(winner.ModelVersion, StringComparison.OrdinalIgnoreCase) &&
+                    x.GatePassed && x.ArtifactId is not null && x.ValidationAccuracy >= .90 &&
+                    x.FalseAcceptRate <= .01 && x.FalseRejectRate <= .10));
+            var single = available.Count >= 2 && comparablePassedRounds >= 20;
+            var retainedCount = single ? 1 : 3;
             var retained = measured.Take(retainedCount).Select(x => x.ModelVersion).ToHashSet(StringComparer.OrdinalIgnoreCase);
             // Keep only the current top three as primary training candidates.
             // Models ranked 4+ remain visible as backup candidates and are not
             // selected by subsequent training submissions.
-            return measured.Select(x => x with { Retained = retained.Contains(x.ModelVersion) }).ToArray();
+            return measured.Select(x => x with { Retained = retained.Contains(x.ModelVersion), SingleModelSelected = single && x.Rank == 1 }).ToArray();
         }
     }
 
@@ -83,7 +88,7 @@ public sealed class ModelCandidateRankingStore
         {
             var rounds = ReadRounds().Where(r => string.IsNullOrWhiteSpace(scenario) ||
                 string.Equals(r.Scenario, scenario, StringComparison.OrdinalIgnoreCase)).ToArray();
-            return rounds.GroupBy(RoundKey, StringComparer.OrdinalIgnoreCase).SelectMany(group =>
+            return rounds.GroupBy(r => $"{r.Scenario}|{RoundKey(r)}", StringComparer.OrdinalIgnoreCase).SelectMany(group =>
                 group.OrderByDescending(Score).ThenBy(r => r.ModelVersion, StringComparer.OrdinalIgnoreCase)
                     .Select((r, index) => new ModelCandidateRoundResult(RoundKey(r), r.ModelVersion,
                         r.AlgorithmId, index + 1, Score(r), r.ValidationAccuracy, r.FalseAcceptRate,
@@ -94,7 +99,9 @@ public sealed class ModelCandidateRankingStore
 
     private ModelCandidateRound[] ReadRounds() => File.Exists(_path)
         ? File.ReadLines(_path).Select(line => JsonSerializer.Deserialize<ModelCandidateRound>(line, _json))
-            .Where(x => x is not null).Cast<ModelCandidateRound>().ToArray()
+            .Where(x => x is not null).Cast<ModelCandidateRound>()
+            .GroupBy(r => $"{r.Scenario}|{RoundKey(r)}|{r.ModelVersion}", StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.OrderByDescending(r => r.CreatedUtc).First()).ToArray()
         : [];
 
     private static string RoundKey(ModelCandidateRound round) =>

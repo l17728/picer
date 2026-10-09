@@ -152,6 +152,8 @@ app.MapPost("/api/ai/vision/completions", async (HttpRequest request) =>
     var response = await client.SendAsync(upstream);
     return Results.Content(await response.Content.ReadAsStringAsync(), "application/json", statusCode: (int)response.StatusCode);
 });
+app.MapGet("/api/face-training/runtime", async (GpuEmbeddingService worker, CancellationToken ct) =>
+    Results.Json(await worker.GetRuntimeAsync(ct)));
 app.MapGet("/api/face-training/algorithms", (IEnumerable<ITrainingAlgorithmAdapter> adapters) =>
     Results.Ok(adapters.Select(a => new { id = a.Id, modelVersion = a.ModelVersion, name = a.DisplayName,
         available = a.IsAvailable, embeddingVersion = a.ModelVersion })));
@@ -160,7 +162,7 @@ app.MapGet("/api/face-training/model-rankings", (HttpRequest http, IEnumerable<I
     var scenario = http.Query["scenario"].FirstOrDefault();
     var candidates = rankings.Rank(adapters, scenario);
     var measuredRounds = candidates.Select(x => x.Rounds).DefaultIfEmpty().Max();
-    var singleModel = measuredRounds >= 20 ? candidates.FirstOrDefault()?.ModelVersion : null;
+    var singleModel = candidates.FirstOrDefault(x => x.SingleModelSelected)?.ModelVersion;
     return Results.Ok(new { policy = new { maxRounds = 20, iterationsPerRound = 9, retainedModels = 3,
         scenarioAware = true, trainingSelection = "top3", singleModelDecisionAfterRounds = 20 },
         scenario, totalRounds = measuredRounds, singleModelDecision = singleModel,
@@ -188,28 +190,52 @@ app.MapPost("/api/face-training/model-ensemble/decide", (ModelEnsembleDecisionRe
 });
 app.MapGet("/api/face-training/signing-key", (ArtifactSigner signer) => Results.Ok(signer.GetInfo()));
 
-app.MapPost("/api/face-training/embeddings", async (EmbeddingRequest request, IEnumerable<ITrainingAlgorithmAdapter> adapters, CancellationToken cancellationToken) =>
+app.MapPost("/api/face-inference", async (FaceInferenceRequest request, IEnumerable<ITrainingAlgorithmAdapter> adapters,
+    GpuEmbeddingService embeddingService, CancellationToken cancellationToken) =>
+{
+    if (string.IsNullOrWhiteSpace(request.ImageBase64) || request.ImageBase64.Length > 16 * 1024 * 1024)
+        return Results.BadRequest(new { error = "imageBase64_required_or_too_large" });
+    var adapter = adapters.FirstOrDefault(value => string.Equals(value.ModelVersion, request.ModelVersion, StringComparison.OrdinalIgnoreCase));
+    if (adapter is null || !adapter.IsAvailable)
+        return Results.BadRequest(new { error = "face_model_not_deployed" });
+    try
+    {
+        var result = await embeddingService.DetectFacesAsync(request.ModelVersion, [request.ImageBase64], cancellationToken);
+        return Results.Json(result);
+    }
+    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+    {
+        return Results.StatusCode(StatusCodes.Status499ClientClosedRequest);
+    }
+    catch (Exception exception) when (exception is InvalidOperationException or IOException or TimeoutException or JsonException)
+    {
+        return Results.Problem(exception.Message, statusCode: 502);
+    }
+});
+
+app.MapPost("/api/face-training/embeddings", async (EmbeddingRequest request, IEnumerable<ITrainingAlgorithmAdapter> adapters, GpuEmbeddingService embeddingService, CancellationToken cancellationToken) =>
 {
     if (request.Images is null || request.Images.Length == 0)
         return Results.BadRequest(new { error = "at least one face crop is required" });
     var adapter = adapters.FirstOrDefault(value => string.Equals(value.ModelVersion, request.ModelVersion, StringComparison.OrdinalIgnoreCase));
     if (adapter is null || !adapter.IsAvailable)
         return Results.BadRequest(new { error = $"model {request.ModelVersion} is not deployed" });
-    var python = Environment.GetEnvironmentVariable("PICER_GPU_WORKER_PYTHON");
-    var script = Environment.GetEnvironmentVariable("PICER_GPU_WORKER_SCRIPT");
-    if (string.IsNullOrWhiteSpace(python) || string.IsNullOrWhiteSpace(script))
-        return Results.Problem("GPU worker is not configured", statusCode: 503);
-    var start = new ProcessStartInfo(python, $"\"{script}\"")
-    { RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true };
-    using var process = Process.Start(start);
-    if (process is null) return Results.Problem("GPU worker could not start", statusCode: 503);
-    await process.StandardInput.WriteAsync(JsonSerializer.Serialize(new { operation = "embed", modelVersion = request.ModelVersion, images = request.Images }));
-    process.StandardInput.Close();
-    var output = await process.StandardOutput.ReadToEndAsync(cancellationToken);
-    var error = await process.StandardError.ReadToEndAsync(cancellationToken);
-    await process.WaitForExitAsync(cancellationToken);
-    if (process.ExitCode != 0) return Results.Problem(string.IsNullOrWhiteSpace(error) ? output : error, statusCode: 502);
-    return Results.Content(output, "application/json");
+    try
+    {
+        // GpuEmbeddingService owns one persistent worker and serializes GPU
+        // access.  Spawning one CUDA process per request made concurrent
+        // vector backfills exhaust VRAM and caused nondeterministic failures.
+        var embeddings = await embeddingService.GenerateAsync(request.ModelVersion, request.Images, cancellationToken);
+        return Results.Json(new { modelVersion = request.ModelVersion, embeddings });
+    }
+    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+    {
+        return Results.StatusCode(StatusCodes.Status499ClientClosedRequest);
+    }
+    catch (Exception exception) when (exception is InvalidOperationException or IOException or TimeoutException)
+    {
+        return Results.Problem(exception.Message, statusCode: 502);
+    }
 });
 
 app.MapPost("/api/face-training/datasets", (DatasetRequest request, ConcurrentDictionary<string, object> index, EvaluationDatasetStore evaluation,
@@ -482,6 +508,7 @@ public record DatasetRequest(string SnapshotId, string? SourceApp = null, string
     string? RecipeReason = null, int SelectedSampleCount = 0, int ExcludedSampleCount = 0,
     string? IdempotencyKey = null, string? Scenario = null, string? EvaluationId = null);
 public record EmbeddingRequest(string ModelVersion, string[] Images);
+public record FaceInferenceRequest(string ModelVersion, string ImageBase64);
 public record FaceSample(long FaceId, long PersonId, float[]? Embedding = null, string Split = "train",
     SampleEvidence? Evidence = null, VlAttributes? Attributes = null, string Label = "positive",
     string? FaceImageBase64 = null);
@@ -559,7 +586,7 @@ public sealed class TrainingExecutor
             if (!string.IsNullOrWhiteSpace(workerPython) && !string.IsNullOrWhiteSpace(workerScript))
             {
                 jobs[jobId] = jobs[jobId] with { Status = "running", Stage = "gpu-worker", Progress = 5 };
-                var payload = JsonSerializer.Serialize(new { modelVersion = dataset.ModelVersion ?? "sface", samples = dataset.Samples ?? [] });
+                var payload = JsonSerializer.Serialize(new { modelVersion = dataset.ModelVersion ?? "sface", samples = dataset.Samples ?? [], negativeSamples = dataset.NegativeSamples ?? [] });
                 var timeoutSeconds = int.TryParse(Environment.GetEnvironmentVariable("PICER_GPU_WORKER_TIMEOUT_SECONDS"), out var configured)
                     ? Math.Clamp(configured, 30, 86400) : 1800;
                 var output = await _gpuWorker.ExecuteAsync(payload, TimeSpan.FromSeconds(timeoutSeconds));
@@ -568,7 +595,7 @@ public sealed class TrainingExecutor
                 var gpuArtifact = JsonSerializer.Deserialize<TrainingArtifact>(output, new JsonSerializerOptions(JsonSerializerDefaults.Web))
                     ?? throw new InvalidOperationException("GPU worker returned invalid artifact");
                 gpuArtifact = _signer.Sign(gpuArtifact);
-                StoreArtifact(gpuArtifact, CalibrationGate.Passes(gpuArtifact.Metrics));
+                StoreArtifact(gpuArtifact);
                 jobs[jobId] = jobs[jobId] with { Status = "completed", Stage = "gpu-worker-completed", Progress = 100, ArtifactId = gpuArtifact.ArtifactId };
                 _archive.Append(new TrainingAttemptRecord("", "", jobId, gpuArtifact.ArtifactId, dataset.Attempt,
                     dataset.ModelVersion ?? "sface", dataset.Samples?.Length ?? 0,
@@ -600,9 +627,10 @@ public sealed class TrainingExecutor
                 return;
             }
 
-            var trainSamples = samples.Where(s => s.Split == "train").ToList();
+            var trainSamples = samples.Where(s => s.Split == "train" && s.Label != "negative").ToList();
             var validationSamples = samples.Where(s => s.Split == "validation").ToList();
-            if (trainSamples.Count == 0) trainSamples = samples.ToList();
+            if (trainSamples.Count == 0 || !validationSamples.Any(s => s.Label != "negative"))
+                throw new InvalidOperationException("需要独立的训练集和正样本验证集");
             jobs[jobId] = jobs[jobId] with { Stage = "clustering", Progress = 25 };
             await Task.Delay(200);
 
@@ -629,69 +657,11 @@ public sealed class TrainingExecutor
             jobs[jobId] = jobs[jobId] with { Stage = "evaluating", Progress = 60 };
             await Task.Delay(200);
 
-            int truePositive = 0, falsePositive = 0, falseNegative = 0, correct = 0, total = 0;
-            double sumSame = 0, sumDiff = 0; int countSame = 0, countDiff = 0;
-            var evalSamples = validationSamples.Count > 0 ? validationSamples : trainSamples;
-            foreach (var sample in evalSamples)
-            {
-                total++;
-                var bestProto = prototypes
-                    .Select(p => (Proto: p, Sim: CosineSimilarity(sample.Embedding!, p.Centroid)))
-                    .OrderByDescending(x => x.Sim)
-                    .FirstOrDefault();
-                var predicted = bestProto.Sim >= bestProto.Proto.Threshold ? bestProto.Proto.PersonId : 0;
-                if (predicted == sample.PersonId)
-                {
-                    correct++; truePositive++;
-                    sumSame += bestProto.Sim; countSame++;
-                }
-                else if (predicted != 0)
-                {
-                    falsePositive++;
-                    sumDiff += bestProto.Sim; countDiff++;
-                }
-                else
-                {
-                    falseNegative++;
-                }
-            }
-
-            // Explicit exclusive/unknown faces are evaluated as negatives;
-            // they never contribute to a person prototype.
-            var negativeSamples = dataset.NegativeSamples ?? [];
-            foreach (var sample in negativeSamples)
-            {
-                var bestProto = prototypes
-                    .Select(p => (Proto: p, Sim: CosineSimilarity(sample.Embedding, p.Centroid)))
-                    .OrderByDescending(x => x.Sim)
-                    .FirstOrDefault();
-                if (bestProto.Proto is not null && bestProto.Sim >= bestProto.Proto.Threshold)
-                    falsePositive++;
-            }
-
-            var trainAccuracy = trainSamples.Count > 0 ? (double)trainSamples.Count(s =>
-            {
-                var best = prototypes.Select(p => (P: p, S: CosineSimilarity(s.Embedding!, p.Centroid))).OrderByDescending(x => x.S).First();
-                return best.P.PersonId == s.PersonId && best.S >= best.P.Threshold;
-            }) / trainSamples.Count : 0;
-
-            var far = total + negativeSamples.Length > 0 ? (double)falsePositive / (total + negativeSamples.Length) : 0;
-            var frr = total > 0 ? (double)falseNegative / total : 0;
-            var valAccuracy = total > 0 ? (double)correct / total : 0;
-
-            jobs[jobId] = jobs[jobId] with { Stage = "packaging", Progress = 85 };
-            await Task.Delay(200);
-
-            var metrics = new TrainingMetrics(
-                samples.Length + negativeSamples.Length, prototypes.Count,
-                Math.Round(trainAccuracy, 4), Math.Round(valAccuracy, 4),
-                Math.Round(far, 4), Math.Round(frr, 4),
-                Math.Round(countSame > 0 ? sumSame / countSame : 0, 4),
-                Math.Round(countDiff > 0 ? sumDiff / countDiff : 0, 4));
+            var metrics = TrainingMetricsEvaluator.Evaluate(prototypes, samples, dataset.NegativeSamples ?? []);
 
             var artifactId = "artifact-" + Guid.NewGuid().ToString("N")[..12];
             var artifact = _signer.Sign(new TrainingArtifact(artifactId, "prototype-calibration", dataset.ModelVersion ?? "sface", DateTime.UtcNow, prototypes, metrics));
-            StoreArtifact(artifact, CalibrationGate.Passes(artifact.Metrics));
+            StoreArtifact(artifact);
 
             jobs[jobId] = jobs[jobId] with { Status = "completed", Stage = "completed", Progress = 100, ArtifactId = artifactId };
             _archive.Append(new TrainingAttemptRecord("", "", jobId, artifactId, dataset.Attempt,
@@ -720,10 +690,9 @@ public sealed class TrainingExecutor
         }
     }
 
-    private void StoreArtifact(TrainingArtifact artifact, bool persist)
+    private void StoreArtifact(TrainingArtifact artifact)
     {
         _artifacts[artifact.ArtifactId] = artifact;
-        if (!persist) return;
         var path = Path.Combine(_artifactRoot, artifact.ArtifactId + ".json");
         var temp = path + ".tmp";
         File.WriteAllText(temp, JsonSerializer.Serialize(artifact, new JsonSerializerOptions(JsonSerializerDefaults.Web)));

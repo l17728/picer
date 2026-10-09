@@ -1,7 +1,7 @@
 using System.ComponentModel;
 using System.Runtime.InteropServices;
 
-namespace Picer.App.Security;
+namespace Picer.Core.Security;
 
 public static class PicerCredentialTargets
 {

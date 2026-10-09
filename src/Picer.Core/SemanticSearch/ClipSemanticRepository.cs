@@ -37,10 +37,11 @@ public sealed class ClipSemanticRepository(PicerDatabase db)
         command.ExecuteNonQuery();
     }
 
-    public IReadOnlyList<ClipSearchHit> Search(ReadOnlySpan<float> query, int count = 20)
+    public IReadOnlyList<ClipSearchHit> Search(ReadOnlySpan<float> query, int count = 20, string modelVersion = ChineseClipEncoder.ModelVersion)
     {
         var candidates = new List<(long Id, float Score)>();
-        using var command = db.Command("SELECT image_id,embedding FROM clip_image_embeddings");
+        using var command = db.Command("SELECT image_id,embedding FROM clip_image_embeddings WHERE model_version=$model");
+        command.Parameters.AddWithValue("$model", modelVersion);
         using var reader = command.ExecuteReader();
         while (reader.Read())
         {

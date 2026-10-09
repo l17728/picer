@@ -1,6 +1,4 @@
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.PixelFormats;
-using SixLabors.ImageSharp.Processing;
+using Picer.Core.Imaging;
 
 namespace Picer.Core.Hashing;
 
@@ -19,8 +17,8 @@ public static class PerceptualHasher
     {
         var pixels = new int[64]; // 8x8
 
-        using var image = Image.Load<Rgba32>(stream);
-        var tempImage = image.Clone(ctx => ctx.Resize(8, 8));
+        using var image = RasterImage.Load(stream);
+        using var tempImage = image.Clone().Resize(8, 8);
 
         long sum = 0;
         for (int y = 0; y < 8; y++)
@@ -55,8 +53,8 @@ public static class PerceptualHasher
         // rows: 8 * 8 = 64 bits.
         var comparisons = new bool[64];
 
-        using var image = Image.Load<Rgba32>(stream);
-        var tempImage = image.Clone(ctx => ctx.Resize(9, 8));
+        using var image = RasterImage.Load(stream);
+        using var tempImage = image.Clone().Resize(9, 8);
 
         for (int y = 0; y < 8; y++)
         {
@@ -95,7 +93,7 @@ public static class PerceptualHasher
         return count;
     }
 
-    private static float GetGrayscale(Rgba32 p)
+    private static float GetGrayscale(RgbPixel p)
     {
         return 0.2126f * p.R + 0.7152f * p.G + 0.0722f * p.B;
     }

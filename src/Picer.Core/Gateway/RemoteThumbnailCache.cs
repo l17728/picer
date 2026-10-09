@@ -15,6 +15,7 @@ public sealed class RemoteThumbnailCache
     private const string CacheVersion = "v1";
     private readonly string _root;
     private readonly ConcurrentDictionary<string, Lazy<Task<string?>>> _inFlight = new(StringComparer.OrdinalIgnoreCase);
+    private readonly SemaphoreSlim _downloadSlots = new(8, 8);
 
     public RemoteThumbnailCache(string root)
     {
@@ -46,29 +47,44 @@ public sealed class RemoteThumbnailCache
     }
 
     public Task<string?> GetOrDownloadAsync(ImageRecord record, Func<Task<Stream?>> openSource,
+        CancellationToken cancellationToken = default) => GetOrDownloadAsync(record, _ => openSource(), cancellationToken);
+
+    public Task<string?> GetOrDownloadAsync(ImageRecord record, Func<CancellationToken, Task<Stream?>> openSource,
         CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var key = GetKey(record);
         var existing = TryGet(record);
         if (existing is not null) return Task.FromResult<string?>(existing);
-        var lazy = _inFlight.GetOrAdd(key, _ => new Lazy<Task<string?>>(
-            () => DownloadCoreAsync(record, key, openSource, cancellationToken),
-            LazyThreadSafetyMode.ExecutionAndPublication));
-        return AwaitAndRemoveAsync(key, lazy.Value);
+        Lazy<Task<string?>> candidate = null!;
+        candidate = new Lazy<Task<string?>>(() => DownloadOwnedAsync(key, candidate, openSource), LazyThreadSafetyMode.ExecutionAndPublication);
+        var task = _inFlight.GetOrAdd(key, candidate).Value;
+        // Caller cancellation stops only that subscriber. The bounded shared download
+        // remains useful to other visible cards and the persistent cache.
+        _ = task.ContinueWith(completed => { _ = completed.Exception; }, CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+        return task.WaitAsync(cancellationToken);
     }
 
-    private async Task<string?> AwaitAndRemoveAsync(string key, Task<string?> task)
+    private async Task<string?> DownloadOwnedAsync(string key, Lazy<Task<string?>> owner,
+        Func<CancellationToken, Task<Stream?>> openSource)
     {
-        try { return await task.ConfigureAwait(false); }
-        finally { _inFlight.TryRemove(key, out _); }
+        using var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(2));
+        try
+        {
+            await _downloadSlots.WaitAsync(deadline.Token).ConfigureAwait(false);
+            try { return await DownloadCoreAsync(key, openSource, deadline.Token).ConfigureAwait(false); }
+            finally { _downloadSlots.Release(); }
+        }
+        finally { ((ICollection<KeyValuePair<string, Lazy<Task<string?>>>>)_inFlight).Remove(new(key, owner)); }
     }
 
-    private async Task<string?> DownloadCoreAsync(ImageRecord record, string key,
-        Func<Task<Stream?>> openSource, CancellationToken cancellationToken)
+    private async Task<string?> DownloadCoreAsync(string key,
+        Func<CancellationToken, Task<Stream?>> openSource, CancellationToken cancellationToken)
     {
         var destination = Path.Combine(_root, key + ".jpg");
         if (File.Exists(destination)) return destination;
-        await using var source = await openSource().ConfigureAwait(false);
+        await using var source = await openSource(cancellationToken).ConfigureAwait(false);
         if (source is null) return null;
         var temporary = destination + "." + Guid.NewGuid().ToString("N") + ".part";
         try

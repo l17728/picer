@@ -1,5 +1,10 @@
 # RuntimeComponent 实机回归记录（2026-09-20）
 
+<!-- historical-status-2026-10-09 -->
+> **历史资料，2026-10-09 状态对照**：正文保留该阶段设计、测试和部署证据；其中“当前”“待办”“已部署”及验收数字按当时语境理解，不代表最新程序状态。
+> 当前能力见[当前能力与验证状态](CURRENT_CAPABILITIES_2026-10-09.md)，后续结果见[最新代码修复与验证](RESIDUAL_CODE_FIXES_2026-10-09.md)。当前源码 schema 45；605 项单元用例由完整回归与补测分轮去重核验，WPF 73/73，不是一次全量 605/605，也不证明历史部署包包含新代码。
+<!-- /historical-status-2026-10-09 -->
+
 ## 资产状态
 
 已核对 `third_party/runtime` 的固定清单。YuNet、SFace、FFmpeg、whisper.cpp（含 base-q5_1 模型）、WebRTC AEC3、Chinese-CLIP 和 Florence-2 INT8 文件均存在，文件大小与 `publish-self-contained.ps1` 及 `RuntimeComponentService.RequiredComponents` 中的 SHA-256 完全一致。运行时原生库 DirectML/ONNX Runtime 由 x64 构建输出提供，测试输出目录也已包含对应文件。

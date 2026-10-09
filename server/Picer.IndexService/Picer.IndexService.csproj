@@ -16,7 +16,9 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Content Include="..\..\third_party\runtime\**\*">
+    <!-- Linux IndexService relays model/media execution to MediaAgent; Windows
+         runtime binaries are neither executable nor needed on the service host. -->
+    <Content Include="..\..\third_party\runtime\**\*" Condition="'$(RuntimeIdentifier)' != 'linux-x64'">
       <Link>runtime\%(RecursiveDir)%(Filename)%(Extension)</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>

@@ -3,6 +3,64 @@ using System.Text.Json;
 using Picer.Core.Data;
 using Picer.Core.Search;
 
+if (args.Length == 2 && args[0] == "--schema-audit")
+{
+    var path = Path.GetFullPath(args[1]);
+    using var db = new PicerDatabase(path);
+    using var check = db.Command("PRAGMA quick_check");
+    var integrity = Convert.ToString(check.ExecuteScalar());
+    using var foreign = db.Command("PRAGMA foreign_key_check");
+    using var reader = foreign.ExecuteReader();
+    var foreignErrors = 0; while (reader.Read()) foreignErrors++;
+    reader.Close();
+    var counts = new Dictionary<string, long>();
+    foreach (var table in new[] { "images", "videos", "detected_faces", "face_person_assignments", "face_review_states", "face_corrections", "cloud_vision_analyses", "video_summaries", "content_derivatives", "content_text_documents" })
+    {
+        using var tableCount = db.Command($"SELECT COUNT(*) FROM {table}");
+        counts[table] = Convert.ToInt64(tableCount.ExecuteScalar());
+    }
+    Console.WriteLine(JsonSerializer.Serialize(new { schemaVersion = PicerDatabase.CurrentSchemaVersion, integrity, foreignErrors, counts }));
+    if (integrity != "ok" || foreignErrors != 0) Environment.ExitCode = 1;
+    return;
+}
+
+if (args.Length == 1 && args[0] == "--artifact-integrity")
+{
+    using var envelope = JsonDocument.Parse(Console.In.ReadToEnd());
+    var artifactJson = envelope.RootElement.GetProperty("artifact").GetString()!;
+    using var artifact = JsonDocument.Parse(artifactJson);
+    var digest = Picer.Core.Vision.FaceTrainingService.ComputeUnsignedArtifactHash(artifactJson);
+    using var verifier = System.Security.Cryptography.ECDsa.Create();
+    verifier.ImportSubjectPublicKeyInfo(Convert.FromBase64String(envelope.RootElement.GetProperty("publicKey").GetString()!), out _);
+    var typed = JsonSerializer.Deserialize<Picer.Core.People.TrainingArtifactData>(artifactJson, new JsonSerializerOptions(JsonSerializerDefaults.Web))!;
+    var typedDigest = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(
+        typed with { Sha256 = null, Signature = null, SignatureAlgorithm = null, SigningKeyId = null }, new JsonSerializerOptions(JsonSerializerDefaults.Web))));
+    var typedHashMatches = typedDigest.Equals(artifact.RootElement.GetProperty("sha256").GetString(), StringComparison.OrdinalIgnoreCase);
+    var hashMatches = digest.Equals(artifact.RootElement.GetProperty("sha256").GetString(), StringComparison.OrdinalIgnoreCase);
+    var signatureValid = hashMatches && verifier.VerifyHash(Convert.FromHexString(digest),
+        Convert.FromBase64String(artifact.RootElement.GetProperty("signature").GetString()!));
+    Console.WriteLine(JsonSerializer.Serialize(new { hashMatches, signatureValid, typedHashMatches }));
+    return;
+}
+
+if (args.Length >= 2 && args[0] == "--face-snapshot")
+{
+    using var db = new PicerDatabase(Path.GetFullPath(args[1]));
+    var snapshot = Picer.Core.People.FaceTrainingSnapshotService.BuildSnapshot(db);
+    Console.WriteLine(JsonSerializer.Serialize(new { snapshot.SnapshotId, snapshot.ManifestHash,
+        snapshot.MemberCount, snapshot.NegativePairCount, snapshot.LeakageGroupCount, snapshot.PersonCount, snapshot.Warnings }));
+    return;
+}
+
+if (args.Length >= 2 && args[0] == "--face-eligibility")
+{
+    // Accept an isolated database copy; opening PicerDatabase may migrate old schemas.
+    using var db = new PicerDatabase(Path.GetFullPath(args[1]));
+    var result = Picer.Core.People.FaceTrainingSnapshotService.CheckEligibility(db);
+    Console.WriteLine(JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true }));
+    return;
+}
+
 if (args.Length >= 2 && args[0] == "--face-diagnostics")
 {
     using var diagnosticDb = new PicerDatabase(Path.GetFullPath(args[1]));

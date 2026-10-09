@@ -13,6 +13,7 @@ namespace Picer.App.ViewModels;
 
 public partial class ImageItemViewModel : ObservableObject
 {
+    private readonly ClientServices _services;
     private static readonly SemaphoreSlim ThumbnailLoadGate = new(8, 8);
     private readonly ImageRecord _record;
     private string? _previewPath;
@@ -22,19 +23,21 @@ public partial class ImageItemViewModel : ObservableObject
     private CancellationTokenSource? _thumbnailCts;
     private readonly CancellationToken _pageCancellation;
 
-    public ImageItemViewModel(ImageRecord record, CancellationToken pageCancellation = default)
+    public ImageItemViewModel(ImageRecord record, CancellationToken pageCancellation = default, ClientServices? services = null)
     {
         _record = record;
+        _services = services ?? new();
         _pageCancellation = pageCancellation;
     }
 
     public ImageItemViewModel(VideoRecord video, string? previewPath,
         Func<VideoRecord, CancellationToken, Task<string?>>? videoPreviewLoader = null,
-        CancellationToken pageCancellation = default)
+        CancellationToken pageCancellation = default, ClientServices? services = null)
     {
         VideoRecord = video;
         _previewPath = previewPath;
         _videoPreviewLoader = videoPreviewLoader;
+        _services = services ?? new();
         _pageCancellation = pageCancellation;
         _record = new ImageRecord
         {
@@ -67,7 +70,7 @@ public partial class ImageItemViewModel : ObservableObject
     public void ConfigureBurst(IReadOnlyList<ImageRecord> records, DateTime startedUtc, DateTime endedUtc)
     {
         BurstMembers.Clear();
-        foreach (var record in records) BurstMembers.Add(new ImageItemViewModel(record, _pageCancellation));
+        foreach (var record in records) BurstMembers.Add(new ImageItemViewModel(record, _pageCancellation, _services));
         BurstTimeRange = $"{startedUtc.ToLocalTime():yyyy-MM-dd HH:mm:ss} – {endedUtc.ToLocalTime():HH:mm:ss}";
         OnPropertyChanged(nameof(IsBurstStack));
         OnPropertyChanged(nameof(BurstCount));
@@ -168,12 +171,12 @@ public partial class ImageItemViewModel : ObservableObject
                 _previewPath = await _videoPreviewLoader(video, cts.Token);
                 imagePaths = await Task.Run(GetImagePaths, cts.Token);
             }
-            if (imagePaths.Count == 0 && !IsVideo && AppServices.ServiceMode)
+            if (imagePaths.Count == 0 && !IsVideo && _services.ServiceMode)
             {
-                var cachedPath = AppServices.RemoteThumbnails.TryGet(_record);
-                var path = cachedPath ?? await AppServices.RemoteThumbnails.GetOrDownloadAsync(
+                var cachedPath = _services.RemoteThumbnails.TryGet(_record);
+                var path = cachedPath ?? await _services.RemoteThumbnails.GetOrDownloadAsync(
                     _record,
-                    () => AppServices.Gateway.OpenThumbnailAsync(_record.Id, cts.Token),
+                    downloadToken => _services.Gateway.OpenThumbnailAsync(_record.Id, downloadToken),
                     cts.Token);
                 if (path is not null && File.Exists(path))
                 {
@@ -192,8 +195,8 @@ public partial class ImageItemViewModel : ObservableObject
                 }
                 return;
             }
-            if (imagePaths.Count == 0 && IsVideo && AppServices.ServiceMode &&
-                AppServices.Gateway is Picer.Core.Gateway.IMediaAssetGateway mediaGateway && VideoRecord is { } remoteVideo)
+            if (imagePaths.Count == 0 && IsVideo && _services.ServiceMode &&
+                _services.Gateway is Picer.Core.Gateway.IMediaAssetGateway mediaGateway && VideoRecord is { } remoteVideo)
             {
                 await using var remote = await mediaGateway.OpenVideoThumbnailAsync(remoteVideo.Id, cancellationToken: cts.Token);
                 if (remote is not null)

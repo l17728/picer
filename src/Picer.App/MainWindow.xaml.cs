@@ -9,6 +9,11 @@ namespace Picer.App;
 
 public partial class MainWindow : Window
 {
+    private void RepairPhotoIndex_Click(object sender, RoutedEventArgs e)
+    {
+        new Views.IndexRepairWindow { Owner = this }.ShowDialog();
+        _mainVm?.LoadImages();
+    }
     private Point _faceDragStartPoint;
     private int _faceDragStartIndex = -1;
     private bool _faceDragSelecting;
@@ -17,6 +22,7 @@ public partial class MainWindow : Window
     private bool _initialized;
     private readonly bool _remoteMode;
     private ServiceBrowseViewModel? _remoteBrowseViewModel;
+    private Views.ServiceBrowseWindow? _remoteBrowseWindow;
 
     public MainWindow()
     {
@@ -39,10 +45,13 @@ public partial class MainWindow : Window
     {
         if (_initialized) return;
         _initialized = true;
+        AiModelSettingsMenuItem.IsEnabled = !AppServices.ServiceMode;
         if (_remoteMode)
         {
             var browse = new Views.ServiceBrowseWindow(AppServices.Gateway, autoLoad: false);
             _remoteBrowseViewModel = browse.ViewModel;
+            _remoteBrowseWindow = browse;
+            LocalToolbar.Visibility = Visibility.Collapsed;
             if (browse.Content is FrameworkElement content)
             {
                 content.DataContext = _remoteBrowseViewModel;
@@ -90,7 +99,7 @@ public partial class MainWindow : Window
 
     private void SearchBox_TextChanged(object sender, TextChangedEventArgs e)
     {
-        if (MainTabs is null || sender is not TextBox box) return;
+        if (_mainVm is null || MainTabs is null || sender is not TextBox box) return;
         // IME composition can update TextBox.Text before its binding source. Synchronize
         // explicitly so Chinese person names do not require Enter or a focus change.
         if (!string.Equals(_mainVm.SearchQuery, box.Text, StringComparison.Ordinal))
@@ -138,13 +147,33 @@ public partial class MainWindow : Window
 
     private void MediaTypeBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (MainTabs is null || MediaTypeBox is null) return;
+        if (_mainVm is null || MainTabs is null || MediaTypeBox is null) return;
         _mainVm.SetDirectoryMediaFilter(MediaTypeBox.SelectedIndex);
         MainTabs.SelectedIndex = 0;
     }
 
     private void CloudVisionSettings_Click(object sender, RoutedEventArgs e)
     {
+        var serviceManaged = AppServices.ServiceMode;
+        if (!serviceManaged)
+        {
+            try
+            {
+                serviceManaged = Picer.Core.Gateway.IndexBackendConfig.LoadConfiguredServiceEndpoint(
+                    AppPaths.ServiceEndpointPath,
+                    static cipher => System.Security.Cryptography.ProtectedData.Unprotect(
+                        cipher, null, System.Security.Cryptography.DataProtectionScope.CurrentUser)) is not null;
+            }
+            catch (Exception exception)
+            {
+                AppLogger.Warn("AI settings service ownership probe failed: " + exception.GetType().Name);
+            }
+        }
+        if (serviceManaged)
+        {
+            MessageBox.Show(this, "本地与远程模式的模型、端点和密钥均由统一 Service 管理，客户端不可修改。", "AI 模型设置", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
         new CloudVisionSettingsWindow(AppPaths.CloudVisionSettingsPath) { Owner = this }.ShowDialog();
     }
 
@@ -152,12 +181,32 @@ public partial class MainWindow : Window
     {
         var chat = AppServices.CreateAiChatClient(AiFeatureIds.AiQuestion);
         if (chat is null) { MessageBox.Show(this, "请先在 AI 模型设置中为 AI 问答选择可用的模型。", "语音助手"); return; }
-        var settings = CloudVisionSettings.Load(AppPaths.CloudVisionSettingsPath);
-        var speech = settings.Resolve(AiFeatureIds.VideoTranscription);
-        if (speech is null || !Uri.TryCreate(speech.Value.Provider.BaseUrl, UriKind.Absolute, out var asrEndpoint))
+        Uri? asrEndpoint; string speechModel; Uri? ttsEndpoint;
+        var backend = AppPaths.LoadIndexBackend();
+        if (string.IsNullOrWhiteSpace(backend.BaseUrl))
         {
-            chat.Dispose(); MessageBox.Show(this, "请先在 AI 模型设置中配置本地语音转写模型。", "语音助手"); return;
+            try
+            {
+                backend = Picer.Core.Gateway.IndexBackendConfig.LoadConfiguredServiceEndpoint(
+                    AppPaths.ServiceEndpointPath,
+                    static cipher => System.Security.Cryptography.ProtectedData.Unprotect(
+                        cipher, null, System.Security.Cryptography.DataProtectionScope.CurrentUser))
+                    ?? backend;
+            }
+            catch (Exception exception)
+            {
+                AppLogger.Warn("Local voice relay endpoint unavailable: " + exception.GetType().Name);
+            }
         }
+        if (string.IsNullOrWhiteSpace(backend.BaseUrl) || !Uri.TryCreate(backend.BaseUrl.TrimEnd('/') + "/", UriKind.Absolute, out var serviceBase))
+        {
+            chat.Dispose();
+            MessageBox.Show(this, "本地与远程模式都必须先配置 IndexService；模型端点由驻留代理统一提供。", "语音助手");
+            return;
+        }
+        asrEndpoint = new Uri(serviceBase, "api/service/v1/asr");
+        ttsEndpoint = new Uri(serviceBase, "api/service/v1/tts");
+        speechModel = "service-asr";
         var window = new Views.VoiceAssistantWindow(new VoiceCommandAgent(chat),
             _mainVm.GetVoiceLocationPaths,
             // Voice planning only exposes manually confirmed people. Candidate
@@ -168,7 +217,7 @@ public partial class MainWindow : Window
                 .Select(person => person.DisplayName)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToArray(), ExecuteVoiceActionAsync,
-            asrEndpoint, speech.Value.Model.Id, new Uri("http://127.0.0.1:8090/api/tts/speech"))
+            asrEndpoint!, speechModel, ttsEndpoint!)
             { Owner = this };
         window.Closed += (_, _) => chat.Dispose();
         window.Show();
@@ -223,14 +272,23 @@ public partial class MainWindow : Window
 
     private void FlorenceValidation_Click(object sender, RoutedEventArgs e)
     {
-        new Views.FlorenceValidationWindow(new Picer.Core.Vision.FlorenceRuntimeValidationService(AppPaths.FlorenceModelRoot), AppPaths.FlorenceRuntimeSettingsPath)
-            { Owner = this }.Show();
+        MessageBox.Show(this, "Florence 视觉能力必须由 IndexService/MediaAgent 提供，当前客户端不直接加载模型。", "服务能力未接入", MessageBoxButton.OK, MessageBoxImage.Information);
+        return;
     }
 
     private void FlorenceBatch_Click(object sender, RoutedEventArgs e)
     {
-        new Views.FlorenceBatchWindow(AppServices.FlorenceResults, AppPaths.FlorenceModelRoot, AppPaths.FlorenceRuntimeSettingsPath)
-            { Owner = this }.Show();
+        DescribeMediaDirectory_Click(sender, e);
+    }
+
+    private void DescribeMediaDirectory_Click(object sender, RoutedEventArgs e) =>
+        new Views.DirectoryMediaDescriptionWindow { Owner = this }.ShowDialog();
+
+    private void VideoMetadata_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement { DataContext: VideoViewModel { SelectedVideo: { } selected } })
+            new Views.VideoMetadataWindow(AppServices.Db, selected.Record.Id,
+                () => AppServices.QueueImmediateRemoteSync("视频标签与概念修改")) { Owner = this }.ShowDialog();
     }
 
     private void StorageSettings_Click(object sender, RoutedEventArgs e)
@@ -555,6 +613,12 @@ public partial class MainWindow : Window
         await _mainVm.ParsePendingLocationsAsync();
     private async void DirectoryLocalClassification_Click(object sender,RoutedEventArgs e){if(DirectoryTreeView.SelectedItem is DirectoryNodeViewModel node)await _mainVm.SetDirectoryClassificationModeAsync(node,false);}
     private async void DirectoryRecursiveClassification_Click(object sender,RoutedEventArgs e){if(DirectoryTreeView.SelectedItem is DirectoryNodeViewModel node)await _mainVm.SetDirectoryClassificationModeAsync(node,true);}
+    private async void DescribeDirectory_Click(object sender, RoutedEventArgs e)
+    {
+        if (DirectoryTreeView.SelectedItem is not DirectoryNodeViewModel node) return;
+        try { await _mainVm.DescribeDirectoryAsync(node); }
+        catch (Exception exception) { MessageBox.Show(this, "目录描述失败：" + exception.Message, "目录照片描述", MessageBoxButton.OK, MessageBoxImage.Error); }
+    }
     private async void RegenerateDirectoryClassification_Click(object sender,RoutedEventArgs e){if(DirectoryTreeView.SelectedItem is DirectoryNodeViewModel node)await _mainVm.LoadSceneAnchorsAsync(node,true);}
     private async void DescribeUnclassifiedScene_Click(object sender,RoutedEventArgs e){if(DirectoryTreeView.SelectedItem is DirectoryNodeViewModel node)await _mainVm.DescribeUnclassifiedSceneAsync(node);}
     private async void EditSceneDescription_Click(object sender,RoutedEventArgs e){if(DirectoryTreeView.SelectedItem is DirectoryNodeViewModel node)await _mainVm.EditSceneDescriptionAsync(node);}
@@ -565,23 +629,42 @@ public partial class MainWindow : Window
             _mainVm.OpenSelectedCommand.Execute(null);
     }
 
+    private void KeyboardHelp_Click(object sender, RoutedEventArgs e) =>
+        new KeyboardHelpWindow { Owner = this }.ShowDialog();
+
     private void MainWindow_PreviewKeyDown(object sender, KeyEventArgs e)
     {
-        if (e.Key == Key.F && Keyboard.Modifiers.HasFlag(ModifierKeys.Control))
+        if (e.Key == Key.F1 && Keyboard.Modifiers == ModifierKeys.None)
         {
-            SearchBox.Focus();
-            SearchBox.SelectAll();
             e.Handled = true;
+            KeyboardHelp_Click(sender, e);
+            return;
         }
-        else if (e.Key == Key.Escape && SearchBox.IsKeyboardFocusWithin)
+        if (_remoteMode)
         {
-            _mainVm.ClearSearchCommand.Execute(null);
-            e.Handled = true;
+            e.Handled = _remoteBrowseWindow?.HandleShortcut(e.Key, Keyboard.Modifiers) == true;
+            return;
         }
-        else if (e.Key == Key.Enter && SearchBox.IsKeyboardFocusWithin)
+        e.Handled = HandleLocalShortcut(e.Key, Keyboard.Modifiers);
+    }
+
+    internal bool HandleLocalShortcut(Key key, ModifierKeys modifiers)
+    {
+        if (_mainVm is null) return false;
+        if (modifiers == ModifierKeys.Control)
         {
-            _ = _mainVm.ResolvePlaceCommand.ExecuteAsync(SearchBox.Text);
-            e.Handled = true;
+            if (key == Key.F) { SearchBox.Focus(); SearchBox.SelectAll(); return true; }
+            if (key == Key.L) { MainTabs.SelectedIndex = 0; DirectoryTreeView.Focus(); return true; }
+            if (key >= Key.D1 && key <= Key.D5)
+            {
+                MainTabs.SelectedIndex = key - Key.D1;
+                ((TabItem)MainTabs.SelectedItem).Focus();
+                return true;
+            }
         }
+        if (modifiers != ModifierKeys.None || !SearchBox.IsKeyboardFocusWithin) return false;
+        if (key == Key.Escape) { _mainVm.ClearSearchCommand.Execute(null); return true; }
+        if (key == Key.Enter) { _ = _mainVm.ResolvePlaceCommand.ExecuteAsync(SearchBox.Text); return true; }
+        return false;
     }
 }

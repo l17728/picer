@@ -6,7 +6,7 @@ Picer is a Windows-only .NET 8 WPF photo/video manager. Product UI and docs unde
 
 - `src/Picer.Core` — net8.0 library: indexing, SQLite data layer (`Data/`), search/FTS5, vision/ONNX (`Vision/`), people, thumbnails, storage (local/WebDAV), file operations.
 - `src/Picer.App` — WPF UI (net8.0-windows), CommunityToolkit.Mvvm.
-- `server/Picer.IndexService` — read-only index gateway over HTTPS (P1 of the C/S design, `docs/INDEX_SERVICE_CS_DESIGN_2026-09-08.md`); `IIndexGateway` + `LocalGateway`/`HttpIndexGateway` live in `src/Picer.Core/Gateway/`.
+- `server/Picer.IndexService` — HTTPS index gateway with authorized index sync, analysis, repair and index-purge endpoints; original media stays read-only. See `docs/INDEX_SERVICE_CS_DESIGN_2026-09-08.md`; gateway contracts live in `src/Picer.Core/Gateway/`.
 - `server/Picer.ModelServer` — separate ASP.NET Core API (deployed independently, has its own `Dockerfile` + `server/README.md`). Run: `dotnet run --project server/Picer.ModelServer`.
 - `tests/Picer.Tests` (xUnit) and `tests/Picer.E2E` (drives the real WPF app via UI Automation and the real Windows recycle bin; WPF tests use STA threads).
 - `tools/` — benchmarks, ONNX probes, `verify-release.ps1`, `publish-self-contained.ps1`.
@@ -33,6 +33,7 @@ For face-model tests alone, `tools/Picer.VisionProbe/download-models.ps1` fetche
 ## Environment variables
 
 - `PICER_DATA_ROOT` — redirects all app data (SQLite db, thumbs) to an isolated directory; E2E tests set this per-test.
+- `PICER_SCAN_CACHE_ROOT` — overrides persistent directory manifests and NTFS USN checkpoints; defaults to `scan-manifests` under the app data root. Treat as disposable cache and invalidate it on explicit index purge.
 - `PICER_TEST_TEMP` — overrides TEMP/TMP for tests (set via `[ModuleInitializer]` in each test project). Default resolves from the repo-root `picer.paths.json` (`testTemp` = `artifacts/test-temp`, repo-relative; per-project `tests`/`e2e` subdirectory).
 - `PICER_MODEL_ROOT` — face model directory; vision tests default to `third_party/model-probe` via `picer.paths.json` (`modelProbeRoot`).
 - `PICER_FFMPEG_PATH` — FFmpeg override used by `Picer.Core.Video.VideoIndexService`.
@@ -44,7 +45,7 @@ For face-model tests alone, `tools/Picer.VisionProbe/download-models.ps1` fetche
 
 - Indexing, search, and analysis must never modify, move, or delete original files. All destructive file operations go through `IUserAuthorizedFileOperation` (recycle bin), re-verifying path/size/mtime/hash at execution time; the index record is removed only after verified recycle success.
 - Destructive flows follow the state machine `Detected -> Reviewed -> Confirmed -> Executing -> Verified -> Completed/PartiallyFailed`. Candidates/suggestions never auto-confirm.
-- SQLite schema changes are chained `PRAGMA user_version` migrations in `src/Picer.Core/Data/PicerDatabase.cs` (currently up to v29). Migrations require a whole-file backup of `picer.db` + WAL + SHM with the app closed.
+- SQLite schema changes are chained `PRAGMA user_version` migrations in `src/Picer.Core/Data/PicerDatabase.cs` (currently up to v45; deployed databases may be older). Migrations require a whole-file backup of `picer.db` + WAL + SHM with all writers closed; `DatabaseMigrationSafety` enforces staged migration and recoverable publication.
 - Privacy: SQL must be parameterized; never log credentials, face embeddings, person names/aliases, or AI question text. Remote/cloud features are opt-in and independently authorized; the full flow must work offline.
 - Vision embeddings/thresholds are per model version and must never be compared or mixed across versions.
 

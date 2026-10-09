@@ -1,3 +1,4 @@
+using Picer.App.Infrastructure;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
@@ -24,13 +25,13 @@ public partial class FaceDetailWindow : Window
         _repository = repository;
         _people = people;
         _initialFaceId = initialFaceId;
-        Loaded += async (_, _) => await InitializeAsync();
+        Loaded += async (_, _) => { try { await InitializeAsync(); } catch (Exception exception) { Status.Text = "加载失败：" + exception.Message; } };
     }
 
     private async Task InitializeAsync()
     {
         Status.Text = "正在加载关联照片和人脸…";
-        var people = await Task.Run(() => _people.GetAll().ToArray());
+        var people = await UiWork.RunDatabaseAsync(() => _people.GetAll().ToArray());
         PersonPicker.ItemsSource = people;
         await LoadPhotoAsync();
         await RefreshFacesAsync();
@@ -59,7 +60,7 @@ public partial class FaceDetailWindow : Window
 
     private async Task RefreshFacesAsync()
     {
-        var faces = await Task.Run(() => _repository.GetFaces(_image.Id).Select(face => new FaceDetailItem(face)).ToArray());
+        var faces = await UiWork.RunDatabaseAsync(() => _repository.GetFaces(_image.Id).Select(face => new FaceDetailItem(face)).ToArray());
         FaceList.ItemsSource = faces;
         FaceCanvas.Children.Clear();
         _rectangles.Clear();
@@ -99,9 +100,13 @@ public partial class FaceDetailWindow : Window
             Status.Text = "请选择人脸和人物。";
             return;
         }
-        await Task.Run(() => _people.ConfirmFace(face.Record.FaceId, person.Id));
-        Status.Text = $"已确认为“{person.DisplayName}”。";
-        await RefreshFacesAsync();
+        try
+        {
+            await UiWork.RunDatabaseAsync(() => _people.ConfirmFace(face.Record.FaceId, person.Id));
+            Status.Text = $"已确认为“{person.DisplayName}”。";
+            await RefreshFacesAsync();
+        }
+        catch (Exception exception) { Status.Text = "确认失败：" + exception.Message; }
     }
 
     private async void Reject_Click(object sender, RoutedEventArgs e)
@@ -111,9 +116,13 @@ public partial class FaceDetailWindow : Window
             Status.Text = "所选人脸当前没有人物归属或建议。";
             return;
         }
-        await Task.Run(() => _people.MarkNotThisPerson(face.Record.FaceId, personId));
-        Status.Text = "已移除错误归属，并记录拒绝约束。";
-        await RefreshFacesAsync();
+        try
+        {
+            await UiWork.RunDatabaseAsync(() => _people.MarkNotThisPerson(face.Record.FaceId, personId));
+            Status.Text = "已移除错误归属，并记录拒绝约束。";
+            await RefreshFacesAsync();
+        }
+        catch (Exception exception) { Status.Text = "纠错失败：" + exception.Message; }
     }
 
     private sealed class FaceDetailItem(ImageFaceRecord record)

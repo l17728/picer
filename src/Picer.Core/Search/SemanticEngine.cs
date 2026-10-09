@@ -48,18 +48,26 @@ public static class SemanticEngine
 
     public static void AssignTag(PicerDatabase db, long imageId, long tagId)
     {
+        using var transaction = db.BeginTransaction();
         using var cmd = db.Command("INSERT OR IGNORE INTO image_tags (image_id, tag_id) VALUES ($img, $tag)");
+        cmd.Transaction = transaction;
         cmd.Parameters.AddWithValue("$img", imageId);
         cmd.Parameters.AddWithValue("$tag", tagId);
         cmd.ExecuteNonQuery();
+        db.RecordMetadataEdit("tag-link", imageId, tagId.ToString(System.Globalization.CultureInfo.InvariantCulture), "1", transaction);
+        transaction.Commit();
     }
 
     public static void RemoveTag(PicerDatabase db, long imageId, long tagId)
     {
+        using var transaction = db.BeginTransaction();
         using var cmd = db.Command("DELETE FROM image_tags WHERE image_id = $img AND tag_id = $tag");
+        cmd.Transaction = transaction;
         cmd.Parameters.AddWithValue("$img", imageId);
         cmd.Parameters.AddWithValue("$tag", tagId);
         cmd.ExecuteNonQuery();
+        db.RecordMetadataEdit("tag-link", imageId, tagId.ToString(System.Globalization.CultureInfo.InvariantCulture), "0", transaction);
+        transaction.Commit();
     }
 
     public static List<Tag> GetImageTags(PicerDatabase db, long imageId)
@@ -119,21 +127,29 @@ public static class SemanticEngine
         }
     }
 
-    public static void AddToAlbum(PicerDatabase db, long albumId, long imageId)
+    public static void AddToAlbum(PicerDatabase db, long albumId, long imageId, bool recordEdit = true)
     {
+        using var transaction = db.BeginTransaction();
         using var cmd = db.Command("INSERT OR IGNORE INTO album_images (album_id, image_id, added_utc) VALUES ($aid, $iid, $ts)");
+        cmd.Transaction = transaction;
         cmd.Parameters.AddWithValue("$aid", albumId);
         cmd.Parameters.AddWithValue("$iid", imageId);
         cmd.Parameters.AddWithValue("$ts", Fmt(DateTime.UtcNow));
         cmd.ExecuteNonQuery();
+        if (recordEdit) db.RecordMetadataEdit("album-link", albumId, imageId.ToString(System.Globalization.CultureInfo.InvariantCulture), "1", transaction);
+        transaction.Commit();
     }
 
     public static void RemoveFromAlbum(PicerDatabase db, long albumId, long imageId)
     {
+        using var transaction = db.BeginTransaction();
         using var cmd = db.Command("DELETE FROM album_images WHERE album_id = $aid AND image_id = $iid");
+        cmd.Transaction = transaction;
         cmd.Parameters.AddWithValue("$aid", albumId);
         cmd.Parameters.AddWithValue("$iid", imageId);
         cmd.ExecuteNonQuery();
+        db.RecordMetadataEdit("album-link", albumId, imageId.ToString(System.Globalization.CultureInfo.InvariantCulture), "0", transaction);
+        transaction.Commit();
     }
 
     public static List<ImageRecord> GetAlbumImages(PicerDatabase db, long albumId)

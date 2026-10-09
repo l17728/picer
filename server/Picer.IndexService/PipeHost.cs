@@ -104,6 +104,9 @@ public sealed class NamedPipeIndexServer : IDisposable
             var body = op switch
             {
                 "health" => JsonSerializer.SerializeToElement(_handlers.Health()),
+                "changes" => JsonSerializer.SerializeToElement(_handlers.GetChanges(payload?.Deserialize<GatewayChangeRequest>(Json) ?? new())),
+                "purge_video" => JsonSerializer.SerializeToElement(new PipeFlagResponse(await _handlers.PurgeVideoAsync(imageRequest.Id, cancellationToken))),
+                "purge_missing" => JsonSerializer.SerializeToElement(new PipeFlagResponse(_handlers.PurgeMissingImage(imageRequest.Id))),
                 "list" => JsonSerializer.SerializeToElement(await _handlers.ListAsync(listRequest.SourceId, listRequest.IncludeMissing, listRequest.PageSize, listRequest.Cursor, cancellationToken)),
                 "image" => JsonSerializer.SerializeToElement(await _handlers.GetAsync(imageRequest.Id, cancellationToken)),
                 "videos" => JsonSerializer.SerializeToElement(await _handlers.ListVideosAsync(videoListRequest.SourceId, videoListRequest.PageSize, videoListRequest.Cursor, cancellationToken)),

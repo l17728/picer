@@ -21,6 +21,16 @@ if ([string]::IsNullOrWhiteSpace($OutputDirectory) -or [string]::IsNullOrWhiteSp
         $ServiceOutputDirectory = if ([IO.Path]::IsPathRooted($configured)) { $configured } else { Join-Path $repoRoot $configured }
     }
 }
+$OutputDirectory = [IO.Path]::GetFullPath($OutputDirectory).TrimEnd('\')
+$ServiceOutputDirectory = [IO.Path]::GetFullPath($ServiceOutputDirectory).TrimEnd('\')
+if ($OutputDirectory.Equals($ServiceOutputDirectory, [StringComparison]::OrdinalIgnoreCase) -or
+    $OutputDirectory.StartsWith($ServiceOutputDirectory + '\', [StringComparison]::OrdinalIgnoreCase) -or
+    $ServiceOutputDirectory.StartsWith($OutputDirectory + '\', [StringComparison]::OrdinalIgnoreCase)) { throw 'Application and service staging directories must be separate.' }
+foreach ($stagingDirectory in @($OutputDirectory, $ServiceOutputDirectory)) {
+    if ((Test-Path -LiteralPath $stagingDirectory) -and @(Get-ChildItem -LiteralPath $stagingDirectory -Force).Count -ne 0) {
+        throw 'Publish requires empty staging directories. Use fresh OutputDirectory and ServiceOutputDirectory; do not publish over a live installation.'
+    }
+}
 $runtimeSource = Join-Path $repoRoot 'third_party\runtime'
 $required = @(
     @{ Path='models\face\face_detection_yunet_2023mar.onnx'; Bytes=232589; Hash='8F2383E4DD3CFBB4553EA8718107FC0423210DC964F9F4280604804ED2552FA4' },
@@ -72,10 +82,14 @@ $agentOutput = Join-Path $OutputDirectory 'media-agent'
 New-Item -ItemType Directory -Force -Path $agentOutput | Out-Null
 dotnet publish (Join-Path $repoRoot 'src\Picer.MediaAgent\Picer.MediaAgent.csproj') -c Release -r win-x64 --self-contained true -o $agentOutput
 if ($LASTEXITCODE -ne 0) { throw 'Self-contained media agent publish failed.' }
-if (-not (Test-Path -LiteralPath (Join-Path $agentOutput 'Picer.MediaAgent.exe'))) { throw 'Published media agent executable is missing.' }
+foreach ($file in @('Picer.MediaAgent.exe','Picer.MediaAgent.dll','Picer.MediaAgent.runtimeconfig.json','Picer.MediaAgent.deps.json','hostfxr.dll','coreclr.dll')) {
+    if (-not (Test-Path -LiteralPath (Join-Path $agentOutput $file) -PathType Leaf)) { throw "Published media agent component is missing: $file" }
+}
 Assert-Runtime (Join-Path $OutputDirectory 'runtime')
 if (-not (Test-Path -LiteralPath (Join-Path $OutputDirectory 'Picer.App.exe'))) { throw 'Published application executable is missing.' }
 $native = @(
+    @{ Path='Magick.Native-Q8-x64.dll'; Bytes=24742576; Hash='7A85C85083D25418A659EDE27ED6C7E104CAE4FEDE6611C2BE4B91294B6207F2' },
+    @{ Path='licenses\Magick.NET-Notice.txt'; Bytes=428101; Hash='38037A04466C03F8698907DC1B79E6E6D7813C9CF021439B4547CF99469DF751' },
     @{ Path='DirectML.dll'; Bytes=18527776; Hash='9C9E6D822561C6C41B90E6994B3E8857CF1D66DBFB1E0C4C799C7C89B4E92DA1' },
     @{ Path='onnxruntime.dll'; Bytes=16468024; Hash='F722DD91A311B9FA4B7F2341D22C379A72FB7BC5B639DF18B64821F23CDDE14B' }
 )

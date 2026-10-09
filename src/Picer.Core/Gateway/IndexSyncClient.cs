@@ -1,4 +1,4 @@
-using System.Net.Http.Headers;
+﻿using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
@@ -16,6 +16,58 @@ namespace Picer.Core.Gateway;
 public sealed class IndexSyncClient(HttpClient client) : IDisposable
 {
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
+    private string? _lastReviewFingerprint;
+    private readonly SemaphoreSlim _reviewSyncGate = new(1, 1);
+    private HashSet<string> _acknowledgedMetadataOperations = new(StringComparer.Ordinal);
+    public IReadOnlySet<string> AcknowledgedMetadataOperations => Volatile.Read(ref _acknowledgedMetadataOperations);
+
+    public async Task PushFaceReviewDecisionsAsync(PicerDatabase database, CancellationToken cancellationToken = default)
+    {
+        await _reviewSyncGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            using var reviewDatabase = database.OpenIndependentConnection();
+            var decisions = reviewDatabase.GetFaceReviewDecisions();
+            var fingerprint = Fingerprint(decisions);
+            if (fingerprint == _lastReviewFingerprint) return;
+            var complete = true;
+            foreach (var batch in decisions.Chunk(500))
+            {
+                using var response = await client.PostAsJsonAsync("api/sync/v1/face-review-decisions", batch, Json, cancellationToken);
+                response.EnsureSuccessStatusCode();
+                var accepted = await response.Content.ReadFromJsonAsync<GatewayFaceReviewDecision[]>(Json, cancellationToken)
+                    ?? throw new InvalidOperationException("face_review_ack_missing");
+                reviewDatabase.MergeFaceReviewDecisions(accepted);
+                if (!batch.Select(item => item.FaceId).ToHashSet().SetEquals(accepted.Select(item => item.FaceId))) complete = false;
+            }
+            // Cache only the sent version, never edits made during the request.
+            // The durable journal itself remains until newer explicit decisions
+            // supersede it, including after acknowledgment and process restart.
+            if (complete) _lastReviewFingerprint = fingerprint;
+        }
+        finally { _reviewSyncGate.Release(); }
+    }
+
+    public async Task PushMetadataEditsAsync(PicerDatabase database, CancellationToken cancellationToken = default)
+    {
+        var acknowledged = new HashSet<string>(StringComparer.Ordinal);
+        using var independent = database.OpenIndependentConnection();
+        foreach (var batch in independent.GetMetadataEdits().Where(edit => edit.Kind is not ("video-tag-link" or "video-concept")
+            || edit.VideoContentIdentity is { Length: 71 } identity && identity.StartsWith("sha256:", StringComparison.Ordinal)
+                && identity[7..].All(Uri.IsHexDigit)).Chunk(500))
+        {
+            using var response = await client.PostAsJsonAsync("api/sync/v1/metadata-edits", batch, Json, cancellationToken).ConfigureAwait(false);
+            response.EnsureSuccessStatusCode();
+            var winners = await response.Content.ReadFromJsonAsync<MetadataEdit[]>(Json, cancellationToken).ConfigureAwait(false)
+                ?? throw new InvalidOperationException("metadata_ack_missing");
+            independent.MergeMetadataEdits(winners);
+            foreach (var winner in winners) acknowledged.Add(winner.OperationId);
+        }
+        var remote = await client.GetFromJsonAsync<MetadataEdit[]>("api/sync/v1/metadata-edits", Json, cancellationToken).ConfigureAwait(false);
+        independent.MergeMetadataEdits(remote ?? []);
+        foreach (var winner in remote ?? []) acknowledged.Add(winner.OperationId);
+        Volatile.Write(ref _acknowledgedMetadataOperations, acknowledged);
+    }
 
     public static IndexSyncClient Create(string baseUrl, string token, byte[]? expectedSpkiPin = null)
     {
@@ -44,7 +96,7 @@ public sealed class IndexSyncClient(HttpClient client) : IDisposable
             var images = database.GetImages(source.Id, includeMissing: true);
             foreach (var batch in images.Chunk(200))
             {
-                using var response = await client.PostAsJsonAsync("api/sync/v1/images", new { sourcePath = source.Path, images }, Json, cancellationToken);
+                using var response = await client.PostAsJsonAsync("api/sync/v1/images", new { sourcePath = source.Path, images = batch }, Json, cancellationToken);
                 if (!response.IsSuccessStatusCode)
                     throw new HttpRequestException($"Image sync failed ({(int)response.StatusCode}): {await response.Content.ReadAsStringAsync(cancellationToken)}");
                 done += batch.Length;
@@ -99,6 +151,7 @@ public sealed class IndexSyncClient(HttpClient client) : IDisposable
         var request = BuildMetadataRequest(database);
         using var response = await client.PostAsJsonAsync("api/sync/v1/metadata", request, Json, cancellationToken);
         response.EnsureSuccessStatusCode();
+        await PushMetadataEditsAsync(database, cancellationToken).ConfigureAwait(false);
     }
 
     private static void EnsureSceneLayoutSnapshots(PicerDatabase database, CancellationToken cancellationToken)
@@ -131,8 +184,10 @@ public sealed class IndexSyncClient(HttpClient client) : IDisposable
     /// </summary>
     public async Task<IndexSyncResult> PushIncrementalAsync(PicerDatabase database, string checkpointPath,
         IProgress<string>? progress = null, CancellationToken cancellationToken = default,
-        bool publishSceneLayouts = true)
+        bool publishSceneLayouts = true, bool publishMedia = true)
     {
+        await PushFaceReviewDecisionsAsync(database, cancellationToken).ConfigureAwait(false);
+        await PushMetadataEditsAsync(database, cancellationToken).ConfigureAwait(false);
         var metadata = BuildMetadataRequest(database);
         var metadataFingerprint = Fingerprint(metadata with
         {
@@ -154,7 +209,7 @@ public sealed class IndexSyncClient(HttpClient client) : IDisposable
         var previous = LoadCheckpoint(checkpointPath);
         var pushedImages = 0;
         var pushedVideos = 0;
-        if (!string.Equals(previous.MediaFingerprint, mediaFingerprint, StringComparison.Ordinal))
+        if (publishMedia && !string.Equals(previous.MediaFingerprint, mediaFingerprint, StringComparison.Ordinal))
         {
             progress?.Report("正在增量同步图片与视频…");
             pushedImages = await PushImagesAsync(database, cancellationToken: cancellationToken).ConfigureAwait(false);
@@ -164,6 +219,15 @@ public sealed class IndexSyncClient(HttpClient client) : IDisposable
         {
             progress?.Report("正在增量同步人物、标签和分析元数据…");
             await PushMetadataAsync(database, cancellationToken, publishSceneLayouts).ConfigureAwait(false);
+            // Scene layout publication materializes snapshots in the local
+            // database. Store the post-write fingerprint so an identical
+            // subsequent sync is truly idempotent.
+            var afterPublish = BuildMetadataRequest(database);
+            metadataFingerprint = Fingerprint(afterPublish with
+            {
+                Faces = afterPublish.Faces?.Select(face => face with { Embedding = null }).ToArray(),
+                VideoFaces = afterPublish.VideoFaces?.Select(face => face with { Embedding = null }).ToArray()
+            });
         }
         var changed = !string.Equals(previous.MediaFingerprint, mediaFingerprint, StringComparison.Ordinal)
             || !string.Equals(previous.MetadataFingerprint, metadataFingerprint, StringComparison.Ordinal);
@@ -199,12 +263,30 @@ public sealed class IndexSyncClient(HttpClient client) : IDisposable
         var tagLinks = database.GetImages(includeMissing: true)
             .SelectMany(image => SemanticEngine.GetImageTags(database, image.Id)
                 .Select(tag => new GatewayImageTagLink(image.Id, tag.Id))).ToArray();
+        var faceTrainingArtifacts = new List<GatewayFaceTrainingArtifact>();
+        using (var command = database.Command("SELECT artifact_id,dataset_id,endpoint,model_version,artifact_json,false_accept_rate,false_reject_rate,state,created_utc,applied_utc FROM face_training_artifacts"))
+        using (var reader = command.ExecuteReader())
+            while (reader.Read()) faceTrainingArtifacts.Add(new(reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetString(3),
+                reader.GetString(4), reader.GetDouble(5), reader.GetDouble(6), reader.GetString(7), reader.GetString(8), reader.IsDBNull(9) ? null : reader.GetString(9)));
+        var facePersonPrototypes = new List<GatewayFacePersonPrototype>();
+        using (var command = database.Command("SELECT person_id,centroid,threshold,sample_count,model_version,updated_utc FROM face_person_prototypes"))
+        using (var reader = command.ExecuteReader())
+            while (reader.Read()) facePersonPrototypes.Add(new(reader.GetInt64(0), (byte[])reader[1], reader.GetDouble(2), reader.GetInt32(3), reader.GetString(4), reader.GetString(5)));
+        var facePersonPolicies = new List<GatewayFacePersonPolicy>();
+        using (var command = database.Command("SELECT person_id,artifact_id,model_version,prototype,match_threshold,updated_utc FROM face_person_policies"))
+        using (var reader = command.ExecuteReader())
+            while (reader.Read()) facePersonPolicies.Add(new(reader.GetInt64(0), reader.GetString(1), reader.GetString(2), (byte[])reader[3], reader.GetDouble(4), reader.GetString(5)));
+        var faceModelSettings = new List<GatewayFaceModelSetting>();
+        using (var command = database.Command("SELECT model_version,match_threshold,calibrated_same_pairs,calibrated_different_pairs,updated_utc FROM face_model_settings"))
+        using (var reader = command.ExecuteReader())
+            while (reader.Read()) faceModelSettings.Add(new(reader.GetString(0), reader.GetDouble(1), reader.GetInt32(2), reader.GetInt32(3), reader.GetString(4)));
         return new SyncMetadataRequest(
             SemanticEngine.GetTags(database), albums, memberships,
             tagLinks, database.GetImageLocationHierarchyRows(), new PeopleService(database).GetAll(), faces, assignments.Values.ToArray(),
             database.GetAllMirroredVideoKeyframes(), database.GetAllMirroredVideoTranscripts(), database.GetAllMirroredVideoSummaries(), database.GetAllMirroredVideoFaces(),
             database.GetAllMirroredCloudVisionAnalyses(), database.GetAllMirroredSceneGroupDescriptions(),
-            database.GetAllMirroredFaceReviewStates(), database.GetAllMirroredFaceCandidateClusters(), database.GetAllMirroredFaceCandidateMembers());
+            database.GetAllMirroredFaceReviewStates(), database.GetAllMirroredFaceCandidateClusters(), database.GetAllMirroredFaceCandidateMembers(),
+            faceTrainingArtifacts, facePersonPrototypes, facePersonPolicies, faceModelSettings);
     }
 
     private static string Fingerprint<T>(T value)
@@ -249,6 +331,10 @@ public sealed class IndexSyncClient(HttpClient client) : IDisposable
         IReadOnlyList<GatewaySceneGroupDescription>? SceneGroupDescriptions = null,
         IReadOnlyList<GatewayFaceReviewState>? FaceReviewStates = null,
         IReadOnlyList<GatewayFaceCandidateCluster>? FaceCandidateClusters = null,
-        IReadOnlyList<GatewayFaceCandidateMember>? FaceCandidateMembers = null);
+        IReadOnlyList<GatewayFaceCandidateMember>? FaceCandidateMembers = null,
+        IReadOnlyList<GatewayFaceTrainingArtifact>? FaceTrainingArtifacts = null,
+        IReadOnlyList<GatewayFacePersonPrototype>? FacePersonPrototypes = null,
+        IReadOnlyList<GatewayFacePersonPolicy>? FacePersonPolicies = null,
+        IReadOnlyList<GatewayFaceModelSetting>? FaceModelSettings = null);
 
 }

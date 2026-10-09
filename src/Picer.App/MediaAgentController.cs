@@ -12,6 +12,21 @@ internal static class MediaAgentController
 
     public sealed record Settings(bool Enabled, string ServiceIp);
 
+    private static string RepairRootsPath => Path.Combine(AppPaths.DataRoot, "index-repair-roots.json");
+
+    internal static string[] LoadRepairRoots()
+    {
+        try { return File.Exists(RepairRootsPath) ? JsonSerializer.Deserialize<string[]>(File.ReadAllText(RepairRootsPath)) ?? [] : []; }
+        catch (Exception exception) when (exception is IOException or JsonException or UnauthorizedAccessException) { return []; }
+    }
+
+    internal static void AuthorizeRepairRoots(IEnumerable<string> roots)
+    {
+        var authorized = LoadRepairRoots().Concat(roots).Select(Path.GetFullPath).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        Directory.CreateDirectory(AppPaths.DataRoot);
+        File.WriteAllText(RepairRootsPath, JsonSerializer.Serialize(authorized));
+    }
+
     public static string ResolveToken()
     {
         var environment = Environment.GetEnvironmentVariable("PICER_INDEX_SERVICE_TOKEN")?.Trim();
@@ -71,16 +86,34 @@ internal static class MediaAgentController
 
     public static bool Start(string serviceIp, string token, string? spkiPin, IEnumerable<string> roots)
     {
-        Stop();
         var executable = FindExecutable();
-        if (executable is null) return false;
+        if (executable is null)
+        {
+            Picer.Core.Logging.AppLogger.Warn("MediaAgent 启动失败：未找到完整代理程序，保留现有代理进程");
+            return false;
+        }
+        Stop();
         var info = new ProcessStartInfo(executable) { UseShellExecute = false, CreateNoWindow = true };
         info.Environment["PICER_INDEX_SERVICE_IP"] = serviceIp;
         info.Environment["PICER_INDEX_SERVICE_TOKEN"] = token;
         if (!string.IsNullOrWhiteSpace(spkiPin)) info.Environment["PICER_INDEX_SERVICE_SPKI_PIN"] = spkiPin;
-        info.Environment["PICER_MEDIA_AGENT_ROOTS"] = string.Join(';', roots.Where(Directory.Exists));
+        // Historical keyframes/crops are generated assets, not source files.
+        // Allow these specific caches, never the entire application-data root
+        // (which also contains credentials and databases).
+        var generatedRoots = new[] { "thumbs", "face-thumbs", "video-keyframes", "video-summary-cache" }
+            .Select(directory => Path.Combine(AppPaths.DataRoot, directory));
+        info.Environment["PICER_MEDIA_AGENT_ROOTS"] = string.Join(';', roots.Concat(LoadRepairRoots()).Concat(generatedRoots)
+            .Select(Path.GetFullPath).Distinct(StringComparer.OrdinalIgnoreCase));
         _process = Process.Start(info);
-        return _process is not null;
+        if (_process is null) return false;
+        if (_process.WaitForExit(2000))
+        {
+            Picer.Core.Logging.AppLogger.Warn($"MediaAgent 启动后退出；exitCode={_process.ExitCode}");
+            _process.Dispose();
+            _process = null;
+            return false;
+        }
+        return !_process.HasExited;
     }
 
     public static void Stop()
@@ -88,17 +121,71 @@ internal static class MediaAgentController
         try { if (_process is { HasExited: false }) _process.Kill(entireProcessTree: true); } catch { }
         _process?.Dispose();
         _process = null;
+
+        // A previous GUI process (or an older launch path) may have started
+        // the singleton agent with a stale allow-list. Merely starting a new
+        // instance is not enough: the global mutex makes it exit while the old
+        // process keeps serving with obsolete roots. Restart only instances of
+        // this exact bundled executable so the next Start applies fresh roots.
+        var expectedExecutables = FindExecutables()
+            .Select(Path.GetFullPath)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (expectedExecutables.Count == 0) return;
+        foreach (var process in Process.GetProcessesByName("Picer.MediaAgent"))
+        {
+            using (process)
+            {
+                try
+                {
+                    var actual = process.MainModule?.FileName;
+                    if (string.IsNullOrWhiteSpace(actual) || !expectedExecutables.Contains(Path.GetFullPath(actual)))
+                        continue;
+                    process.Kill(entireProcessTree: true);
+                    process.WaitForExit(5000);
+                }
+                catch (Exception exception) when (exception is InvalidOperationException or System.ComponentModel.Win32Exception or System.NotSupportedException)
+                {
+                    // Process teardown is best effort; Start remains guarded by
+                    // the named global mutex inside MediaAgent itself.
+                }
+            }
+        }
     }
 
     private static string? FindExecutable()
+        => ResolveExecutableForBaseDirectory(AppContext.BaseDirectory);
+
+    private static IEnumerable<string> FindExecutables()
+        => EnumerateExecutableCandidates(AppContext.BaseDirectory);
+
+    internal static string? ResolveExecutableForBaseDirectory(string appBaseDirectory)
+        => EnumerateExecutableCandidates(appBaseDirectory).FirstOrDefault(path =>
+            File.Exists(path) && File.Exists(Path.ChangeExtension(path, ".dll")) &&
+            File.Exists(Path.ChangeExtension(path, ".runtimeconfig.json")) &&
+            File.Exists(Path.ChangeExtension(path, ".deps.json")));
+
+    internal static IEnumerable<string> EnumerateExecutableCandidates(string appBaseDirectory)
     {
-        var candidates = new[]
+        var baseDirectory = Path.GetFullPath(appBaseDirectory);
+        yield return Path.Combine(baseDirectory, "media-agent", "Picer.MediaAgent.exe");
+        yield return Path.Combine(baseDirectory, "Picer.MediaAgent.exe");
+
+        // Development builds and portable app copies can live several levels
+        // below the repository root. Walk ancestors and look for the canonical
+        // src/Picer.MediaAgent layout rather than assuming a fixed number of
+        // parent traversals (which silently missed the executable for packaged
+        // test/portable GUI directories).
+        for (var ancestor = new DirectoryInfo(baseDirectory); ancestor is not null; ancestor = ancestor.Parent)
         {
-            Path.Combine(AppContext.BaseDirectory, "Picer.MediaAgent.exe"),
-            Path.Combine(AppContext.BaseDirectory, "media-agent", "Picer.MediaAgent.exe"),
-            Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "Picer.MediaAgent", "bin", "Debug", "net8.0-windows", "Picer.MediaAgent.exe")),
-            Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "Picer.MediaAgent", "bin", "Release", "net8.0-windows", "win-x64", "Picer.MediaAgent.exe"))
-        };
-        return candidates.FirstOrDefault(File.Exists);
+            var projectOutput = Path.Combine(ancestor.FullName, "src", "Picer.MediaAgent", "bin");
+            yield return Path.Combine(projectOutput, "Debug", "net8.0-windows", "Picer.MediaAgent.exe");
+            yield return Path.Combine(projectOutput, "Release", "net8.0-windows", "win-x64", "Picer.MediaAgent.exe");
+
+            // Retain compatibility with older layouts which placed the project
+            // directory directly beside the repository root.
+            var legacyOutput = Path.Combine(ancestor.FullName, "Picer.MediaAgent", "bin");
+            yield return Path.Combine(legacyOutput, "Debug", "net8.0-windows", "Picer.MediaAgent.exe");
+            yield return Path.Combine(legacyOutput, "Release", "net8.0-windows", "win-x64", "Picer.MediaAgent.exe");
+        }
     }
 }

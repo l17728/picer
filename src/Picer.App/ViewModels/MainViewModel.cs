@@ -19,6 +19,7 @@ using Picer.Core.Logging;
 using Picer.Core.Search;
 using Picer.Core.Vision;
 using Picer.Core.Video;
+using Picer.Core.Gateway;
 using Picer.App.Infrastructure;
 using Picer.Core.FileOperations;
 using Picer.Core.Hashing;
@@ -30,6 +31,7 @@ public enum DirectoryMediaFilter { Images, Videos, All }
 
 public partial class MainViewModel : ObservableObject, IDisposable
 {
+    private readonly ClientServices _services;
     private readonly PicerDatabase _db;
     private IndexEngine _engine;
     private readonly IReverseGeocoder _geocoder;
@@ -199,14 +201,14 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty] private long? _filterMinFileSizeMb;
     [ObservableProperty] private long? _filterMaxFileSizeMb;
     [ObservableProperty] private string? _selectedCameraBrand;
-    [ObservableProperty] private bool _includeMissing;
+    [ObservableProperty] private bool _includeMissing = true;
 
     public int TotalCount => Images.Sum(image => image.BurstCount);
 
     public void ReplaceIndexEngine(IndexEngine engine)
     {
         _engine = engine ?? throw new ArgumentNullException(nameof(engine));
-        StatusText = $"存储配置已应用：{AppServices.Storage.Scheme}";
+        StatusText = $"存储配置已应用：{_services.Storage.Scheme}";
     }
     public string ResultsSummary => MatchedCount > TotalCount
         ? $"已加载 {TotalCount} / 共 {MatchedCount} 张"
@@ -237,22 +239,23 @@ public partial class MainViewModel : ObservableObject, IDisposable
             ? "命中依据：结构化筛选"
             : "命中依据：文件路径、相机或 GPS 全文匹配，并满足结构化筛选";
 
-    public MainViewModel(PicerDatabase db, IndexEngine engine, IReverseGeocoder geocoder, PeopleViewModel people)
+    public MainViewModel(PicerDatabase db, IndexEngine engine, IReverseGeocoder geocoder, PeopleViewModel people, ClientServices services)
     {
+        _services = services;
         _db = db;
         _engine = engine;
         _geocoder = geocoder;
         People = people;
-        Video = new VideoViewModel(AppServices.Videos, AppServices.VideoIndex, AppServices.VideoKeyframes,
-            AppServices.VideoTranscription, AppServices.VideoFaceTimeline, AppServices.VideoSummaries, AppServices.People,
-            AppServices.ServiceMode);
+        Video = new VideoViewModel(_services.Videos, _services.VideoIndex, _services.VideoKeyframes,
+            _services.VideoTranscription, _services.VideoFaceTimeline, _services.VideoSummaries, _services.People,
+            _services.ServiceMode, services: _services);
         Video.SetIdentityChangedCallback(People.RefreshSharedIdentityAsync);
         Semantic = new SemanticViewModel(db, () =>
         {
             LoadTags();
             _ = ApplySearchAndFilterAsync();
             _ = LoadDirectoryTreeAsync();
-        });
+        }, _services);
         SelectedImages.CollectionChanged += (_, _) => Semantic.SetSelection(SelectedImages.Where(image => !image.IsVideo).Select(image => image.Record.Id));
         DirectoryImagesView = (ListCollectionView)CollectionViewSource.GetDefaultView(DirectoryImages);
 
@@ -277,20 +280,24 @@ public partial class MainViewModel : ObservableObject, IDisposable
         await ApplySearchAndFilterAsync();
         await LoadLookupValuesAsync();
         await LoadDirectoryTreeAsync();
-        if (!AppServices.ServiceMode)
+        // Load the persisted video mirror immediately in both modes. In
+        // service mode the authoritative refresh runs in the background and
+        // can take substantially longer than first-page rendering; the later
+        // mirror refresh preserves the current selection and reloads details.
+        _ = Video.LoadAsync();
+        if (!_services.ServiceMode)
         {
-            _ = Video.LoadAsync();
             _ = EnrichLocationHierarchyAsync();
             _ = RebuildTextIndexAsync();
         }
         PicerEventSource.Log.StartupStage("first-page-ready", Stopwatch.GetElapsedTime(started).TotalMilliseconds);
-        if (!AppServices.ServiceMode)
+        if (!_services.ServiceMode)
             BackfillBurstGroupsAsync().Forget();
     }
 
     public async Task RefreshFromRemoteMirrorAsync()
     {
-        if (AppServices.SyncClient is null) return;
+        if (_services.SyncClient is null) return;
         if (!Application.Current.Dispatcher.CheckAccess())
         {
             // The remote poller runs on a worker thread. CollectionView-backed
@@ -419,11 +426,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 var images = node!.AnchorImageIds.Select(id => _db.GetImage(id))
                     .Where(image => image is { Status: ImageStatus.Active }).Cast<ImageRecord>().ToArray();
                 if (images.Length == 0) return $"场景：{node.SceneName}　没有可用照片记录";
-                var service = new SceneGroupDescriptionService(_db, AppServices.CloudVisionRepository);
+                var service = new SceneGroupDescriptionService(_db, _services.CloudVisionRepository);
                 var accepted = service.GetAccepted(SceneGroupDescriptionService.CreateFingerprint(images))
                     ?? service.GetAcceptedForGroup(node.FullPath, images);
                 if (accepted is not null) return $"场景：{accepted.SceneName}　摘要：{accepted.Summary}";
-                var descriptions = images.Select(image => AppServices.CloudVisionRepository.GetLatestCompleted(image.Id)?.Result.Summary)
+                var descriptions = images.Select(image => _services.CloudVisionRepository.GetLatestCompleted(image.Id)?.Result.Summary)
                     .Where(value => !string.IsNullOrWhiteSpace(value)).Distinct(StringComparer.CurrentCultureIgnoreCase).Take(2).ToArray();
                 return descriptions.Length > 0
                     ? $"场景：{node.SceneName}　照片描述：{string.Join("；", descriptions)}（尚未生成场景级摘要）"
@@ -452,7 +459,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         if(record is null){SelectedPhotoContext="未选择照片";return;}
         var time=record.TakenUtc is not null?$"拍摄时间：{record.TakenUtc.Value.ToLocalTime():yyyy-MM-dd HH:mm:ss}":
             $"文件创建时间：{(record.CreatedUtc??record.ModifiedUtc).ToLocalTime():yyyy-MM-dd HH:mm:ss}";
-        var description=await UiWork.RunDatabaseAsync(()=>AppServices.CloudVisionRepository.GetLatestCompleted(record.Id)?.Result.Summary,cancellation.Token);
+        var description=await UiWork.RunDatabaseAsync(()=>_services.CloudVisionRepository.GetLatestCompleted(record.Id)?.Result.Summary,cancellation.Token);
         if(cancellation.IsCancellationRequested)return;
         var descriptionText=string.IsNullOrWhiteSpace(description)?"":"    描述："+description;
         SelectedPhotoContext=$"{time}    拍摄地点：无GPS信息{descriptionText}";
@@ -477,7 +484,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             Sources.Add(new SourceNodeViewModel
             {
                 SourceId = s.Id,
-                DisplayName = AppServices.ServiceMode ? $"远程 / {GetDisplaySourceName(s.Path)}" : Path.GetFileName(s.Path),
+                DisplayName = _services.ServiceMode ? $"远程 / {GetDisplaySourceName(s.Path)}" : Path.GetFileName(s.Path),
                 FullPath = s.Path,
                 ImageCount = s.ImageCount
             });
@@ -494,7 +501,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         foreach (var source in snapshot.Sources)
             Sources.Add(new SourceNodeViewModel
             {
-                SourceId = source.Id, DisplayName = AppServices.ServiceMode ? $"远程 / {GetDisplaySourceName(source.Path)}" : Path.GetFileName(source.Path), FullPath = source.Path, ImageCount = source.ImageCount
+                SourceId = source.Id, DisplayName = _services.ServiceMode ? $"远程 / {GetDisplaySourceName(source.Path)}" : Path.GetFileName(source.Path), FullPath = source.Path, ImageCount = source.ImageCount
             });
         SelectedSource = Sources.FirstOrDefault(source => source.SourceId == previous) ?? Sources.FirstOrDefault();
     }
@@ -528,7 +535,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         SearchPage page;
         try
         {
-            page = await AppServices.MediaSearch.ExecutePagedAsync(filters, cancellationToken: cts.Token);
+            page = await _services.MediaSearch.ExecutePagedAsync(filters, cancellationToken: cts.Token);
         }
         catch (OperationCanceledException)
         {
@@ -611,7 +618,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _aiQuestionCts?.Cancel(); _aiQuestionCts?.Dispose();
         _aiQuestionCts = CancellationTokenSource.CreateLinkedTokenSource(searchCancellation.Token);
         var token = _aiQuestionCts.Token;
-        using var chat = AppServices.CreateAiChatClient(AiFeatureIds.AiQuestion);
+        using var chat = _services.CreateAiChatClient(AiFeatureIds.AiQuestion);
         if (chat is null)
         {
             QuestionAnswerText = "## AI 问答尚未配置\n\n请在“AI 模型设置 → AI 问答与媒体检索”中选择可用模型。";
@@ -627,30 +634,41 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 ProgressValue = value.Percent; StatusText = $"AI 问答：{value.Stage}（{value.Percent}%）";
             });
             AppLogger.Info($"AiQuestion started; includeVideos={includeVideos}; queryLength={question.Length}");
-            var service = new AiMediaRetrievalService(_db, AppServices.People, AppServices.Videos,
-                AppServices.CloudVisionRepository, chat);
-            var answer = await service.AskAsync(question, includeVideos, DateTime.Today, progress, token);
-            if (version != _searchVersion || token.IsCancellationRequested) return;
-            QuestionAnswerText = "";
-            StatusText = "AI 问答：正在流式生成回答…";
-            var streamed = new System.Text.StringBuilder();
-            try
+            // AiMediaRetrievalService performs synchronous SQLite work before
+            // its first network await. Keep that prefix off the WPF dispatcher
+            // so the submit click and progress/status rendering stay responsive.
+            var answer = await Task.Run(async () =>
             {
-                await foreach (var chunk in chat.StreamAsync(
-                    "你是私人照片库回答整理器。只能忠实整理给定的检索结论，不得新增人物、地点或照片事实。直接输出中文 Markdown。",
-                    answer.Markdown, 900, token))
+                using var queryDatabase = _db.OpenIndependentConnection();
+                var service = new AiMediaRetrievalService(queryDatabase, new Picer.Core.People.PeopleService(queryDatabase),
+                    new VideoRepository(queryDatabase), new CloudVisionRepository(queryDatabase), chat);
+                return await service.AskAsync(question, includeVideos, DateTime.Today, progress, token);
+            }, token);
+            if (version != _searchVersion || token.IsCancellationRequested) return;
+            QuestionAnswerText = answer.Markdown;
+            // Stream only the clearly labelled explanation; verified results remain immutable.
+            if (answer.Photos.Count + answer.Videos.Count > 0 && !string.IsNullOrWhiteSpace(answer.AiExplanation))
+            {
+                StatusText = "AI 问答：正在流式生成解释，程序确认结果已保留…";
+                var streamed = new System.Text.StringBuilder();
+                try
                 {
-                    if (version != _searchVersion || token.IsCancellationRequested) return;
-                    streamed.Append(chunk);
-                    QuestionAnswerText = streamed.ToString();
-                    await Dispatcher.Yield(DispatcherPriority.Background);
+                    await foreach (var chunk in chat.StreamAsync(
+                        "你只整理给定的 AI 解释材料。它不是检索证据；不得新增媒体、人物、地点或数量，不得重写程序确认结果。不确定的判断必须保留不确定性。直接输出中文解释。",
+                        answer.AiExplanation, 900, token))
+                    {
+                        if (version != _searchVersion || token.IsCancellationRequested) return;
+                        streamed.Append(chunk);
+                        QuestionAnswerText = AiMediaAnswer.ComposeMarkdown(answer.ConfirmedMarkdown, streamed.ToString());
+                        await Dispatcher.Yield(DispatcherPriority.Background);
+                    }
+                }
+                catch (Exception streamException) when (streamException is HttpRequestException or InvalidDataException)
+                {
+                    AppLogger.Warn($"AiQuestion explanation stream fallback: {streamException.GetType().Name}");
+                    QuestionAnswerText = answer.Markdown;
                 }
             }
-            catch (Exception streamException) when (streamException is HttpRequestException or InvalidDataException)
-            {
-                AppLogger.Warn($"AiQuestion answer stream fallback: {streamException.GetType().Name}");
-            }
-            if (streamed.Length == 0) QuestionAnswerText = answer.Markdown;
             MatchedCount = answer.Photos.Count;
             _searchCursor = null; HasMoreResults = false;
             Images.Clear(); _searchLoadedRecords.Clear(); _searchLoadedRecords.AddRange(answer.Photos);
@@ -760,7 +778,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         if (_searchCursor is null) return;
         var token = _searchCts?.Token ?? default;
-        var page = await AppServices.MediaSearch.ExecutePagedAsync(BuildSearchFilters(), cursor: _searchCursor, cancellationToken: token);
+        var page = await _services.MediaSearch.ExecutePagedAsync(BuildSearchFilters(), cursor: _searchCursor, cancellationToken: token);
         token.ThrowIfCancellationRequested();
 
         // Do not rebuild/clear the already rendered page. Clearing the bound
@@ -799,17 +817,17 @@ public partial class MainViewModel : ObservableObject, IDisposable
             cancellationToken.ThrowIfCancellationRequested();
             if (!groupByImage.TryGetValue(record.Id, out var group))
             {
-                result.Add(new ImageItemViewModel(record, cancellationToken));
+                result.Add(new ImageItemViewModel(record, cancellationToken, _services));
                 continue;
             }
             if (!handledGroups.Add(group.Id)) continue;
             var visibleMembers = visibleByGroup[group.Id];
             if (visibleMembers.Length < 2)
             {
-                result.Add(new ImageItemViewModel(record, cancellationToken));
+                result.Add(new ImageItemViewModel(record, cancellationToken, _services));
                 continue;
             }
-            var stack = new ImageItemViewModel(visibleMembers[0], cancellationToken);
+            var stack = new ImageItemViewModel(visibleMembers[0], cancellationToken, _services);
             stack.ConfigureBurst(visibleMembers, group.StartedUtc, group.EndedUtc);
             result.Add(stack);
         }
@@ -829,7 +847,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         FilterMaxFileSizeMb = null;
         SelectedCameraBrand = null;
         SelectedTag = null;
-        IncludeMissing = false;
+        IncludeMissing = true;
         _ = ApplySearchAndFilterAsync();
     }
 
@@ -851,9 +869,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private async Task AddFolderAsync()
     {
         string sourcePath;
-        if (string.Equals(AppServices.Storage.Scheme, "webdav", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(_services.Storage.Scheme, "webdav", StringComparison.OrdinalIgnoreCase))
         {
-            sourcePath = AppServices.Config.WebDAV?.BasePath ?? "/";
+            sourcePath = _services.Config.WebDAV?.BasePath ?? "/";
             StatusText = $"正在添加 WebDAV 来源：{sourcePath}";
         }
         else
@@ -995,7 +1013,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 if (value.Total > 0 && value.Done < value.Total)
                     StatusText = $"正在更新文字索引 {value.Done}/{value.Total}（期间搜索结果可能不完整）";
             });
-            var changed = await Task.Run(() => new Picer.Core.Search.MediaTextIndexRepository(_db).RebuildFromCloudAnalyses(progress: progress));
+            var changed = await Task.Run(() =>
+            {
+                using var indexDatabase = _db.OpenIndependentConnection();
+                return new Picer.Core.Search.MediaTextIndexRepository(indexDatabase).RebuildFromCloudAnalyses(progress: progress);
+            });
             if (changed > 0)
                 AppendOutput($"文字索引已更新 {changed} 条（含地理位置与人物标记）");
         }
@@ -1021,7 +1043,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 if (value.CompletedGroups % 10 == 0) _ = LoadDirectoryTreeAsync();
             });
             var result = await Task.Run(
-                () => AppServices.LocationHierarchy.EnrichPendingAsync(progress, _locationEnrichmentCts.Token),
+                () => _services.LocationHierarchy.EnrichPendingAsync(progress, _locationEnrichmentCts.Token),
                 _locationEnrichmentCts.Token);
             if (result.CoordinateGroups == 0) return;
 
@@ -1185,16 +1207,80 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [RelayCommand]
     private void OpenDuplicates()
     {
-        var vm = new DuplicateViewModel(_db, _engine, AppServices.FileOperations);
+        var vm = new DuplicateViewModel(_db, _engine, _services.FileOperations);
         var window = new DuplicateWindow(vm) { Owner = Application.Current.MainWindow };
         window.Show();
     }
 
-    [RelayCommand]
-    private void OpenSelected()
+    public async Task OpenIndexedPhotoAsync(long imageId)
     {
-        var path = SelectedImage?.Path;
-        if (path is null) { StatusText = "请先选择图片"; return; }
+        var record = await UiWork.RunDatabaseAsync(() => _db.GetImage(imageId));
+        if (record is null) { StatusText = "照片索引记录已移除"; return; }
+        SelectedImage = new ImageItemViewModel(record, services: _services);
+        await OpenSelected();
+    }
+
+    [RelayCommand]
+    private async Task OpenSelected()
+    {
+        var selected = SelectedImage;
+        var path = selected?.Path;
+        if (selected is null || path is null) { StatusText = "请先选择图片"; return; }
+        if (_services.ServiceMode)
+        {
+            if (_services.Gateway is not IMediaAssetGateway media)
+            {
+                StatusText = "IndexService 原图代理不可用，无法打开远程原图";
+                AppLogger.Warn($"Remote original image unavailable: gateway does not support media assets; image={selected.Record.Id}");
+                return;
+            }
+
+            var video = selected.VideoRecord;
+            var mediaId = video?.Id ?? selected.Record.Id;
+            var isVideo = video is not null;
+            var fileSize = video?.FileSize ?? selected.Record.FileSize;
+            var modifiedUtc = video?.ModifiedUtc ?? selected.Record.ModifiedUtc;
+            var extension = Path.GetExtension(path);
+            if (string.IsNullOrWhiteSpace(extension) || extension.Length > 12 || extension.Any(character => !char.IsAsciiLetterOrDigit(character) && character != '.'))
+                extension = isVideo ? ".mp4" : ".img";
+            var mediaDirectory = Path.Combine(AppPaths.DataRoot, "remote-assets", isVideo ? "videos" : "images");
+            Directory.CreateDirectory(mediaDirectory);
+            var cachePath = Path.Combine(mediaDirectory, $"{(isVideo ? "video" : "image")}-{mediaId}-{fileSize}-{modifiedUtc.Ticks}{extension}");
+            var operationId = Guid.NewGuid().ToString("N");
+            try
+            {
+                if (!File.Exists(cachePath))
+                {
+                    StatusText = $"正在通过 IndexService 和本机原图代理获取{(isVideo ? "视频" : "原图")}…";
+                    AppLogger.Info($"Remote original asset request started; operation={operationId}; kind={(isVideo ? "video" : "image")}; id={mediaId}; cacheHit=false");
+                    await using var source = isVideo
+                        ? await media.OpenOriginalVideoAsync(mediaId)
+                        : await media.OpenOriginalImageAsync(mediaId);
+                    if (source is null) throw new IOException("IndexService 未能从在线原图代理取得源文件");
+                    var temporaryPath = cachePath + $".{operationId}.partial";
+                    try
+                    {
+                        await using (var output = new FileStream(temporaryPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 1024 * 128, FileOptions.Asynchronous | FileOptions.SequentialScan))
+                            await source.CopyToAsync(output);
+                        if (fileSize > 0 && new FileInfo(temporaryPath).Length != fileSize)
+                            throw new InvalidDataException("原图代理返回的文件长度与索引记录不一致");
+                        File.Move(temporaryPath, cachePath, overwrite: true);
+                    }
+                    finally { if (File.Exists(temporaryPath)) File.Delete(temporaryPath); }
+                }
+                else AppLogger.Info($"Remote original asset cache hit; operation={operationId}; kind={(isVideo ? "video" : "image")}; id={mediaId}");
+
+                Process.Start(new ProcessStartInfo(cachePath) { UseShellExecute = true });
+                StatusText = $"已通过 IndexService 原图代理打开{(isVideo ? "远程视频" : "远程原图")}（本地缓存可复用）";
+                AppLogger.Info($"Remote original asset opened; operation={operationId}; kind={(isVideo ? "video" : "image")}; id={mediaId}");
+            }
+            catch (Exception exception)
+            {
+                StatusText = $"远程{(isVideo ? "视频" : "原图")}打开失败：{exception.Message}";
+                AppLogger.Error($"Remote original asset open failed; operation={operationId}; kind={(isVideo ? "video" : "image")}; id={mediaId}", exception);
+            }
+            return;
+        }
         if (!File.Exists(path)) { StatusText = "原图片当前不可用，请运行“检查缺失”后重新定位"; return; }
         try { Process.Start(new ProcessStartInfo(path) { UseShellExecute = true }); }
         catch (Exception exception) { StatusText = $"无法打开图片：{exception.Message}"; }
@@ -1203,8 +1289,15 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [RelayCommand]
     private void ShowInExplorer()
     {
-        var path = SelectedImage?.Path;
+        var selected = SelectedImage;
+        var path = selected?.Path;
         if (path is null) { StatusText = "请先选择图片"; return; }
+        if (_services.ServiceMode)
+        {
+            StatusText = "远程模式不能定位源目录；原始文件由源机器代理提供";
+            AppLogger.Info($"远程模式已阻止资源管理器定位图片源文件：image={selected!.Record.Id}");
+            return;
+        }
         if (!File.Exists(path)) { StatusText = "原图片当前不可用，请运行“检查缺失”后重新定位"; return; }
         try { Process.Start("explorer.exe", $"/select,\"{path}\""); }
         catch (Exception exception) { StatusText = $"无法在资源管理器中定位：{exception.Message}"; }
@@ -1227,8 +1320,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
             ?? (record.ModifiedUtc == DateTime.MinValue ? "未知" : record.ModifiedUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss") + "（文件修改时间）");
         var locationText = "无 GPS 信息";
         var attribution = "";
-        var cloud = await UiWork.RunDatabaseAsync(() => AppServices.CloudVisionRepository.GetLatestCompleted(record.Id));
-        var markedPeople = await UiWork.RunDatabaseAsync(() => AppServices.People.GetConfirmedPersonNamesForImage(record.Id));
+        var cloud = await UiWork.RunDatabaseAsync(() => _services.CloudVisionRepository.GetLatestCompleted(record.Id));
+        var markedPeople = await UiWork.RunDatabaseAsync(() => _services.People.GetConfirmedPersonNamesForImage(record.Id));
         var peopleText = markedPeople.Count == 0 ? "无已标记人物" : string.Join("、", markedPeople);
         var cloudText = cloud is not null
             ? $"\n\nAI 描述（{cloud.Value.Provider} / {cloud.Value.ModelVersion}）：{cloud.Value.Result.Summary}"
@@ -1273,10 +1366,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         if (selected.Count == 0)
         {
-            MessageBox.Show("请先选择要描述的照片。", "云端照片分析", MessageBoxButton.OK, MessageBoxImage.Information);
+            MessageBox.Show("请先选择要描述的照片。", "照片分析", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
-        var configured = AppServices.CreateCloudVisionService(featureId);
+        var configured = _services.CreateCloudVisionService(featureId);
         if (configured is null)
         {
             MessageBox.Show("AI 分析尚未启用、模型未配置，或云端模型尚未保存 API Key。请先打开“AI 模型设置”。", "照片内容分析",
@@ -1288,7 +1381,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         var estimated = DomesticCloudVisionPricing.Calculate(configured.Value.Analyzer.Provider,
             configured.Value.Analyzer.ModelVersion, count * 1200L, count * 200L).EstimatedCostYuan;
         var confirmationText = configured.Value.IsLocal
-            ? $"即将通过 {configured.Value.ProviderLabel} 在本机分析 {count} 张照片。\n\n照片只发送到 127.0.0.1 的本地模型服务，不上传云端、不产生 API 费用；原始照片不会被修改。\n\n是否继续？"
+            ? $"即将通过 {configured.Value.ProviderLabel} 使用本地模型分析 {count} 张照片。\n\n照片副本及分析上下文将经过已配置的索引服务中转；如果索引服务位于远程服务器，数据也会经过该服务器。模型推理不产生云端 API 费用；原始照片不会被修改。\n\n是否继续？"
             : $"即将通过{configured.Value.ProviderLabel}分析 {count} 张照片，粗略估算费用 ¥{estimated:0.0000}。\n每日/每月预算：¥{configured.Value.Policy.DailyBudgetYuan:0.##} / ¥{configured.Value.Policy.MonthlyBudgetYuan:0.##}。\n\n上传的是最长边1280像素、已清除EXIF的副本；{preciseText}。原始照片不会被修改。\n\n是否继续？";
         var confirmation = MessageBox.Show(confirmationText,
             configured.Value.IsLocal ? "确认本地照片分析" : "确认云端照片分析",
@@ -1308,21 +1401,22 @@ public partial class MainViewModel : ObservableObject, IDisposable
         {
             var candidates = await UiWork.RunDatabaseAsync(() => selected.Take(count).Select(image => (
                 image,
-                AppServices.VisualConceptRepository.GetScores(image.Id),
+                _services.VisualConceptRepository.GetScores(image.Id),
                 "user-requested")).ToArray());
             var progress = new Progress<(int Completed, int Total)>(value =>
                 StatusText = $"云端描述：{value.Completed}/{value.Total}");
             var result = await configured.Value.Service.AnalyzeAsync(candidates, progress, _cloudCts.Token, configured.Value.Policy);
+            _services.QueueImmediateRemoteSync("图片 AI 描述写入");
             StatusText = $"云端描述完成：成功 {result.Completed}，缓存跳过 {result.Skipped}，失败 {result.Failed}，预算拦截 {result.BudgetBlocked}";
             if (refreshDirectoryTree) await LoadDirectoryTreeAsync();
-            if (showCompletionDialog) MessageBox.Show(StatusText, "云端照片分析", MessageBoxButton.OK,
+            if (showCompletionDialog) MessageBox.Show(StatusText, "照片分析", MessageBoxButton.OK,
                 result.Failed == 0 ? MessageBoxImage.Information : MessageBoxImage.Warning);
         }
-        catch (OperationCanceledException) { StatusText = "云端照片分析已取消"; }
+        catch (OperationCanceledException) { StatusText = "照片分析已取消"; }
         catch (Exception exception)
         {
-            StatusText = $"云端照片分析失败：{exception.Message}";
-            MessageBox.Show(StatusText + "\n\n可在“任务中心”查看单张照片的详细错误。", "云端照片分析",
+            StatusText = $"照片分析失败：{exception.Message}";
+            MessageBox.Show(StatusText + "\n\n可在“任务中心”查看单张照片的详细错误。", "照片分析",
                 MessageBoxButton.OK, MessageBoxImage.Error);
         }
         finally
@@ -1332,6 +1426,24 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
     }
 
+    public async Task DescribeDirectoryAsync(DirectoryNodeViewModel directory)
+    {
+        if (IsBusy) return;
+        var plan = await UiWork.RunDatabaseAsync(() => DirectoryDescriptionPlan.Build(_db,
+            _services.CloudVisionRepository, directory.FullPath));
+        StatusText = $"本目录及所有子目录：共 {plan.Total} 张，已有描述 {plan.AlreadyDescribed} 张，待描述 {plan.Pending.Count} 张";
+        if (plan.Pending.Count == 0)
+        {
+            MessageBox.Show(StatusText, "目录照片描述", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+        // The existing execution flow obtains independent cloud authorization and applies budgets.
+        await AnalyzeImagesWithCloudAsync(plan.Pending);
+        var remaining = await UiWork.RunDatabaseAsync(() => DirectoryDescriptionPlan.Build(_db,
+            _services.CloudVisionRepository, directory.FullPath));
+        StatusText += $"；目录仍有 {remaining.Pending.Count} 张待描述（达到批次上限时可再次运行，已完成项会跳过）";
+    }
+
     [RelayCommand]
     private async Task ScanVideosAsync()
     {
@@ -1339,9 +1451,18 @@ public partial class MainViewModel : ObservableObject, IDisposable
         StatusText = "正在扫描视频文件…";
         try
         {
-            var count = await UiWork.RunDatabaseAsync(() => AppServices.VideoIndex.ScanLocalSources());
+            if (_services.ServiceMode)
+            {
+                StatusText = "正在从 IndexService 刷新远程视频索引…";
+                using var refreshTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+                await _services.SyncRemoteVideosAsync(refreshTimeout.Token);
+                StatusText = $"远程视频索引刷新完成：当前 {_services.Videos.GetAll().Count} 个视频";
+                return;
+            }
+            StatusText = "正在异步扫描本地视频文件…";
+            var count = await _services.VideoIndex.ScanLocalSourcesAsync();
             StatusText = $"视频索引完成：发现 {count} 个视频；FFmpeg " +
-                         (AppServices.VideoKeyframes is null ? "尚未就绪" : "已就绪");
+                         (_services.VideoKeyframes is null ? "尚未就绪" : "已就绪");
             MessageBox.Show(StatusText, "视频索引", MessageBoxButton.OK, MessageBoxImage.Information);
         }
         catch (Exception exception)
@@ -1371,7 +1492,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             var confirm=MessageBox.Show($"将把 {plan.FileCount} 个原始文件移入 Windows 回收站，并在成功后删除对应索引和缩略图。\n\n{preview}{more}\n\n此操作不会直接永久清空回收站。是否继续？",
                 "确认删除原始文件",MessageBoxButton.YesNo,MessageBoxImage.Warning,MessageBoxResult.No);
             if(confirm!=MessageBoxResult.Yes){StatusText="已取消删除，未更改文件、索引或缩略图";return;}
-            var result=await AppServices.FileOperations.MoveToRecycleBinAsync(plan);
+            var result=await _services.FileOperations.MoveToRecycleBinAsync(plan);
             foreach(var item in result.Items.Where(item=>item.Success))await _engine.RemoveIndexRecordAsync(item.Selection.ImageId);
             SelectedImages.Clear(); SelectedImage=null; await ReloadSourcesAsync(); await ApplySearchAndFilterAsync(); await LoadDirectoryTreeAsync();
             if(SelectedDirectory is not null)LoadImagesForSelectedDirectory();
@@ -1401,14 +1522,14 @@ public partial class MainViewModel : ObservableObject, IDisposable
             Albums: SemanticEngine.GetAlbums(_db)
                 .Select(album => (Album: album, Images: SemanticEngine.GetAlbumImages(_db, album.Id).ToArray())).ToArray(),
             Locations: _db.GetImageLocationHierarchyRows().ToArray()));
-        AppLogger.Info($"Directory tree snapshot: sources={snapshot.Sources.Length}, albums={snapshot.Albums.Length}, albumImages={snapshot.Albums.Sum(item => item.Images.Length)}, locations={snapshot.Locations.Length}, serviceMode={AppServices.ServiceMode}");
+        AppLogger.Info($"Directory tree snapshot: sources={snapshot.Sources.Length}, albums={snapshot.Albums.Length}, albumImages={snapshot.Albums.Sum(item => item.Images.Length)}, locations={snapshot.Locations.Length}, serviceMode={_services.ServiceMode}");
         DirectoryTree.Clear();
         foreach (var source in snapshot.Sources)
         {
             var node = new DirectoryNodeViewModel
             {
                 SourceId = source.Id,
-                Name = AppServices.ServiceMode ? $"远程 / {GetDisplaySourceName(source.Path)}" : Path.GetFileName(source.Path),
+                Name = _services.ServiceMode ? $"远程 / {GetDisplaySourceName(source.Path)}" : Path.GetFileName(source.Path),
                 FullPath = source.Path,
                 Icon = "📁",
                 ImageCount = source.ImageCount,
@@ -1418,7 +1539,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             // A service-mode source path is the server's path (often Linux) and
             // is not a valid Windows directory. Remote children are represented
             // by indexed nodes, never enumerated through the local filesystem.
-            if (AppServices.ServiceMode)
+            if (_services.ServiceMode)
                 BuildRemoteDirectoryChildren(node, snapshot.Sources.First(item => item.Id == source.Id));
             else
                 _ = ExpandDirectoryAsync(node);
@@ -1616,9 +1737,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
             var recursive=_directoryClassification.IncludesDescendants(node.FullPath);node.ClassificationIncludesDescendants=recursive;
             var clusters=await UiWork.RunDatabaseAsync(() =>
             {
-                if (AppServices.ServiceMode && node.SourceId is { } remoteSourceId)
+                if (_services.ServiceMode && node.SourceId is { } remoteSourceId)
                 {
-                    var images = FilterRemoteDirectoryImages(_db.GetImages(remoteSourceId, includeMissing: false), node.RemotePathPrefix, recursive);
+                    var images = FilterRemoteDirectoryImages(_db.GetImages(remoteSourceId, includeMissing: true), node.RemotePathPrefix, recursive);
                     var mirroredLayout = new SceneGroupDescriptionService(_db, new CloudVisionRepository(_db))
                         .GetLayoutSnapshot(node.FullPath, recursive, images);
                     if (mirroredLayout.Count > 0)
@@ -1633,7 +1754,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     .SaveLayoutSnapshot(node.FullPath, recursive, localClusters);
                 return localClusters;
             });
-            AppLogger.Info($"Scene anchors loaded: path={node.FullPath}; model={(AppServices.ServiceMode ? "remote-mirror" : "local")}; recursive={recursive}; clusters={clusters.Count}; images={clusters.Sum(cluster => cluster.ImageIds.Count)}");
+            AppLogger.Info($"Scene anchors loaded: path={node.FullPath}; model={(_services.ServiceMode ? "remote-mirror" : "local")}; recursive={recursive}; clusters={clusters.Count}; images={clusters.Sum(cluster => cluster.ImageIds.Count)}");
             foreach(var anchor in node.Children.Where(child=>child.IsSceneAnchor).ToList())node.Children.Remove(anchor);
             foreach(var cluster in clusters)node.Children.Add(new DirectoryNodeViewModel{Name=cluster.DisplayName,FullPath=node.FullPath,Icon="⚓",ImageCount=cluster.ImageIds.Count,IsSceneAnchor=true,SceneName=cluster.SceneName,AnchorImageIds=cluster.ImageIds});
             node.SceneAnchorsLoaded=true;
@@ -1687,16 +1808,16 @@ public partial class MainViewModel : ObservableObject, IDisposable
         var images = await UiWork.RunDatabaseAsync(() => node.AnchorImageIds.Select(id => _db.GetImage(id))
             .Where(image => image is { Status: ImageStatus.Active } && File.Exists(image.Path)).Cast<ImageRecord>().ToArray());
         if (images.Length == 0) { MessageBox.Show("该场景没有当前可读取的照片。", "场景描述"); return; }
-        var service = new SceneGroupDescriptionService(_db, AppServices.CloudVisionRepository);
+        var service = new SceneGroupDescriptionService(_db, _services.CloudVisionRepository);
         var plan = await UiWork.RunDatabaseAsync(() => service.BuildPlan(node.FullPath, images, maximumSubgroups: 5, maximumRepresentatives: 3));
-        var missing = await UiWork.RunDatabaseAsync(() => plan.Representatives.Where(image => AppServices.CloudVisionRepository.GetLatestCompleted(image.Id) is null).ToArray());
+        var missing = await UiWork.RunDatabaseAsync(() => plan.Representatives.Where(image => _services.CloudVisionRepository.GetLatestCompleted(image.Id) is null).ToArray());
         var preview = $"该时间段共有 {plan.Images.Count} 张照片，已细分为 {plan.Subgroups.Count} 组，" +
             $"并从前、中、后均匀选择 {plan.Representatives.Count} 张代表照片。\n" +
-            $"其中 {missing.Length} 张需要调用已配置的云端视觉 API，其余将复用已有描述。\n\n是否继续？";
+            $"其中 {missing.Length} 张需要调用已配置的照片分析模型，其余将复用已有描述。\n\n是否继续？";
         if (MessageBox.Show(preview, "描述未分类场景", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
         if (missing.Length > 0) await AnalyzeImagesWithCloudAsync(missing, AiFeatureIds.SceneDescription,
             refreshDirectoryTree: false, showCompletionDialog: false);
-        using var summarizer = AppServices.CreateSceneGroupSummarizer();
+        using var summarizer = _services.CreateSceneGroupSummarizer();
         if (summarizer is null)
         {
             MessageBox.Show("场景总结模型尚未配置。请在“AI 模型设置”中为“未分类场景描述”选择服务商和模型。",
@@ -1726,6 +1847,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         if (accept != MessageBoxResult.Yes) return;
         var parent = EnumerateDirectoryNodes(DirectoryTree).FirstOrDefault(candidate => candidate.Children.Contains(node));
         await UiWork.RunDatabaseAsync(() => service.SaveAccepted(plan, summary));
+        _services.QueueImmediateRemoteSync("场景描述写入");
         StatusText = $"已应用场景描述：{summary.SceneName}";
         if (parent is null) return;
         await LoadSceneAnchorsAsync(parent, true);
@@ -1740,7 +1862,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     public async Task EditSceneDescriptionAsync(DirectoryNodeViewModel node)
     {
         if (!node.IsSceneAnchor) return;
-        var service = new SceneGroupDescriptionService(_db, AppServices.CloudVisionRepository);
+        var service = new SceneGroupDescriptionService(_db, _services.CloudVisionRepository);
         var images = await UiWork.RunDatabaseAsync(() => node.AnchorImageIds.Select(id => _db.GetImage(id))
             .Where(image => image is { Status: ImageStatus.Active }).Cast<ImageRecord>().ToArray());
         if (images.Length == 0) { StatusText = "该场景没有可编辑的照片记录"; return; }
@@ -1769,6 +1891,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 service.UpdateAcceptedText(accepted.Fingerprint, window.SceneTitle, window.SceneSummary);
             }
         });
+        _services.QueueImmediateRemoteSync("场景描述编辑");
         var parent = EnumerateDirectoryNodes(DirectoryTree).FirstOrDefault(candidate => candidate.Children.Contains(node));
         if (parent is not null)
         {
@@ -1795,7 +1918,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             return;
         }
 
-        var service = new SceneGroupDescriptionService(_db, AppServices.CloudVisionRepository);
+        var service = new SceneGroupDescriptionService(_db, _services.CloudVisionRepository);
         var plans = new List<SceneGroupPlan>();
         foreach (var anchor in anchors)
         {
@@ -1814,7 +1937,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
         var missing = await UiWork.RunDatabaseAsync(() => plans.SelectMany(plan => plan.Representatives)
             .GroupBy(image => image.Id).Select(group => group.First())
-            .Where(image => AppServices.CloudVisionRepository.GetLatestCompleted(image.Id) is null).ToArray());
+            .Where(image => _services.CloudVisionRepository.GetLatestCompleted(image.Id) is null).ToArray());
         var preview = $"目录“{directory.Name}”中有 {plans.Count} 个尚未描述的场景，" +
             $"将使用 {plans.Sum(plan => plan.Representatives.Count)} 张代表照片；其中 {missing.Length} 张需要调用已配置的视觉模型。\n\n" +
             "生成成功的场景名称和摘要将直接应用；已有照片描述会增量复用。是否继续？";
@@ -1824,7 +1947,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         if (missing.Length > 0)
             await AnalyzeImagesWithCloudAsync(missing, AiFeatureIds.SceneDescription,
                 refreshDirectoryTree: false, showCompletionDialog: false);
-        using var summarizer = AppServices.CreateSceneGroupSummarizer();
+        using var summarizer = _services.CreateSceneGroupSummarizer();
         if (summarizer is null)
         {
             MessageBox.Show("场景总结模型尚未配置。请在“AI 模型设置”中为“未分类场景描述”选择服务商和模型。",
@@ -1842,6 +1965,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 var summary = await service.SummarizeWithAiAsync(plan, summarizer);
                 if (summary is null) { failed++; continue; }
                 await UiWork.RunDatabaseAsync(() => service.SaveAccepted(plan, summary));
+                _services.QueueImmediateRemoteSync("批量场景描述写入");
                 completed++;
             }
             catch (Exception ex)
@@ -1891,7 +2015,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 StatusText = $"请选择“{selectedDirectory.Name}”下的一个相册";
                 return;
             }
-            var records = await UiWork.RunDatabaseAsync(() => AppServices.ServiceMode && selectedDirectory.SourceId is { } remoteSourceId
+            var records = await UiWork.RunDatabaseAsync(() => _services.ServiceMode && selectedDirectory.SourceId is { } remoteSourceId
                 ? FilterRemoteDirectoryImages(_db.GetImages(remoteSourceId, includeMissing: false), selectedDirectory.RemotePathPrefix)
                 : selectedDirectory.IsSceneAnchor || selectedDirectory.IsGeoNode || selectedDirectory.IsAlbumRoot
                 ? selectedDirectory.AnchorImageIds.Select(id => _db.GetImage(id)).Where(image => image is not null).Cast<ImageRecord>()
@@ -1914,15 +2038,15 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 ? []
                 : await UiWork.RunDatabaseAsync("DirectoryVideos.Load", () =>
                 {
-                    if (AppServices.ServiceMode && selectedDirectory.SourceId is { } remoteSourceId)
+                    if (_services.ServiceMode && selectedDirectory.SourceId is { } remoteSourceId)
                     {
-                        var remotePosters = AppServices.Videos.GetFirstKeyframePaths();
-                        return AppServices.Videos.GetAll()
+                        var remotePosters = _services.Videos.GetFirstKeyframePaths();
+                        return _services.Videos.GetAll()
                             .Where(video => video.Status == "active" && video.SourceId == remoteSourceId)
                             .Where(video => string.IsNullOrWhiteSpace(selectedDirectory.RemotePathPrefix) ||
                                 NormalizeRemotePath(video.Path).StartsWith(NormalizeRemotePath(selectedDirectory.RemotePathPrefix!) + "/", StringComparison.OrdinalIgnoreCase))
                             .Where(video => string.IsNullOrWhiteSpace(SearchQuery) || Path.GetFileName(video.Path).Contains(SearchQuery.Trim(), StringComparison.CurrentCultureIgnoreCase))
-                            .Select(video => new ImageItemViewModel(video, remotePosters.GetValueOrDefault(video.Id), LoadVideoPosterPathAsync, cts.Token)).ToArray();
+                            .Select(video => new ImageItemViewModel(video, remotePosters.GetValueOrDefault(video.Id), LoadVideoPosterPathAsync, cts.Token, _services)).ToArray();
                     }
                     // Keep the directory view self-healing: videos may have been imported
                     // before the explicit video scan was introduced. Index files under the
@@ -1932,14 +2056,14 @@ public partial class MainViewModel : ObservableObject, IDisposable
                             Path.GetFullPath(selectedDirectory.FullPath).TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase) ||
                         IsPathUnderDirectory(selectedDirectory.FullPath, candidate.Path));
                     if (source is not null)
-                        AppServices.VideoIndex.ScanDirectory(source.Id, selectedDirectory.FullPath, true, cts.Token);
-                    var posters = AppServices.Videos.GetFirstKeyframePaths();
-                    return AppServices.Videos.GetAll()
+                        _services.VideoIndex.ScanDirectory(source.Id, selectedDirectory.FullPath, true, cts.Token);
+                    var posters = _services.Videos.GetFirstKeyframePaths();
+                    return _services.Videos.GetAll()
                         .Where(video => video.Status == "active" && IsPathUnderDirectory(video.Path, selectedDirectory.FullPath))
                         .Where(video => string.IsNullOrWhiteSpace(SearchQuery) ||
                                         Path.GetFileName(video.Path).Contains(SearchQuery.Trim(), StringComparison.CurrentCultureIgnoreCase))
                         .Select(video => new ImageItemViewModel(video, posters.GetValueOrDefault(video.Id),
-                            LoadVideoPosterPathAsync, cts.Token)).ToArray();
+                            LoadVideoPosterPathAsync, cts.Token, _services)).ToArray();
                 }, cts.Token);
             var displayItems = photoItems.Concat(videoItems)
                 .OrderBy(item => IsChronologicalAscending ? item.EffectiveTime.Ticks : -item.EffectiveTime.Ticks)
@@ -1977,7 +2101,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             // enumerate it as a local filesystem fallback; all indexed media has
             // already arrived through the gateway and thumbnails are loaded via
             // the remote cache endpoint.
-            var unindexedFiles = AppServices.ServiceMode && selectedDirectory.SourceId is not null
+            var unindexedFiles = _services.ServiceMode && selectedDirectory.SourceId is not null
                 ? []
                 : DirectoryMediaFilter == DirectoryMediaFilter.Videos || selectedDirectory.IsSceneAnchor || selectedDirectory.IsGeoNode || selectedDirectory.IsAlbumRoot || selectedDirectory.AlbumId is not null ? [] : await Task.Run(() =>
             {
@@ -2007,7 +2131,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
             if (!IsCurrentLoad()) return;
             await UiWork.AddInBatchesAsync(unindexedFiles,
-                rec => { if (IsCurrentLoad()) DirectoryImages.Add(new ImageItemViewModel(rec, cts.Token)); }, cts.Token, batchSize: 8);
+                rec => { if (IsCurrentLoad()) DirectoryImages.Add(new ImageItemViewModel(rec, cts.Token, _services)); }, cts.Token, batchSize: 8);
 
             if (!IsCurrentLoad()) return;
 
@@ -2041,7 +2165,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private void BuildRemoteDirectoryChildren(DirectoryNodeViewModel root, SourceFolder source)
     {
-        var records = _db.GetImages(source.Id, includeMissing: false);
+        var records = _db.GetImages(source.Id, includeMissing: true);
         // The index service stores the source's server-side mount prefix
         // (for example `/opt/picer-index/G:\\Apple照片`), while image records
         // retain the authoritative client path (`G:\\Apple照片\\...`).
@@ -2127,7 +2251,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private async Task<string?> LoadVideoPosterPathAsync(VideoRecord video, CancellationToken cancellationToken)
     {
-        if (AppServices.VideoKeyframes is not { } keyframes) return null;
+        if (_services.VideoKeyframes is not { } keyframes) return null;
         await _videoPosterGate.WaitAsync(cancellationToken);
         try
         {

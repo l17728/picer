@@ -29,4 +29,9 @@
     <ProjectReference Include="..\..\server\Picer.ModelServer\Picer.ModelServer.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Compile Include="..\..\src\Picer.MediaAgent\ModelEndpointResolver.cs" Link="ModelEndpointResolver.cs" />
+    <Compile Include="..\..\src\Picer.MediaAgent\ModelRequestAuthorization.cs" Link="ModelRequestAuthorization.cs" />
+  </ItemGroup>
+
 </Project>

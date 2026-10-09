@@ -2,6 +2,8 @@
 **/bin/
 **/obj/
 **/TestResults/
+**/__pycache__/
+*.pyc
 artifacts/
 publish/
 releases/
@@ -46,6 +48,7 @@ github-token*
 *github*token*
 storage.local.json
 cloud-vision.local.json
+tools/_remote_video_probe_tmp.py
 
 # Archives and diagnostics produced by the app
 *.zip

@@ -11,6 +11,12 @@ public partial class MissingFilesWindow : Window
     private readonly IndexEngine _engine;
     private readonly ObservableCollection<ImageRecord> _items;
 
+    private void RepairRoots_Click(object sender, RoutedEventArgs e)
+    {
+        new Views.IndexRepairWindow { Owner = this }.ShowDialog();
+        Close();
+    }
+
     public MissingFilesWindow(IndexEngine engine, IReadOnlyList<ImageRecord> missing)
     {
         InitializeComponent();
@@ -28,8 +34,12 @@ public partial class MissingFilesWindow : Window
         if (MessageBox.Show(this, $"确定删除该文件的索引记录吗？\n{rec.Path}",
                 "删除记录", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes)
             return;
-        await _engine.RemoveIndexRecordAsync(rec.Id);
-        _items.Remove(rec);
+        try
+        {
+            await AppServices.PurgeMissingImageAsync(rec);
+            _items.Remove(rec);
+        }
+        catch (Exception exception) { MessageBox.Show(this, "删除未完成，可重试：" + exception.Message); }
     }
 
     private async void Relocate_Click(object sender, RoutedEventArgs e)

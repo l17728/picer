@@ -1,3 +1,4 @@
+using Picer.Core.Imaging;
 using System.IO;
 using System.Threading.Channels;
 using Microsoft.Data.Sqlite;
@@ -9,9 +10,6 @@ using Picer.Core.Metadata;
 using Picer.Core.Models;
 using Picer.Core.Storage;
 using Picer.Core.Thumbnails;
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.PixelFormats;
-using SixLabors.ImageSharp.Processing;
 
 namespace Picer.Core.Indexing;
 
@@ -170,11 +168,11 @@ public sealed class IndexEngine
         long aHash = 0, dHash = 0;
         int width = 0, height = 0;
         ImageMetadata meta = new();
-        Image<Rgba32>? decodedImage = null;
+        RasterImage? decodedImage = null;
 
         try
         {
-            decodedImage = Image.Load<Rgba32>(stream);
+            decodedImage = RasterImage.Load(stream);
             stream.Position = 0;
 
             meta = ImageMetadataReader.Read(stream);
@@ -216,8 +214,8 @@ public sealed class IndexEngine
         {
             if (!prepared.NeedsThumbnail) return;
             record.ThumbPath = prepared.DecodedImage is not null
-                ? _thumbnails.GetOrCreateFromImage(prepared.DecodedImage, record.Id)
-                : _thumbnails.GetOrCreate(record.Path, record.Id);
+                ? _thumbnails.GetOrCreateFromImage(prepared.DecodedImage, record.Id, record.Sha256)
+                : _thumbnails.GetOrCreate(record.Path, record.Id, record.Sha256);
         }
 
         if (!string.IsNullOrEmpty(record.Sha256))
@@ -250,7 +248,7 @@ public sealed class IndexEngine
         return temp;
     }
 
-    private sealed record PreparedImage(ImageRecord Record, Image<Rgba32>? DecodedImage, bool NeedsThumbnail);
+    private sealed record PreparedImage(ImageRecord Record, RasterImage? DecodedImage, bool NeedsThumbnail);
 
     private sealed class NonOwningStream(Stream inner) : Stream
     {
@@ -272,10 +270,10 @@ public sealed class IndexEngine
         public override void SetLength(long value) => throw new NotSupportedException(); public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     }
 
-    private static long ComputeAverageHashFromImage(Image<Rgba32> image)
+    private static long ComputeAverageHashFromImage(RasterImage image)
     {
         var pixels = new int[64];
-        using var tempImage = image.Clone(ctx => ctx.Resize(8, 8));
+        using var tempImage = image.Clone().Resize(8, 8);
 
         long sum = 0;
         for (int y = 0; y < 8; y++)
@@ -299,10 +297,10 @@ public sealed class IndexEngine
         return hash;
     }
 
-    private static long ComputeDifferenceHashFromImage(Image<Rgba32> image)
+    private static long ComputeDifferenceHashFromImage(RasterImage image)
     {
-        var comparisons = new bool[56];
-        using var tempImage = image.Clone(ctx => ctx.Resize(9, 8));
+        var comparisons = new bool[64];
+        using var tempImage = image.Clone().Resize(9, 8);
 
         for (int y = 0; y < 8; y++)
         {
@@ -315,7 +313,7 @@ public sealed class IndexEngine
         }
 
         long hash = 0;
-        for (int i = 0; i < 56; i++)
+        for (int i = 0; i < 64; i++)
         {
             if (comparisons[i])
                 hash |= 1L << i;
@@ -323,7 +321,7 @@ public sealed class IndexEngine
         return hash;
     }
 
-    private static float GetGrayscale(Rgba32 p)
+    private static float GetGrayscale(RgbPixel p)
     {
         return 0.2126f * p.R + 0.7152f * p.G + 0.0722f * p.B;
     }

@@ -22,7 +22,7 @@ public sealed record FaceTrainingPlan(string SnapshotId, string ModelVersion, in
 
 public sealed class FaceTrainingService(
     VisionAnalysisRepository repository,
-    HttpClient? client = null) : IDisposable
+    HttpClient? client = null, Func<HttpClient>? clientFactory = null) : IDisposable
 {
     private readonly HttpClient _client = client ?? new HttpClient { Timeout = TimeSpan.FromMinutes(30) };
     private readonly bool _ownsClient = client is null;
@@ -72,11 +72,13 @@ public sealed class FaceTrainingService(
         string? expectedSnapshotId = null, bool applyArtifact = true, int attempt = 1,
         string? recipeFingerprint = null, string? recipeReason = null, int excludedSampleCount = 0)
     {
-        if (_client.DefaultRequestHeaders.Authorization is null)
+        using var routedClient = clientFactory?.Invoke();
+        var activeClient = routedClient ?? _client;
+        if (activeClient.DefaultRequestHeaders.Authorization is null)
         {
             var key = Picer.Core.People.ModelServerApiKey.Load();
             if (!string.IsNullOrWhiteSpace(key))
-                _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", key);
+                activeClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", key);
         }
         progress?.Report(new("snapshot", 2, "正在冻结人工确认与排他负样本"));
         var samples = BuildSamples(out var modelVersion, attempt);
@@ -99,7 +101,7 @@ public sealed class FaceTrainingService(
             }).ToArray();
         using var datasetRequest = new HttpRequestMessage(HttpMethod.Post, new Uri(root, "datasets")) { Content = JsonContent.Create(new { snapshotId, sourceApp = "picer", modelVersion, attempt, recipeFingerprint, recipeReason, selectedSampleCount = samples.Length, excludedSampleCount, actions, samples }, options: Json) };
         datasetRequest.Headers.Add("X-Picer-Api-Version", "1");
-        using var datasetResponse = await _client.SendAsync(datasetRequest, cancellationToken).ConfigureAwait(false);
+        using var datasetResponse = await activeClient.SendAsync(datasetRequest, cancellationToken).ConfigureAwait(false);
         await EnsureSuccess(datasetResponse, "提交训练快照", cancellationToken).ConfigureAwait(false);
         var dataset = await datasetResponse.Content.ReadFromJsonAsync<DatasetResponse>(Json, cancellationToken)
             .ConfigureAwait(false) ?? throw new InvalidDataException("训练平台未返回数据集编号。");
@@ -108,24 +110,24 @@ public sealed class FaceTrainingService(
         if (string.IsNullOrWhiteSpace(dataset.Id)) throw new InvalidDataException("训练平台返回了空数据集编号。");
         using var jobRequest = new HttpRequestMessage(HttpMethod.Post, new Uri(root, "jobs")) { Content = JsonContent.Create(new { datasetId = dataset.Id, type = "embedding-adapter-training" }, options: Json) };
         jobRequest.Headers.Add("X-Picer-Api-Version", "1");
-        using var jobResponse = await _client.SendAsync(jobRequest, cancellationToken).ConfigureAwait(false);
+        using var jobResponse = await activeClient.SendAsync(jobRequest, cancellationToken).ConfigureAwait(false);
         await EnsureSuccess(jobResponse, "创建训练任务", cancellationToken).ConfigureAwait(false);
         var job = await jobResponse.Content.ReadFromJsonAsync<JobResponse>(Json, cancellationToken).ConfigureAwait(false)
                   ?? throw new InvalidDataException("训练平台未返回任务编号。");
         if (string.IsNullOrWhiteSpace(job.Id)) throw new InvalidDataException("训练平台返回了空任务编号。");
         var submittedJobId = job.Id;
         using var cancelRegistration = cancellationToken.Register(() =>
-            _ = _client.PostAsync(new Uri(root, $"jobs/{submittedJobId}/cancel"), content: null, CancellationToken.None));
+            _ = activeClient.PostAsync(new Uri(root, $"jobs/{submittedJobId}/cancel"), content: null, CancellationToken.None));
         while (job.Status is "queued" or "running" or "canceling")
         {
             await Task.Delay(500, cancellationToken).ConfigureAwait(false);
-            job = await _client.GetFromJsonAsync<JobResponse>(new Uri(root, $"jobs/{job.Id}"), Json, cancellationToken)
+            job = await activeClient.GetFromJsonAsync<JobResponse>(new Uri(root, $"jobs/{job.Id}"), Json, cancellationToken)
                 .ConfigureAwait(false) ?? throw new InvalidDataException("训练平台返回了空任务状态。");
             if (!string.IsNullOrWhiteSpace(job.LogsUrl))
             {
                 try
                 {
-                    var log = await _client.GetStringAsync(new Uri(root, job.LogsUrl.TrimStart('/')), cancellationToken).ConfigureAwait(false);
+                    var log = await activeClient.GetStringAsync(new Uri(root, $"jobs/{Uri.EscapeDataString(job.Id)}/logs"), cancellationToken).ConfigureAwait(false);
                     if (!string.IsNullOrWhiteSpace(log)) progress?.Report(new(job.Stage, Math.Clamp(18 + job.Progress * 7 / 10, 18, 88), $"平台日志：{log.Trim().Split('\n').LastOrDefault()?.Trim()}"));
                 }
                 catch (HttpRequestException) { /* status polling remains authoritative */ }
@@ -138,7 +140,7 @@ public sealed class FaceTrainingService(
         if (job.Status is not ("completed" or "ready") || string.IsNullOrWhiteSpace(job.ArtifactId))
             throw new InvalidOperationException($"训练任务{job.Status}：{job.Error ?? "未生成制品"}");
         progress?.Report(new("download", 90, "正在校验训练制品与评估指标"));
-        var artifactJson = await _client.GetStringAsync(new Uri(root, $"artifacts/{job.ArtifactId}"), cancellationToken)
+        var artifactJson = await activeClient.GetStringAsync(new Uri(root, $"artifacts/{job.ArtifactId}"), cancellationToken)
             .ConfigureAwait(false);
         var artifact = JsonSerializer.Deserialize<ArtifactResponse>(artifactJson, Json)
                        ?? throw new InvalidDataException("训练制品格式无效。");
@@ -223,7 +225,7 @@ public sealed class FaceTrainingService(
                 imageGroups.GetValueOrDefault(face.ImageId, $"image:{face.ImageId}"), face.Embedding,
                 face.DetectionConfidence, face.RelativeArea)))
             .Concat(BuildConfirmedHardNegatives(confirmed, imageGroups));
-        var videos = repository.GetVideoTrainingFaces().Select(face => CreateSample(-face.VideoFaceId, face.PersonId,
+        var videos = repository.GetVideoTrainingFaces(selectedModelVersion).Select(face => CreateSample(-face.VideoFaceId, face.PersonId,
             face.Label, $"video:{face.VideoId}", face.Embedding, face.DetectionConfidence, face.RelativeArea));
         var all = photos.Concat(videos).OrderBy(sample => sample.FaceId).ThenBy(sample => sample.PersonId)
             .ThenBy(sample => sample.Label, StringComparer.Ordinal).ToArray();
@@ -360,6 +362,17 @@ public sealed class FaceTrainingService(
     {
         var node = JsonNode.Parse(artifactJson) as JsonObject
                    ?? throw new InvalidDataException("训练制品 JSON 根节点无效。");
+        if (node.ContainsKey("artifactId") && node.ContainsKey("prototypes"))
+        {
+            // Reconstitute the typed signed contract before hashing equivalent JSON spellings.
+            // Unknown fields must fail closed rather than escape authentication.
+            var options = new JsonSerializerOptions(Json)
+            { UnmappedMemberHandling = System.Text.Json.Serialization.JsonUnmappedMemberHandling.Disallow };
+            var artifact = JsonSerializer.Deserialize<TrainingArtifactData>(artifactJson, options)
+                ?? throw new InvalidDataException("训练制品 JSON 无效。");
+            var unsigned = artifact with { Sha256 = null, Signature = null, SignatureAlgorithm = null, SigningKeyId = null };
+            return Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(unsigned, Json))).ToLowerInvariant();
+        }
         foreach (var name in new[] { "sha256", "signature", "signatureAlgorithm", "signingKeyId" })
             if (node.ContainsKey(name)) node[name] = null;
         var bytes = JsonSerializer.SerializeToUtf8Bytes(node, Json);

@@ -5,12 +5,11 @@
         ShowInTaskbar="False">
     <DockPanel Margin="8">
         <TextBlock DockPanel.Dock="Top" TextWrapping="Wrap" Margin="0,0,0,8"
-                   Text="以下图片在磁盘上已找不到（可能被移动或删除）。您可以删除其索引记录，或指定文件的新位置以重建索引（图片内容通过哈希校验确保是同一文件）。"/>
+                   Text="以下照片已删除或移动，索引和缩略图仍保留。可选择多个新根目录自动修复关联。手动删除位置记录后，只有不再被其他位置引用的共享内容才会彻底清除。"/>
 
         <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,8,0,0">
-            <Button Content="删除记录" Click="Delete_Click" Padding="12,4" Margin="0,0,8,0"/>
-            <Button Content="指定新位置..." Click="Relocate_Click" Padding="12,4" Margin="0,0,8,0"/>
-            <Button Content="指定新根目录..." Click="RelocateRoot_Click" Padding="12,4" Margin="0,0,8,0"/>
+            <Button Content="彻底删除此位置记录" Click="Delete_Click" Padding="12,4" Margin="0,0,8,0"/>
+            <Button Content="选择多个目录修复…" Click="RepairRoots_Click" Padding="12,4" Margin="0,0,8,0"/>
             <Button Content="关闭" Click="Close_Click" Padding="12,4"/>
         </StackPanel>
 

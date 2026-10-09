@@ -1,3 +1,4 @@
+using Picer.Core.Imaging;
 using System.Diagnostics;
 using System.IO;
 using System.Net;
@@ -5,9 +6,6 @@ using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text;
 using Picer.Core.Gateway;
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.Formats.Png;
-using SixLabors.ImageSharp.PixelFormats;
 
 namespace Picer.E2E;
 
@@ -17,9 +15,9 @@ public sealed class ServiceModeSmokeTests
 
     private static byte[] PngBytes()
     {
-        using var image = new Image<Rgb24>(4, 3, new Rgb24(120, 60, 30));
+        using var image = new RasterImage(4, 3, new RgbPixel(120, 60, 30));
         using var encoded = new MemoryStream();
-        image.Save(encoded, new PngEncoder());
+        image.SaveAsPng(encoded);
         return encoded.ToArray();
     }
 

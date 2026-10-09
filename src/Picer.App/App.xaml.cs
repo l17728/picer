@@ -1,6 +1,7 @@
 ﻿using System.Diagnostics;
 using System.IO;
 using System.Windows;
+using Picer.App.Infrastructure;
 using Picer.App.ViewModels;
 using Picer.Core.Diagnostics;
 
@@ -62,7 +63,7 @@ public partial class App : Application
             LogInfo($"AppServices 初始化完成；serviceMode={AppServices.ServiceMode}; syncClient={(AppServices.SyncClient is null ? "未配置" : "已配置")}; gateway={AppServices.Gateway.GetType().Name}");
             if (!AppServices.ServiceMode)
             {
-                var recovery = new Picer.Core.People.TrainingJobRecoveryService(AppServices.VisionRepository);
+                var recovery = new Picer.Core.People.TrainingJobRecoveryService(AppServices.VisionRepository, AppServices.CreateTrainingSubmissionService);
                 var recoveryTasks = recovery.ResumeAsync().GetAwaiter().GetResult();
                 _ = Task.WhenAll(recoveryTasks);
                 LogInfo($"已恢复后台训练任务监控：{recoveryTasks.Count} 个");
@@ -71,7 +72,16 @@ public partial class App : Application
         catch (Exception ex)
         {
             LogCrash("AppServices.Initialize 失败", ex);
-            MessageBox.Show($"初始化失败：{ex.Message}\n\n详见 {LogPath}", "Picer",
+            var detail = ex.Message switch
+            {
+                "database_upgrade_requires_closed_instances" or "database_upgrade_requires_closed_database_wal_shm" or "database_startup_busy_close_other_instances"
+                    => "索引需要升级。请关闭其他 Picer 窗口和使用该索引的服务，再重新启动；程序会先自动备份索引。",
+                "database_schema_newer_than_application" => "此索引由更新版本的 Picer 创建，请使用相同或更新版本打开。",
+                "database_migration_integrity_failed" or "database_migration_foreign_keys_failed"
+                    => "索引升级校验未通过，原索引和迁移前备份已保留。请查看日志后再处理。",
+                _ => ex.Message
+            };
+            MessageBox.Show($"初始化失败：{detail}\n\n详见 {LogPath}", "Picer",
                 MessageBoxButton.OK, MessageBoxImage.Error);
             Shutdown(-1);
             return;
@@ -86,8 +96,8 @@ public partial class App : Application
                 AppServices.Db, AppServices.People, AppServices.VisionRepository,
                 AppServices.VisionAnalysis, AppServices.FaceThumbnails, AppServices.FaceSuggestions,
                 AppServices.UnknownFaceClusters, AppServices.VisionUnavailableReason,
-                AppServices.Gateway as Picer.Core.Gateway.IMediaAssetGateway);
-            _mainViewModel = new MainViewModel(AppServices.Db, AppServices.Index, AppServices.Geocoder, peopleViewModel);
+                AppServices.Gateway as Picer.Core.Gateway.IMediaAssetGateway, AppServices.GetClientServices());
+            _mainViewModel = new MainViewModel(AppServices.Db, AppServices.Index, AppServices.Geocoder, peopleViewModel, AppServices.GetClientServices());
             LogInfo("ViewModel 创建完成");
 
             LogInfo("正在创建 MainWindow...");
@@ -97,9 +107,17 @@ public partial class App : Application
             window.Show();
             if (AppServices.ServiceMode)
             {
-                StartConfiguredMediaAgent();
+                // Resolving the source machine's allow-listed roots can open a
+                // large local index database. Never perform that startup I/O
+                // on the WPF dispatcher; the shell should remain interactive
+                // while the resident agent refreshes its configuration.
+                _ = Task.Run(StartConfiguredMediaAgent);
             }
-            if (AppServices.SyncClient is not null)
+            // Service mode must always pull the authoritative remote mirror.
+            // SyncClient is an optional publisher helper and can be absent when
+            // a read-only endpoint was configured, but that must not disable
+            // remote metadata refresh (video people/keyframes included).
+            if (AppServices.ServiceMode || AppServices.SyncClient is not null)
                 _remoteMirrorLoop = Task.Run(() => RemoteMirrorLoopAsync(_remoteMirrorLoopCts.Token));
             // A remote client is a read/mirror consumer. Publishing the local
             // evaluation snapshot here needlessly scans thousands of faces and
@@ -123,31 +141,38 @@ public partial class App : Application
     {
         try
         {
+            LogInfo("正在后台同步 MediaAgent 授权源目录并刷新单实例代理");
             var settings = MediaAgentController.Load();
             if (!settings.Enabled || string.IsNullOrWhiteSpace(settings.ServiceIp))
             {
-                LogInfo("远程模式未启用原图代理，跳过 MediaAgent 自动启动");
+                LogInfo($"远程模式未启用原图代理，跳过 MediaAgent 自动启动；enabled={settings.Enabled}; serviceIpConfigured={!string.IsNullOrWhiteSpace(settings.ServiceIp)}");
                 return;
             }
-            var roots = AppServices.Db.GetSources().Select(source => source.Path).Where(Directory.Exists).ToArray();
+            LogInfo("MediaAgent 启动：正在从镜像索引解析本机可代理源目录");
+            var mirroredSources = UiWork.RunDatabaseAsync("MediaAgent.ResolveMirroredRoots", AppServices.Db.GetSources)
+                .GetAwaiter().GetResult();
+            var roots = mirroredSources.Select(source => source.Path).Where(Directory.Exists).ToArray();
             // A service-mode client normally owns only remote-mirror.db. If
             // this machine is also the source host, recover the real source
             // roots from its local index so the agent can serve media.
             if (roots.Length == 0 && File.Exists(AppPaths.DbPath))
             {
+                LogInfo("MediaAgent 启动：镜像索引没有本机可用目录，检查本机权威索引");
                 using var localDb = new Picer.Core.Data.PicerDatabase(AppPaths.DbPath);
                 roots = localDb.GetSources().Select(source => source.Path).Where(Directory.Exists).ToArray();
             }
+            roots = roots.Concat(MediaAgentController.LoadRepairRoots()).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
             if (roots.Length == 0)
             {
-                LogInfo("远程模式未找到可代理的本地源目录，跳过 MediaAgent 自动启动");
+                LogInfo($"远程模式未找到可代理的本地源目录，跳过 MediaAgent 自动启动；mirroredSourceCount={mirroredSources.Count}; dataDbExists={File.Exists(AppPaths.DbPath)}");
                 return;
             }
+            LogInfo($"MediaAgent 启动：解析到本机授权根目录；count={roots.Length}");
             if (MediaAgentController.Start(settings.ServiceIp, MediaAgentController.ResolveToken(),
                     MediaAgentController.ResolveSpkiPin(), roots))
                 LogInfo($"远程模式已自动启动 MediaAgent：service={settings.ServiceIp}; roots={roots.Length}");
             else
-                LogInfo("远程模式无法启动 MediaAgent：未找到可执行文件");
+                LogInfo("远程模式无法启动 MediaAgent：程序不完整或启动后退出，请查看代理启动日志");
         }
         catch (Exception exception)
         {

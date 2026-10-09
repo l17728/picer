@@ -1,3 +1,4 @@
+using Picer.App.Infrastructure;
 using System.IO;
 using System.Text.Json;
 using System.Windows;
@@ -8,12 +9,19 @@ namespace Picer.App.Views;
 public partial class FlorenceBatchWindow : Window
 {
     private readonly FlorenceResultRepository _repository; private readonly string _modelRoot, _settingsPath; private CancellationTokenSource? _cancellation; private List<ReviewRow> _rows = [];
-    public FlorenceBatchWindow(FlorenceResultRepository repository, string modelRoot, string settingsPath) { InitializeComponent(); _repository = repository; _modelRoot = modelRoot; _settingsPath = settingsPath; Loaded += async (_, _) => await RefreshRowsAsync(); }
-    private async void Start_Click(object sender, RoutedEventArgs e)
+    public FlorenceBatchWindow(FlorenceResultRepository repository, string modelRoot, string settingsPath) { InitializeComponent(); _repository = repository; _modelRoot = modelRoot; _settingsPath = settingsPath; Loaded += async (_, _) => await RunUiAsync(RefreshRowsAsync); }
+    private async Task RunUiAsync(Func<Task> work)
+    {
+        try { await work(); }
+        catch (OperationCanceledException) { StatusText.Text = "操作已取消，已保存的结果保留。"; }
+        catch (Exception exception) { StatusText.Text = "操作未完成：" + exception.Message; }
+    }
+    private async void Start_Click(object sender, RoutedEventArgs e) => await RunUiAsync(StartAsync);
+    private async Task StartAsync()
     {
         if (!int.TryParse(LimitBox.Text, out var limit) || limit is < 1 or > 500) { StatusText.Text = "本次处理数量必须为 1–500。"; return; }
         var task = TaskBox.SelectedIndex switch { 1 => FlorenceTask.DetailedCaption, 2 => FlorenceTask.Ocr, _ => FlorenceTask.Caption }; var provider = LoadProvider();
-        var pending = await Task.Run(() => _repository.GetPending(task.ToString(), "Florence-2-base-ft-int8-e88a44e").Take(limit).ToArray()); if (pending.Length == 0) { StatusText.Text = "没有需要处理的图片。"; return; }
+        var pending = await UiWork.RunDatabaseAsync(() => _repository.GetPending(task.ToString(), "Florence-2-base-ft-int8-e88a44e").Take(limit).ToArray()); if (pending.Length == 0) { StatusText.Text = "没有需要处理的图片。"; return; }
         _cancellation = new(); StartButton.IsEnabled = false; CancelButton.IsEnabled = true; Progress.Maximum = pending.Length; Progress.Value = 0;
         try
         {
@@ -21,7 +29,7 @@ public partial class FlorenceBatchWindow : Window
             for (var index = 0; index < pending.Length; index++)
             {
                 _cancellation.Token.ThrowIfCancellationRequested(); var image = pending[index]; StatusText.Text = $"{index + 1}/{pending.Length}：{image.Path}";
-                try { var result = await service.RunAsync(image.Path, task, task == FlorenceTask.DetailedCaption ? 128 : 96, cancellationToken: _cancellation.Token); await Task.Run(() => _repository.SaveSuggested(image, task, provider, result.Text)); }
+                try { var result = await service.RunAsync(image.Path, task, task == FlorenceTask.DetailedCaption ? 128 : 96, cancellationToken: _cancellation.Token); await UiWork.RunDatabaseAsync(() => _repository.SaveSuggested(image, task, provider, result.Text)); }
                 catch (Exception ex) when (ex is not OperationCanceledException) { StatusText.Text = $"跳过失败图片：{Path.GetFileName(image.Path)}；{ex.Message}"; }
                 Progress.Value = index + 1;
             }
@@ -31,8 +39,8 @@ public partial class FlorenceBatchWindow : Window
         finally { StartButton.IsEnabled = true; CancelButton.IsEnabled = false; _cancellation.Dispose(); _cancellation = null; }
     }
     private FlorenceExecutionProvider LoadProvider() { try { using var document = JsonDocument.Parse(File.ReadAllText(_settingsPath)); if (document.RootElement.TryGetProperty("provider", out var value) && Enum.TryParse<FlorenceExecutionProvider>(value.GetString(), out var provider)) return provider; } catch { } return FlorenceExecutionProvider.Cpu; }
-    private async void Refresh_Click(object sender, RoutedEventArgs e) => await RefreshRowsAsync(); private void Cancel_Click(object sender, RoutedEventArgs e) => _cancellation?.Cancel();
-    private async Task RefreshRowsAsync() { _rows = await Task.Run(() => _repository.GetForReview().Select(x => new ReviewRow(x.ImageId, x.Path, x.Task, x.Text, x.State, x.Provider) { Accepted = x.State == "accepted" }).ToList()); Rows.ItemsSource = _rows; StatusText.Text = $"已加载 {_rows.Count} 条本地结果。"; }
-    private async void SaveReview_Click(object sender, RoutedEventArgs e) { var rows = _rows.Where(x => x.State == "suggested").ToArray(); await Task.Run(() => { foreach (var row in rows) _repository.Review(row.ImageId, row.Task, row.Accepted); }); await RefreshRowsAsync(); StatusText.Text = "审阅已保存；接受的文字现已进入主搜索。"; }
+    private async void Refresh_Click(object sender, RoutedEventArgs e) => await RunUiAsync(RefreshRowsAsync); private void Cancel_Click(object sender, RoutedEventArgs e) => _cancellation?.Cancel();
+    private async Task RefreshRowsAsync() { _rows = await UiWork.RunDatabaseAsync(() => _repository.GetForReview().Select(x => new ReviewRow(x.ImageId, x.Path, x.Task, x.Text, x.State, x.Provider) { Accepted = x.State == "accepted" }).ToList()); Rows.ItemsSource = _rows; StatusText.Text = $"已加载 {_rows.Count} 条本地结果。"; }
+    private async void SaveReview_Click(object sender, RoutedEventArgs e) => await RunUiAsync(async () => { var rows = _rows.Where(x => x.State == "suggested").ToArray(); await UiWork.RunDatabaseAsync(() => { foreach (var row in rows) _repository.Review(row.ImageId, row.Task, row.Accepted); }); await RefreshRowsAsync(); StatusText.Text = "审阅已保存；接受的文字现已进入主搜索。"; });
     private sealed class ReviewRow(long imageId, string path, string task, string text, string state, string provider) { public long ImageId { get; } = imageId; public string Path { get; } = path; public string Task { get; } = task; public string Text { get; } = text; public string State { get; } = state; public string Provider { get; } = provider; public bool Accepted { get; set; } }
 }

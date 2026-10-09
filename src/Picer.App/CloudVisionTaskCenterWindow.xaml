@@ -1,5 +1,5 @@
 <Window x:Class="Picer.App.CloudVisionTaskCenterWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="云端分析任务中心" Width="1000" Height="600" WindowStartupLocation="CenterOwner">
+        Title="照片分析任务中心" Width="1000" Height="600" WindowStartupLocation="CenterOwner">
     <DockPanel Margin="12">
         <DockPanel DockPanel.Dock="Top" Margin="0,0,0,10">
             <StackPanel DockPanel.Dock="Right" Orientation="Horizontal"><Button Content="重试选中失败任务" Click="Retry_Click" Padding="14,5" Margin="0,0,8,0"/><Button Content="刷新" Click="Refresh_Click" Padding="14,5"/></StackPanel>
@@ -18,6 +18,6 @@
                 <DataGridTextColumn Header="更新时间" Binding="{Binding UpdatedLocal}" Width="145"/>
             </DataGrid.Columns>
         </DataGrid>
-        <TextBlock DockPanel.Dock="Bottom" Text="双击任务可在资源管理器中定位原照片。任务中心只查看本地任务记录，不会触发上传。" Foreground="#666" Margin="0,8,0,0"/>
+        <TextBlock DockPanel.Dock="Bottom" Text="双击任务：本地照片在资源管理器中定位；远程照片通过索引服务打开。刷新列表只读取任务记录。" Foreground="#666" Margin="0,8,0,0"/>
     </DockPanel>
 </Window>

@@ -1,8 +1,6 @@
+using Picer.Core.Imaging;
 using System.Text;
 using Picer.Core.People;
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.Formats.Jpeg;
-using SixLabors.ImageSharp.Processing;
 
 namespace Picer.Core.Vision;
 
@@ -59,14 +57,14 @@ public sealed class RemoteFaceVectorBackfillService(
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (bytes is null || bytes.Length == 0) return null;
-            using var image = Image.Load(bytes);
+            using var image = RasterImage.Load(bytes);
             var paddingX = source.Box.Width * .25f; var paddingY = source.Box.Height * .25f;
             var left = Math.Clamp(source.Box.X - paddingX, 0, 1); var top = Math.Clamp(source.Box.Y - paddingY, 0, 1);
             var right = Math.Clamp(source.Box.X + source.Box.Width + paddingX, 0, 1); var bottom = Math.Clamp(source.Box.Y + source.Box.Height + paddingY, 0, 1);
-            var rectangle = new Rectangle(Math.Clamp((int)(left * image.Width), 0, image.Width - 1), Math.Clamp((int)(top * image.Height), 0, image.Height - 1),
+            var rectangle = new System.Drawing.Rectangle(Math.Clamp((int)(left * image.Width), 0, image.Width - 1), Math.Clamp((int)(top * image.Height), 0, image.Height - 1),
                 Math.Max(1, Math.Min(image.Width, (int)((right - left) * image.Width))), Math.Max(1, Math.Min(image.Height, (int)((bottom - top) * image.Height))));
-            image.Mutate(context => context.Crop(rectangle).Resize(new ResizeOptions { Mode = ResizeMode.Crop, Size = new Size(112, 112) }));
-            using var stream = new MemoryStream(); image.SaveAsJpeg(stream, new JpegEncoder { Quality = 88 });
+            image.Crop(rectangle.X, rectangle.Y, rectangle.Width, rectangle.Height).ResizeToFill(112, 112);
+            using var stream = new MemoryStream(); image.SaveAsJpeg(stream, 88);
             return Convert.ToBase64String(stream.ToArray());
         }
         catch { return null; }

@@ -57,42 +57,54 @@ public sealed class MediaSearchTool(PicerDatabase database, VideoRepository? vid
             TimeOfDay = request.TimeOfDay,
             IncludeMissing = request.IncludeMissing,
             SortBy = SortField.TakenDate,
-            SortDir = request.SortDirection
+            SortDir = request.SortDirection,
+            VisualConceptIds = request.VisualConceptIds ?? []
         };
-        if (request.VisualConceptIds is { Count: > 0 })
-            warnings.Add("视觉概念过滤尚未写入结构化索引，当前仅返回文本/元数据候选。");
         var people = request.PersonIds?.Where(id => id > 0).Distinct().ToArray() ?? [];
         // SearchFilters currently accepts one person ID; intersect additional
         // people in memory without weakening the query boundary.
         var photos = ExecutePhotoPass(filters, terms, request.RequireAllTerms);
+        var textScores = new MediaTextRanking(database).Search(terms, request.RequireAllTerms);
+        if (textScores.Count > 0)
+        {
+            var structured = IndexSearchEngine.Search(database, filters);
+            photos = photos.Concat(structured.Where(image => textScores.ContainsKey(image.Id))).DistinctBy(image => image.Id);
+        }
         var relaxedLocation = false;
         if (!photos.Any() && request.AutoRelax && request.Location is not null)
         {
             // GPS is a soft recall constraint for legacy records: retain person/date/time,
             // remove only geographic bounds, and disclose the relaxation to the caller.
-            photos = ExecutePhotoPass(CloneFilters(filters, null, null), terms, request.RequireAllTerms);
+            var relaxedFilters = CloneFilters(filters, null, null);
+            relaxedFilters.GeoBounds = null;
+            photos = ExecutePhotoPass(relaxedFilters, terms, request.RequireAllTerms);
             relaxedLocation = photos.Any();
             if (photos.Any()) warnings.Add("未找到同时满足 GPS 范围的记录，已回退到地点文字索引。");
         }
         if (people.Length > 0)
         {
-            var allowed = new HashSet<long>();
+            HashSet<long>? allowed = null;
             foreach (var personId in people)
             {
                 var personFilters = CloneFilters(filters, "", personId);
                 if (relaxedLocation) personFilters.GeoBounds = null;
-                foreach (var image in IndexSearchEngine.Search(database, personFilters)) allowed.Add(image.Id);
+                var personImages = IndexSearchEngine.Search(database, personFilters).Select(image => image.Id).ToHashSet();
+                if (allowed is null) allowed = personImages; else allowed.IntersectWith(personImages);
             }
-            photos = photos.Where(image => allowed.Contains(image.Id));
+            photos = photos.Where(image => allowed!.Contains(image.Id));
         }
         if (request.TagIds is { Count: > 0 })
         {
-            var tagged = GetImagesWithTags(request.TagIds);
+            var tagged = GetImagesWithTags(request.TagIds.Distinct().ToArray());
             photos = photos.Where(image => tagged.Contains(image.Id));
         }
-        var totalCandidates = photos.Count();
+        var totalCandidates = request.MediaType == MediaTypeFilter.Video ? 0 : photos.Count();
+        photos = photos.OrderByDescending(image => textScores.GetValueOrDefault(image.Id))
+            .ThenBy(image => request.SortDirection == SortDirection.Ascending ? (image.TakenUtc ?? image.ModifiedUtc).Ticks : -(image.TakenUtc ?? image.ModifiedUtc).Ticks)
+            .ThenBy(image => image.Id);
+        var videoCandidates = 0;
         var photoHits = request.MediaType == MediaTypeFilter.Video ? [] : photos.Take(request.Limit).Select(image => new MediaSearchHit(image.Id, image.Path,
-            MediaTypeFilter.Photo, image.TakenUtc, null, terms.Length == 0 ? [] : ["text"])).ToArray();
+            MediaTypeFilter.Photo, image.TakenUtc, textScores.GetValueOrDefault(image.Id), terms.Length == 0 ? [] : ["text"])).ToArray();
         var videoHits = Array.Empty<MediaSearchHit>();
         if (request.MediaType is MediaTypeFilter.Video or MediaTypeFilter.All && videoRepository is not null)
         {
@@ -100,19 +112,31 @@ public sealed class MediaSearchTool(PicerDatabase database, VideoRepository? vid
                 request.RequireAllTerms
                     ? videoRepository.GetAll().Where(v => terms.All(term => videoRepository.Search(term).Any(hit => hit.Id == v.Id)))
                     : terms.SelectMany(videoRepository.Search).DistinctBy(v => v.Id);
+            if (terms.Length > 0)
+                videos = videos.Concat(videoRepository.GetAll().Where(video => textScores.ContainsKey(-video.Id))).DistinctBy(video => video.Id);
+            var allowedVideos = new VideoSearchMetadata(database).Match(people, request.TagIds ?? [], request.VisualConceptIds ?? []);
+            videos = videos.Where(video => allowedVideos.Contains(video.Id) && VideoSearchMetadata.Within(video, request.Location));
             videos = videos.Where(v => request.IncludeMissing || v.Status == "active");
-            if (request.StartDate is not null) videos = videos.Where(v => v.TakenUtc is null || v.TakenUtc >= request.StartDate);
-            if (request.EndDate is not null) videos = videos.Where(v => v.TakenUtc is null || v.TakenUtc <= request.EndDate);
+            if (request.StartDate is not null) videos = videos.Where(v => v.TakenUtc is not null && v.TakenUtc >= request.StartDate);
+            if (request.EndDate is not null) videos = videos.Where(v => v.TakenUtc is not null && v.TakenUtc <= request.EndDate);
             if (request.TimeOfDay != TimeOfDayFilter.Any) videos = videos.Where(v => v.TakenUtc is not null &&
                 (request.TimeOfDay == TimeOfDayFilter.Day ? v.TakenUtc.Value.ToLocalTime().Hour is >= 6 and < 18 : v.TakenUtc.Value.ToLocalTime().Hour is < 6 or >= 18));
-            videoHits = videos.Take(request.Limit).Select(v => new MediaSearchHit(v.Id, v.Path, MediaTypeFilter.Video, v.TakenUtc, null, terms.Length == 0 ? [] : ["text"])).ToArray();
+            videoCandidates = videos.Count();
+            videoHits = videos.OrderByDescending(v => textScores.GetValueOrDefault(-v.Id))
+                .ThenBy(v => request.SortDirection == SortDirection.Ascending ? (v.TakenUtc ?? v.ModifiedUtc).Ticks : -(v.TakenUtc ?? v.ModifiedUtc).Ticks)
+                .ThenBy(v => v.Id).Take(request.Limit).Select(v => new MediaSearchHit(v.Id, v.Path, MediaTypeFilter.Video, v.TakenUtc,
+                    textScores.GetValueOrDefault(-v.Id), terms.Length == 0 ? [] : ["text"])).ToArray();
         }
-        var hits = request.MediaType == MediaTypeFilter.Video ? videoHits : request.MediaType == MediaTypeFilter.All ? photoHits.Concat(videoHits).Take(request.Limit).ToArray() : photoHits;
-        return new(hits, totalCandidates + videoHits.Length, request with { Terms = terms }, warnings);
+        var hits = request.MediaType == MediaTypeFilter.Video ? videoHits : request.MediaType == MediaTypeFilter.All
+            ? photoHits.Concat(videoHits).OrderByDescending(hit => hit.TextScore ?? 0).ThenBy(hit => request.SortDirection == SortDirection.Ascending ? hit.TakenUtc?.Ticks : -hit.TakenUtc?.Ticks).Take(request.Limit).ToArray() : photoHits;
+        return new(hits, totalCandidates + videoCandidates, request with { Terms = terms }, warnings);
     }
 
     private static void Validate(MediaSearchRequest request)
     {
+        ArgumentNullException.ThrowIfNull(request);
+        if (request.VisualConceptIds?.Any(string.IsNullOrWhiteSpace) == true)
+            throw new ArgumentException("视觉概念 ID 不能为空。", nameof(request));
         if (!Enum.IsDefined(request.MediaType)) throw new ArgumentOutOfRangeException(nameof(request.MediaType));
         if (!Enum.IsDefined(request.TimeOfDay)) throw new ArgumentOutOfRangeException(nameof(request.TimeOfDay));
         if (request.Limit is < 1 or > 1000) throw new ArgumentOutOfRangeException(nameof(request.Limit));

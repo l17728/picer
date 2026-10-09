@@ -28,7 +28,7 @@ public sealed class FaceEvaluationSnapshotService(VisionAnalysisRepository repos
         if (positives.Length == 0) throw new InvalidOperationException("没有可用于评测快照的已确认人脸。");
         var modelVersion = embeddingModelVersion ?? positives.GroupBy(face => face.ModelVersion).OrderByDescending(group => group.Count())
             .Select(group => group.Key).First();
-        var selected = all.Where(face => face.ModelVersion == modelVersion && face.PersonId is not null).ToArray();
+        var selected = positives.Where(face => face.ModelVersion == modelVersion).ToArray();
         var rejected = repository.GetRejectedFaceEmbeddings().Where(face => face.ModelVersion == modelVersion).ToArray();
         var imageGroups = repository.GetTrainingLeakageGroups(selected.Select(face => face.ImageId)
             .Concat(rejected.Select(face => face.ImageId)));
@@ -45,7 +45,7 @@ public sealed class FaceEvaluationSnapshotService(VisionAnalysisRepository repos
             members.Add(CreateMember($"face:{face.FaceId}:negative:{face.PersonId}", face.FaceId, null, face.PersonId,
                 "negative", group, group, face.Embedding, Quality(face.DetectionConfidence, face.RelativeArea), randomSeed));
         }
-        foreach (var face in repository.GetVideoTrainingFaces())
+        foreach (var face in repository.GetVideoTrainingFaces(modelVersion))
         {
             var group = $"video:{face.VideoId}"; // all keyframes from a video share one partition
             members.Add(CreateMember($"video:{face.VideoFaceId}:{face.PersonId}:{face.Label}", null, face.VideoFaceId,
