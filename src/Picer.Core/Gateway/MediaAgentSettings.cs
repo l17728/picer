@@ -106,6 +106,9 @@ public sealed record MediaAgentSettings(string ServiceUrl, string Token, string 
             return true;
         });
         await tls.AuthenticateAsClientAsync(new SslClientAuthenticationOptions { TargetHost = uri.Host }, cancellationToken).ConfigureAwait(false);
+        // Finish the discovery-only TLS session explicitly. Disposing a socket
+        // with unread TLS 1.3 session tickets can otherwise reset the peer.
+        await tls.ShutdownAsync().WaitAsync(cancellationToken).ConfigureAwait(false);
         return discovered ?? throw new IOException("服务未提供证书。");
     }
 

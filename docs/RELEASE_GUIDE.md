@@ -1,17 +1,17 @@
-# Picer v1.2.0 安装契约（尚未发布）
+# Picer v1.2.1 安装指南
 
-更新：2026-10-10。本页说明正在实现和验收的 v1.2.0 安装方式；安装器及登录自启的实际验收仍由发布流程进行，不表示新版本已发布或所有安装场景已通过。[v1.1.2](https://github.com/l17728/picer/releases/tag/v1.1.2) 已正式公开，是独立的历史版本；本页新增安装器不是对旧版本资产的追溯承诺。
+更新：2026-10-10。本页说明 v1.2.1 的安装方式。正式可下载资产与发布状态以 GitHub Release 为准；发布流程检查安装、升级、卸载及真实服务连接，不代表所有系统环境都已经验收。[v1.1.2](https://github.com/l17728/picer/releases/tag/v1.1.2) 已正式公开，是独立的历史版本；本页新增安装器不是对旧版本资产的追溯承诺。
 
 ## 普通 Windows 用户选择哪个安装器
 
-| 计划资产 | 安装内容与用途 |
+| 资产 | 安装内容与用途 |
 | --- | --- |
-| Picer-v1.2.0-win-x64-setup.exe | GUI 与同包 MediaAgent；中文当前用户安装，无需管理员权限 |
-| Picer.MediaAgent-v1.2.0-win-x64-setup.exe | 仅安装原媒体所在电脑的驻留代理；中文当前用户安装，无需管理员权限 |
-| Picer-v1.2.0-win-x64-binary.zip | GUI 解压包，适合手动部署 |
-| Picer.MediaAgent-v1.2.0-win-x64-binary.zip | 独立代理解压包 |
-| Picer.IndexService-v1.2.0-win-x64-binary.zip / Picer.IndexService-v1.2.0-linux-x64-binary.tar.gz | Windows/Linux 索引服务，管理员手动配置 |
-| Picer.ModelServer-v1.2.0-win-x64-binary.zip / Picer.ModelServer-v1.2.0-linux-x64-binary.tar.gz | 模型 API、worker 与 setup-modelserver.py 环境准备脚本 |
+| Picer-v1.2.1-win-x64-setup.exe | GUI 与同包 MediaAgent；中文当前用户安装，无需管理员权限 |
+| Picer.MediaAgent-v1.2.1-win-x64-setup.exe | 仅安装原媒体所在电脑的驻留代理；中文当前用户安装，无需管理员权限 |
+| Picer-v1.2.1-win-x64-binary.zip | GUI 解压包，适合手动部署 |
+| Picer.MediaAgent-v1.2.1-win-x64-binary.zip | 独立代理解压包 |
+| Picer.IndexService-v1.2.1-win-x64-binary.zip / Picer.IndexService-v1.2.1-linux-x64-binary.tar.gz | Windows/Linux 索引服务，管理员手动配置 |
+| Picer.ModelServer-v1.2.1-win-x64-binary.zip / Picer.ModelServer-v1.2.1-linux-x64-binary.tar.gz | 模型 API、worker 与 setup-modelserver.py 环境准备脚本 |
 | SHA256SUMS.txt | 实际发布资产的完整 SHA-256 校验清单 |
 
 两个安装器都包含自包含 .NET 和应用目录内的 MSVC CRT，不要求用户另外安装 .NET 或 VC++ Redistributable。GUI 内含代理，代理目录下 tools/ffmpeg 提供 ffmpeg.exe、ffprobe.exe 及 LICENSE，独立代理使用同样的相对目录；程序自动发现工具。普通 GUI/代理用户不再需要手动下载视频工具或设置工具路径。
@@ -87,4 +87,4 @@ GUI 配对与运行模式的 12 项定向测试已通过，包含真实 TLS 无�
 
 v1.1.2 于 2026-10-10 00:45:21 UTC 正式公开，非草稿、非预发布。Release 回归 610/610 单元、73/73 WPF，离线构建通过；当时为六个二进制包、完整 GUI、runtime 共八个包及其他说明/清单，共 13 项资产，摘要校验完成。
 
-旧 v1.1.2 提供解压包而非本页的新 setup.exe；其固定 runtime 只附 ffmpeg.exe，源代理仍需额外 ffprobe.exe。这个旧版限制由 v1.2.0 新代理工具打包契约解决，不能反向声称旧包已经包含。本轮尚未改变 v1.1.2 的发布事实。
+旧 v1.1.2 提供解压包而非本页的新 setup.exe；其固定 runtime 只附 ffmpeg.exe，源代理仍需额外 ffprobe.exe。这个旧版限制由 v1.2.1 新代理工具打包契约解决，不能反向声称旧包已经包含。本轮尚未改变 v1.1.2 的发布事实。

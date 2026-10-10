@@ -1,6 +1,6 @@
 # 一键安装与首次配对实现记录（2026-10-10）
 
-状态：v1.2.0 安装契约实现与验收中，尚未发布。v1.1.2 已公开的事实保持不变。本记录不把代码测试通过等同于安装器验收。
+状态：安装契约实现与验收中，正式候选推进至 v1.2.1，尚未发布。v1.2.0 在 CI 暴露 TLS 关闭兼容问题后停止发布，标签保留用于追溯。v1.1.2 已公开的事实保持不变。本记录不把代码测试通过等同于安装器验收。
 
 ## 本轮目标
 
@@ -34,6 +34,8 @@ App 实际采用带 ViewModel 的窗口构造，不能依赖无参窗口的 remo
 - 登录自启入口由安装器定义；隔离安装测试关闭自启任务，未模拟 Windows 注销再登录。最终 CI 将重新构建并验收正式安装包。
 
 ## 真实服务连接门禁
+
+首次 CI 的 622 项单元测试中 621 项通过；失败发生在证书发现完成后的连接关闭，Windows runner 的 TLS 对端读取收到连接重置。发现逻辑现显式发送 TLS close_notify 再释放连接，保持原有“服务端读取到 0 字节应用数据”的断言，没有放宽测试。修复后本地 12 项代理设置测试通过（artifacts/installer-tests/agent-tls-shutdown.trx），等待新提交 CI 验证。
 
 按用户要求接入真实 IndexService：三个 GitHub Secrets（PICER_LIVE_SERVICE_URL、PICER_LIVE_SERVICE_TOKEN、PICER_LIVE_SERVICE_SPKI_PIN）仅在受信任 main CI 和 Release 安装验收步骤注入，不写入源码或分发包。PR 测试不获取这些凭据。
 
