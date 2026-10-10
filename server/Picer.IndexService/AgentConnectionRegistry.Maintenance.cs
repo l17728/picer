@@ -12,7 +12,9 @@ internal sealed partial class AgentConnectionRegistry
         var normalized = request with { Items = request.Items.Select(item => item with
         { Root = IndexApiHandlers.NormalizeAgentPath(item.Root), Path = IndexApiHandlers.NormalizeAgentPath(item.Path) }).ToArray() };
         var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
-        var payload = await sessions[0].RequestTaskAsync(MediaConsistencyVerifier.Capability, JsonSerializer.Serialize(normalized, options), token);
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
+        deadline.CancelAfter(TimeSpan.FromSeconds(90));
+        var payload = await sessions[0].RequestTaskAsync(MediaConsistencyVerifier.Capability, JsonSerializer.Serialize(normalized, options), deadline.Token);
         if (payload is null) return null;
         var result = JsonSerializer.Deserialize<MediaConsistencyBatch>(payload, options) ?? throw new InvalidDataException("invalid_maintenance_response");
         // Validate source paths before restoring the service's stored path representation.

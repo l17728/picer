@@ -16,10 +16,14 @@ public sealed class MediaConsistencyVerifier(Func<string, bool, CancellationToke
     public const string Capability = "directory.verify.v1";
     private readonly Func<string, bool, CancellationToken, Task<DirectoryMediaMetadata>> _metadata = metadataReader ?? ((path, video, token) => DirectoryMediaMetadataReader.ReadAsync(path, video, token));
 
-    public async Task<MediaConsistencyBatch> VerifyAsync(MediaConsistencyRequest request, IReadOnlyList<string> roots, CancellationToken token)
+    public async Task<MediaConsistencyBatch> VerifyAsync(MediaConsistencyRequest request, IReadOnlyList<string> roots, CancellationToken token,
+        TimeSpan? budget = null)
     {
         if (request.Items.Count > 129 || request.AuditIndex < -1 || request.AuditIndex >= request.Items.Count)
             throw new ArgumentOutOfRangeException(nameof(request));
+        using var passDeadline = CancellationTokenSource.CreateLinkedTokenSource(token);
+        passDeadline.CancelAfter(budget ?? TimeSpan.FromSeconds(45));
+        token = passDeadline.Token;
         var results = new List<MediaConsistencyResult>();
         for (var index = 0; index < request.Items.Count; index++)
         {

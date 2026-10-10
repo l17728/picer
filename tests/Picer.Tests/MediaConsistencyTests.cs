@@ -108,6 +108,16 @@ public sealed class MediaConsistencyTests : IDisposable
         Assert.Equal(first.Id, Assert.Single(batch.Items).Id);
     }
     [Fact]
+    public async Task WholePassBudgetReturnsPartialProgressInsteadOfAnOrphanedTask()
+    {
+        var candidate = Add("slow.jpg") with { Sha256 = new string('a', 64) };
+        var verifier = new MediaConsistencyVerifier(async (_, _, token) =>
+        { await Task.Delay(Timeout.Infinite, token); return new DirectoryMediaMetadata(1, 1, null); });
+        var result = await verifier.VerifyAsync(new([candidate], 0), [_root], default, TimeSpan.FromMilliseconds(100));
+        Assert.True(result.Deferred);
+        Assert.Empty(result.Items);
+    }
+    [Fact]
     public async Task CheckpointsResumeAndAlternateMediaWithoutWholeTreeScan()
     {
         var a = Add("a.jpg"); var b = Add("b.jpg"); var v = Add("v.mp4", true);
