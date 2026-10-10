@@ -49,7 +49,6 @@ public partial class ServiceBrowseViewModel : ObservableObject
     private Task? _thumbnailWorker;
     private long _thumbnailRequestTicks;
     private HashSet<int> _visibleThumbnailIndices = [];
-    private readonly RemoteAssetCache _assetCache = new(Path.Combine(AppPaths.DataRoot, "remote-assets"));
 
     public ObservableCollection<ServicePhotoItem> Items { get; } = [];
     public ObservableCollection<SourceFolder> Sources { get; } = [];
@@ -295,55 +294,19 @@ public partial class ServiceBrowseViewModel : ObservableObject
     }
 
     [RelayCommand]
+    private async Task PreviewAsync(ServicePhotoItem? item)
+    {
+        if (item is null) return;
+        if (!item.IsVideo && _gateway is HttpIndexGateway remote)
+            await Picer.App.Services.RemotePhotoPreview.OpenAsync(remote, item.MediaId, item.Path, item.Sha256);
+        else await OpenOriginalAsync(item);
+    }
+
+    [RelayCommand]
     private async Task OpenOriginalAsync(ServicePhotoItem? item)
     {
         if (item is null || _gateway is not IMediaAssetGateway media) return;
-        if (item.Sha256 is { Length: 64 } cachedHash && _assetCache.TryGetCached(cachedHash) is { } cachedPath)
-        {
-            var extension = Path.GetExtension(item.Path);
-            var openPath = string.IsNullOrWhiteSpace(extension) || string.Equals(Path.GetExtension(cachedPath), extension, StringComparison.OrdinalIgnoreCase)
-                ? cachedPath
-                : cachedPath + extension;
-            if (!string.Equals(openPath, cachedPath, StringComparison.OrdinalIgnoreCase) && !File.Exists(openPath))
-                File.Copy(cachedPath, openPath);
-            Process.Start(new ProcessStartInfo(openPath) { UseShellExecute = true });
-            StatusText = "鍘熷浘宸叉墦寮€锛堟湰鍦扮紦瀛樺懡涓級";
-            return;
-        }
-        try
-        {
-            // The index service selects the sole online MediaAgent in the
-            // single-tenant deployment.  Do not send the remote GUI machine
-            // name as if it were the source agent id.
-            await using var stream = item.IsVideo
-                ? await media.OpenOriginalVideoAsync(item.MediaId)
-                : await media.OpenOriginalImageAsync(item.MediaId);
-            if (stream is null) { StatusText = "原图代理未找到文件"; return; }
-            var bytes = await ReadAllAsync(stream);
-            var hash = item.Sha256;
-            var path = hash is { Length: 64 }
-                ? await _assetCache.GetOrDownloadAsync(hash, () => new MemoryStream(bytes, writable: false))
-                : await SaveTemporaryAsync(item, bytes);
-            Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
-            StatusText = "原图已打开（本地缓存可复用）";
-        }
-        catch (Exception exception) { StatusText = $"打开原图失败：{exception.Message}"; }
-    }
-
-    private static async Task<byte[]> ReadAllAsync(Stream stream)
-    {
-        using var memory = new MemoryStream();
-        await stream.CopyToAsync(memory);
-        return memory.ToArray();
-    }
-
-    private static async Task<string> SaveTemporaryAsync(ServicePhotoItem item, byte[] bytes)
-    {
-        var directory = Path.Combine(AppPaths.DataRoot, "remote-assets");
-        Directory.CreateDirectory(directory);
-        var path = Path.Combine(directory, $"image-{item.Id}{Path.GetExtension(item.Path)}");
-        await File.WriteAllBytesAsync(path, bytes);
-        return path;
+        await Picer.App.Services.MediaPlayback.OpenAsync(media, item.MediaId, item.IsVideo, item.Path, item.Sha256);
     }
 
     private async Task LoadThumbnailAsync(ServicePhotoItem item, CancellationToken cancellationToken)

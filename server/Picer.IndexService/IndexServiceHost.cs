@@ -395,8 +395,14 @@ public static class IndexServiceHost
             }
         }
         var agents = new AgentConnectionRegistry(journal, savedServiceConfig);
+        var mediaPreviews = new MediaPreviewCache();
         var app = builder.Build();
         app.UseWebSockets();
+        app.MapPost("/api/gateway/v1/media-lease", async (MediaLeaseRequest request, CancellationToken token) =>
+        {
+            await agents.ManageMediaLeaseAsync(request.ETag, request.Release, token);
+            return Results.NoContent();
+        });
         app.UseResponseCompression();
         app.MapGet("/service", () => Results.Content("""
 <!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>Picer Service</title><style>body{font:14px sans-serif;max-width:900px;margin:30px auto;color:#222}table{border-collapse:collapse;width:100%}td,th{border:1px solid #ddd;padding:8px;text-align:left}.ok{color:#087f23}.bad{color:#a11}</style></head>
@@ -560,6 +566,11 @@ async function load(){const [c,g]=await Promise.all([fetch('/api/service/v1/capa
             try { await next(); }
             catch (Exception exception)
             {
+                if (context.Response.HasStarted || context.RequestAborted.IsCancellationRequested)
+                {
+                    context.Abort();
+                    return;
+                }
                 AppLogger.Error("IndexService request failed: " + context.Request.Path, exception);
                 context.Response.StatusCode = StatusCodes.Status500InternalServerError;
                 await context.Response.WriteAsJsonAsync(new { error = exception.GetType().Name, detail = exception.Message });
@@ -585,6 +596,11 @@ async function load(){const [c,g]=await Promise.all([fetch('/api/service/v1/capa
 
         app.Use(async (context, next) =>
         {
+            if (context.Request.Path.StartsWithSegments("/api/agent/v1/media", out var mediaTicket))
+            {
+                await agents.HandleMediaAsync(context, mediaTicket.Value?.Trim('/') ?? "");
+                return;
+            }
             if (!context.Request.Path.StartsWithSegments("/api/agent/v1/connect"))
             {
                 await next();
@@ -623,10 +639,22 @@ async function load(){const [c,g]=await Promise.all([fetch('/api/service/v1/capa
             if (stream is null)
             {
                 var image = await handlers.GetAsync(id, cancellationToken);
-                if (image is not null && await agents.RequestAsync(agentId, IndexApiHandlers.NormalizeAgentPath(image.Path), cancellationToken) is { } asset)
-                    stream = thumbnails.GetOrCreate(new MemoryStream(asset.Content), id) is { } cached && File.Exists(cached) ? File.OpenRead(cached) : null;
+                if (image is not null)
+                {
+                    var key = $"photo:{agentId}:{image.Sha256 ?? image.Path}:{image.FileSize}:{image.ModifiedUtc.Ticks}:256";
+                    var bytes = await mediaPreviews.GetAsync(key, token => MediaAssetResults.PreviewAsync(agents, agentId, IndexApiHandlers.NormalizeAgentPath(image.Path), 256, token), cancellationToken);
+                    stream = new MemoryStream(bytes, writable: false);
+                }
             }
             return stream is null ? Results.NotFound() : Results.Stream(stream, "image/jpeg");
+        });
+        app.MapGet("/api/gateway/v1/previews/{id:long}", async (long id, string? agentId, CancellationToken cancellationToken) =>
+        {
+            var image = await handlers.GetAsync(id, cancellationToken);
+            if (image is null) return Results.NotFound();
+            var key = $"photo:{agentId}:{image.Sha256 ?? image.Path}:{image.FileSize}:{image.ModifiedUtc.Ticks}:1600";
+            var bytes = await mediaPreviews.GetAsync(key, token => MediaAssetResults.PreviewAsync(agents, agentId, IndexApiHandlers.NormalizeAgentPath(image.Path), 1600, token), cancellationToken);
+            return Results.File(bytes, "image/jpeg");
         });
         app.MapGet("/api/gateway/v1/face-thumbs/{id:long}", async (long id, string? agentId, CancellationToken cancellationToken) =>
         {
@@ -638,8 +666,12 @@ async function load(){const [c,g]=await Promise.all([fetch('/api/service/v1/capa
             if (image is null) return Results.NotFound();
             var box = new NormalizedFaceBox((float)reader.GetDouble(1), (float)reader.GetDouble(2), (float)reader.GetDouble(3), (float)reader.GetDouble(4));
             Stream? original = File.Exists(image.Path) ? File.OpenRead(image.Path) : null;
-            if (original is null && await agents.RequestAsync(agentId, IndexApiHandlers.NormalizeAgentPath(image.Path), cancellationToken) is { } asset)
-                original = new MemoryStream(asset.Content, writable: false);
+            if (original is null)
+            {
+                var key = $"photo:{agentId}:{image.Sha256 ?? image.Path}:{image.FileSize}:{image.ModifiedUtc.Ticks}:1600";
+                var bytes = await mediaPreviews.GetAsync(key, token => MediaAssetResults.PreviewAsync(agents, agentId, IndexApiHandlers.NormalizeAgentPath(image.Path), 1600, token), cancellationToken);
+                original = new MemoryStream(bytes, writable: false);
+            }
             if (original is null) return Results.NotFound();
             await using (original)
             {
@@ -651,8 +683,11 @@ async function load(){const [c,g]=await Promise.all([fetch('/api/service/v1/capa
         {
             var path = handlers.GetFirstVideoKeyframePath(id);
             Stream? stream = !string.IsNullOrWhiteSpace(path) && File.Exists(path) ? File.OpenRead(path) : null;
-            if (stream is null && !string.IsNullOrWhiteSpace(path) && await agents.RequestAsync(agentId, IndexApiHandlers.NormalizeAgentPath(path), cancellationToken) is { } asset)
-                stream = new MemoryStream(asset.Content, writable: false);
+            if (stream is null && !string.IsNullOrWhiteSpace(path))
+            {
+                var bytes = await mediaPreviews.GetAsync($"video:{agentId}:{path}", token => MediaAssetResults.PreviewAsync(agents, agentId, IndexApiHandlers.NormalizeAgentPath(path), 256, token), cancellationToken);
+                stream = new MemoryStream(bytes, writable: false);
+            }
             return stream is null ? Results.NotFound() : Results.Stream(stream, "image/jpeg");
         });
         app.MapPost("/api/sync/v1/images", (SyncImagesRequest request) =>
@@ -748,23 +783,17 @@ async function load(){const [c,g]=await Promise.all([fetch('/api/service/v1/capa
             File.Move(temporary, path, true);
             return Results.Json(new { count = request.Overrides.Count });
         });
-        app.MapGet("/api/gateway/v1/assets/images/{id:long}", async (long id, string? agentId, CancellationToken cancellationToken) =>
+        app.MapMethods("/api/gateway/v1/assets/images/{id:long}", ["GET", "HEAD"], async (long id, string? agentId, HttpContext context, CancellationToken cancellationToken) =>
         {
             var record = await handlers.GetAsync(id, cancellationToken);
             if (record is null) return Results.NotFound();
-            var asset = await agents.RequestAsync(agentId, IndexApiHandlers.NormalizeAgentPath(record.Path), cancellationToken);
-            return asset is null
-                ? Results.Json(new { error = "media_agent_offline", detail = "没有在线的原图代理" }, statusCode: StatusCodes.Status503ServiceUnavailable)
-                : Results.File(asset.Value.Content, asset.Value.ContentType, enableRangeProcessing: true);
+            return await MediaAssetResults.OpenAsync(agents, context, agentId, IndexApiHandlers.NormalizeAgentPath(record.Path));
         });
-        app.MapGet("/api/gateway/v1/assets/videos/{id:long}", async (long id, string? agentId, CancellationToken cancellationToken) =>
+        app.MapMethods("/api/gateway/v1/assets/videos/{id:long}", ["GET", "HEAD"], async (long id, string? agentId, HttpContext context, CancellationToken cancellationToken) =>
         {
             var record = await handlers.GetVideoAsync(id, cancellationToken);
             if (record is null) return Results.NotFound();
-            var asset = await agents.RequestAsync(agentId, IndexApiHandlers.NormalizeAgentPath(record.Path), cancellationToken);
-            return asset is null
-                ? Results.Json(new { error = "media_agent_offline", detail = "没有在线的原图代理" }, statusCode: StatusCodes.Status503ServiceUnavailable)
-                : Results.File(asset.Value.Content, "video/mp4", enableRangeProcessing: true);
+            return await MediaAssetResults.OpenAsync(agents, context, agentId, IndexApiHandlers.NormalizeAgentPath(record.Path));
         });
         app.MapGet("/api/gateway/v1/video-keyframes/{id:long}", async (long id, string? agentId, CancellationToken cancellationToken) =>
         {
@@ -1188,8 +1217,20 @@ async function load(){const [c,g]=await Promise.all([fetch('/api/service/v1/capa
             Results.Json(new GatewayVerifiedChangesResult(handlers.RemoveRecycledRecords(request.ImageIds))));
         app.MapPost("/api/gateway/v1/backup", (GatewayBackupRequest request) =>
             Results.Json(new GatewayBackupResult(handlers.Backup(request.DestinationPath))));
-        app.MapPost("/api/gateway/v1/videos/{id:long}/purge", async (long id, CancellationToken cancellationToken) => Results.Json(new PipeFlagResponse(await handlers.PurgeVideoAsync(id, cancellationToken))));
-        app.MapPost("/api/gateway/v1/images/{id:long}/purge-missing", (long id) => Results.Json(new PipeFlagResponse(handlers.PurgeMissingImage(id))));
+        app.MapPost("/api/gateway/v1/videos/{id:long}/purge", async (long id, CancellationToken cancellationToken) =>
+        {
+            var result = await handlers.PurgeVideoAsync(id, cancellationToken);
+            mediaPreviews.Clear();
+            await agents.ClearMediaCachesAsync(cancellationToken);
+            return Results.Json(new PipeFlagResponse(result));
+        });
+        app.MapPost("/api/gateway/v1/images/{id:long}/purge-missing", async (long id, CancellationToken cancellationToken) =>
+        {
+            var result = handlers.PurgeMissingImage(id);
+            mediaPreviews.Clear();
+            await agents.ClearMediaCachesAsync(cancellationToken);
+            return Results.Json(new PipeFlagResponse(result));
+        });
 
         app.Lifetime.ApplicationStopped.Register(() =>
         {

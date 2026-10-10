@@ -46,7 +46,7 @@ try
     {
         var task = (Task)gatewayType.GetMethod(method)!.Invoke(gateway, parameters)!;
         await task;
-        return task.GetType().GetProperty("Result")!.GetValue(task);
+        return task.GetType().GetProperty("Result")?.GetValue(task);
     }
 
     stage = "pinned-health";
@@ -126,6 +126,39 @@ try
     ValidatePage(videoPage, videos);
     stage = "video-thumbnail-decode";
     await ValidateThumbnail("OpenVideoThumbnailAsync", videos, true);
+    var mediaRangesVerified = false;
+    if (gatewayType.GetMethod("GetMediaInfoAsync") is not null)
+    {
+        foreach (var video in videos)
+        {
+            stage = "video-range-metadata";
+            object info;
+            try { info = (await Invoke("GetMediaInfoAsync", Id(video), true, deadline.Token))!; }
+            catch (HttpRequestException) { continue; }
+            if (!(bool)Property(info, "SupportsStreaming")!) break;
+            var length = Convert.ToInt64(Property(info, "Length"));
+            try
+            {
+                if (length <= 0) continue;
+                stage = "video-first-and-tail-range";
+                var count = (int)Math.Min(4096, length);
+                foreach (var offset in new[] { 0L, length - count })
+                {
+                    using var stream = (Stream)(await Invoke("OpenMediaRangeAsync", Id(video), true, info, offset, count, deadline.Token))!;
+                    await stream.ReadExactlyAsync(new byte[count].AsMemory(), deadline.Token);
+                }
+                mediaRangesVerified = true;
+                break;
+            }
+            finally
+            {
+                using var release = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                await Invoke("ManageMediaLeaseAsync", Property(info, "ETag"), true, release.Token);
+            }
+        }
+    }
+    if (Environment.GetEnvironmentVariable("PICER_REQUIRE_STREAMING") == "1" && !mediaRangesVerified)
+        throw new InvalidDataException();
     stage = "invalid-token-rejected";
     using var rejectedRequest = new HttpRequestMessage(HttpMethod.Get, new Uri(uri, "api/gateway/v1/images?pageSize=1"));
     rejectedRequest.Headers.Authorization = new("Bearer", "invalid-probe-" + Guid.NewGuid().ToString("N"));
@@ -135,6 +168,7 @@ try
     {
         success = true, certificateDiscovery = true, pinnedTls = true, authenticatedRead = true, invalidTokenRejected = true,
         photoIndex = true, photoDetail = true, photoThumbnailDecoded = true, videoIndex = true, videoThumbnailDecoded = true,
+        mediaRangesVerified,
         installedCoreSha256 = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(corePath))).ToLowerInvariant(),
         checkedUtc = DateTime.UtcNow
     }));

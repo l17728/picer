@@ -7,7 +7,7 @@ using Picer.Core.Logging;
 
 namespace Picer.IndexService;
 
-internal sealed class AgentConnectionRegistry
+internal sealed partial class AgentConnectionRegistry
 {
     private const int MaxTaskPayloadChars = 16 * 1024 * 1024;
     private readonly ConcurrentDictionary<string, AgentSession> _sessions = new(StringComparer.OrdinalIgnoreCase);

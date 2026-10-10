@@ -114,6 +114,11 @@ jobs:
           $service = Join-Path $env:RUNNER_TEMP 'offline-service'
           ./tools/publish-self-contained.ps1 -OutputDirectory $gui -ServiceOutputDirectory $service -SkipArchive
           # The tagged script checks each native CLI exit code and every pinned runtime asset.
+      - name: Decode and seek tail-indexed video through playback proxy
+        shell: pwsh
+        run: |
+          dotnet test tests/Picer.E2E/Picer.E2E.csproj -c Debug --filter "FullyQualifiedName~VideoStreamDecodeTests" --logger "trx;LogFileName=offline-stream-decode.trx"
+          if ($LASTEXITCODE -ne 0) { throw 'Real stream decode and seek failed' }
       - name: Package full GUI, runtime and source manifest
         shell: pwsh
         run: |

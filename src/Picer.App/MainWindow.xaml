@@ -45,6 +45,7 @@
                 <MenuItem Header="运行组件" Click="RuntimeComponents_Click"/>
                 <MenuItem Header="诊断中心" Click="Diagnostics_Click"/>
                 <MenuItem Header="扫描视频" Command="{Binding ScanVideosCommand}"/>
+                <MenuItem Header="视频播放器与读取方式…" Click="VideoPlayerSettings_Click"/>
             </MenuItem>
             <MenuItem Header="帮助(_H)" AutomationProperties.Name="帮助菜单">
                 <MenuItem Header="键盘操作帮助" InputGestureText="F1" Click="KeyboardHelp_Click"/>

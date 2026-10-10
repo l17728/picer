@@ -13,6 +13,7 @@ public sealed class ImageRecordPurger(PicerDatabase db)
         var record = db.GetImage(id);
         if (record is null) return true;
         if (requireMissing && record.Status != ImageStatus.Missing) return false;
+        Picer.Core.Gateway.PlayableMediaCache.Purge(Path.GetDirectoryName(db.DatabasePath)!);
         var hash = record.ContentSha256 ?? record.Sha256;
         var faces = new List<long>();
         using (var command = db.Command("SELECT id FROM detected_faces WHERE image_id=$id"))

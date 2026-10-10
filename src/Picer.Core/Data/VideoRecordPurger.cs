@@ -42,6 +42,7 @@ public sealed class VideoRecordPurger(PicerDatabase db, VideoPurgeCacheScope cac
         if (snapshot is null) return true;
         if (requireMissing && File.Exists(snapshot.Path)) return false;
         var root = Path.GetDirectoryName(db.DatabasePath)!;
+        Picer.Core.Gateway.PlayableMediaCache.Purge(root);
         // Remove caches before committing so a failed cleanup retains the retry keys.
         var remote = cacheScope == VideoPurgeCacheScope.Remote;
         var frameRoot = Path.Combine(root, remote ? "remote-video-keyframes" : "video-keyframes");

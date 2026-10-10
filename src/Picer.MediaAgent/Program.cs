@@ -43,7 +43,7 @@ internal static class Program
     }
 }
 
-internal sealed class AgentApplication : IDisposable
+internal sealed partial class AgentApplication : IDisposable
 {
     private readonly Picer.Core.Indexing.DirectoryMediaScanner _directoryScanner;
     private const long MaxAssetBytes = 64L * 1024 * 1024;
@@ -144,6 +144,8 @@ internal sealed class AgentApplication : IDisposable
                 var endpoint = new UriBuilder(settings.ServiceUrl) { Scheme = "wss", Path = "/api/agent/v1/connect" };
                 await socket.ConnectAsync(endpoint.Uri, cancellationToken);
                 Log($"connected; socketState={socket.State}; processId={Environment.ProcessId}");
+                _mediaPreviews.Clear();
+                _mediaLeases.Clear();
                 _icon.Text = "Picer 原图代理（已连接）";
                 await SendAsync(socket, new
                 {
@@ -215,6 +217,20 @@ internal sealed class AgentApplication : IDisposable
             if (!root.TryGetProperty("type", out var type)) continue;
             switch (type.GetString())
             {
+                case "media.cache.clear":
+                    _mediaPreviews.Clear();
+                    _mediaLeases.Clear();
+                    break;
+                case "media.release":
+                    _mediaLeases.Release(root.GetProperty("etag").GetString()!);
+                    break;
+                case "media.keepalive":
+                    _mediaLeases.Touch(root.GetProperty("etag").GetString()!);
+                    break;
+                case "media.open":
+                    requests.RemoveAll(task => task.IsCompleted);
+                    requests.Add(ServeMediaAsync(root.Clone(), cancellationToken));
+                    break;
                 case "asset.open":
                     requests.RemoveAll(task => task.IsCompleted);
                     requests.Add(ServeAssetAsync(socket, root, cancellationToken));
@@ -257,7 +273,7 @@ internal sealed class AgentApplication : IDisposable
 
     private string[] BuildCapabilities()
     {
-        var capabilities = new List<string> { "originalRead", "videoRead", "range", "ai.proxy", "directory.media" };
+        var capabilities = new List<string> { "originalRead", "videoRead", "range", "ai.proxy", "directory.media", Picer.Core.Gateway.MediaWire.Capability };
         var ffmpeg = Setting("PICER_FFMPEG_PATH");
         if (!string.IsNullOrWhiteSpace(ffmpeg) && File.Exists(ffmpeg) && File.Exists(Path.Combine(Path.GetDirectoryName(ffmpeg)!, "ffprobe.exe")))
         {
@@ -407,9 +423,13 @@ internal sealed class AgentApplication : IDisposable
                     if (!_roots.Any(root => Picer.Core.Indexing.DirectoryMediaImport.Contains(root, Path.GetFullPath(candidate))))
                         throw new UnauthorizedAccessException("video_purge_outside_configured_roots");
                 using var removal = await Picer.Core.Video.VideoOperationLifetime.BeginPurgeAsync(source, cancellationToken);
+                _mediaLeases.Clear();
+                _mediaPreviews.Clear();
                 var cacheLeases = new List<IDisposable>();
                 try
                 {
+                    foreach (var frame in purge.Keyframes.Distinct(StringComparer.OrdinalIgnoreCase))
+                        cacheLeases.Add(await Picer.Core.Video.VideoOperationLifetime.BeginPurgeAsync(frame, cancellationToken));
                     var caches = purge.Keyframes.Select(Picer.Core.Data.VideoRecordPurger.RecordedSourceCacheDirectory).Where(path => path is not null).Cast<string>()
                         .Append(Picer.Core.Data.VideoRecordPurger.SourceCacheDirectory(source)).Distinct(StringComparer.OrdinalIgnoreCase);
                     foreach (var cache in caches) cacheLeases.Add(await Picer.Core.Video.VideoOperationLifetime.BeginPurgeAsync(cache, cancellationToken));
@@ -898,6 +918,7 @@ internal sealed class AgentApplication : IDisposable
         _disposed = true;
         _stop.Cancel();
         _modelClient.Dispose();
+        _mediaLeases.Dispose();
         try { _loop?.Wait(TimeSpan.FromSeconds(2)); } catch { }
         _icon.Visible = false;
         _icon.Dispose();

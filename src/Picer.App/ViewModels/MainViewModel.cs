@@ -1225,65 +1225,27 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         var selected = SelectedImage;
         var path = selected?.Path;
-        if (selected is null || path is null) { StatusText = "请先选择图片"; return; }
+        if (selected is null || path is null) { StatusText = "请先选择图片或视频"; return; }
         if (_services.ServiceMode)
         {
-            if (_services.Gateway is not IMediaAssetGateway media)
+            if (_services.Gateway is not IMediaAssetGateway media) { StatusText = "媒体服务不可用"; return; }
+            var video = selected.VideoRecord;
+            if (video is null && media is HttpIndexGateway remote)
             {
-                StatusText = "IndexService 原图代理不可用，无法打开远程原图";
-                AppLogger.Warn($"Remote original image unavailable: gateway does not support media assets; image={selected.Record.Id}");
+                await Picer.App.Services.RemotePhotoPreview.OpenAsync(remote, selected.Record.Id, path, selected.Record.ContentSha256 ?? selected.Record.Sha256);
                 return;
             }
-
-            var video = selected.VideoRecord;
-            var mediaId = video?.Id ?? selected.Record.Id;
-            var isVideo = video is not null;
-            var fileSize = video?.FileSize ?? selected.Record.FileSize;
-            var modifiedUtc = video?.ModifiedUtc ?? selected.Record.ModifiedUtc;
-            var extension = Path.GetExtension(path);
-            if (string.IsNullOrWhiteSpace(extension) || extension.Length > 12 || extension.Any(character => !char.IsAsciiLetterOrDigit(character) && character != '.'))
-                extension = isVideo ? ".mp4" : ".img";
-            var mediaDirectory = Path.Combine(AppPaths.DataRoot, "remote-assets", isVideo ? "videos" : "images");
-            Directory.CreateDirectory(mediaDirectory);
-            var cachePath = Path.Combine(mediaDirectory, $"{(isVideo ? "video" : "image")}-{mediaId}-{fileSize}-{modifiedUtc.Ticks}{extension}");
-            var operationId = Guid.NewGuid().ToString("N");
-            try
-            {
-                if (!File.Exists(cachePath))
-                {
-                    StatusText = $"正在通过 IndexService 和本机原图代理获取{(isVideo ? "视频" : "原图")}…";
-                    AppLogger.Info($"Remote original asset request started; operation={operationId}; kind={(isVideo ? "video" : "image")}; id={mediaId}; cacheHit=false");
-                    await using var source = isVideo
-                        ? await media.OpenOriginalVideoAsync(mediaId)
-                        : await media.OpenOriginalImageAsync(mediaId);
-                    if (source is null) throw new IOException("IndexService 未能从在线原图代理取得源文件");
-                    var temporaryPath = cachePath + $".{operationId}.partial";
-                    try
-                    {
-                        await using (var output = new FileStream(temporaryPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 1024 * 128, FileOptions.Asynchronous | FileOptions.SequentialScan))
-                            await source.CopyToAsync(output);
-                        if (fileSize > 0 && new FileInfo(temporaryPath).Length != fileSize)
-                            throw new InvalidDataException("原图代理返回的文件长度与索引记录不一致");
-                        File.Move(temporaryPath, cachePath, overwrite: true);
-                    }
-                    finally { if (File.Exists(temporaryPath)) File.Delete(temporaryPath); }
-                }
-                else AppLogger.Info($"Remote original asset cache hit; operation={operationId}; kind={(isVideo ? "video" : "image")}; id={mediaId}");
-
-                Process.Start(new ProcessStartInfo(cachePath) { UseShellExecute = true });
-                StatusText = $"已通过 IndexService 原图代理打开{(isVideo ? "远程视频" : "远程原图")}（本地缓存可复用）";
-                AppLogger.Info($"Remote original asset opened; operation={operationId}; kind={(isVideo ? "video" : "image")}; id={mediaId}");
-            }
-            catch (Exception exception)
-            {
-                StatusText = $"远程{(isVideo ? "视频" : "原图")}打开失败：{exception.Message}";
-                AppLogger.Error($"Remote original asset open failed; operation={operationId}; kind={(isVideo ? "video" : "image")}; id={mediaId}", exception);
-            }
+            await Picer.App.Services.MediaPlayback.OpenAsync(media, video?.Id ?? selected.Record.Id, video is not null, path,
+                video is null ? selected.Record.ContentSha256 ?? selected.Record.Sha256 : video.Sha256);
             return;
         }
-        if (!File.Exists(path)) { StatusText = "原图片当前不可用，请运行“检查缺失”后重新定位"; return; }
-        try { Process.Start(new ProcessStartInfo(path) { UseShellExecute = true }); }
-        catch (Exception exception) { StatusText = $"无法打开图片：{exception.Message}"; }
+        if (!File.Exists(path)) { StatusText = "原文件当前不可用，请检查缺失或修复位置"; return; }
+        if (selected.VideoRecord is not null) await Picer.App.Services.MediaPlayback.OpenLocalAsync(path);
+        else
+        {
+            try { Process.Start(new ProcessStartInfo(path) { UseShellExecute = true }); }
+            catch (Exception exception) { StatusText = $"无法打开图片：{exception.Message}"; }
+        }
     }
 
     [RelayCommand]

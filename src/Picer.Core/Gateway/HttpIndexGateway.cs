@@ -11,7 +11,7 @@ using Picer.Core.Video;
 
 namespace Picer.Core.Gateway;
 
-public sealed class HttpIndexGateway : IIndexGateway, IMediaAssetGateway, IDisposable
+public sealed partial class HttpIndexGateway : IIndexGateway, IMediaAssetGateway, IRangeMediaGateway, IDisposable
 {
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
     private readonly HttpClient _client;
@@ -25,7 +25,9 @@ public sealed class HttpIndexGateway : IIndexGateway, IMediaAssetGateway, IDispo
         {
             var handler = new HttpClientHandler
             {
-                AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate | DecompressionMethods.Brotli
+                AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate | DecompressionMethods.Brotli,
+                AllowAutoRedirect = false,
+                MaxConnectionsPerServer = 12
             };
             handler.ServerCertificateCustomValidationCallback = (_, certificate, _, _) =>
             {
@@ -93,50 +95,45 @@ public sealed class HttpIndexGateway : IIndexGateway, IMediaAssetGateway, IDispo
 
     public async Task<Stream?> OpenThumbnailAsync(long imageId, CancellationToken cancellationToken = default)
     {
-        var response = await GetWithRetryAsync($"api/gateway/v1/thumbs/{imageId}", cancellationToken);
+        var response = await GetMediaWithRetryAsync($"api/gateway/v1/thumbs/{imageId}", cancellationToken);
         if (response.StatusCode == HttpStatusCode.NotFound)
         {
             response.Dispose();
             return null;
         }
-        response.EnsureSuccessStatusCode();
-        return await response.Content.ReadAsStreamAsync(cancellationToken);
+        return await OwnResponseAsync(response, cancellationToken);
     }
 
     public async Task<Stream?> OpenFaceThumbnailAsync(long faceId, string? agentId = null, CancellationToken cancellationToken = default)
     {
         var query = string.IsNullOrWhiteSpace(agentId) ? "" : $"?agentId={Uri.EscapeDataString(agentId)}";
-        var response = await GetWithRetryAsync($"api/gateway/v1/face-thumbs/{faceId}{query}", cancellationToken);
+        var response = await GetMediaWithRetryAsync($"api/gateway/v1/face-thumbs/{faceId}{query}", cancellationToken);
         if (response.StatusCode == HttpStatusCode.NotFound) { response.Dispose(); return null; }
-        await EnsureSuccessAsync(response, cancellationToken);
-        return await response.Content.ReadAsStreamAsync(cancellationToken);
+        return await OwnResponseAsync(response, cancellationToken);
     }
 
     public async Task<Stream?> OpenVideoThumbnailAsync(long videoId, string? agentId = null, CancellationToken cancellationToken = default)
     {
         var query = string.IsNullOrWhiteSpace(agentId) ? "" : $"?agentId={Uri.EscapeDataString(agentId)}";
-        var response = await GetWithRetryAsync($"api/gateway/v1/video-thumbs/{videoId}{query}", cancellationToken);
+        var response = await GetMediaWithRetryAsync($"api/gateway/v1/video-thumbs/{videoId}{query}", cancellationToken);
         if (response.StatusCode == HttpStatusCode.NotFound) { response.Dispose(); return null; }
-        await EnsureSuccessAsync(response, cancellationToken);
-        return await response.Content.ReadAsStreamAsync(cancellationToken);
+        return await OwnResponseAsync(response, cancellationToken);
     }
 
     public async Task<Stream?> OpenOriginalImageAsync(long imageId, string? agentId = null, CancellationToken cancellationToken = default)
     {
         var query = string.IsNullOrWhiteSpace(agentId) ? "" : $"?agentId={Uri.EscapeDataString(agentId)}";
-        var response = await _client.GetAsync($"api/gateway/v1/assets/images/{imageId}{query}", cancellationToken);
+        var response = await _client.GetAsync($"api/gateway/v1/assets/images/{imageId}{query}", HttpCompletionOption.ResponseHeadersRead, cancellationToken);
         if (response.StatusCode == HttpStatusCode.NotFound) { response.Dispose(); return null; }
-        await EnsureSuccessAsync(response, cancellationToken);
-        return await response.Content.ReadAsStreamAsync(cancellationToken);
+        return await OwnResponseAsync(response, cancellationToken);
     }
 
     public async Task<Stream?> OpenOriginalVideoAsync(long videoId, string? agentId = null, CancellationToken cancellationToken = default)
     {
         var query = string.IsNullOrWhiteSpace(agentId) ? "" : $"?agentId={Uri.EscapeDataString(agentId)}";
-        var response = await _client.GetAsync($"api/gateway/v1/assets/videos/{videoId}{query}", cancellationToken);
+        var response = await _client.GetAsync($"api/gateway/v1/assets/videos/{videoId}{query}", HttpCompletionOption.ResponseHeadersRead, cancellationToken);
         if (response.StatusCode == HttpStatusCode.NotFound) { response.Dispose(); return null; }
-        await EnsureSuccessAsync(response, cancellationToken);
-        return await response.Content.ReadAsStreamAsync(cancellationToken);
+        return await OwnResponseAsync(response, cancellationToken);
     }
 
     public async Task AnalyzeVideoPeopleAsync(long videoId, CancellationToken cancellationToken = default)
@@ -205,18 +202,16 @@ public sealed class HttpIndexGateway : IIndexGateway, IMediaAssetGateway, IDispo
 
     public async Task<Stream?> OpenVideoKeyframeAsync(long keyframeId, CancellationToken cancellationToken = default)
     {
-        var response = await GetWithRetryAsync($"api/gateway/v1/video-keyframes/{keyframeId}", cancellationToken);
+        var response = await GetMediaWithRetryAsync($"api/gateway/v1/video-keyframes/{keyframeId}", cancellationToken);
         if (response.StatusCode == HttpStatusCode.NotFound) { response.Dispose(); return null; }
-        await EnsureSuccessAsync(response, cancellationToken);
-        return await response.Content.ReadAsStreamAsync(cancellationToken);
+        return await OwnResponseAsync(response, cancellationToken);
     }
 
     public async Task<Stream?> OpenVideoKeyframeByOrdinalAsync(long videoId, int ordinal, CancellationToken cancellationToken = default)
     {
-        var response = await GetWithRetryAsync($"api/gateway/v1/video-keyframes/by-video/{videoId}/{Math.Max(0, ordinal)}", cancellationToken);
+        var response = await GetMediaWithRetryAsync($"api/gateway/v1/video-keyframes/by-video/{videoId}/{Math.Max(0, ordinal)}", cancellationToken);
         if (response.StatusCode == HttpStatusCode.NotFound) { response.Dispose(); return null; }
-        await EnsureSuccessAsync(response, cancellationToken);
-        return await response.Content.ReadAsStreamAsync(cancellationToken);
+        return await OwnResponseAsync(response, cancellationToken);
     }
 
     public async Task<GatewayPage> SearchAsync(SearchFilters filters, int pageSize = 200, string? cursor = null, CancellationToken cancellationToken = default)

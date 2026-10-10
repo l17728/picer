@@ -9,6 +9,7 @@ namespace Picer.App;
 
 public partial class MainWindow : Window
 {
+    private void VideoPlayerSettings_Click(object sender, RoutedEventArgs e) => Services.MediaPlayback.Configure();
     private void RepairPhotoIndex_Click(object sender, RoutedEventArgs e)
     {
         new Views.IndexRepairWindow { Owner = this }.ShowDialog();

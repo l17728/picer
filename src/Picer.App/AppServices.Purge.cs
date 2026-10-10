@@ -37,6 +37,7 @@ public static partial class AppServices
 
     public static async Task PurgeMissingImageAsync(ImageRecord record)
     {
+        await Services.MediaPlayback.StopAllAsync();
         await RemoteMirrorGate.WaitAsync();
         try
         {

@@ -4,6 +4,8 @@
 
 本文描述已实现架构。产品交互见 [产品设计](PRODUCT_DESIGN.md)，操作见 [用户指南](USER_GUIDE.md)，当前验证与暂停事项见 [开发计划](DEVELOPMENT_PLAN.md)。早期方案和历史验收保存在带日期的实施报告中，不作为当前表结构或运行状态。
 
+远程媒体新通道采用独立认证 WebSocket、1 MiB 二进制拉取、源端 256/1600 预览、读取租约和端到端 Range。GUI 通过只监听 loopback 的 Kestrel 代理向所选播放器提供临时单视频地址，服务令牌不进入播放器。原图读取槽与预览槽独立有界；缓存、租约、取消及旧协议边界见[媒体实施记录](MEDIA_STREAMING_IMPLEMENTATION_2026-10-10.md)。
+
 ## 1. 系统边界与组件
 
 Picer 是 Windows x64、.NET 8 WPF 照片和视频管理器，采用 MVVM、SQLite 和本地缓存，支持本地文件与 WebDAV。

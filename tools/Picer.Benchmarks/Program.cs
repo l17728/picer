@@ -3,6 +3,12 @@ using System.Text.Json;
 using Picer.Core.Data;
 using Picer.Core.Search;
 
+if (args is ["--media-transfer"])
+{
+    await MediaBenchmark.RunAsync();
+    return;
+}
+
 if (args.Length == 2 && args[0] == "--schema-audit")
 {
     var path = Path.GetFullPath(args[1]);

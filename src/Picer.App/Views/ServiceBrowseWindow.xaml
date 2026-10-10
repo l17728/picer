@@ -52,7 +52,7 @@
                 <DataTemplate>
                     <StackPanel Width="180" Margin="6">
                         <StackPanel.InputBindings>
-                            <MouseBinding MouseAction="LeftDoubleClick" Command="{Binding DataContext.OpenOriginalCommand, RelativeSource={RelativeSource AncestorType=ListBox}}" CommandParameter="{Binding}"/>
+                            <MouseBinding MouseAction="LeftDoubleClick" Command="{Binding DataContext.PreviewCommand, RelativeSource={RelativeSource AncestorType=ListBox}}" CommandParameter="{Binding}"/>
                         </StackPanel.InputBindings>
                         <Border Height="135" Background="{DynamicResource {x:Static SystemColors.ControlBrushKey}}"><Grid><Image Source="{Binding Thumbnail}" Stretch="Uniform"/><TextBlock Text="{Binding MediaBadge}" HorizontalAlignment="Center" VerticalAlignment="Center" FontSize="22" Foreground="{DynamicResource {x:Static SystemColors.ControlTextBrushKey}}"/></Grid></Border>
                         <TextBlock Text="{Binding Path}" TextTrimming="CharacterEllipsis" ToolTip="{Binding Path}" Foreground="{DynamicResource {x:Static SystemColors.ControlTextBrushKey}}"/>

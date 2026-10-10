@@ -10,6 +10,7 @@ public static partial class AppServices
 {
     public static async Task PurgeVideoAsync(VideoRecord record, CancellationToken token = default)
     {
+        await Services.MediaPlayback.StopAllAsync();
         using var removal = await VideoOperationLifetime.BeginPurgeAsync(record.Path, token);
         using var mutation = await AcquireIndexMutationAsync(token);
         if (!ServiceMode && SyncGateway is not null)

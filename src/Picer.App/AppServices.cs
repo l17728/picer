@@ -710,6 +710,7 @@ public static partial class AppServices
 
     public static void Shutdown()
     {
+        Services.MediaPlayback.Shutdown();
         AppLogger.Info("AppServices 关闭");
         if (ServiceMode)
         {

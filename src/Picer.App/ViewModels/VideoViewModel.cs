@@ -1,4 +1,4 @@
-﻿using System.Collections.ObjectModel;
+using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.IO;
 using System.Net.Http;
@@ -545,59 +545,16 @@ public partial class VideoViewModel(VideoRepository repository, VideoIndexServic
     [RelayCommand]
     private async Task OpenSelected()
     {
-        if (SelectedVideo is null) { StatusText = "请先选择视频"; return; }
+        var selected = SelectedVideo;
+        if (selected is null) { StatusText = "请先选择视频"; return; }
         if (remoteMode)
         {
-            if (_services.Gateway is not IMediaAssetGateway gateway)
-            {
-                StatusText = "IndexService 原图代理不可用，无法打开远程视频";
-                AppLogger.Warn($"Remote video original unavailable: gateway does not support media assets; video={SelectedVideo.Record.Id}");
-                return;
-            }
-            IsBusy = true;
-            try
-            {
-                var directory = Path.Combine(AppPaths.DataRoot, "remote-assets", "videos");
-                Directory.CreateDirectory(directory);
-                var extension = Path.GetExtension(SelectedVideo.Record.Path);
-                if (string.IsNullOrWhiteSpace(extension) || extension.Length > 12 || extension.Any(character => !char.IsAsciiLetterOrDigit(character) && character != '.'))
-                    extension = ".mp4";
-                var video = SelectedVideo.Record;
-                var target = Path.Combine(directory, $"video-{video.Id}-{video.FileSize}-{video.ModifiedUtc.Ticks}{extension}");
-                var operationId = Guid.NewGuid().ToString("N");
-                if (!File.Exists(target))
-                {
-                    StatusText = $"正在通过原图代理下载视频：{SelectedVideo.FileName}";
-                    AppLogger.Info($"Remote original video request started; operation={operationId}; video={video.Id}; cacheHit=false");
-                    await using var stream = await gateway.OpenOriginalVideoAsync(video.Id);
-                    if (stream is null) throw new IOException("原图代理未返回视频");
-                    var temporary = target + $".{operationId}.partial";
-                    try
-                    {
-                        await using (var output = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None, 1024 * 128, FileOptions.Asynchronous | FileOptions.SequentialScan))
-                            await stream.CopyToAsync(output);
-                        if (video.FileSize > 0 && new FileInfo(temporary).Length != video.FileSize)
-                            throw new InvalidDataException("代理返回的视频长度与索引记录不一致");
-                        File.Move(temporary, target, overwrite: true);
-                    }
-                    finally { if (File.Exists(temporary)) File.Delete(temporary); }
-                }
-                else AppLogger.Info($"Remote original video cache hit; operation={operationId}; video={video.Id}");
-                Process.Start(new ProcessStartInfo(target) { UseShellExecute = true });
-                StatusText = $"已通过 IndexService 原图代理打开远程视频（本地缓存可复用）：{SelectedVideo.FileName}";
-                AppLogger.Info($"Remote original video opened; operation={operationId}; video={video.Id}");
-            }
-            catch (Exception exception)
-            {
-                StatusText = $"远程视频打开失败：{CompactError(exception.Message)}";
-                AppLogger.Error($"Remote original video open failed; video={SelectedVideo.Record.Id}", exception);
-            }
-            finally { IsBusy = false; }
+            if (_services.Gateway is not IMediaAssetGateway gateway) { StatusText = "媒体服务不可用"; return; }
+            await Picer.App.Services.MediaPlayback.OpenAsync(gateway, selected.Record.Id, true, selected.Record.Path, selected.Record.Sha256);
             return;
         }
-        if (!File.Exists(SelectedVideo.Record.Path)) { StatusText = "原视频当前不可用，请重新扫描来源"; return; }
-        try { Process.Start(new ProcessStartInfo(SelectedVideo.Record.Path) { UseShellExecute = true }); }
-        catch (Exception exception) { StatusText = $"无法打开视频：{exception.Message}"; }
+        if (!File.Exists(selected.Record.Path)) { StatusText = "原视频当前不可用，请重新扫描来源"; return; }
+        await Picer.App.Services.MediaPlayback.OpenLocalAsync(selected.Record.Path);
     }
 
     [RelayCommand]

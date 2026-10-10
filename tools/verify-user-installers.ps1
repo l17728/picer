@@ -37,6 +37,9 @@ foreach ($product in @(
             if (-not (Test-Path -LiteralPath (Join-Path $destination $file) -PathType Leaf)) { throw "Installed prerequisite missing: $file" }
         }
         $agentRoot = if ($product.Agent) { Join-Path $destination $product.Agent } else { $destination }
+        if ($product.Agent -and -not (Test-Path -LiteralPath (Join-Path $destination 'Microsoft.AspNetCore.Server.Kestrel.Core.dll') -PathType Leaf)) {
+            throw 'Installed GUI playback proxy runtime is missing.'
+        }
         $ffmpeg = Join-Path $agentRoot 'tools/ffmpeg/ffmpeg.exe'
         $ffprobe = Join-Path $agentRoot 'tools/ffmpeg/ffprobe.exe'
         if (-not (Test-Path -LiteralPath $ffmpeg) -or -not (Test-Path -LiteralPath $ffprobe)) { throw 'Bundled video tools missing.' }
