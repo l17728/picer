@@ -10,7 +10,7 @@
 | [用户指南](USER_GUIDE.md) | 安装、目录照片和视频描述、搜索、移动修复、手动清除 |
 | [产品设计](PRODUCT_DESIGN.md) | 用户流程、功能范围和交互约束 |
 | [架构规格](SDD.md) | 数据模型、同步、模型服务、安全边界和数据库迁移 |
-| [开发计划](DEVELOPMENT_PLAN.md) | 已完成代码、新增性能计划与暂停的真实环境验收 |
+| [开发计划](DEVELOPMENT_PLAN.md) | 已完成代码、性能交付与暂停的真实环境验收 |
 | [性能说明](PERFORMANCE.md) | 扫描、并发、缓存和性能验证范围 |
 | [服务部署说明](../server/README.md) | ModelServer 与 IndexService 的部署和配置 |
 | [Linux 升级流程](INDEX_SERVICE_AUTOMATED_UPGRADE_2026-09-30.md) | 备份、升级、健康检查和回滚 |
@@ -18,10 +18,11 @@
 
 ## 最近实现与验证
 
-- [安装实现与验收](INSTALLER_IMPLEMENTATION_2026-10-10.md)：v1.2.1（0d50de4）CI/Release 各 623 单元、86 WPF 全通过；GUI/代理安装生命周期及安装后的真实索引、缩略图读取通过，离线资产和公开状态以该记录为准。
-- [当前能力状态](CURRENT_CAPABILITIES_2026-10-09.md)：本机 5 处 159 文件核验、GUI/Agent 响应、远端 20261010T024817097Z 与三数据库 schema 45 验证。
-- [性能与新增计划](PERFORMANCE.md)：用户新增视频流式读取/播放，尚未实现，不计作已交付能力。
-- [历史发布部署](RELEASE_DEPLOYMENT_2026-10-09.md)：v1.1.2 已公开及此前 CI、备份、部署证据。
+- [远程媒体实施与验收](MEDIA_STREAMING_IMPLEMENTATION_2026-10-10.md)：照片预览、二进制 Range、播放器策略和有界并发；v1.3.5 的 CI/Release 各 639 单元、88 桌面测试通过，离线包通过真实视频解码与跳转验证；最终发布及部署证据以该记录为准。
+- [当前能力状态](CURRENT_CAPABILITIES_2026-10-09.md)：本机五处程序、ModelServer、远端 IndexService 及三数据库 schema 45 的验证状态。
+- [性能说明](PERFORMANCE.md)：已实现的远程媒体读取与播放、测量条件及验收边界。
+- [历史安装实现与验收](INSTALLER_IMPLEMENTATION_2026-10-10.md)：v1.2.1 安装器、首次配对、离线资产及历史发布证据。
+- [历史发布部署](RELEASE_DEPLOYMENT_2026-10-09.md)：v1.1.2 已发布及此前 CI、备份、部署证据。
 - [视频 USN 修复](VIDEO_HASH_USN_FIX_2026-10-09.md)、[代码复查](RESIDUAL_CODE_FIXES_2026-10-09.md)、[四项代码补齐](REMAINING_CODE_IMPLEMENTATION_2026-10-09.md)：此前已实现能力的历史证据。
 
 ## 历史文档的使用规则

@@ -1,6 +1,6 @@
 # 远程媒体读取、预览与播放实施
 
-更新：2026-10-10。对应 `PERFORMANCE.md` 的五项改造，数据库仍为 schema 45，不改写原始媒体。测试和发布证据在完成后记录于本文。
+更新：2026-10-10。对应 `PERFORMANCE.md` 的五项改造已完成，v1.3.5 已正式发布并部署。数据库仍为 schema 45，不改写原始媒体。最终测试和发布证据见文末；仓库为私有，下载需要访问权限。
 
 ## 交付内容
 
@@ -75,4 +75,34 @@ v1.3.2 的 Release 38037373476 成功，重复通过 638 项单元和 88 项桌�
 
 这是一轮实际线路读吞吐对照，不是显示首帧测试，也不是稳定硬件上的三次中位数。当前网络波动大，4 路本次较快，2 路并未显著改善；保留默认 2 路和用户可选 4 路，不把这轮结果宣传为固定加速倍数。客户端字节列不包含协议开销，不能直接当成链路流量计数。
 
+v1.3.4 的 Release 38041568930 通过 639/639 单元、88/88 桌面及两个安装器验收，但 CI 38041565715 两次遇到原有证书发现测试的 TLS 关闭重置。已确认失败发生在 TLS 关闭后的服务端读取，异常为 ConnectionReset；未采集报文，因此未将未读 TLS 1.3 会话票据等具体触发原因定论。产品发现过程本身已显式发送 close_notify，且未发送 HTTP。测试现只接受明确的 ConnectionReset，并核对应用字节缓冲区未被写入，其他 I/O 错误及任何实际 HTTP 数据仍失败。严格构建和 12/12 配对定向测试通过。v1.3.4 保持未公开草稿，不再依靠反复重跑获取偶然通过。
+
+最终候选为 v1.3.5（a6c319a）。与 db89b54 比较，仅上述测试及文档变化；产品代码、远端部署二进制和真实网络证据继续有效。完整 CI、Release 和离线验证对该新标签重新执行。
+
 不自动安装播放器，不承诺所有播放器或编码可播放。不进行隐式转码或修改原视频；播放器无法解码时下载也未必能解决编码兼容性。多 Agent 同时在线且未指定来源时拒绝猜测。四项已暂停的历史 P2 质量/硬件验收不在本轮恢复。
+
+## v1.3.5 最终发布与部署
+
+[v1.3.5](https://github.com/l17728/picer/releases/tag/v1.3.5) 于 2026-10-10 10:27:09 UTC（北京时间 18:27:09）正式发布，来源提交 `a6c319a817373641d4e4fa44642d1716a2efd243`。Release 已脱离草稿且不是预发布；仓库为私有，下载仍需访问权限，不能将“发布”理解为匿名公开下载。
+
+[CI 38042807569](https://github.com/l17728/picer/actions/runs/38042807569) 与 [Release 38042810432](https://github.com/l17728/picer/actions/runs/38042810432) 均成功，下载 TRX 独立核对各自 639/639 单元、88/88 桌面，失败及未执行均为零。两个安装器通过安装、重复升级、卸载、数据保留及包内 FFmpeg/FFprobe 执行验证；分别从安装目录读取真实索引、解码照片和视频缩略图，并通过 HEAD、首尾 Range 与租约校验，`mediaRangesVerified=true`。
+
+[Offline 38043813405](https://github.com/l17728/picer/actions/runs/38043813405) 通过固定运行资源 SHA-256、许可证门禁和真实视频解码跳转测试（1/1），补齐完整 GUI 与 runtime 包。共 10 个软件包、15 项资产。全部软件包的构建校验清单与上传资产摘要一致；三个本机部署 ZIP 另经实际下载并计算完整 SHA-256。统一 `SHA256SUMS.txt` 覆盖另外 14 项资产，其自身 SHA-256 为 `83adc52561e59465a7f2e90ebb9667f4eb86e7f2291f78c33f33f21803a16b46`，上传后再次核对一致。
+
+GUI 安装包 `Picer-v1.3.5-win-x64-setup.exe` 为 **325,997,754 字节**，约 326.0 MB / 310.9 MiB，SHA-256 为 `14338f3f9776ef059094d94172fcd8ffafff49399c886c473dd44923cd221128`。GUI 包含同包代理但不为其注册 Windows 登录自启，新装 GUI 默认禁用本机代理；此前启用代理且配置服务地址、可解析本机源目录/修复授权根时才尝试自动启动。远程模式不是自动停用既有媒体源代理的信号，独立代理的登录自启单独管理，详见[安装指南](RELEASE_GUIDE.md)。
+
+本机以下五处同步最终 CI 程序包，4585 个文件核对通过，仅替换 53 个变化文件：
+
+- `D:\PicerData\releases\Picer-win-x64`
+- `D:\picer\artifacts\p2-followup-release-20261009\Picer-win-x64`
+- `D:\picer\artifacts\p2-followup-release-20261009\Picer.IndexService-win-x64`
+- `D:\picer\artifacts\release\Picer-win-x64`
+- `D:\picer\artifacts\release\Picer.IndexService-win-x64`
+
+程序备份位于 `artifacts/v1.3.5-program-backup-20261010T101340`，关闭写入者后的 DB/WAL/SHM 备份位于 `artifacts/deployment-backup-20261010T102530`。GUI 18992 与 Agent 304 恢复响应；进程号仅为此次验收快照。两个本机数据库仍为 schema 45，quick_check、外键和备份记录数量一致。最终安装目录于 10:26:50 UTC 再次通过强制流式真实服务探针，加载的 Core SHA-256 为 `d713faae3caca1d9508584dc0fe73a4a66496ba581317ac70886e436ca4a0eb4`，与安装器验证一致。
+
+ModelServer 更新到最终 Windows 包，8091 健康，DLL 与发布包 SHA-256 一致；备份位于 `D:\VL-models\service-backups\modelserver-20261010T101817110`，更新后恢复监控程序。远端 IndexService 沿用已验证的 `20261010T091658645Z` / `db89b54` 产品代码，后续最终标签只调整测试和文档，未虚构新的远端部署身份。远端 schema 45、完整性、外键和备份数量核验结果继续有效。
+
+本机证据汇总：`artifacts/final-v1.3.5/final-evidence.json`、`artifacts/deploy/v1.3.5-program-checks.json`、`artifacts/deploy/local-db-v1.3.5.json`、`artifacts/deploy/media-installed-streaming-v1.3.5.log`；历史失败和未公开候选均保留。本轮性能代码、测试、安装、部署和发布已完成，四项原先暂停的外部 P2 验收保持暂停。
+
+按用户要求，正式发布后另从 Release 下载 GUI 安装包至 `D:\Picer-v1.3.5-win-x64-setup.exe`，完整文件大小和 SHA-256 均与上述发布资产一致；结果保存于 `artifacts/final-v1.3.5/root-installer.json`。

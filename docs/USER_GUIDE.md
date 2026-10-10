@@ -1,10 +1,10 @@
 # Picer 用户指南
 
-更新：2026-10-10；schema 45。v1.2.1（0d50de4）的 CI 与 Release 均通过严格构建、623 项单元和 86 项 WPF 测试；GUI/代理安装器的安装、升级、卸载、数据保留及安装后的真实服务读取已验证。下载资产与公开状态见[安装指南](RELEASE_GUIDE.md)及[验收记录](INSTALLER_IMPLEMENTATION_2026-10-10.md)。
+更新：2026-10-10；schema 45。[v1.3.5](https://github.com/l17728/picer/releases/tag/v1.3.5)（a6c319a）已正式发布，schema 45。仓库为私有，下载需要仓库访问权限；正式发布不表示匿名公开下载。[CI 38042807569](https://github.com/l17728/picer/actions/runs/38042807569) 与 [Release 38042810432](https://github.com/l17728/picer/actions/runs/38042810432) 均通过 639 项单元和 88 项桌面测试。两个安装器的安装、重复升级、卸载、数据保留及真实服务读取均通过；离线包通过固定资源、许可证及真实视频解码跳转验证。失败候选、重跑原因、实测性能和最终资产证据见[媒体实施记录](MEDIA_STREAMING_IMPLEMENTATION_2026-10-10.md)。
 
-下载 [v1.2.1 正式 Release](https://github.com/l17728/picer/releases/tag/v1.2.1) 的 GUI 或独立代理一键安装器，详见[安装说明](RELEASE_GUIDE.md)。该版本共 10 个软件包、15 项资产，下载后核对统一 SHA256SUMS；v1.1.2 旧包不包含本轮新安装契约。
+下载 [v1.3.5 正式 Release](https://github.com/l17728/picer/releases/tag/v1.3.5) 的 GUI 或独立驻留程序一键安装器，详见[安装说明](RELEASE_GUIDE.md)。GUI 安装器为 325,997,754 字节（约 326.0 MB）；共 10 个软件包、15 项资产，下载后核对统一 SHA256SUMS。
 
-实际部署已完成：本机 5 处 159 文件哈希核验，GUI 11600/Agent 10696 响应；远端部署 20261010T024817097Z（来源 07852f2567aa），ModelServer 8091 健康。三个数据库 schema 45 的完整性、外键及数量与升级备份一致，详细记录见[能力状态](CURRENT_CAPABILITIES_2026-10-09.md)。
+本机 5 个安装位置已同步最终发布产物，4585 个文件完成哈希核对；GUI 与驻留程序已恢复，ModelServer 8091 健康。远端部署 20261010T091658645Z 来自 db89b54，产品代码与最终标签一致，后续提交仅调整测试及文档。三数据库仍为 schema 45，完整性、外键及升级备份数量核对通过。实际安装目录的强制流式探针通过 HEAD、首尾 Range 和租约校验；详见[媒体实施记录](MEDIA_STREAMING_IMPLEMENTATION_2026-10-10.md)。
 
 ## 远程预览与视频播放
 
@@ -146,6 +146,6 @@ JSON/CSV 报告默认只包含组件状态、数据库状态、数量、存储�
 
 管理员可运行 `tools/verify-platform-services.ps1` 检查本机 ModelServer 和 HTTPS IndexService。远端 IndexService 不可用时，客户端仅对健康、列表和搜索请求进行有限重试；训练任务重启后显示为“可恢复”，用户可以重新提交，写操作不会自动重复。
 
-## 新增视频性能计划
+## 视频性能与验收范围
 
-视频流式读取/播放是用户新增计划，目前尚未实现；见[性能计划](PERFORMANCE.md)。现有视频功能不代表已经支持该新传输/播放方式。四项旧 P2 质量与硬件验收仍暂停。
+视频流式读取/播放及其余远程媒体性能改造已随 v1.3.5 交付，使用入口见本页“远程预览与视频播放”，验证条件和实测结果见[性能说明](PERFORMANCE.md)及[媒体实施记录](MEDIA_STREAMING_IMPLEMENTATION_2026-10-10.md)。播放器和视频编码的兼容性仍有边界。四项旧 P2 质量与硬件验收仍暂停。

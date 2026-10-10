@@ -1,6 +1,6 @@
 # Picer 软件设计说明（SDD）
 
-版本：1.5；更新：2026-10-10；SQLite schema 45。GUI 与驻留代理采用自包含安装和首次连接配对，远程 GUI 按服务模式跳过本地模型预检。本机五处程序、ModelServer 和远端 IndexService 已更新，三数据库完整性与升级前数量已核验。当前发布、安装和部署证据统一见[安装实现与验收](INSTALLER_IMPLEMENTATION_2026-10-10.md)；旧版本记录保留为历史。
+版本：1.5；更新：2026-10-10；SQLite schema 45。GUI 与驻留代理采用自包含安装和首次连接配对，远程 GUI 按服务模式跳过本地模型预检。本机五处程序、ModelServer 和远端 IndexService 已更新，三数据库完整性与升级前数量已核验。当前 v1.3.5 发布、安装和部署证据统一见[媒体实施记录](MEDIA_STREAMING_IMPLEMENTATION_2026-10-10.md)；旧版本记录保留为历史。
 
 本文描述已实现架构。产品交互见 [产品设计](PRODUCT_DESIGN.md)，操作见 [用户指南](USER_GUIDE.md)，当前验证与暂停事项见 [开发计划](DEVELOPMENT_PLAN.md)。早期方案和历史验收保存在带日期的实施报告中，不作为当前表结构或运行状态。
 
