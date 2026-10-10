@@ -46,7 +46,9 @@ public static class MediaPlayback
             if (choose.ShowDialog() != true) return Task.CompletedTask;
             settings = choose.Selection!;
         }
-        var executable = settings.ResolveExecutable(Path.GetExtension(path));
+        // Local files must honor the complete Windows association (including
+        // packaged applications and association-specific arguments).
+        var executable = settings.Executable.Trim();
         try { Launch(executable, path, executable.Length > 0 ? VideoPlayerSettings.Identify(executable) : VideoPlayerKind.Unknown)?.Dispose(); }
         catch (Exception exception) { MessageBox.Show("无法打开播放器：" + exception.GetType().Name, "播放失败"); }
         return Task.CompletedTask;
@@ -131,7 +133,7 @@ public static class MediaPlayback
                     { if (output.Length + read > 20L * 1024 * 1024 * 1024) throw new IOException("媒体超过缓存容量。"); await output.WriteAsync(buffer.AsMemory(0, read), token); }
                 }
             }, stop.Token);
-            Launch(executable, path, kind)?.Dispose();
+            Launch(string.IsNullOrWhiteSpace(settings.Executable) ? "" : executable, path, kind)?.Dispose();
         }
         catch (OperationCanceledException) when (stop.IsCancellationRequested) { }
         catch (Exception exception)
