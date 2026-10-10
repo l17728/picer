@@ -1,23 +1,23 @@
-# Picer v1.3.5 安装指南
+# Picer 安装指南
 
-更新：2026-10-10。当前正式版本为 [v1.3.5](https://github.com/l17728/picer/releases/tag/v1.3.5)，已完成发布及部署。仓库为私有，下载需要仓库访问权限；Release 非草稿不表示匿名公开下载。当前用户安装无需管理员权限，目标系统为 Windows 10/11 x64。
+更新：2026-10-10。从[最新正式 Release](https://github.com/l17728/picer/releases/latest) 下载，版本以资产名和包内清单为准。本指南适用于当前安装器；本次性能改造与发布验证见[实施记录](PERFORMANCE_FOLLOWUP_IMPLEMENTATION_2026-10-10.md)，下文旧版本测试仅为历史证据。仓库为私有，下载需要访问权限。当前用户安装无需管理员权限，目标系统为 Windows 10/11 x64。
 
 ## 普通 Windows 用户选择哪个安装器
 
 | 资产 | 安装内容与用途 |
 | --- | --- |
-| Picer-v1.3.5-win-x64-setup.exe | GUI 与同包 MediaAgent；中文当前用户安装，无需管理员权限 |
-| Picer.MediaAgent-v1.3.5-win-x64-setup.exe | 仅安装原媒体所在电脑的驻留代理；中文当前用户安装，无需管理员权限 |
-| Picer-v1.3.5-win-x64-binary.zip | GUI 解压包，适合手动部署 |
-| Picer.MediaAgent-v1.3.5-win-x64-binary.zip | 独立代理解压包 |
-| Picer.IndexService-v1.3.5-win-x64-binary.zip / Picer.IndexService-v1.3.5-linux-x64-binary.tar.gz | Windows/Linux 索引服务，管理员手动配置 |
-| Picer.ModelServer-v1.3.5-win-x64-binary.zip / Picer.ModelServer-v1.3.5-linux-x64-binary.tar.gz | 模型 API、worker 与 setup-modelserver.py 环境准备脚本 |
-| Picer-v1.3.5-win-x64-full.zip / Picer-runtime-v1.3.5-win-x64.zip | 完整 GUI 与固定 runtime 离线包；纯远程 GUI 无需这些模型资源 |
+| `Picer-{版本}-win-x64-setup.exe` | GUI 与同包 MediaAgent；中文当前用户安装，无需管理员权限 |
+| `Picer.MediaAgent-{版本}-win-x64-setup.exe` | 仅安装原媒体所在电脑的驻留代理；中文当前用户安装，无需管理员权限 |
+| `Picer-{版本}-win-x64-binary.zip` | GUI 解压包，适合手动部署 |
+| `Picer.MediaAgent-{版本}-win-x64-binary.zip` | 独立代理解压包 |
+| `Picer.IndexService-{版本}-win-x64-binary.zip` / `Picer.IndexService-{版本}-linux-x64-binary.tar.gz` | Windows/Linux 索引服务，管理员手动配置 |
+| `Picer.ModelServer-{版本}-win-x64-binary.zip` / `Picer.ModelServer-{版本}-linux-x64-binary.tar.gz` | 模型 API、worker 与 setup-modelserver.py 环境准备脚本 |
+| `Picer-{版本}-win-x64-full.zip` / `Picer-runtime-{版本}-win-x64.zip` | 完整 GUI 与固定 runtime 离线包；纯远程 GUI 无需这些模型资源 |
 | SHA256SUMS.txt | 实际发布资产的完整 SHA-256 校验清单 |
 
 两个安装器都包含自包含 .NET 和应用目录内的 MSVC CRT，不要求用户另外安装 .NET 或 VC++ Redistributable。GUI 内含代理，代理目录下 tools/ffmpeg 提供 ffmpeg.exe、ffprobe.exe 及 LICENSE，独立代理使用同样的相对目录；程序自动发现工具。普通 GUI/代理用户不再需要手动下载视频工具或设置工具路径。
 
-v1.3.5 GUI 同时包含播放代理所需的 ASP.NET Core/Kestrel 库，无需额外安装运行时。远程照片预览、分块下载和所选播放器的流式播放需要升级 GUI、Agent、IndexService；自动模式对识别到的 VLC/mpv 尝试流式，其他播放器默认下载。播放器由用户选择已安装的程序；其编码支持取决于播放器本身。详见[媒体实施记录](MEDIA_STREAMING_IMPLEMENTATION_2026-10-10.md)。
+GUI 包含播放代理所需的 ASP.NET Core/Kestrel 库，无需额外安装运行时。远程照片预览、分块下载、流式播放以及新连接复用、源端描述预处理、后台一致性检查需要配套升级 GUI、Agent、IndexService。自动模式对识别到的 VLC/mpv 尝试流式，其他播放器默认下载。播放器由用户选择已安装的程序；其编码支持取决于播放器本身。后台维护不扫描新文件，不影响描述任务启动。
 
 目标系统为常规 Windows 10/11 x64。安装器目前没有代码签名凭据，因此未签名，Windows 可能显示“发布者未知”或安全提示；一键安装不绕过系统保护，应从正式 Release 下载并核对哈希。Windows N/Server 的 Media Foundation 等系统可选组件不随包提供，不能承诺这些特殊系统无需额外系统配置即可具备全部本地媒体能力。
 
@@ -102,7 +102,7 @@ GUI 安装器为 **325,997,754 字节（约 326.0 MB / 310.9 MiB）**，包含 G
 14338f3f9776ef059094d94172fcd8ffafff49399c886c473dd44923cd221128
 ```
 
-下载后用 `Get-FileHash -Algorithm SHA256 <安装包路径>` 与 Release 的统一 `SHA256SUMS.txt` 核对。此清单覆盖另外 14 项资产；不同版本不能混用校验值。此次实际部署机已另存一份到 `D:\Picer-v1.3.5-win-x64-setup.exe`，该路径不是用户的默认安装位置。
+下载后用 `Get-FileHash -Algorithm SHA256 <安装包路径>` 与对应 Release 的统一 `SHA256SUMS.txt` 核对；不同版本不能混用校验值。安装器下载位置由用户选择，不是程序默认安装目录。
 
 ## 选择运行方式
 
