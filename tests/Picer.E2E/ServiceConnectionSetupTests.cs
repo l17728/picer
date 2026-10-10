@@ -1,10 +1,12 @@
 using System.IO;
 using System.Net;
-using System.Net.Security;
-using System.Net.Sockets;
+using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
-using System.Text;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Logging;
 using System.Windows.Controls;
 using Picer.App;
 using Picer.Core.Gateway;
@@ -130,37 +132,29 @@ public sealed class ServiceConnectionSetupTests
         using var generated = request.CreateSelfSigned(DateTimeOffset.UtcNow.AddMinutes(-1), DateTimeOffset.UtcNow.AddHours(1));
         using var certificate = new X509Certificate2(generated.Export(X509ContentType.Pfx));
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(20));
-        using var listener = new TcpListener(IPAddress.Loopback, 0);
-        listener.Start();
-        var url = $"https://127.0.0.1:{((IPEndPoint)listener.LocalEndpoint).Port}";
-        var requests = new List<string>();
-        var server = Task.Run(async () =>
+        var requests = new ConcurrentQueue<(string Method, string Path, string Authorization)>();
+        var builder = WebApplication.CreateSlimBuilder();
+        builder.Logging.ClearProviders();
+        builder.WebHost.ConfigureKestrel(options =>
+            options.Listen(IPAddress.Loopback, 0, endpoint => endpoint.UseHttps(certificate)));
+        await using var server = builder.Build();
+        server.Use(async (context, next) =>
         {
-            for (var connection = 0; connection < 3; connection++)
-            {
-                using var tcp = await listener.AcceptTcpClientAsync(deadline.Token);
-                using var tls = new SslStream(tcp.GetStream());
-                await tls.AuthenticateAsServerAsync(new SslServerAuthenticationOptions { ServerCertificate = certificate }, deadline.Token);
-                using var reader = new StreamReader(tls, Encoding.ASCII, false, 1024, leaveOpen: true);
-                var headers = new StringBuilder();
-                while (await reader.ReadLineAsync(deadline.Token) is { Length: > 0 } line) headers.AppendLine(line);
-                requests.Add(headers.ToString());
-                if (connection == 0) continue; // Discovery closes after TLS, without HTTP or token.
-                var body = Encoding.UTF8.GetBytes("{\"status\":\"ok\",\"schemaVersion\":45,\"minClientVersion\":\"1\",\"serviceVersion\":\"test\"}");
-                var header = Encoding.ASCII.GetBytes($"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {body.Length}\r\nConnection: close\r\n\r\n");
-                await tls.WriteAsync(header, deadline.Token);
-                await tls.WriteAsync(body, deadline.Token);
-                await tls.FlushAsync(deadline.Token);
-            }
-        }, deadline.Token);
+            requests.Enqueue((context.Request.Method, context.Request.Path.Value ?? "", context.Request.Headers.Authorization.ToString()));
+            await next(context);
+        });
+        server.MapGet("/health", () => Results.Json(new GatewayHealth("ok", 45, "1", "test")));
         var root = Path.Combine(Path.GetTempPath(), "picer-tls-pairing-" + Guid.NewGuid().ToString("N"));
         var oldToken = Environment.GetEnvironmentVariable("PICER_INDEX_SERVICE_TOKEN");
         try
         {
+            await server.StartAsync(deadline.Token);
+            var url = Assert.Single(server.Urls);
             Environment.SetEnvironmentVariable("PICER_INDEX_SERVICE_TOKEN", null);
             var pin = await MediaAgentSettings.DiscoverSpkiAsync(url, deadline.Token);
             Assert.Equal(HttpIndexGateway.ComputeSpkiPin(certificate), pin);
             Assert.NotEqual(32, pin.Length);
+            Assert.Empty(requests); // Discovery performs TLS only, not even a credential-free HTTP request.
             using (var gateway = new HttpIndexGateway(url, "synthetic-pairing-token", pin))
                 Assert.Equal("ok", (await gateway.GetHealthAsync(deadline.Token)).Status);
             var endpoint = Path.Combine(root, "service-endpoint.json");
@@ -168,15 +162,19 @@ public sealed class ServiceConnectionSetupTests
             var loaded = IndexBackendConfig.LoadConfiguredServiceEndpoint(endpoint, cipher => ProtectedData.Unprotect(cipher, null, DataProtectionScope.CurrentUser))!;
             using (var gateway = new HttpIndexGateway(loaded.BaseUrl!, loaded.Token!, loaded.SpkiPin))
                 Assert.Equal(45, (await gateway.GetHealthAsync(deadline.Token)).SchemaVersion);
-            await server;
-            Assert.Equal("", requests[0]);
-            Assert.All(requests.Skip(1), headers => Assert.Contains("Authorization: Bearer synthetic-pairing-token", headers));
+            Assert.Equal(2, requests.Count);
+            Assert.All(requests, captured =>
+            {
+                Assert.Equal("GET", captured.Method);
+                Assert.Equal("/health", captured.Path);
+                Assert.Equal("Bearer synthetic-pairing-token", captured.Authorization);
+            });
+            Assert.Equal(pin, loaded.SpkiPin);
+            Assert.Equal("synthetic-pairing-token", loaded.Token);
         }
         finally
         {
             deadline.Cancel();
-            listener.Stop();
-            try { await server; } catch (Exception) when (deadline.IsCancellationRequested) { }
             Environment.SetEnvironmentVariable("PICER_INDEX_SERVICE_TOKEN", oldToken);
             if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
         }
