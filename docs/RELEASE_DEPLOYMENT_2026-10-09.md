@@ -9,13 +9,17 @@
 - [Release 工作流](https://github.com/l17728/picer/actions/runs/37928114114)：严格构建、两套非 RuntimeComponent 测试、六个组件打包及草稿上传全部成功。
 - 第一轮 CI 在 577 项通过后触发 60 秒无测试事件超时；第二轮在测试执行前触发 30 秒宿主连接超时。分别改为 10 分钟挂起诊断和 180 秒连接等待，保留全部测试。原始失败日志保留在本机 `artifacts/ci-run-*`。
 
-补充候选验证：`1f0e376` 修复视频内容缓存，采用卷日志代次与文件 USN；无法取得可信签名时重新读取内容。[v1.1.1 CI](https://github.com/l17728/picer/actions/runs/37932196317) 通过 **610/610 + 73/73**。发布流程重复测试时暴露目录通知测试的异步时序问题；现保留数量、路径和完整性断言，采用最长 3 秒等待通知收敛，严格构建及 6 项定向测试通过。最终候选调整为 `v1.1.2`，待修正提交完整 CI 通过后创建标签。
+补充候选验证：`1f0e376` 修复视频内容缓存，采用卷日志代次与文件 USN；无法取得可信签名时重新读取内容。[v1.1.1 CI](https://github.com/l17728/picer/actions/runs/37932196317) 通过 **610/610 + 73/73**。发布流程重复测试时暴露目录通知测试的异步时序问题；保留数量、路径和完整性断言，采用最长 3 秒等待通知收敛，严格构建及 6 项定向测试通过。最终 `v1.1.2` 指向 `c8daa9c`，完整 CI 与 [Release 重复验证](https://github.com/l17728/picer/actions/runs/38008954566) 均通过 **610/610 + 73/73**。
 
 ## 发布资产
 
-最终 `v1.1.2` 的组件与安装方式见[发布安装指南](RELEASE_GUIDE.md)。六个二进制包由 GitHub Actions 生成：Windows GUI（含代理）、独立 Windows MediaAgent、Windows/Linux IndexService、Windows/Linux ModelServer。另补充经固定运行组件检查的 Windows 完整包、版本化 runtime 包与独立校验清单。最终公开状态与资产核验在本轮收尾时记录。
+[v1.1.2 Release](https://github.com/l17728/picer/releases/tag/v1.1.2) 已于 2026-10-10 08:45（北京时间）正式公开，非草稿、非预发布。组件与安装方式见[发布安装指南](RELEASE_GUIDE.md)。六个二进制包由 GitHub Actions 生成：Windows GUI（含代理）、独立 Windows MediaAgent、Windows/Linux IndexService、Windows/Linux ModelServer。另包含经固定运行组件检查的 Windows 完整 GUI 包与版本化 runtime 包，共八个程序/运行组件包；13 项资产均已上传，统一 SHA256SUMS.txt 覆盖其余资产。
 
-完整包的固定运行组件由 `tools/publish-self-contained.ps1` 校验文件大小、SHA-256、许可证和本机依赖；隔离 GUI 冒烟确认使用包内 `coreclr.dll`，窗口正常响应。固定 runtime 包只有 ffmpeg.exe，不含代理探测所需的 ffprobe.exe；代理需另备同目录的两个工具。外部 Python/CUDA、Qwen/InsightFace 等模型与实际模型端点仍需独立安装配置；这些不因提供 ModelServer 程序包而自动具备。包内安装说明是 CI 构建时快照，Release 顶层 INSTALL.md 修正了 FFprobe 安装说明，以顶层说明为准。
+[离线资产工作流 38009843679](https://github.com/l17728/picer/actions/runs/38009843679) 成功；逐项比对构建校验清单与 GitHub 上传资产的 SHA-256 摘要，八包全部一致。统一清单上传后再次核验其摘要，再公开 Release。校验记录保留于 `artifacts/release-additions-v1.1.2/verified-assets.json`，源码标签保持 `c8daa9c`。
+
+公开后根据用户确认补充角色依赖说明：纯远程 GUI 不要求 Python、CUDA、FFmpeg/FFprobe 或模型 runtime；Python 属于启用的模型 worker，CUDA 为其可选 GPU 加速，FFprobe 属于执行视频探测的源机器 MediaAgent。已更新顶层 INSTALL.md、OFFLINE-INSTALL.txt 与发布说明，并重新生成统一校验清单；八个二进制/运行组件包保持原始哈希。包内说明是构建时快照，角色区分以顶层更新说明为准。
+
+完整包的固定运行组件由 `tools/publish-self-contained.ps1` 校验文件大小、SHA-256、许可证和本机依赖；隔离 GUI 冒烟确认使用包内 `coreclr.dll`，窗口正常响应。固定 runtime 包只有 ffmpeg.exe，不含代理探测所需的 ffprobe.exe；代理需另备同目录的两个工具。外部 Python/CUDA、Qwen/InsightFace 等模型与实际模型端点仍需独立安装配置；这些不因提供 ModelServer 程序包而自动具备。最终标签内安装说明已包含 FFprobe 依赖，参见 Release 的 INSTALL.md 与 OFFLINE-INSTALL.txt。
 
 ## 部署与数据保护
 
@@ -40,6 +44,22 @@ ModelServer 备份在 `D:\VL-models\service-backups\modelserver-20261009T1202203
 部署后发现旧启动环境没有让 GUI 拉起的代理继承 FFmpeg、ASR、VL、TTS 路由。通过已配对 SPKI 校验的连接，把本机既有有效配置恢复到服务的持久配置并广播，保留已有的人脸服务配置。复查代理在线，FFmpeg、ASR、VL、人脸、TTS 能力均 ready，训练代理为 configured；这只是连接和配置状态，不替代真实模型质量验收。此次使用本机既有外部 FFmpeg 目录（ffmpeg.exe 与 ffprobe.exe 齐全）及模型端点，不是仅解压完整包后的全新环境验证。
 
 Linux 备份工具另用临时 SQLite/WAL 合成数据验证了完整复制、恢复、损坏拒绝、独立持锁拒绝及多余 sidecar 清除；未用真实库注入故障。本机安装目录切换遇到新 staging 目录重命名访问拒绝，旧目录立即恢复；随后保留旧目录备份，复制并核验新安装文件。
+
+## 最终候选补充核验
+
+`c8daa9c38881dee83041c000d826121578af147a` 的 [CI 37934489618](https://github.com/l17728/picer/actions/runs/37934489618) 完整通过：单元/集成 **610/610**、WPF **73/73**，零失败、零跳过、零超时。TRX 和计数汇总保存于 `artifacts/final-ci-v1.1.2`。
+
+上述部署表为第一轮历史记录。后续五处 Windows GUI/代理/索引服务安装已更新为 `1f0e376` 构建的产品代码，56 个程序文件逐项哈希校验通过；该提交至最终候选只变更测试与文档。真实 GUI 窗口响应正常。旧 GUI 未响应关闭请求时，核验进程身份后停止，并再次完成闭库备份 `artifacts/deployment-backup-20261009T125913`，再替换程序。
+
+ModelServer 更新时发现模型控制台会自动拉起旧进程；首次复制失败后恢复旧版，再暂停控制台执行更新并恢复控制台。最终程序备份为 `D:\VL-models\service-backups\modelserver-20261009T125851794`，服务健康检查通过。
+
+远端最新版部署号为 `20261009T125050635Z`，来源 `1f0e376fc4a0`，SHA-256 为 `7f497d23e1ff50f8250aaa84ebcb685b2416eec07c6d0a3abfc1f9bf55273263`，备份在 `/opt/picer-index.backup-20261009T125050635Z`。传输采用基于旧完整哈希的差分重建；重建后重新验证完整二进制哈希，再运行原安装程序的闭库备份与回滚流程。
+
+最终 SPKI 配对校验、服务健康与版本检查通过，schema 45，代理在线，FFmpeg/ASR/VL/人脸/TTS 为 ready，训练代理为 configured。升级期间短暂的人脸 unavailable 在重新连接并应用既有持久配置后恢复，未修改模型或重新训练。发布内容排除本机 artifacts、TestResults 和 Python 缓存，避免 SDK 将本机验证输出递归带入服务包。
+
+2026-10-10 补充隔离 GUI 冒烟：第一次未在限时内出现窗口，验证脚本的 finally 又覆盖原始错误；已修正脚本保留首错并核验本脚本启动的进程身份后清理。重新运行未放宽 45 秒阈值，中文本地主窗、包内 coreclr、响应性和正常退出均通过，证据 `artifacts/deploy/final-package-smoke-retry.log`。首次启动迟延的环境原因尚未完全确定，没有据此认定产品退出死锁。`v1.1.2` 标签已指向通过完整 CI 的 `c8daa9c`；脚本诊断修正不改变产品二进制。
+
+最终远端只读核验：实际数据库与 `125050635Z` 部署备份均为 schema 45，`quick_check=ok`，外键错误 0；12 张核心表数量全部一致，包括 8,603 张照片、529 个视频、21,336 个人脸记录、26 个视频人脸、725 个关键帧、4 份转录和 1 份视频摘要。通过只读连接和事务完成，不停服务，不执行迁移；证据 `artifacts/deploy/remote-final-verification.json`。
 
 ## 文档与范围
 

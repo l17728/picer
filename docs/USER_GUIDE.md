@@ -1,6 +1,8 @@
 # Picer 用户指南
 
-更新：2026-10-09；对应 schema 45。实际本机与远端数据库已升级并核验，安装也已更新；本地 5 个安装位置已更新缓存修复并通过 56 个文件哈希核验，远程最新版部署进行中；拟发布 v1.1.2 尚待新 CI 和标签，实际安装版本见[部署记录](RELEASE_DEPLOYMENT_2026-10-09.md)。v1.1.0 候选因后续发现缓存问题保持草稿未公开。
+更新：2026-10-10；对应 schema 45。实际本机与远端数据库已升级并核验，安装也已更新；本地 5 个安装位置已更新缓存修复并通过 56 个文件哈希核验，远端最新版部署 125050635Z 已成功，schema 45 及二进制哈希核验通过；正式发布提交 c8daa9c CI 已成功，v1.1.2 已正式公开（2026-10-10 00:45:21 UTC，非草稿、非预发布），实际安装版本见[部署记录](RELEASE_DEPLOYMENT_2026-10-09.md)。v1.1.0 候选因后续发现缓存问题保持草稿未公开。
+
+当前下载：[v1.1.2 正式 Release](https://github.com/l17728/picer/releases/tag/v1.1.2)。发布回归再次通过 610 项单元及 73 项 WPF 测试，离线构建成功；6 个二进制包、完整 GUI 和 runtime 共 8 个包均核验 digest，13 项资产的统一 SHA256SUMS 已上传并核验。按[安装说明](RELEASE_GUIDE.md)选择包，下载后核对哈希。
 
 ## 描述一个目录中的照片和视频
 
@@ -30,7 +32,9 @@
 
 ## 离线自包含运行
 
-自包含 win-x64 发布流程要求随包提供 .NET、OpenCV、固定版本模型、FFmpeg 和 whisper.cpp 等离线组件，并校验固定哈希及许可证。源码检出不等于已经拥有这些资产；最新修复候选的公开状态以[部署记录](RELEASE_DEPLOYMENT_2026-10-09.md)为准。另行配置的 Qwen ASR/VL、TTS、ModelServer 和远端索引服务属于独立部署，不因安装桌面包自动具备。固定 runtime 仅附 ffmpeg.exe，独立代理还需同目录 ffprobe.exe 才注册完整 FFmpeg 能力，不能把 GUI 自检通过当作全部代理能力齐备。
+依赖按运行角色区分：仅连接远端索引服务的 GUI 选用 Windows GUI binary 包即可，不需要另装 runtime 模型包、Python、CUDA 或 FFprobe。视频处理由服务派给源电脑的 MediaAgent，执行视频任务的代理才需要 FFmpeg/FFprobe；模型 worker 所在电脑需要 Python，CUDA 可选，也支持 CPU。同一电脑同时运行 GUI、代理和模型时会同时安装这些组件，但 GUI 自动拉起代理不代表纯远程 GUI 本身依赖它们。角色配置见[发布安装指南](RELEASE_GUIDE.md)。
+
+自包含 win-x64 发布流程要求随包提供 .NET、OpenCV、固定版本模型、FFmpeg 和 whisper.cpp 等离线组件，并校验固定哈希及许可证。源码检出不等于已经拥有这些资产；v1.1.2 已正式公开，资产清单与安装说明见[部署记录](RELEASE_DEPLOYMENT_2026-10-09.md)。另行配置的 Qwen ASR/VL、TTS、ModelServer 和远端索引服务属于独立部署，不因安装桌面包自动具备。固定 runtime 仅附 ffmpeg.exe，独立代理还需同目录 ffprobe.exe 才注册完整 FFmpeg 能力，不能把 GUI 自检通过当作全部代理能力齐备。
 
 主窗口的“运行组件”可检查每个组件的许可证、发布路径和状态。“完整校验”会核对固定 SHA-256；“运行自检”会实际加载人脸模型并启动 FFmpeg 与 whisper.cpp。任何组件缺失或损坏时，请重新安装完整发布包，不要从不明来源替换文件。
 

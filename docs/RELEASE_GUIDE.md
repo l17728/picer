@@ -1,6 +1,20 @@
-﻿# Picer v1.1.2 发布与安装
+# Picer v1.1.2 发布与安装
 
 此文说明发布契约，不代表 GitHub CI、Release 或部署已经成功。以对应提交的 Actions 结果、最终 Release 资产和实际健康检查为准。
+
+## 依赖安装在哪台机器
+
+**仅作为远程客户端使用的 GUI 不需要安装 Python、CUDA、FFmpeg 或 FFprobe，也不需要下载模型/runtime 包。** GUI 经 IndexService 请求媒体处理和模型推理；打包时附带 MediaAgent 不表示每台 GUI 机器都必须启用代理。
+
+| 运行角色 | 所需外部组件 |
+| --- | --- |
+| 远程 GUI | 服务连接与配对配置；自包含程序包已含 .NET 运行时 |
+| IndexService（当前代理派发模式） | 连接源媒体代理和模型服务，不要求本机安装上述推理/媒体工具 |
+| MediaAgent（持有原照片/视频的源机器） | 执行视频任务时需要 ffmpeg.exe 和 ffprobe.exe；只转发模型请求，不因转发而需要 Python/CUDA |
+| ModelServer 的 Python 人脸推理/训练 worker | Python、对应依赖和模型；CUDA 仅在启用 NVIDIA GPU 推理时需要，worker 也支持 CPU |
+| 独立 Qwen/ASR 等模型服务 | 按具体服务安装其 Python/GPU/模型依赖，与远程 GUI 安装分开 |
+
+当前部署把 GUI、MediaAgent 和模型服务放在同一台 Windows 机器，因此依赖共同出现在这台电脑上，但它们属于代理/模型服务。视频探测链路为 GUI → IndexService → 源机器 MediaAgent → FFprobe；模型请求通过 IndexService 路由至代理/模型端点。GUI 不直接启动这些 Python worker 或 FFprobe。
 
 ## 下载哪个包
 
@@ -18,7 +32,7 @@
 
 这些是解压安装包，不是 MSI。二进制包含对应平台的 .NET 运行时及发布输出中的本机库，不包含全部 AI 模型、CUDA、Python 或外部模型服务。不要删除 DLL、runtimes、licenses 等依赖目录。Linux IndexService 主要通过 Windows MediaAgent 执行媒体工作，不能将 Windows 原生视觉库当作 Linux 本机推理能力。
 
-运行时基础资产 runtime-v1/Picer-runtime-win-x64.zip 经固定 SHA-256 和当前逐文件门禁验证后复用，不能只凭文件名或日期推断兼容性。安装使用本 Release 的版本化 runtime 资产。完整包不需要再次解压 runtime；额外的代理工具和模型端点仍按下文配置。
+运行时基础资产 runtime-v1/Picer-runtime-win-x64.zip 经固定 SHA-256 和当前逐文件门禁验证后复用，不能只凭文件名或日期推断兼容性。需要本地运行组件的部署使用本 Release 的版本化 runtime 资产；纯远程 GUI 可直接选择 binary 包。完整包不需要再次解压 runtime；额外的代理工具和模型端点仅在对应角色机器上按下文配置。
 
 ## 校验和 Windows 安装
 
@@ -59,4 +73,3 @@ tools/package-release.ps1 是明确的外置运行资产二进制发行模式，
 工作流创建 draft Release，发布负责人补齐通过原固定哈希校验的版本化运行资产、对应清单及安装冒烟证据后再公开。工作流手动重跑要求已有 tag，不自动给任意分支创建版本标签；已有同名 Release 时停止供人工核对，避免悄悄替换已发布资产。
 
 RuntimeComponent 检验和本轮真实部署独立于轻量包 CI。历史本机 605 分轮单元证据与 WPF 73/73 不能替代当前提交的 GitHub CI 结果，模型质量/硬件暂停验收也不因生成安装包自动完成。
-
