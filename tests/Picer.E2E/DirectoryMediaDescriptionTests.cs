@@ -11,6 +11,61 @@ namespace Picer.E2E;
 
 public sealed class DirectoryMediaDescriptionTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task LocalPhotoInputUsesVerifiedSnapshotAndRejectsChangedContent(bool changed)
+    {
+        var root = Path.Combine(Path.GetTempPath(), "picer-description-input-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var source = Path.Combine(root, "source.jpg");
+            byte[] original = [1, 2, 3, 4];
+            await File.WriteAllBytesAsync(source, original);
+            var modified = File.GetLastWriteTimeUtc(source);
+            var image = new ImageRecord { Id = 1, Path = source, FileSize = original.Length, ModifiedUtc = modified,
+                Sha256 = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(original)) };
+            if (changed)
+            {
+                await File.WriteAllBytesAsync(source, new byte[] { 4, 3, 2, 1 });
+                File.SetLastWriteTimeUtc(source, modified);
+            }
+            var inner = new SnapshotAnalyzer(source, original);
+            var cache = Path.Combine(root, "input");
+            var analyzer = new MediaDescriptionBatch.PhotoInputAnalyzer(inner, cache);
+            if (changed)
+            {
+                var failure = await Assert.ThrowsAsync<AnalysisStageException>(() => analyzer.AnalyzeAsync(new(image, null, []), CancellationToken.None));
+                Assert.Equal(AnalysisStage.Preprocess, failure.Stage);
+                Assert.Equal(0, inner.Calls);
+            }
+            else
+            {
+                await analyzer.AnalyzeAsync(new(image, null, []), CancellationToken.None);
+                Assert.Equal(1, inner.Calls);
+            }
+            Assert.Empty(Directory.EnumerateFiles(cache));
+            Assert.Equal(changed ? new byte[] { 4, 3, 2, 1 } : original, await File.ReadAllBytesAsync(source));
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
+    private sealed class SnapshotAnalyzer(string source, byte[] original) : ICloudVisionAnalyzer
+    {
+        public int Calls { get; private set; }
+        public string Provider => "test";
+        public string ModelVersion => "test";
+        public string PromptVersion => "test";
+        public async Task<CloudVisionResult> AnalyzeAsync(CloudVisionRequest request, CancellationToken cancellationToken)
+        {
+            Calls++;
+            Assert.NotEqual(source, request.Image.Path);
+            Assert.Equal(original, await File.ReadAllBytesAsync(request.Image.Path, cancellationToken));
+            return new("test", [], [], [], []);
+        }
+    }
+
     [Fact]
     public async Task FailureListIncludesBothMediaKindsButExcludesUserCancellation()
     {

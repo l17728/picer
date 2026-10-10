@@ -25,6 +25,43 @@ public sealed class IncrementalDescriptionSearchTests : IDisposable
     });
 
     [Fact]
+    public void MediaDescriptionPlanUsesIndexWithoutReadingOrImportingOriginalFiles()
+    {
+        var photo = Add("photos/sub/pending.jpg");
+        var described = Add("photos/done.jpg");
+        var cloud = new CloudVisionRepository(_db);
+        cloud.Save(described, new Analyzer(), "", "test", new("已有描述", [], [], [], []));
+        var videos = new VideoRepository(_db);
+        var video = new VideoRecord(30, _source, Path.Combine(_root, "photos/sub/pending.mp4"), 987,
+            DateTime.UtcNow, 5, 640, 480, null, null, "active");
+        videos.UpsertMirrored(video, _source);
+        var completedVideo = video with { Id = 31, Path = Path.Combine(_root, "photos/done.mp4") };
+        videos.UpsertMirrored(completedVideo, _source);
+        videos.SaveSummary(completedVideo.Id, new Analyzer(), completedVideo, new("已有总结", [], [], [], []));
+        var directory = Path.Combine(_root, "photos");
+        Directory.CreateDirectory(directory);
+        var unindexed = Path.Combine(directory, "not-indexed.jpg");
+        File.WriteAllText(unindexed, "not an image; planning must not decode or import this file");
+        Assert.False(File.Exists(photo.Path));
+        Assert.False(File.Exists(video.Path));
+        using var changes = _db.Command("SELECT total_changes()");
+        var before = changes.ExecuteScalar();
+
+        var plan = DirectoryMediaDescriptionPlan.Build(_db, cloud, videos, directory);
+
+        Assert.Equal(photo.Id, Assert.Single(plan.Photos).Id);
+        Assert.Equal(video.Id, Assert.Single(plan.Videos).Id);
+        Assert.Equal(2, plan.SkippedCount);
+        Assert.Equal(before, changes.ExecuteScalar());
+        Assert.DoesNotContain(_db.GetImages(_source), image => image.Path == unindexed);
+        // Independent index discovery is visible on the next run, with completed results still skipped.
+        var discovered = Add("photos/not-indexed.jpg");
+        var refreshed = DirectoryMediaDescriptionPlan.Build(_db, cloud, videos, directory);
+        Assert.Contains(refreshed.Photos, image => image.Id == discovered.Id);
+        Assert.Equal(2, refreshed.SkippedCount);
+    }
+
+    [Fact]
     public void DirectoryPreviewEscapesWildcardsAndDoesNotWriteSharedDescriptionProjections()
     {
         var image = Add("photos_100%/one.jpg"); Add("photosX100more/two.jpg"); Add("photos_100%-old/three.jpg");

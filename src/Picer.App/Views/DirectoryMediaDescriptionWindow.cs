@@ -1,6 +1,5 @@
-﻿using System.IO;
+using System.IO;
 using System.Collections.ObjectModel;
-using System.Net.Http.Json;
 using System.Windows;
 using System.Windows.Controls;
 using Picer.App.Infrastructure;
@@ -24,11 +23,9 @@ public sealed class DirectoryMediaDescriptionWindow : Window
     private readonly CancellationTokenSource _lifetime = new();
     private CancellationTokenSource? _previewCancellation;
     private readonly ComboBox _concurrency = new() { ItemsSource = new[] { 1, 2, 3, 4 }, SelectedItem = 2, Width = 70, Margin = new Thickness(8, 0, 0, 0) };
-    private readonly CheckBox _fullScan = new() { Content = "完整校验文件内容（较慢；默认只深度扫描新增或变化项）", Margin = new Thickness(0, 4, 0, 8) };
     private CancellationTokenSource? _cancellation;
     private DirectoryMediaDescriptionPlan? _plan;
     private int _selectionVersion;
-    private readonly List<DirectoryMediaFailure> _scanFailures = [];
 
     public DirectoryMediaDescriptionWindow(bool loadOnShow = true)
     {
@@ -36,7 +33,7 @@ public sealed class DirectoryMediaDescriptionWindow : Window
         Width = 720; Height = 620; MinWidth = 560; MinHeight = 440;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
         var layout = new DockPanel { Margin = new Thickness(16) };
-        var header = new TextBlock { Text = "选择目录树节点：先扫描该目录及所有子目录，再描述其中的照片和视频。已有有效描述自动跳过。", TextWrapping = TextWrapping.Wrap };
+        var header = new TextBlock { Text = "描述所选目录及其所有子目录中已入库的照片和视频，自动跳过已有有效描述。新文件请先更新索引。", TextWrapping = TextWrapping.Wrap };
         DockPanel.SetDock(header, Dock.Top); layout.Children.Add(header);
         var bottom = new StackPanel(); DockPanel.SetDock(bottom, Dock.Bottom);
         bottom.Children.Add(_authorization); bottom.Children.Add(_status);
@@ -44,7 +41,6 @@ public sealed class DirectoryMediaDescriptionWindow : Window
         concurrencyPanel.Children.Add(new TextBlock { Text = "本地照片/视频并发数（云端为 1）：", VerticalAlignment = VerticalAlignment.Center });
         System.Windows.Automation.AutomationProperties.SetName(_concurrency, "本地照片和视频并发数");
         concurrencyPanel.Children.Add(_concurrency); bottom.Children.Add(concurrencyPanel);
-        bottom.Children.Add(_fullScan);
         var actions = new StackPanel { Orientation = Orientation.Horizontal };
         actions.Children.Add(_start); actions.Children.Add(_cancel); actions.Children.Add(_retry); bottom.Children.Add(actions);
         var failures = new ListBox { ItemsSource = _failures, MaxHeight = 110 };
@@ -104,7 +100,7 @@ public sealed class DirectoryMediaDescriptionWindow : Window
     {
         if (_tree.SelectedItem is not TreeViewItem { Tag: string directory } || _cancellation is not null) return;
         var version = ++_selectionVersion;
-        _failures.Clear(); _scanFailures.Clear(); _retry.IsEnabled = false;
+        _failures.Clear(); _retry.IsEnabled = false;
         _previewCancellation?.Cancel(); _previewCancellation?.Dispose();
         _previewCancellation = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
         var token = _previewCancellation.Token;
@@ -116,7 +112,7 @@ public sealed class DirectoryMediaDescriptionWindow : Window
                 AppServices.CloudVisionRepository, AppServices.Videos, directory, token), token);
             if (version != _selectionVersion || token.IsCancellationRequested) return;
             _plan = plan;
-            _status.Text = $"扫描前索引预览（不含尚未发现的文件）：照片 {plan.TotalPhotos} 张、视频 {plan.TotalVideos} 个；已有描述 {plan.SkippedCount} 项；待描述照片 {plan.Photos.Count} 张、视频 {plan.Videos.Count} 个。开始后扫描并更新实际范围。";
+            _status.Text = $"当前索引范围：照片 {plan.TotalPhotos} 张、视频 {plan.TotalVideos} 个；已有描述 {plan.SkippedCount} 项；待描述照片 {plan.Photos.Count} 张、视频 {plan.Videos.Count} 个。";
             _authorization.Text = "点击开始，将通过 AI 模型设置中的照片分析/视频总结服务处理全部待描述项。照片副本、最多 12 帧的视频拼图及已有转写会经过已配置的索引服务；远程索引服务也会接收中转数据。云端配置还会将内容发送给模型服务商。不上传原视频，不修改原文件。开始前将显示实际模型与处理范围。";
             _start.IsEnabled = true;
         }
@@ -127,7 +123,7 @@ public sealed class DirectoryMediaDescriptionWindow : Window
     private async Task StartAsync(bool retryOnly = false)
     {
         if (_plan is not { } plan || _cancellation is not null) return;
-        var taskStage = AnalysisStage.Scan;
+        var taskStage = AnalysisStage.Preprocess;
         (CloudVisionAnalysisService Service, OpenAiCompatibleCloudVisionAnalyzer Analyzer, CloudVisionRunPolicy Policy, string ProviderLabel, bool IsLocal)? photo = null, video = null;
         try
         {
@@ -135,10 +131,9 @@ public sealed class DirectoryMediaDescriptionWindow : Window
             _failures.Clear(); _retry.IsEnabled = false;
             _previewCancellation?.Cancel();
             _cancellation = new(); _tree.IsEnabled = false; _start.IsEnabled = false; _cancel.IsEnabled = true;
-            _fullScan.IsEnabled = false; _concurrency.IsEnabled = false;
+            _concurrency.IsEnabled = false;
             var token = _cancellation.Token;
-            await RefreshDirectoryAsync(plan.Directory, token);
-            taskStage = AnalysisStage.Preprocess;
+            _status.Text = "正在读取索引中的待描述项…";
             plan = await UiWork.RunDatabaseAsync(() => DirectoryMediaDescriptionPlan.Build(AppServices.Db,
                 AppServices.CloudVisionRepository, AppServices.Videos, plan.Directory, token), token);
             if (retryOnly)
@@ -147,13 +142,8 @@ public sealed class DirectoryMediaDescriptionWindow : Window
                 var retryVideos = plan.Videos.Where(item => retryPaths.Any(path => DirectoryMediaImport.Contains(path, item.Path))).ToArray();
                 plan = plan with { DeferredCount = plan.PendingCount - retryPhotos.Length - retryVideos.Length, Photos = retryPhotos, Videos = retryVideos };
             }
-            bool Eligible(string path) => !_scanFailures.Any(error => error.IsDirectory
-                ? DirectoryMediaImport.Contains(error.Path, path)
-                : DirectoryMediaImport.Normalize(error.Path).Equals(DirectoryMediaImport.Normalize(path), StringComparison.OrdinalIgnoreCase));
-            plan = plan with { FailedCount = plan.Photos.Count(x => !Eligible(x.Path)) + plan.Videos.Count(x => !Eligible(x.Path)),
-                Photos = plan.Photos.Where(x => Eligible(x.Path)).ToArray(), Videos = plan.Videos.Where(x => Eligible(x.Path)).ToArray() };
             _plan = plan;
-            if (plan.PendingCount == 0) { _status.Text = "扫描完成，没有可处理的待描述项。"; return; }
+            if (plan.PendingCount == 0) { _status.Text = "当前索引中没有待描述项；新增文件请通过独立索引任务入库。"; return; }
             photo = plan.Photos.Count > 0 ? AppServices.CreateCloudVisionService(AiFeatureIds.PhotoAnalysis) : null;
             video = plan.Videos.Count > 0 ? AppServices.CreateCloudVisionService(AiFeatureIds.VideoSummary) : null;
             if (plan.Photos.Count > 0 && photo is null || plan.Videos.Count > 0 && video is null)
@@ -162,8 +152,10 @@ public sealed class DirectoryMediaDescriptionWindow : Window
             if (MessageBox.Show(this, $"{modelText}\n\n将描述 {plan.Photos.Count} 张照片和 {plan.Videos.Count} 个视频（含所有子目录）。已有结果跳过；云端模型可能产生费用。\n\n是否开始？",
                 "确认目录媒体描述", MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No) != MessageBoxResult.Yes) return;
             ICloudVisionAnalyzer? photoAnalyzer = photo?.Analyzer;
-            if (photoAnalyzer is not null && AppServices.ServiceMode && AppServices.Gateway is IMediaAssetGateway assets)
-                photoAnalyzer = new MediaDescriptionBatch.RemotePhotoAnalyzer(photoAnalyzer, assets, Path.Combine(AppPaths.DataRoot, "description-input"));
+            if (photoAnalyzer is not null)
+                photoAnalyzer = new MediaDescriptionBatch.PhotoInputAnalyzer(photoAnalyzer, Path.Combine(AppPaths.DataRoot, "description-input"),
+                    AppServices.ServiceMode ? AppServices.Gateway as IMediaAssetGateway
+                        ?? throw new InvalidOperationException("索引服务未提供原图读取接口。") : null);
             var photoService = photoAnalyzer is null ? null : new CloudVisionAnalysisService(AppServices.CloudVisionRepository,
                 photoAnalyzer, AppServices.Geocoder, AppServices.People,
                 databaseWork: (work, ct) => UiWork.RunDatabaseAsync(work, ct), allowConcurrent: photo?.IsLocal == true);
@@ -234,70 +226,12 @@ public sealed class DirectoryMediaDescriptionWindow : Window
         }
         finally
         {
-            if (_scanFailures.Count > 0) _status.Text += $" 扫描有 {_scanFailures.Count} 个文件或目录失败，本次跳过，原索引保留；可再次运行重试。";
             photo?.Analyzer.Dispose(); video?.Analyzer.Dispose();
             _cancellation?.Dispose(); _cancellation = null;
             _tree.IsEnabled = true; _cancel.IsEnabled = false;
-            _fullScan.IsEnabled = true; _concurrency.IsEnabled = true;
+            _concurrency.IsEnabled = true;
             _start.IsEnabled = _plan is not null;
             _retry.IsEnabled = _failures.Any(failure => failure.Retryable);
-        }
-    }
-
-    private async Task RefreshDirectoryAsync(string selectedDirectory, CancellationToken token)
-    {
-        using var mutation = await AppServices.AcquireIndexMutationAsync(token);
-        _scanFailures.Clear();
-        var indexChanged = false;
-        var sources = AppServices.ServiceMode
-            ? await AppServices.Gateway.ListSourcesAsync(token)
-            : await UiWork.RunDatabaseAsync(AppServices.Db.GetSources, token);
-        var matching = sources.Where(source => DirectoryMediaImport.Contains(source.Path, selectedDirectory)
-            || DirectoryMediaImport.Contains(selectedDirectory, source.Path)).ToArray();
-        if (matching.Length == 0) throw new InvalidOperationException("所选目录不在已配置的媒体源中。");
-        var scanner = new DirectoryMediaScanner();
-        var backend = AppPaths.LoadIndexBackend();
-        using var client = AppServices.ServiceMode ? AppServices.CreatePinnedServiceClient(backend, TimeSpan.FromMinutes(10)) : null;
-        foreach (var source in matching)
-        {
-            var directory = DirectoryMediaImport.Contains(source.Path, selectedDirectory) ? selectedDirectory : DirectoryMediaImport.Normalize(source.Path);
-            if (directory.Length == 2 && directory[1] == ':') directory += "/";
-            var request = new DirectoryMediaScanRequest(source.Id, directory, ForceFullScan: _fullScan.IsChecked == true);
-            if (client is null && !request.ForceFullScan)
-                request = request with { KnownEntries = await UiWork.RunDatabaseAsync(() => DirectoryMediaImport.KnownEntries(AppServices.Db, source.Id, directory), token) };
-            DirectoryMediaPage page;
-            do
-            {
-                _status.Text = $"正在{(request.ForceFullScan ? "完整校验" : "增量检查")}照片和视频：已检查 {request.Offset} 项…";
-                if (client is not null)
-                {
-                    using var response = await client.PostAsJsonAsync(new Uri(new Uri(backend.BaseUrl!), "/api/service/v1/directory-media"), request, token);
-                    response.EnsureSuccessStatusCode();
-                    page = await response.Content.ReadFromJsonAsync<DirectoryMediaPage>(cancellationToken: token)
-                        ?? throw new InvalidDataException("目录扫描未返回结果。");
-                }
-                else
-                {
-                    page = await Task.Run(() => scanner.ReadAsync(request, token), token);
-                    page = page with { IndexChanged = await UiWork.RunDatabaseAsync(() => DirectoryMediaImport.ApplyAndDetectChanges(AppServices.Db, source.Id, directory, page), token) };
-                }
-                indexChanged |= page.IndexChanged;
-                foreach (var failure in page.Failures ?? [])
-                    if (!_scanFailures.Contains(failure))
-                    {
-                        _scanFailures.Add(failure);
-                        _failures.Add(new(VideoFormats.IsSupported(failure.Path), 0, failure.Path,
-                            $"{(failure.IsDirectory ? "目录" : "文件")}扫描失败（{failure.Code}）", AnalysisStage.Scan,
-                            !failure.Code.Contains("Unauthorized", StringComparison.Ordinal) && !failure.Code.Contains("link", StringComparison.OrdinalIgnoreCase)));
-                    }
-                if (!page.Done && page.NextOffset <= request.Offset) throw new InvalidDataException("目录扫描进度异常。");
-                request = request with { Snapshot = page.Snapshot, Offset = page.NextOffset, KnownEntries = null };
-            } while (!page.Done);
-        }
-        if (indexChanged || !mutation.RestoreUnchangedMirror())
-        {
-            _status.Text = "扫描完成，正在同步新增或变化的索引…";
-            await AppServices.RefreshMirrorAfterIndexMutationAsync(token);
         }
     }
 }
