@@ -28,6 +28,10 @@ try
     var assembly = context.LoadFromAssemblyPath(corePath);
     var gatewayType = assembly.GetType("Picer.Core.Gateway.HttpIndexGateway", throwOnError: true)!;
     using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+    stage = "certificate-discovery";
+    var settingsType = assembly.GetType("Picer.Core.Gateway.MediaAgentSettings", throwOnError: true)!;
+    var discovery = (Task<byte[]>)settingsType.GetMethod("DiscoverSpkiAsync")!.Invoke(null, [url, deadline.Token])!;
+    if (!CryptographicOperations.FixedTimeEquals(await discovery, pin)) throw new InvalidOperationException();
     using var handler = new HttpClientHandler { AllowAutoRedirect = false };
     handler.ServerCertificateCustomValidationCallback = (_, certificate, _, _) => certificate is not null &&
         CryptographicOperations.FixedTimeEquals(certificate.PublicKey.ExportSubjectPublicKeyInfo(), pin);
@@ -54,7 +58,7 @@ try
     if (rejectedResponse.StatusCode != HttpStatusCode.Unauthorized) throw new InvalidOperationException();
     Console.WriteLine(JsonSerializer.Serialize(new
     {
-        success = true, pinnedTls = true, authenticatedRead = true, invalidTokenRejected = true,
+        success = true, certificateDiscovery = true, pinnedTls = true, authenticatedRead = true, invalidTokenRejected = true,
         installedCoreSha256 = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(corePath))).ToLowerInvariant(),
         checkedUtc = DateTime.UtcNow
     }));
