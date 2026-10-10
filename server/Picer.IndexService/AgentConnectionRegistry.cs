@@ -232,7 +232,10 @@ internal sealed class AgentConnectionRegistry
             try
             {
                 await SendAsync(new { type = "asset.open", requestId, path }, cancellationToken);
-                return await completion.Task.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken);
+                // A cold source (network volume or large original) may need more
+                // than 30 seconds before a thumbnail can be generated. Keep the
+                // wait bounded and honor caller disconnect/cancellation.
+                return await completion.Task.WaitAsync(TimeSpan.FromMinutes(2), cancellationToken);
             }
             finally { _pending.TryRemove(requestId, out _); }
         }

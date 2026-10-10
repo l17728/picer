@@ -1,8 +1,12 @@
 using System.Net;
+using System.Net.Http;
+using System.IO;
 using System.Reflection;
 using System.Runtime.Loader;
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Collections;
+using System.Windows.Media.Imaging;
 
 // Load the gateway from the installed payload, not a source project reference.
 // Credentials enter only through the environment and are never printed.
@@ -27,7 +31,7 @@ try
     };
     var assembly = context.LoadFromAssemblyPath(corePath);
     var gatewayType = assembly.GetType("Picer.Core.Gateway.HttpIndexGateway", throwOnError: true)!;
-    using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+    using var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(3));
     stage = "certificate-discovery";
     var settingsType = assembly.GetType("Picer.Core.Gateway.MediaAgentSettings", throwOnError: true)!;
     var discovery = (Task<byte[]>)settingsType.GetMethod("DiscoverSpkiAsync")!.Invoke(null, [url, deadline.Token])!;
@@ -35,7 +39,7 @@ try
     using var handler = new HttpClientHandler { AllowAutoRedirect = false };
     handler.ServerCertificateCustomValidationCallback = (_, certificate, _, _) => certificate is not null &&
         CryptographicOperations.FixedTimeEquals(certificate.PublicKey.ExportSubjectPublicKeyInfo(), pin);
-    using var client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(20) };
+    using var client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(130) };
     using var gateway = (IDisposable)Activator.CreateInstance(gatewayType, url, token, pin, client)!;
 
     async Task<object?> Invoke(string method, params object?[] parameters)
@@ -49,8 +53,79 @@ try
     var health = await Invoke("GetHealthAsync", deadline.Token);
     if (!string.Equals(health?.GetType().GetProperty("Status")?.GetValue(health)?.ToString(), "ok", StringComparison.OrdinalIgnoreCase))
         throw new InvalidOperationException();
-    stage = "authenticated-read";
-    _ = await Invoke("ListImagesAsync", null, false, 1, null, deadline.Token);
+    static object? Property(object value, string name) => value.GetType().GetProperty(name)!.GetValue(value);
+    static object[] Items(object page) => ((IEnumerable)Property(page, "Items")!).Cast<object>().ToArray();
+    static long Id(object item) => Convert.ToInt64(Property(item, "Id"));
+    static void ValidatePage(object page, object[] items)
+    {
+        if (items.Length is 0 or > 8 || Convert.ToInt32(Property(page, "TotalCount")) < items.Length ||
+            items.Any(item => Id(item) <= 0) || items.Select(Id).Distinct().Count() != items.Length)
+            throw new InvalidDataException();
+    }
+    async Task ValidateThumbnail(string method, object[] candidates, bool video)
+    {
+        foreach (var item in candidates)
+        {
+            stage = video ? "video-thumbnail-fetch" : "photo-thumbnail-fetch";
+            using var stream = (Stream?)await Invoke(method, video ? [Id(item), null, deadline.Token] : [Id(item), deadline.Token]);
+            if (stream is null) continue;
+            stage = video ? "video-thumbnail-read" : "photo-thumbnail-read";
+            using var bytes = new MemoryStream();
+            var buffer = new byte[16384];
+            int read;
+            while ((read = await stream.ReadAsync(buffer, deadline.Token)) > 0)
+            {
+                if (bytes.Length + read > 4 * 1024 * 1024) throw new InvalidDataException();
+                bytes.Write(buffer, 0, read);
+            }
+            Exception? decodeFailure = null;
+            stage = video ? "video-thumbnail-decode" : "photo-thumbnail-decode";
+            var thread = new Thread(() =>
+            {
+                try
+                {
+                    bytes.Position = 0;
+                    var frame = BitmapDecoder.Create(bytes, BitmapCreateOptions.PreservePixelFormat, BitmapCacheOption.OnLoad).Frames[0];
+                    if (frame.PixelWidth is <= 0 or > 4096 || frame.PixelHeight is <= 0 or > 4096) throw new InvalidDataException();
+                    var stride = checked((frame.PixelWidth * frame.Format.BitsPerPixel + 7) / 8);
+                    var length = checked(stride * frame.PixelHeight);
+                    if (length is <= 0 or > 16 * 1024 * 1024) throw new InvalidDataException();
+                    frame.CopyPixels(new byte[length], stride, 0);
+                }
+                catch (Exception error) { decodeFailure = error; }
+            });
+            thread.IsBackground = true;
+            thread.SetApartmentState(ApartmentState.STA);
+            thread.Start();
+            if (!thread.Join(TimeSpan.FromSeconds(10)) || decodeFailure is not null) throw new InvalidDataException();
+            return;
+        }
+        throw new InvalidDataException();
+    }
+    stage = "photo-index-page";
+    var page = (await Invoke("ListImagesAsync", null, false, 8, null, deadline.Token))!;
+    var photos = Items(page);
+    ValidatePage(page, photos);
+    var nextCursor = (string?)Property(page, "NextCursor");
+    if (!string.IsNullOrEmpty(nextCursor))
+    {
+        stage = "photo-index-next-page";
+        var next = (await Invoke("ListImagesAsync", null, false, 8, nextCursor, deadline.Token))!;
+        var nextItems = Items(next);
+        ValidatePage(next, nextItems);
+        if (nextItems.Select(Id).Intersect(photos.Select(Id)).Any()) throw new InvalidDataException();
+    }
+    stage = "photo-detail";
+    var detail = (await Invoke("GetImageAsync", Id(photos[0]), deadline.Token))!;
+    if (Id(detail) != Id(photos[0])) throw new InvalidDataException();
+    stage = "photo-thumbnail-decode";
+    await ValidateThumbnail("OpenThumbnailAsync", photos, false);
+    stage = "video-index-page";
+    var videoPage = (await Invoke("ListVideosAsync", null, 8, null, deadline.Token))!;
+    var videos = Items(videoPage);
+    ValidatePage(videoPage, videos);
+    stage = "video-thumbnail-decode";
+    await ValidateThumbnail("OpenVideoThumbnailAsync", videos, true);
     stage = "invalid-token-rejected";
     using var rejectedRequest = new HttpRequestMessage(HttpMethod.Get, new Uri(uri, "api/gateway/v1/images?pageSize=1"));
     rejectedRequest.Headers.Authorization = new("Bearer", "invalid-probe-" + Guid.NewGuid().ToString("N"));
@@ -59,14 +134,17 @@ try
     Console.WriteLine(JsonSerializer.Serialize(new
     {
         success = true, certificateDiscovery = true, pinnedTls = true, authenticatedRead = true, invalidTokenRejected = true,
+        photoIndex = true, photoDetail = true, photoThumbnailDecoded = true, videoIndex = true, videoThumbnailDecoded = true,
         installedCoreSha256 = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(corePath))).ToLowerInvariant(),
         checkedUtc = DateTime.UtcNow
     }));
     return 0;
 }
-catch
+catch (Exception error)
 {
     // Exception messages and HTTP bodies may contain private endpoint/media data.
     Console.Error.WriteLine("Live service verification failed at stage: " + stage);
+    while (error.InnerException is not null) error = error.InnerException;
+    Console.Error.WriteLine("Failure type: " + error.GetType().Name);
     return 1;
 }

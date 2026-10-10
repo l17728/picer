@@ -435,8 +435,10 @@ public sealed class GatewayContractTests(GatewayServiceFixture fixture) : IClass
         }
     }
 
-    [Fact]
-    public async Task RemoteAgent_ProxiesOriginalImageThroughIndexService()
+    [Theory]
+    [InlineData(0)]
+    [InlineData(35)]
+    public async Task RemoteAgent_ProxiesOriginalImageThroughIndexService(int sourceDelaySeconds)
     {
         var image = fixture.Db.GetImages(fixture.SourceId).First();
         var agentId = "test-agent-" + Guid.NewGuid().ToString("N");
@@ -452,6 +454,8 @@ public sealed class GatewayContractTests(GatewayServiceFixture fixture) : IClass
         {
             var request = JsonDocument.Parse(await ReceiveAgentRequestAsync(agent)).RootElement;
             var requestId = request.GetProperty("requestId").GetString();
+            // Reproduce a cold source exceeding the previous 30-second limit.
+            await Task.Delay(TimeSpan.FromSeconds(sourceDelaySeconds));
             await SendWsAsync(agent, new
             {
                 type = "asset.response",
