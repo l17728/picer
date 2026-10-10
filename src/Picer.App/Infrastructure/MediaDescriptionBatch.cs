@@ -69,24 +69,28 @@ internal sealed class MediaDescriptionBatch(
             var stage = AnalysisStage.Preprocess;
             try
             {
-                await using (var stream = assets is not null
+                var prepared = assets is not null ? await assets.OpenPhotoAnalysisInputAsync(request.Image, token) : null;
+                var sourcePrepared = prepared is not null;
+                await using (var stream = prepared ?? (assets is not null
                     ? await assets.OpenOriginalImageAsync(request.Image.Id, cancellationToken: token) ?? throw new IOException("原图不可用")
-                    : new FileStream(request.Image.Path, FileMode.Open, FileAccess.Read, FileShare.Read, 81920, FileOptions.Asynchronous | FileOptions.SequentialScan))
+                    : new FileStream(request.Image.Path, FileMode.Open, FileAccess.Read, FileShare.Read, 81920, FileOptions.Asynchronous | FileOptions.SequentialScan)))
                 {
                     if (assets is null && File.GetLastWriteTimeUtc(request.Image.Path) != request.Image.ModifiedUtc)
                         throw new InvalidDataException("原图已变化，请先更新索引。");
                     await using var output = File.Create(path);
                     await stream.CopyToAsync(output, token);
                 }
-                if (new FileInfo(path).Length != request.Image.FileSize) throw new InvalidDataException("原图长度不匹配");
-                if ((request.Image.ContentSha256 ?? request.Image.Sha256) is { Length: 64 } expected)
+                var inputSize = new FileInfo(path).Length;
+                if (sourcePrepared ? inputSize is <= 0 or > 8 * 1024 * 1024 : inputSize != request.Image.FileSize)
+                    throw new InvalidDataException("照片输入长度不匹配");
+                if (!sourcePrepared && (request.Image.ContentSha256 ?? request.Image.Sha256) is { Length: 64 } expected)
                 {
                     await using var input = File.OpenRead(path);
                     var actual = Convert.ToHexString(await System.Security.Cryptography.SHA256.HashDataAsync(input, token));
                     if (!actual.Equals(expected, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("原图内容已变化，请先更新索引。");
                 }
                 var image = request.Image;
-                var local = new ImageRecord { Id = image.Id, Path = path, FileSize = image.FileSize,
+                var local = new ImageRecord { Id = image.Id, Path = path, FileSize = inputSize,
                     ModifiedUtc = image.ModifiedUtc, TakenUtc = image.TakenUtc, CreatedUtc = image.CreatedUtc,
                     Width = image.Width, Height = image.Height, Gps = image.Gps, Camera = image.Camera };
                 stage = AnalysisStage.Model;

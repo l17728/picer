@@ -11,6 +11,240 @@ namespace Picer.Tests;
 public sealed class MediaStreamingTests
 {
     [Fact]
+    public async Task IdlePoolDoesNotStarveNewFilesBeyondConnectionLimit()
+    {
+        using var fixture = new GatewayServiceFixture();
+        await using var agent = await TestAgent.StartAsync(fixture);
+        using var gateway = new HttpIndexGateway(fixture.BaseUrl, "picer-test-token", fixture.SpkiPin);
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var opened = new List<(long Id, RemoteMediaInfo Info)>();
+        for (var i = 0; i < 7; i++)
+        {
+            var path = Path.Combine(fixture.Root, $"pool-{i}.mp4");
+            await File.WriteAllBytesAsync(path, [(byte)i], deadline.Token);
+            var video = new VideoRepository(fixture.Db).Upsert(fixture.SourceId, path);
+            opened.Add((video.Id, await gateway.GetMediaInfoAsync(video.Id, true, deadline.Token)));
+        }
+        Assert.Equal(7, agent.MediaConnections);
+        for (var i = 0; i < opened.Count; i++)
+        {
+            var item = opened[i];
+            await using var stream = await gateway.OpenMediaRangeAsync(item.Id, true, item.Info, 0, 1, deadline.Token);
+            var buffer = new byte[1]; await stream.ReadExactlyAsync(buffer, deadline.Token);
+            Assert.Equal((byte)i, buffer[0]);
+        }
+        foreach (var item in opened) await gateway.ManageMediaLeaseAsync(item.Info.ETag, true, deadline.Token);
+        await agent.WaitForIdleAsync();
+    }
+
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    [InlineData(false, false)]
+    public async Task AnalysisInputIsPreparedAtSourceWithIdentityAndPrivacyChecks(bool supported, bool changed)
+    {
+        using var fixture = new GatewayServiceFixture();
+        var path = Path.Combine(fixture.Root, "analysis.jpg");
+        using (var pixels = new ImageMagick.MagickImage(ImageMagick.MagickColors.Red, 3000, 2000))
+        {
+            var exif = new ImageMagick.ExifProfile();
+            exif.SetValue(ImageMagick.ExifTag.Artist, "private-analysis-test-marker");
+            pixels.SetProfile(exif);
+            using var output = File.Create(path);
+            pixels.Write(output, ImageMagick.MagickFormat.Jpeg);
+        }
+        var original = await File.ReadAllBytesAsync(path);
+        var image = fixture.Db.UpsertImage(new Picer.Core.Models.ImageRecord
+        {
+            SourceId = fixture.SourceId, Path = path, FileSize = original.Length,
+            ModifiedUtc = File.GetLastWriteTimeUtc(path), Width = 3000, Height = 2000,
+            Sha256 = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(original))
+        });
+        if (changed)
+        {
+            original[^1] ^= 1;
+            await File.WriteAllBytesAsync(path, original);
+            File.SetLastWriteTimeUtc(path, image.ModifiedUtc);
+        }
+        await using var agent = await TestAgent.StartAsync(fixture, analysis: supported);
+        using var gateway = new HttpIndexGateway(fixture.BaseUrl, "picer-test-token", fixture.SpkiPin);
+        if (changed)
+        {
+            await Assert.ThrowsAsync<InvalidDataException>(() => gateway.OpenPhotoAnalysisInputAsync(image));
+            Assert.Equal(0, agent.BytesRead);
+        }
+        else
+        {
+            await using var stream = await gateway.OpenPhotoAnalysisInputAsync(image);
+            if (!supported) { Assert.Null(stream); Assert.Equal(0, agent.MediaConnections); }
+            else
+            {
+                Assert.NotNull(stream);
+                using var bytes = new MemoryStream(); await stream.CopyToAsync(bytes);
+                using var decoded = new ImageMagick.MagickImage(bytes.ToArray());
+                Assert.InRange(decoded.Width, 1U, 1280U); Assert.InRange(decoded.Height, 1U, 1280U);
+                Assert.Null(decoded.GetExifProfile());
+                Assert.True(bytes.Length < original.Length);
+                Assert.Equal(bytes.Length, agent.BytesRead);
+                Assert.Equal(0, agent.OriginalRequests);
+            }
+        }
+        Assert.Equal(original, await File.ReadAllBytesAsync(path));
+    }
+
+    [Theory]
+    [InlineData(true, 1)]
+    [InlineData(false, 3)]
+    public async Task SequentialRangesReuseCapableAgentConnectionAndReleaseIt(bool reuse, int connections)
+    {
+        using var fixture = new GatewayServiceFixture();
+        var path = Path.Combine(fixture.Root, "reuse.mp4");
+        await File.WriteAllBytesAsync(path, new byte[1024]);
+        var video = new VideoRepository(fixture.Db).Upsert(fixture.SourceId, path);
+        await using var agent = await TestAgent.StartAsync(fixture, reuse: reuse);
+        using var gateway = new HttpIndexGateway(fixture.BaseUrl, "picer-test-token", fixture.SpkiPin);
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        var info = await gateway.GetMediaInfoAsync(video.Id, true, deadline.Token);
+        foreach (var offset in new[] { 0, 1023 })
+        {
+            await using var stream = await gateway.OpenMediaRangeAsync(video.Id, true, info, offset, 1, deadline.Token);
+            var bytes = new byte[1]; await stream.ReadExactlyAsync(bytes, deadline.Token);
+        }
+        Assert.Equal(connections, agent.MediaConnections);
+        Assert.Equal(2, agent.BytesRead);
+        await gateway.ManageMediaLeaseAsync(info.ETag, true, deadline.Token);
+        await agent.WaitForIdleAsync();
+        // Control release and the data connection close are independent network messages.
+        while (true)
+        {
+            try { using var writable = File.Open(path, FileMode.Open, FileAccess.Write, FileShare.None); break; }
+            catch (IOException) { await Task.Delay(20, deadline.Token); }
+        }
+    }
+
+    [Fact]
+    public async Task SequentialPlaybackPrefetchesBoundedWindowAndDrainsOnCancellation()
+    {
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var entered = 0;
+        var gateway = new FakeRangeGateway { BeforeRead = async token =>
+        {
+            if (Interlocked.Increment(ref entered) == 4) started.TrySetResult();
+            await Task.Delay(Timeout.Infinite, token);
+        } };
+        await using var reader = new ParallelMediaReader(gateway, 1, true, await gateway.GetMediaInfoAsync(1, true), 4);
+        using var output = new MemoryStream();
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var copying = reader.CopyRangeAsync(output, 0, reader.Info.Length, cancellation.Token);
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(4, gateway.Peak);
+        Assert.Equal(4, gateway.Requests);
+        cancellation.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => copying);
+        Assert.Equal(0, gateway.Active);
+        Assert.Equal(4, gateway.Requests);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(8388607)]
+    public async Task TinyPlayerProbeReadsOnlyRequestedBytesAndCachesResult(long offset)
+    {
+        var gateway = new FakeRangeGateway();
+        await using var reader = new ParallelMediaReader(gateway, 1, true, await gateway.GetMediaInfoAsync(1, true), 4);
+        for (var i = 0; i < 2; i++)
+        {
+            using var output = new MemoryStream();
+            await reader.CopyRangeAsync(output, offset, 1, CancellationToken.None);
+            Assert.Equal(1, output.Length);
+        }
+        Assert.Equal(1, gateway.Requests);
+        Assert.Equal(1, gateway.SourceBytes);
+    }
+
+    [Fact]
+    public async Task PlayableCacheHotHitAndOtherKeyDoNotWaitForSlowDownload()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "picer-cache-concurrency-" + Guid.NewGuid().ToString("N"));
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        Task<string>? slow = null;
+        try
+        {
+            var cache = new PlayableMediaCache(Path.Combine(root, "remote-assets", "playable"), 1024);
+            Task Download(string path, CancellationToken token) => File.WriteAllBytesAsync(path, new byte[8], token);
+            var hot = await cache.GetAsync(new string('a', 64), ".mp4", null, Download, deadline.Token);
+            slow = cache.GetAsync(new string('b', 64), ".mp4", null, async (path, token) =>
+            { entered.TrySetResult(); await release.Task.WaitAsync(token); await Download(path, token); }, deadline.Token);
+            await entered.Task.WaitAsync(deadline.Token);
+            Assert.Equal(hot, await cache.GetAsync(new string('a', 64), ".mp4", null, Download, deadline.Token).WaitAsync(TimeSpan.FromSeconds(2)));
+            await cache.GetAsync(new string('c', 64), ".mp4", null, Download, deadline.Token).WaitAsync(TimeSpan.FromSeconds(2));
+            Assert.False(slow.IsCompleted);
+            release.TrySetResult(); await slow;
+            PlayableMediaCache.Purge(root);
+        }
+        finally { release.TrySetResult(); if (slow is not null) { try { await slow; } catch { } } Directory.Delete(root, true); }
+    }
+
+    [Fact]
+    public async Task PlayablePurgeCancelsAllWritersAndWaitersBeforeDeletingCache()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "picer-cache-purge-" + Guid.NewGuid().ToString("N"));
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var cache = new PlayableMediaCache(Path.Combine(root, "remote-assets", "playable"), 1024);
+        var count = 0;
+        async Task Download(string path, CancellationToken token)
+        {
+            await File.WriteAllBytesAsync(path, new byte[8], token);
+            if (Interlocked.Increment(ref count) == 2) started.TrySetResult();
+            await Task.Delay(Timeout.Infinite, token);
+        }
+        var first = cache.GetAsync(new string('a', 64), ".mp4", null, Download, deadline.Token);
+        var second = cache.GetAsync(new string('b', 64), ".mp4", null, Download, deadline.Token);
+        var same = cache.GetAsync(new string('a', 64), ".mp4", null, Download, deadline.Token);
+        try
+        {
+            await started.Task.WaitAsync(deadline.Token);
+            await Task.Run(() => PlayableMediaCache.Purge(root)).WaitAsync(deadline.Token);
+            foreach (var task in new[] { first, second, same }) await Assert.ThrowsAnyAsync<OperationCanceledException>(() => task);
+            Assert.Equal(2, count);
+            Assert.Empty(Directory.EnumerateFiles(Path.Combine(root, "remote-assets", "playable")));
+            var next = await cache.GetAsync(new string('c', 64), ".mp4", null,
+                (path, token) => File.WriteAllBytesAsync(path, new byte[8], token), deadline.Token);
+            Assert.True(File.Exists(next));
+        }
+        finally
+        {
+            deadline.Cancel();
+            try { await Task.WhenAll(first, second, same); } catch { }
+            Directory.Delete(root, true);
+        }
+    }
+
+    [Fact]
+    public async Task PreviewKeysWithOldStripeCollisionRunIndependently()
+    {
+        var hot = "hot";
+        var stripe = (hot.GetHashCode(StringComparison.Ordinal) & int.MaxValue) % 32;
+        var cold = Enumerable.Range(0, 10000).Select(i => "cold" + i).First(key => (key.GetHashCode(StringComparison.Ordinal) & int.MaxValue) % 32 == stripe);
+        var cache = new MediaPreviewCache();
+        await cache.GetAsync(hot, _ => Task.FromResult(new byte[] { 1 }), CancellationToken.None);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var slow = cache.GetAsync(cold, async token => { entered.TrySetResult(); await release.Task.WaitAsync(token); return new byte[] { 2 }; }, deadline.Token);
+        try
+        {
+            await entered.Task.WaitAsync(deadline.Token);
+            Assert.Equal(new byte[] { 1 }, await cache.GetAsync(hot, _ => throw new InvalidOperationException(), deadline.Token).WaitAsync(TimeSpan.FromSeconds(2)));
+            Assert.False(slow.IsCompleted);
+        }
+        finally { release.TrySetResult(); await slow; }
+    }
+
+    [Fact]
     public async Task IfRangeMismatch_ReturnsCompleteRepresentationDespiteReadAheadLimit()
     {
         using var fixture = new GatewayServiceFixture();
@@ -80,8 +314,10 @@ public sealed class MediaStreamingTests
             Assert.Equal(expected, await response.Content.ReadAsByteArrayAsync());
         }
         Assert.Equal(8, agent.BytesRead);
-        await agent.WaitForIdleAsync();
         Assert.Throws<IOException>(() => File.Open(path, FileMode.Open, FileAccess.Write, FileShare.None));
+        using (var gateway = new HttpIndexGateway(fixture.BaseUrl, "picer-test-token", fixture.SpkiPin))
+            await gateway.ManageMediaLeaseAsync(etag, true);
+        await agent.WaitForIdleAsync();
         agent.Release(etag);
         using var writable = File.Open(path, FileMode.Open, FileAccess.Write, FileShare.None);
         Assert.Equal(80L * 1024 * 1024, writable.Length);
@@ -263,6 +499,9 @@ public sealed class MediaStreamingTests
     private sealed class FakeRangeGateway : IRangeMediaGateway
     {
         private int _active;
+        public int Active => Volatile.Read(ref _active);
+        public long SourceBytes;
+        public Func<CancellationToken, Task>? BeforeRead;
         public int Peak, Requests;
         public bool Changed;
         public Task<RemoteMediaInfo> GetMediaInfoAsync(long id, bool video, CancellationToken token = default) => Task.FromResult(new RemoteMediaInfo(8L * MediaWire.BlockSize, "\"version1\"", "video/mp4", true));
@@ -270,11 +509,13 @@ public sealed class MediaStreamingTests
         {
             if (Changed) throw new InvalidDataException("changed");
             Interlocked.Increment(ref Requests);
+            Interlocked.Add(ref SourceBytes, count);
             var active = Interlocked.Increment(ref _active);
             int peak; do { peak = Peak; } while (active > peak && Interlocked.CompareExchange(ref Peak, active, peak) != peak);
             try
             {
-                await Task.Delay(25, token);
+                if (BeforeRead is not null) await BeforeRead(token);
+                else await Task.Delay(25, token);
                 var bytes = new byte[count]; Array.Fill(bytes, (byte)(offset / MediaWire.BlockSize));
                 return new MemoryStream(bytes);
             }
@@ -295,12 +536,16 @@ public sealed class MediaStreamingTests
         public long BytesRead => Interlocked.Read(ref _bytes);
         public int MediaConnections => _connections;
         public int OriginalRequests;
-        public static async Task<TestAgent> StartAsync(GatewayServiceFixture fixture, bool binary = true)
+        public static async Task<TestAgent> StartAsync(GatewayServiceFixture fixture, bool binary = true, bool reuse = true, bool analysis = true)
         {
             var agent = new TestAgent(fixture);
             agent.Configure(agent._control);
             await agent._control.ConnectAsync(agent.Endpoint("api/agent/v1/connect"), agent._stop.Token);
-            await MediaWire.SendJsonAsync(agent._control, new { type = "agent.register", agentId = "binary-test", capabilities = binary ? new[] { MediaWire.Capability } : Array.Empty<string>() }, agent._stop.Token);
+            var capabilities = new List<string>();
+            if (binary) capabilities.Add(MediaWire.Capability);
+            if (binary && reuse) capabilities.Add(MediaWire.ReuseCapability);
+            if (binary && analysis) capabilities.Add(MediaWire.AnalysisInputCapability);
+            await MediaWire.SendJsonAsync(agent._control, new { type = "agent.register", agentId = "binary-test", capabilities }, agent._stop.Token);
             await MediaWire.ReceiveJsonAsync<JsonElement>(agent._control, agent._stop.Token);
             agent._loop = agent.LoopAsync(); return agent;
         }
@@ -342,7 +587,9 @@ public sealed class MediaStreamingTests
                 {
                     var total = long.Parse(metrics.Split(';')[0].Split('=')[1]);
                     Interlocked.Add(ref _bytes, total - last); last = total;
-                }, _stop.Token, _leases, request.GetProperty("expectedETag").GetString(), request.GetProperty("keepLease").GetBoolean());
+                }, _stop.Token, _leases, request.GetProperty("expectedETag").GetString(), request.GetProperty("keepLease").GetBoolean(),
+                    request.TryGetProperty("sourceFingerprint", out var fingerprint) && fingerprint.ValueKind == JsonValueKind.Object
+                        ? fingerprint.Deserialize<MediaWire.SourceFingerprint>() : null);
             }
             catch (MediaSourceChangedException)
             {

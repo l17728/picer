@@ -14,12 +14,13 @@ namespace Picer.App.ViewModels;
 public partial class ImageItemViewModel : ObservableObject
 {
     private readonly ClientServices _services;
-    private static readonly SemaphoreSlim ThumbnailLoadGate = new(8, 8);
+    private static readonly Picer.Core.Gateway.ThumbnailWorkScheduler ThumbnailLoadGate = new();
     private readonly ImageRecord _record;
     private string? _previewPath;
     private readonly Func<VideoRecord, CancellationToken, Task<string?>>? _videoPreviewLoader;
     private BitmapImage? _thumbnail;
     private bool _isLoadingThumbnail;
+    private bool _thumbnailPrefetch;
     private CancellationTokenSource? _thumbnailCts;
     private readonly CancellationToken _pageCancellation;
 
@@ -129,6 +130,9 @@ public partial class ImageItemViewModel : ObservableObject
     public void EnsureThumbnailLoad()
     {
         if (_thumbnail is not null) return;
+        Volatile.Write(ref _thumbnailPrefetch, false);
+        ThumbnailLoadGate.RefreshPriorities();
+        if (_services.ServiceMode && !IsVideo) _services.RemoteThumbnails.Promote(_record);
         if (!_isLoadingThumbnail) LoadThumbnailAsync(priorityToken: null);
     }
 
@@ -136,11 +140,13 @@ public partial class ImageItemViewModel : ObservableObject
     public void PrefetchThumbnail()
     {
         if (_thumbnail is null && !_isLoadingThumbnail)
-            // A page switch still cancels through _pageCancellation. The
-            // prefetch scheduler itself never cancels an already-started
-            // transfer while the user scrolls.
+        {
+            Volatile.Write(ref _thumbnailPrefetch, true);
             LoadThumbnailAsync(priorityToken: CancellationToken.None);
+        }
     }
+
+    public void CancelThumbnailPrefetch() { if (Volatile.Read(ref _thumbnailPrefetch)) _thumbnailCts?.Cancel(); }
 
     public void SetVideoPreviewPath(string path)
     {
@@ -159,12 +165,11 @@ public partial class ImageItemViewModel : ObservableObject
         var cts = _thumbnailCts = priorityToken is { } priority
             ? CancellationTokenSource.CreateLinkedTokenSource(_pageCancellation, priority)
             : CancellationTokenSource.CreateLinkedTokenSource(_pageCancellation);
-        var acquired = false;
+        IDisposable? slot = null;
 
         try
         {
-            await ThumbnailLoadGate.WaitAsync(cts.Token);
-            acquired = true;
+            slot = await ThumbnailLoadGate.EnterAsync(() => !Volatile.Read(ref _thumbnailPrefetch), cts.Token);
             var imagePaths = await Task.Run(GetImagePaths, cts.Token);
             if (imagePaths.Count == 0 && VideoRecord is { } video && _videoPreviewLoader is not null)
             {
@@ -177,7 +182,7 @@ public partial class ImageItemViewModel : ObservableObject
                 var path = cachedPath ?? await _services.RemoteThumbnails.GetOrDownloadAsync(
                     _record,
                     downloadToken => _services.Gateway.OpenThumbnailAsync(_record.Id, downloadToken),
-                    cts.Token);
+                    cts.Token, prefetch: Volatile.Read(ref _thumbnailPrefetch));
                 if (path is not null && File.Exists(path))
                 {
                     var remoteImage = new BitmapImage();
@@ -255,7 +260,7 @@ public partial class ImageItemViewModel : ObservableObject
         }
         finally
         {
-            if (acquired) ThumbnailLoadGate.Release();
+            slot?.Dispose();
             if (ReferenceEquals(_thumbnailCts, cts))
             {
                 _isLoadingThumbnail = false;

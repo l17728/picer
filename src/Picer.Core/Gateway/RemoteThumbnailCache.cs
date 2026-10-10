@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using Picer.Core.Models;
 
@@ -14,8 +13,16 @@ public sealed class RemoteThumbnailCache
 {
     private const string CacheVersion = "v1";
     private readonly string _root;
-    private readonly ConcurrentDictionary<string, Lazy<Task<string?>>> _inFlight = new(StringComparer.OrdinalIgnoreCase);
-    private readonly SemaphoreSlim _downloadSlots = new(8, 8);
+    private readonly object _sync = new();
+    private readonly Dictionary<string, Flight> _inFlight = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ThumbnailWorkScheduler _downloads = new();
+    private sealed class Flight
+    {
+        public readonly TaskCompletionSource<string?> Ready = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public readonly CancellationTokenSource Stop = new();
+        public int Subscribers;
+        public bool Visible;
+    }
 
     public RemoteThumbnailCache(string root)
     {
@@ -23,7 +30,7 @@ public sealed class RemoteThumbnailCache
         Directory.CreateDirectory(_root);
         foreach (var partial in Directory.EnumerateFiles(_root, "*.part", SearchOption.TopDirectoryOnly))
         {
-            try { File.Delete(partial); } catch { }
+            try { if (File.GetLastWriteTimeUtc(partial) < DateTime.UtcNow.AddDays(-1)) File.Delete(partial); } catch { }
         }
     }
 
@@ -49,37 +56,70 @@ public sealed class RemoteThumbnailCache
     public Task<string?> GetOrDownloadAsync(ImageRecord record, Func<Task<Stream?>> openSource,
         CancellationToken cancellationToken = default) => GetOrDownloadAsync(record, _ => openSource(), cancellationToken);
 
-    public Task<string?> GetOrDownloadAsync(ImageRecord record, Func<CancellationToken, Task<Stream?>> openSource,
-        CancellationToken cancellationToken = default)
+    public async Task<string?> GetOrDownloadAsync(ImageRecord record, Func<CancellationToken, Task<Stream?>> openSource,
+        CancellationToken cancellationToken = default, bool prefetch = false)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var key = GetKey(record);
         var existing = TryGet(record);
-        if (existing is not null) return Task.FromResult<string?>(existing);
-        Lazy<Task<string?>> candidate = null!;
-        candidate = new Lazy<Task<string?>>(() => DownloadOwnedAsync(key, candidate, openSource), LazyThreadSafetyMode.ExecutionAndPublication);
-        var task = _inFlight.GetOrAdd(key, candidate).Value;
-        // Caller cancellation stops only that subscriber. The bounded shared download
-        // remains useful to other visible cards and the persistent cache.
-        _ = task.ContinueWith(completed => { _ = completed.Exception; }, CancellationToken.None,
-            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
-        return task.WaitAsync(cancellationToken);
+        if (existing is not null) return existing;
+        Flight flight;
+        var start = false;
+        lock (_sync)
+        {
+            if (!_inFlight.TryGetValue(key, out flight!)) { _inFlight[key] = flight = new(); start = true; }
+            flight.Subscribers++;
+            if (!prefetch) Volatile.Write(ref flight.Visible, true);
+        }
+        if (start) _ = DownloadOwnedAsync(key, flight, openSource);
+        else _downloads.RefreshPriorities();
+        try { return await flight.Ready.Task.WaitAsync(cancellationToken).ConfigureAwait(false); }
+        finally
+        {
+            var cancel = false;
+            lock (_sync)
+            {
+                if (--flight.Subscribers == 0 && !flight.Ready.Task.IsCompleted)
+                {
+                    if (_inFlight.TryGetValue(key, out var current) && ReferenceEquals(current, flight)) _inFlight.Remove(key);
+                    cancel = true;
+                }
+            }
+            if (cancel)
+            {
+                try { flight.Stop.Cancel(); } catch (ObjectDisposedException) { }
+                // The last subscriber leaves only after its orphaned writer has cleaned up.
+                try { await flight.Ready.Task.ConfigureAwait(false); } catch (Exception) { }
+            }
+        }
     }
 
-    private async Task<string?> DownloadOwnedAsync(string key, Lazy<Task<string?>> owner,
+    public void Promote(ImageRecord record)
+    {
+        lock (_sync) if (_inFlight.TryGetValue(GetKey(record), out var flight)) Volatile.Write(ref flight.Visible, true);
+        _downloads.RefreshPriorities();
+    }
+
+    private async Task DownloadOwnedAsync(string key, Flight owner,
         Func<CancellationToken, Task<Stream?>> openSource)
     {
-        using var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(2));
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(owner.Stop.Token);
+        deadline.CancelAfter(TimeSpan.FromMinutes(2));
         try
         {
-            await _downloadSlots.WaitAsync(deadline.Token).ConfigureAwait(false);
-            try { return await DownloadCoreAsync(key, openSource, deadline.Token).ConfigureAwait(false); }
-            finally { _downloadSlots.Release(); }
+            using var slot = await _downloads.EnterAsync(() => Volatile.Read(ref owner.Visible), deadline.Token).ConfigureAwait(false);
+            owner.Ready.TrySetResult(await DownloadCoreAsync(key, owner, openSource, deadline.Token).ConfigureAwait(false));
         }
-        finally { ((ICollection<KeyValuePair<string, Lazy<Task<string?>>>>)_inFlight).Remove(new(key, owner)); }
+        catch (OperationCanceledException) { owner.Ready.TrySetCanceled(); }
+        catch (Exception exception) { owner.Ready.TrySetException(exception); _ = owner.Ready.Task.Exception; }
+        finally
+        {
+            lock (_sync) if (_inFlight.TryGetValue(key, out var current) && ReferenceEquals(current, owner)) _inFlight.Remove(key);
+            owner.Stop.Dispose();
+        }
     }
 
-    private async Task<string?> DownloadCoreAsync(string key,
+    private async Task<string?> DownloadCoreAsync(string key, Flight owner,
         Func<CancellationToken, Task<Stream?>> openSource, CancellationToken cancellationToken)
     {
         var destination = Path.Combine(_root, key + ".jpg");
@@ -94,8 +134,12 @@ public sealed class RemoteThumbnailCache
             {
                 await source.CopyToAsync(target, cancellationToken).ConfigureAwait(false);
             }
-            cancellationToken.ThrowIfCancellationRequested();
-            if (!File.Exists(destination)) File.Move(temporary, destination);
+            lock (_sync)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (!_inFlight.TryGetValue(key, out var current) || !ReferenceEquals(current, owner)) throw new OperationCanceledException();
+                if (!File.Exists(destination)) File.Move(temporary, destination);
+            }
             return destination;
         }
         finally

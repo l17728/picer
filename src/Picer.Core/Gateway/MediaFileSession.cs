@@ -10,7 +10,8 @@ public static class MediaFileSession
 {
     public static async Task ServeAsync(WebSocket socket, string requestedPath, IReadOnlyList<string> roots, int previewSize,
         string contentType, MediaPreviewCache cache, Action<string> log, CancellationToken token,
-        MediaReadLeasePool? leases = null, string? expectedETag = null, bool keepLease = false)
+        MediaReadLeasePool? leases = null, string? expectedETag = null, bool keepLease = false,
+        MediaWire.SourceFingerprint? sourceFingerprint = null)
     {
         var timer = Stopwatch.StartNew();
         var path = MediaSourceIdentity.ResolveAllowed(requestedPath, roots);
@@ -27,21 +28,33 @@ public static class MediaFileSession
             Stream input = source;
             if (previewSize != 0)
             {
-                if (previewSize is not (256 or 1600)) throw new InvalidDataException("media_preview_size_invalid");
-                var key = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(etag + ":" + previewSize))).ToLowerInvariant();
-                var bytes = await cache.GetAsync(key, ct => Task.Run(() =>
+                if (previewSize is not (256 or 1280 or 1600)) throw new InvalidDataException("media_preview_size_invalid");
+                if (previewSize == 1280 && (sourceFingerprint is null || sourceFingerprint.Length != source.Length
+                    || sourceFingerprint.ModifiedUtc != File.GetLastWriteTimeUtc(path))) throw new MediaSourceChangedException();
+                var key = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(etag + ":" + previewSize + ":" + sourceFingerprint?.Sha256))).ToLowerInvariant();
+                var bytes = await cache.GetAsync(key, async ct =>
                 {
+                    if (previewSize == 1280 && sourceFingerprint?.Sha256 is { Length: 64 } expectedHash)
+                    {
+                        var actual = Convert.ToHexString(await SHA256.HashDataAsync(source, ct).ConfigureAwait(false));
+                        if (!actual.Equals(expectedHash, StringComparison.OrdinalIgnoreCase)) throw new MediaSourceChangedException();
+                        source.Position = 0;
+                    }
+                    return await Task.Run(() =>
+                    {
                     var stage = Stopwatch.StartNew();
                     using var image = RasterImage.Load(source);
                     decodeMs = stage.ElapsedMilliseconds;
                     stage.Restart();
                     if (image.Width > previewSize || image.Height > previewSize) image.ResizeToFit(previewSize, previewSize);
                     using var output = new MemoryStream();
-                    image.SaveAsJpeg(output);
+                    image.StripMetadata();
+                    image.SaveAsJpeg(output, previewSize == 1280 ? 82 : 75);
                     encodeMs = stage.ElapsedMilliseconds;
                     ct.ThrowIfCancellationRequested();
                     return output.ToArray();
-                }, ct), token);
+                    }, ct).ConfigureAwait(false);
+                }, token);
                 preview = new MemoryStream(bytes, writable: false);
                 input = preview;
                 etag = "\"" + key + "\"";
@@ -54,6 +67,13 @@ public static class MediaFileSession
             while (socket.State == WebSocketState.Open)
             {
                 var request = await MediaWire.ReceiveJsonAsync<MediaWire.ReadRequest>(socket, token);
+                // A pooled transport must revalidate a revoked lease before every reuse/read.
+                using var validLease = lease is not null ? leases!.Acquire(path, lease.ETag) : null;
+                if (request.Offset == 0 && request.Count == 0)
+                {
+                    await MediaWire.SendJsonAsync(socket, new MediaWire.Metadata(input.Length, contentType, etag), token);
+                    continue;
+                }
                 if (request.Offset < 0 || request.Count is < 1 or > MediaWire.BlockSize || request.Offset > input.Length - request.Count)
                     throw new InvalidDataException("media_range_invalid");
                 var start = timer.ElapsedMilliseconds;

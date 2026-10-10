@@ -7,4 +7,7 @@ public interface IMediaAssetGateway
     Task<Stream?> OpenVideoThumbnailAsync(long videoId, string? agentId = null, CancellationToken cancellationToken = default);
     Task<Stream?> OpenOriginalImageAsync(long imageId, string? agentId = null, CancellationToken cancellationToken = default);
     Task<Stream?> OpenOriginalVideoAsync(long videoId, string? agentId = null, CancellationToken cancellationToken = default);
+    /// <summary>Verified, metadata-stripped JPEG from the source host; null means legacy fallback is required.</summary>
+    Task<Stream?> OpenPhotoAnalysisInputAsync(Picer.Core.Models.ImageRecord image, CancellationToken cancellationToken = default)
+        => Task.FromResult<Stream?>(null);
 }

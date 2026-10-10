@@ -1,28 +1,28 @@
 namespace Picer.Core.Gateway;
 
-/// <summary>Bounded transient preview cache. Striped single-flight avoids unbounded key/lock inventories.</summary>
+/// <summary>Bounded preview cache with independent active keys and an immediate hot-cache path.</summary>
 public sealed class MediaPreviewCache(long capacity = 64L * 1024 * 1024)
 {
     private readonly object _sync = new();
-    private readonly SemaphoreSlim[] _gates = Enumerable.Range(0, 32).Select(_ => new SemaphoreSlim(1, 1)).ToArray();
+    private readonly AsyncMediaKeyGate _keys = new();
     private readonly Dictionary<string, (byte[] Bytes, DateTime Expires, LinkedListNode<string> Node)> _items = new();
     private readonly LinkedList<string> _lru = new();
     private long _bytes, _generation;
     public async Task<byte[]> GetAsync(string key, Func<CancellationToken, Task<byte[]>> factory, CancellationToken token)
     {
-        var gate = _gates[(key.GetHashCode(StringComparison.Ordinal) & int.MaxValue) % _gates.Length];
-        await gate.WaitAsync(token).ConfigureAwait(false);
-        try
+        token.ThrowIfCancellationRequested();
+        long generation;
+        lock (_sync)
         {
-            long generation;
+            generation = _generation;
+            if (TryGet(key) is { } cached) return cached;
+        }
+        using (await _keys.EnterAsync(key, token).ConfigureAwait(false))
+        {
             lock (_sync)
             {
-                generation = _generation;
-                if (_items.TryGetValue(key, out var item))
-                {
-                    if (item.Expires > DateTime.UtcNow) { _lru.Remove(item.Node); _lru.AddLast(item.Node); return item.Bytes; }
-                    Remove(key);
-                }
+                if (generation != _generation) throw new OperationCanceledException("media_cache_cleared");
+                if (TryGet(key) is { } cached) return cached;
             }
             var bytes = await factory(token).ConfigureAwait(false);
             if (bytes.LongLength > Math.Min(capacity, 8 * 1024 * 1024)) throw new IOException("media_preview_too_large");
@@ -36,7 +36,12 @@ public sealed class MediaPreviewCache(long capacity = 64L * 1024 * 1024)
             }
             return bytes;
         }
-        finally { gate.Release(); }
+    }
+    private byte[]? TryGet(string key)
+    {
+        if (!_items.TryGetValue(key, out var item)) return null;
+        if (item.Expires <= DateTime.UtcNow) { Remove(key); return null; }
+        _lru.Remove(item.Node); _lru.AddLast(item.Node); return item.Bytes;
     }
     private void Remove(string key)
     { if (_items.Remove(key, out var item)) { _bytes -= item.Bytes.LongLength; _lru.Remove(item.Node); } }

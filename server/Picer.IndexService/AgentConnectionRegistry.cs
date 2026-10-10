@@ -18,6 +18,7 @@ internal sealed partial class AgentConnectionRegistry
     {
         _journal = journal;
         _currentConfig = currentConfig?.Clone();
+        _mediaExpiry = new(_ => SweepMedia(), null, TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(2));
     }
     public int OnlineCount => _sessions.Count;
     public IReadOnlyList<string> OnlineCapabilities => _sessions.Values
@@ -94,7 +95,11 @@ internal sealed partial class AgentConnectionRegistry
         catch (WebSocketException) { }
         finally
         {
-            if (session is not null) _sessions.TryRemove(new KeyValuePair<string, AgentSession>(session.AgentId, session));
+            if (session is not null)
+            {
+                _sessions.TryRemove(new KeyValuePair<string, AgentSession>(session.AgentId, session));
+                ClearPooledMedia(owner: session);
+            }
             session?.Dispose();
         }
     }

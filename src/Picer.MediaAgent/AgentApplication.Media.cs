@@ -10,16 +10,19 @@ namespace Picer.MediaAgent;
 
 internal sealed partial class AgentApplication
 {
+    private readonly Picer.Core.Indexing.BackgroundWorkCoordinator _maintenanceActivity = new();
     private readonly SemaphoreSlim _mediaReaders = new(4, 4);
     private readonly SemaphoreSlim _previewReaders = new(2, 2);
+    private readonly SemaphoreSlim _analysisReaders = new(2, 2);
     private readonly MediaPreviewCache _mediaPreviews = new();
     private readonly MediaReadLeasePool _mediaLeases = new();
 
     private async Task ServeMediaAsync(JsonElement request, CancellationToken token)
     {
+        using var foreground = _maintenanceActivity.EnterForeground();
         var id = request.GetProperty("requestId").GetString()!;
         var size = request.GetProperty("previewSize").GetInt32();
-        var gate = size > 0 ? _previewReaders : _mediaReaders;
+        var gate = size == 1280 ? _analysisReaders : size > 0 ? _previewReaders : _mediaReaders;
         var elapsed = Stopwatch.StartNew();
         var entered = false;
         using var socket = new ClientWebSocket();
@@ -38,7 +41,9 @@ internal sealed partial class AgentApplication
                 Mime(request.GetProperty("path").GetString()!), _mediaPreviews,
                 metrics => Log($"media block; requestId={id}; queueMs={queueMs}; {metrics}"), token, _mediaLeases,
                 request.TryGetProperty("expectedETag", out var expected) && expected.ValueKind == JsonValueKind.String ? expected.GetString() : null,
-                request.TryGetProperty("keepLease", out var keep) && keep.GetBoolean());
+                request.TryGetProperty("keepLease", out var keep) && keep.GetBoolean(),
+                request.TryGetProperty("sourceFingerprint", out var fingerprint) && fingerprint.ValueKind == JsonValueKind.Object
+                    ? fingerprint.Deserialize<MediaWire.SourceFingerprint>() : null);
         }
         catch (Exception exception) when (exception is IOException or InvalidDataException or UnauthorizedAccessException or OperationCanceledException or WebSocketException or ArgumentException)
         {

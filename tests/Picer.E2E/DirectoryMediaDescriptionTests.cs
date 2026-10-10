@@ -12,6 +12,39 @@ namespace Picer.E2E;
 public sealed class DirectoryMediaDescriptionTests
 {
     [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task RemotePhotoUsesPreparedInputOrVerifiedLegacyOriginal(bool supported)
+    {
+        var root = Path.Combine(Path.GetTempPath(), "picer-prepared-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            byte[] original = [1, 2, 3, 4]; byte[] prepared = [8, 9];
+            var record = new ImageRecord { Id = 1, Path = "remote/photo.jpg", FileSize = original.Length,
+                Sha256 = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(original)) };
+            var assets = new PreparedAssets(supported, original, prepared);
+            var inner = new SnapshotAnalyzer(record.Path, supported ? prepared : original);
+            await new MediaDescriptionBatch.PhotoInputAnalyzer(inner, root, assets).AnalyzeAsync(new(record, null, []), default);
+            Assert.Equal(1, inner.Calls);
+            Assert.Equal(supported ? 0 : 1, assets.OriginalReads);
+            Assert.Empty(Directory.EnumerateFiles(root));
+        }
+        finally { Directory.Delete(root, true); }
+    }
+    private sealed class PreparedAssets(bool supported, byte[] original, byte[] prepared) : Picer.Core.Gateway.IMediaAssetGateway
+    {
+        public int OriginalReads;
+        public Task<Stream?> OpenPhotoAnalysisInputAsync(ImageRecord image, CancellationToken cancellationToken = default)
+            => Task.FromResult<Stream?>(supported ? new MemoryStream(prepared) : null);
+        public Task<Stream?> OpenOriginalImageAsync(long id, string? agentId = null, CancellationToken cancellationToken = default)
+        { OriginalReads++; return Task.FromResult<Stream?>(new MemoryStream(original)); }
+        public Task<Stream?> OpenOriginalVideoAsync(long id, string? agentId = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<Stream?> OpenVideoThumbnailAsync(long id, string? agentId = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<Stream?> OpenFaceThumbnailAsync(long id, string? agentId = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public async Task LocalPhotoInputUsesVerifiedSnapshotAndRejectsChangedContent(bool changed)

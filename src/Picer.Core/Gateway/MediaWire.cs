@@ -8,6 +8,10 @@ public static class MediaWire
 {
     public const int BlockSize = 1024 * 1024;
     public const string Capability = "media.binary.v1";
+    public const string ReuseCapability = "media.reuse.v1";
+    public const string AnalysisInputCapability = "media.analysis-input.v1";
+    public sealed record SourceFingerprint(long Length, DateTime ModifiedUtc, string? Sha256);
+    public sealed record AnalysisInputRequest(long ImageId, SourceFingerprint Source);
     public sealed record Metadata(long Length, string ContentType, string ETag, string? Error = null);
     public sealed record ReadRequest(long Offset, int Count);
 
@@ -36,12 +40,14 @@ public static class MediaWire
 }
 
 /// <summary>Seekable remote reader, bounded to one binary block. Never downloads an entire file in memory.</summary>
-public sealed class SocketMediaStream(WebSocket socket, MediaWire.Metadata metadata, Action onDispose) : Stream
+public sealed class SocketMediaStream(WebSocket socket, MediaWire.Metadata metadata, Action onDispose,
+    Func<WebSocket, bool>? returnConnection = null) : Stream
 {
     private byte[] _block = [];
     private long _blockOffset;
     private long _position;
     private int _disposed;
+    private bool _faulted;
     public MediaWire.Metadata Metadata { get; } = metadata;
     public override bool CanRead => _disposed == 0;
     public override bool CanSeek => _disposed == 0;
@@ -71,7 +77,7 @@ public sealed class SocketMediaStream(WebSocket socket, MediaWire.Metadata metad
                 if (_block.Length != count) throw new EndOfStreamException("media_source_changed");
                 _blockOffset = _position;
             }
-            catch { Dispose(); throw; }
+            catch { _faulted = true; Dispose(); throw; }
         }
         var start = checked((int)(_position - _blockOffset));
         var copied = Math.Min(buffer.Length, _block.Length - start);
@@ -91,7 +97,16 @@ public sealed class SocketMediaStream(WebSocket socket, MediaWire.Metadata metad
     public override int Read(byte[] buffer, int offset, int count) => ReadAsync(buffer.AsMemory(offset, count)).AsTask().GetAwaiter().GetResult();
     protected override void Dispose(bool disposing)
     {
-        if (Interlocked.Exchange(ref _disposed, 1) == 0) { socket.Abort(); socket.Dispose(); _block = []; onDispose(); }
+        if (Interlocked.Exchange(ref _disposed, 1) == 0)
+        {
+            var returned = false;
+            try { returned = !_faulted && socket.State == WebSocketState.Open && returnConnection?.Invoke(socket) == true; }
+            finally
+            {
+                if (!returned) { socket.Abort(); socket.Dispose(); }
+                _block = []; onDispose();
+            }
+        }
         base.Dispose(disposing);
     }
     public override void Flush() { }

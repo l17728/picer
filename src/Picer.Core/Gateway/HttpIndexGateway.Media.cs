@@ -15,6 +15,28 @@ public interface IRangeMediaGateway
 
 public sealed partial class HttpIndexGateway
 {
+    public async Task<Stream?> OpenPhotoAnalysisInputAsync(Picer.Core.Models.ImageRecord image, CancellationToken cancellationToken = default)
+    {
+        var identity = new MediaWire.SourceFingerprint(image.FileSize, image.ModifiedUtc, image.ContentSha256 ?? image.Sha256);
+        using var request = new HttpRequestMessage(HttpMethod.Post, "api/gateway/v1/analysis-input")
+        { Content = JsonContent.Create(new MediaWire.AnalysisInputRequest(image.Id, identity)) };
+        var response = await _client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
+        if (response.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.NotImplemented or HttpStatusCode.MethodNotAllowed)
+        { response.Dispose(); return null; }
+        try
+        {
+            if (response.StatusCode is HttpStatusCode.Conflict or HttpStatusCode.PreconditionFailed)
+                throw new InvalidDataException("照片内容或索引已变化，请先更新索引。");
+            response.EnsureSuccessStatusCode();
+            if (response.Content.Headers.ContentType?.MediaType != "image/jpeg"
+                || response.Content.Headers.ContentLength is not (> 0 and <= 8 * 1024 * 1024)
+                || !response.Headers.TryGetValues("X-Picer-Analysis-Input", out var values) || !values.Contains("verified-v1"))
+                throw new InvalidDataException("photo_analysis_input_invalid");
+            return await OwnResponseAsync(response, cancellationToken).ConfigureAwait(false);
+        }
+        catch { response.Dispose(); throw; }
+    }
+
     private Task<HttpResponseMessage> GetMediaWithRetryAsync(string route, CancellationToken token,
         [System.Runtime.CompilerServices.CallerMemberName] string operation = "") =>
         SendWithRetryAsync(ct => _client.GetAsync(route, HttpCompletionOption.ResponseHeadersRead, ct), token, operation);

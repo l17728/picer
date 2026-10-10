@@ -1,6 +1,7 @@
 ﻿using Picer.Core.Data;
 using Picer.Core.Models;
 using Picer.Core.Video;
+using Microsoft.Data.Sqlite;
 
 namespace Picer.Core.Indexing;
 
@@ -48,7 +49,38 @@ public static class DirectoryMediaImport
         }
     }
 
-    private static void ApplyCore(PicerDatabase db, long sourceId, string directory, DirectoryMediaPage page)
+    public static bool ApplyVerifiedExisting(PicerDatabase db, MediaConsistencyCandidate expected, MediaConsistencyResult result)
+    {
+        if (result.Id != expected.Id || result.IsVideo != expected.IsVideo) throw new InvalidDataException("maintenance_identity_mismatch");
+        if (result.State is "unknown" or "unchanged") return false;
+        if (result.State != "missing" && (result.State != "verified" || result.Entry is not { } entry
+            || entry.IsVideo != expected.IsVideo || !Normalize(entry.Path).Equals(Normalize(expected.Path), StringComparison.OrdinalIgnoreCase)
+            || entry.Sha256 is not { Length: 64 } hash || !hash.All(Uri.IsHexDigit))) throw new InvalidDataException("maintenance_result_invalid");
+        lock (ScanGate)
+        {
+            using var transaction = db.BeginTransaction();
+            var current = MediaConsistencyMaintenance.ReadCandidate(db, expected.IsVideo, expected.Id);
+            if (current != expected) return false;
+            using var changes = db.Command("SELECT total_changes()");
+            var before = Convert.ToInt64(changes.ExecuteScalar());
+            if (result.State == "missing")
+            {
+                using var update = db.Command($"UPDATE {(expected.IsVideo ? "videos" : "images")} SET status='missing' WHERE id=$id AND status<>'missing'");
+                update.Parameters.AddWithValue("$id", expected.Id); update.ExecuteNonQuery();
+            }
+            else
+            {
+                // The transaction keeps purge/repair from racing the existence check and turning this into an insert.
+                var verified = result.Entry! with { Path = expected.Path };
+                ApplyCore(db, expected.SourceId, expected.Root,
+                    new DirectoryMediaPage(Guid.NewGuid().ToString("N"), 1, 1, true, [verified]), transaction);
+            }
+            var changed = Convert.ToInt64(changes.ExecuteScalar()) != before;
+            transaction.Commit(); return changed;
+        }
+    }
+
+    private static void ApplyCore(PicerDatabase db, long sourceId, string directory, DirectoryMediaPage page, SqliteTransaction? suppliedTransaction = null)
     {
         var source = db.GetSource(sourceId) ?? throw new InvalidOperationException("directory_source_missing");
         if (!Contains(source.Path, directory)) throw new UnauthorizedAccessException("directory_outside_source");
@@ -76,7 +108,8 @@ public static class DirectoryMediaImport
             scan.Complete &= page.EnumerationComplete;
             scan.Observed.UnionWith(page.ObservedPaths.Select(Normalize));
         }
-        using var transaction = db.BeginTransaction();
+        using var ownedTransaction = suppliedTransaction is null ? db.BeginTransaction() : null;
+        var transaction = suppliedTransaction ?? ownedTransaction!;
         foreach (var entry in page.Items)
         {
             if (entry.IsVideo)
@@ -142,7 +175,7 @@ public static class DirectoryMediaImport
                 command.Parameters.AddWithValue("$modified", missing.Modified.ToUniversalTime().ToString("o")); command.ExecuteNonQuery();
             }
         }
-        transaction.Commit();
+        ownedTransaction?.Commit();
         if (page.Done) Scans.Remove(scanKey);
     }
 

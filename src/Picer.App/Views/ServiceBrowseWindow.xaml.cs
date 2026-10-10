@@ -42,6 +42,7 @@ public partial class ServiceBrowseWindow : Window
         InitializeComponent();
         ViewModel = new ServiceBrowseViewModel(gateway, AppServices.GetClientServices());
         DataContext = ViewModel;
+        Closed += (_, _) => ViewModel.CancelThumbnailWork();
         // The remote tree is hierarchical even though the legacy XAML template
         // predates child directories.  Install the same hierarchical template
         // at runtime so the original window can expand every indexed folder.

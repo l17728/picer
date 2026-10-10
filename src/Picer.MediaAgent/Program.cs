@@ -273,7 +273,8 @@ internal sealed partial class AgentApplication : IDisposable
 
     private string[] BuildCapabilities()
     {
-        var capabilities = new List<string> { "originalRead", "videoRead", "range", "ai.proxy", "directory.media", Picer.Core.Gateway.MediaWire.Capability };
+        var capabilities = new List<string> { "originalRead", "videoRead", "range", "ai.proxy", "directory.media", Picer.Core.Gateway.MediaWire.Capability, Picer.Core.Gateway.MediaWire.ReuseCapability, Picer.Core.Gateway.MediaWire.AnalysisInputCapability };
+        capabilities.Add(Picer.Core.Indexing.MediaConsistencyVerifier.Capability);
         var ffmpeg = Setting("PICER_FFMPEG_PATH");
         if (!string.IsNullOrWhiteSpace(ffmpeg) && File.Exists(ffmpeg) && File.Exists(Path.Combine(Path.GetDirectoryName(ffmpeg)!, "ffprobe.exe")))
         {
@@ -327,6 +328,7 @@ internal sealed partial class AgentApplication : IDisposable
 
     private async Task ServeAssetAsync(ClientWebSocket socket, JsonElement request, CancellationToken cancellationToken)
     {
+        using var foreground = _maintenanceActivity.EnterForeground();
         var requestId = request.TryGetProperty("requestId", out var id) ? id.GetString() : null;
         var requestedPath = request.TryGetProperty("path", out var path) ? path.GetString() : null;
         if (string.IsNullOrWhiteSpace(requestId) || string.IsNullOrWhiteSpace(requestedPath)) return;
@@ -350,6 +352,7 @@ internal sealed partial class AgentApplication : IDisposable
 
     private async Task ServeAiAsync(ClientWebSocket socket, JsonElement request, CancellationToken cancellationToken)
     {
+        using var foreground = _maintenanceActivity.EnterForeground();
         var requestId = request.TryGetProperty("requestId", out var id) ? id.GetString() : null;
         if (string.IsNullOrWhiteSpace(requestId) || !request.TryGetProperty("payloadBase64", out var payloadElement)) return;
         var started = System.Diagnostics.Stopwatch.StartNew();
@@ -397,9 +400,22 @@ internal sealed partial class AgentApplication : IDisposable
             return;
         }
         var started = System.Diagnostics.Stopwatch.StartNew();
-        Log($"task accepted; requestId={requestId}; task={task}; payloadBytes={payload?.Length ?? 0}");
+        var maintenance = task == Picer.Core.Indexing.MediaConsistencyVerifier.Capability;
+        using var foreground = maintenance ? null : _maintenanceActivity.EnterForeground();
+        if (!maintenance) Log($"task accepted; requestId={requestId}; task={task}; payloadBytes={payload?.Length ?? 0}");
         try
         {
+            if (maintenance)
+            {
+                var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+                var check = JsonSerializer.Deserialize<Picer.Core.Indexing.MediaConsistencyRequest>(payload ?? "", options)
+                    ?? throw new InvalidDataException("invalid_maintenance_request");
+                using var background = _maintenanceActivity.TryEnterBackground(cancellationToken);
+                var result = background is null ? new Picer.Core.Indexing.MediaConsistencyBatch([], Deferred: true)
+                    : await new Picer.Core.Indexing.MediaConsistencyVerifier().VerifyAsync(check, _roots, background.Token);
+                await SendAsync(socket, new { type = "task.result", requestId, payload = JsonSerializer.Serialize(result, options) }, cancellationToken);
+                return;
+            }
             if (!string.Equals(task, "index.repair", StringComparison.OrdinalIgnoreCase) &&
                 !string.Equals(task, "directory.media", StringComparison.OrdinalIgnoreCase) &&
                 !string.Equals(task, "video.purge-cache", StringComparison.OrdinalIgnoreCase) &&

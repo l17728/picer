@@ -397,6 +397,12 @@ public static class IndexServiceHost
         var agents = new AgentConnectionRegistry(journal, savedServiceConfig);
         var mediaPreviews = new MediaPreviewCache();
         var app = builder.Build();
+        app.Lifetime.ApplicationStopping.Register(agents.StopMediaConnections);
+        var maintenance = new BackgroundConsistencyScheduler(new Picer.Core.Indexing.MediaConsistencyMaintenance(
+            db.OpenIndependentConnection, agents.VerifyExistingAsync, Path.Combine(dataRoot, "consistency-checkpoint.json")));
+        if (Environment.GetEnvironmentVariable("PICER_BACKGROUND_INDEX_CHECK") != "0")
+            app.Lifetime.ApplicationStarted.Register(maintenance.Start);
+        app.Lifetime.ApplicationStopping.Register(maintenance.Stop);
         app.UseWebSockets();
         app.MapPost("/api/gateway/v1/media-lease", async (MediaLeaseRequest request, CancellationToken token) =>
         {
@@ -655,6 +661,36 @@ async function load(){const [c,g]=await Promise.all([fetch('/api/service/v1/capa
             var key = $"photo:{agentId}:{image.Sha256 ?? image.Path}:{image.FileSize}:{image.ModifiedUtc.Ticks}:1600";
             var bytes = await mediaPreviews.GetAsync(key, token => MediaAssetResults.PreviewAsync(agents, agentId, IndexApiHandlers.NormalizeAgentPath(image.Path), 1600, token), cancellationToken);
             return Results.File(bytes, "image/jpeg");
+        });
+        app.MapPost("/api/gateway/v1/analysis-input", async (MediaWire.AnalysisInputRequest request, string? agentId, HttpContext context, CancellationToken token) =>
+        {
+            if (request.Source is null) return Results.BadRequest();
+            using var connection = db.OpenIndependentConnection();
+            var image = connection.GetImage(request.ImageId);
+            if (image is null) return Results.NotFound();
+            bool Matches(ImageRecord? current) => current is not null && current.FileSize == request.Source.Length
+                && current.ModifiedUtc == request.Source.ModifiedUtc
+                && string.Equals(current.ContentSha256 ?? current.Sha256, request.Source.Sha256, StringComparison.OrdinalIgnoreCase);
+            if (!Matches(image)) return Results.StatusCode(StatusCodes.Status409Conflict);
+            if (agents.OnlineCount == 0) return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
+            try
+            {
+                await using var stream = await agents.OpenMediaAsync(agentId, IndexApiHandlers.NormalizeAgentPath(image.Path), 1280, token,
+                    sourceFingerprint: request.Source);
+                if (stream is null) return Results.StatusCode(StatusCodes.Status501NotImplemented);
+                if (stream.Length is <= 0 or > 8 * 1024 * 1024) throw new InvalidDataException("photo_analysis_input_too_large");
+                using var output = new MemoryStream();
+                await stream.CopyToAsync(output, token);
+                if (!Matches(connection.GetImage(request.ImageId))) return Results.StatusCode(StatusCodes.Status409Conflict);
+                context.Response.Headers["X-Picer-Analysis-Input"] = "verified-v1";
+                return Results.File(output.ToArray(), "image/jpeg");
+            }
+            catch (MediaSourceChangedException) { return Results.StatusCode(StatusCodes.Status412PreconditionFailed); }
+            catch (Exception exception) when (exception is IOException or WebSocketException or UnauthorizedAccessException)
+            {
+                AppLogger.Warn($"Photo analysis input failed; errorType={exception.GetType().Name}");
+                return Results.Json(new { error = "photo_analysis_input_unavailable" }, statusCode: StatusCodes.Status502BadGateway);
+            }
         });
         app.MapGet("/api/gateway/v1/face-thumbs/{id:long}", async (long id, string? agentId, CancellationToken cancellationToken) =>
         {
@@ -1235,6 +1271,7 @@ async function load(){const [c,g]=await Promise.all([fetch('/api/service/v1/capa
         app.Lifetime.ApplicationStopped.Register(() =>
         {
             AppLogger.Info("Picer.IndexService 已停止");
+            maintenance.Dispose();
             db.Dispose();
         });
         return new IndexServiceInstance(app, certificate, handlers, engine, jobs);

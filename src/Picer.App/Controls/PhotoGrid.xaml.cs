@@ -36,6 +36,7 @@ public partial class PhotoGrid : UserControl
     private bool _dragSelecting;
     private HashSet<object> _selectionBeforeDrag = [];
     private Task? _prefetchWorker;
+    private readonly HashSet<ImageItemViewModel> _prefetchItems = [];
     private long _lastPrefetchRequestTicks;
     private long _lastPrefetchLogTicks;
     private long _lastPrefetchBatchLogTicks;
@@ -90,6 +91,16 @@ public partial class PhotoGrid : UserControl
     private void ScheduleGreedyPrefetch()
     {
         if (!AppServices.ServiceMode) return;
+        var viewport = FindViewportRange();
+        var visibleNow = new HashSet<ImageItemViewModel>();
+        if (viewport.First >= 0)
+            for (var i = viewport.First; i <= viewport.Last && i < List.Items.Count; i++)
+                if (List.Items[i] is ImageItemViewModel item) { visibleNow.Add(item); item.EnsureThumbnailLoad(); }
+        foreach (var item in _prefetchItems.ToArray())
+        {
+            if (!visibleNow.Contains(item)) item.CancelThumbnailPrefetch();
+            if (!item.IsThumbnailLoading || visibleNow.Contains(item)) _prefetchItems.Remove(item);
+        }
         Volatile.Write(ref _lastPrefetchRequestTicks, DateTime.UtcNow.Ticks);
         var now = DateTime.UtcNow.Ticks;
         if (now - Volatile.Read(ref _lastPrefetchLogTicks) > TimeSpan.TicksPerSecond)
@@ -115,28 +126,32 @@ public partial class PhotoGrid : UserControl
                     await Task.Delay(TimeSpan.FromTicks(remaining));
                     continue;
                 }
-                // Recompute the order on every batch. A scroll therefore
-                // changes only the not-yet-started work; requests already
-                // running are never cancelled.
                 var all = List.Items.OfType<ImageItemViewModel>().ToArray();
                 var visible = new HashSet<ImageItemViewModel>();
                 var range = FindViewportRange();
                 if (range.First >= 0)
                     for (var index = range.First; index <= range.Last && index < List.Items.Count; index++)
                         if (List.Items[index] is ImageItemViewModel item) visible.Add(item);
-                var ordered = visible.Concat(all.Where(item => !visible.Contains(item))).ToArray();
-                var pending = ordered.Where(item => !item.HasThumbnail && !item.IsThumbnailLoading).Take(8).ToArray();
+                var span = Math.Clamp(range.Last - range.First + 1, 8, 128);
+                var near = all.Skip(Math.Max(0, range.First - span)).Take(span * 3);
+                var ordered = visible.Concat(near.Where(item => !visible.Contains(item))).ToArray();
+                var available = Math.Max(0, 8 - ordered.Count(item => item.IsThumbnailLoading));
+                var pending = ordered.Where(item => !item.HasThumbnail && !item.IsThumbnailLoading).Take(available).ToArray();
                 var batchNow = DateTime.UtcNow.Ticks;
                 if (batchNow - Volatile.Read(ref _lastPrefetchBatchLogTicks) > TimeSpan.TicksPerSecond)
                 {
                     Volatile.Write(ref _lastPrefetchBatchLogTicks, batchNow);
                     AppLogger.Info($"Thumbnail prefetch batch; items={all.Length}; viewport={range.First}-{range.Last}; pending={pending.Length}");
                 }
-                if (pending.Length == 0) return;
+                if (pending.Length == 0)
+                {
+                    if (ordered.Any(item => item.IsThumbnailLoading)) { await Task.Delay(80); continue; }
+                    return;
+                }
                 foreach (var item in pending)
                 {
                     if (visible.Contains(item)) item.EnsureThumbnailLoad();
-                    else item.PrefetchThumbnail();
+                    else { _prefetchItems.Add(item); item.PrefetchThumbnail(); }
                 }
                 await Task.Delay(40);
             }
@@ -253,6 +268,8 @@ public partial class PhotoGrid : UserControl
     private void PhotoGrid_Unloaded(object sender, RoutedEventArgs e)
     {
         Volatile.Write(ref _lastPrefetchRequestTicks, 0);
+        foreach (var item in _prefetchItems) item.CancelThumbnailPrefetch();
+        _prefetchItems.Clear();
     }
 
     private void PhotoGrid_Loaded(object sender, RoutedEventArgs e) => ScheduleGreedyPrefetch();
