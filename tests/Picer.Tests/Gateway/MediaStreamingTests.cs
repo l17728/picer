@@ -11,6 +11,22 @@ namespace Picer.Tests;
 public sealed class MediaStreamingTests
 {
     [Fact]
+    public async Task LegacyAgent_HeadDoesNotRequestOriginal_AndReportsDownloadFallback()
+    {
+        using var fixture = new GatewayServiceFixture();
+        var path = Path.Combine(fixture.Root, "legacy-large.mp4");
+        await using (var file = File.Create(path)) file.SetLength(80L * 1024 * 1024);
+        var video = new VideoRepository(fixture.Db).Upsert(fixture.SourceId, path);
+        await using var agent = await TestAgent.StartAsync(fixture, binary: false);
+        using var gateway = new HttpIndexGateway(fixture.BaseUrl, "picer-test-token", fixture.SpkiPin);
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var info = await gateway.GetMediaInfoAsync(video.Id, true, deadline.Token);
+        Assert.False(info.SupportsStreaming);
+        Assert.Equal(0, agent.OriginalRequests);
+        Assert.Equal(0, agent.BytesRead);
+    }
+
+    [Fact]
     public async Task RealAgentChannel_LargeFileSeeksWithoutFullTransfer_AndClosesSource()
     {
         using var fixture = new GatewayServiceFixture();
@@ -259,12 +275,13 @@ public sealed class MediaStreamingTests
         private int _connections, _active;
         public long BytesRead => Interlocked.Read(ref _bytes);
         public int MediaConnections => _connections;
-        public static async Task<TestAgent> StartAsync(GatewayServiceFixture fixture)
+        public int OriginalRequests;
+        public static async Task<TestAgent> StartAsync(GatewayServiceFixture fixture, bool binary = true)
         {
             var agent = new TestAgent(fixture);
             agent.Configure(agent._control);
             await agent._control.ConnectAsync(agent.Endpoint("api/agent/v1/connect"), agent._stop.Token);
-            await MediaWire.SendJsonAsync(agent._control, new { type = "agent.register", agentId = "binary-test", capabilities = new[] { MediaWire.Capability } }, agent._stop.Token);
+            await MediaWire.SendJsonAsync(agent._control, new { type = "agent.register", agentId = "binary-test", capabilities = binary ? new[] { MediaWire.Capability } : Array.Empty<string>() }, agent._stop.Token);
             await MediaWire.ReceiveJsonAsync<JsonElement>(agent._control, agent._stop.Token);
             agent._loop = agent.LoopAsync(); return agent;
         }
@@ -283,6 +300,7 @@ public sealed class MediaStreamingTests
                     var request = await MediaWire.ReceiveJsonAsync<JsonElement>(_control, _stop.Token);
                     switch (request.GetProperty("type").GetString())
                     {
+                        case "asset.open": Interlocked.Increment(ref OriginalRequests); break;
                         case "media.open": _requests.Add(ServeAsync(request)); break;
                         case "media.release": _leases.Release(request.GetProperty("etag").GetString()!); break;
                         case "media.keepalive": _leases.Touch(request.GetProperty("etag").GetString()!); break;

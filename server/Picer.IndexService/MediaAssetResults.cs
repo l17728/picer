@@ -41,6 +41,9 @@ internal static class MediaAssetResults
             try { return Results.Stream(stream, stream.Metadata.ContentType, entityTag: EntityTagHeaderValue.Parse(stream.Metadata.ETag), enableRangeProcessing: true); }
             catch { await stream.DisposeAsync(); throw; }
         }
+        // Legacy agents cannot return metadata without uploading the complete original.
+        // A capability probe must never trigger that transfer (especially for large videos).
+        if (HttpMethods.IsHead(context.Request.Method)) return Results.StatusCode(405);
         var asset = await agents.RequestAsync(agentId, path, context.RequestAborted);
         return asset is null ? Results.StatusCode(503) : Results.File(asset.Value.Content, asset.Value.ContentType, enableRangeProcessing: true);
     }
