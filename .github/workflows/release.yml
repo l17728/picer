@@ -73,7 +73,11 @@ jobs:
           if-no-files-found: error
       - name: Verify user installer lifecycle and bundled dependencies
         shell: pwsh
-        run: ./tools/verify-user-installers.ps1 -Version $env:RELEASE_TAG -AssetDirectory "$env:RUNNER_TEMP/release-assets" -TestRoot "$env:RUNNER_TEMP/installer-validation"
+        env:
+          PICER_LIVE_SERVICE_URL: ${{ secrets.PICER_LIVE_SERVICE_URL }}
+          PICER_LIVE_SERVICE_TOKEN: ${{ secrets.PICER_LIVE_SERVICE_TOKEN }}
+          PICER_LIVE_SERVICE_SPKI_PIN: ${{ secrets.PICER_LIVE_SERVICE_SPKI_PIN }}
+        run: ./tools/verify-user-installers.ps1 -Version $env:RELEASE_TAG -AssetDirectory "$env:RUNNER_TEMP/release-assets" -TestRoot "$env:RUNNER_TEMP/installer-validation" -VerifyLiveService
       - name: Upload installer validation evidence
         if: always()
         uses: actions/upload-artifact@v4

@@ -1,7 +1,8 @@
 param(
     [Parameter(Mandatory)][ValidatePattern('^v\d+\.\d+\.\d+$')][string]$Version,
     [Parameter(Mandatory)][string]$AssetDirectory,
-    [string]$TestRoot
+    [string]$TestRoot,
+    [switch]$VerifyLiveService
 )
 $ErrorActionPreference = 'Stop'
 if ([string]::IsNullOrWhiteSpace($TestRoot)) { $TestRoot = Join-Path $PSScriptRoot '../artifacts/installer-validation' }
@@ -46,6 +47,11 @@ foreach ($product in @(
         if ($LASTEXITCODE -ne 0 -or $probe.streams[0].width -ne 64 -or $probe.streams[0].height -ne 48) { throw 'Bundled FFprobe failed.' }
         if ($product.Name -eq 'Picer') {
             & (Join-Path $PSScriptRoot 'verify-p1-package.ps1') -PackageRoot $destination -TestRoot $root
+        }
+        if ($VerifyLiveService) {
+            $probeOutput = & dotnet run --project (Join-Path $PSScriptRoot 'Picer.ServiceProbe/Picer.ServiceProbe.csproj') -c Release -- $destination
+            if ($LASTEXITCODE -ne 0) { throw 'Installed payload could not verify the real service.' }
+            $probeOutput | Set-Content -LiteralPath (Join-Path $root ($product.Name + '-live-service.json')) -Encoding utf8
         }
         $userFile = Join-Path $destination 'unowned-user-sentinel.txt'
         [IO.File]::WriteAllText($userFile, 'Installer must preserve unowned files.')

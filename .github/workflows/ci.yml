@@ -42,6 +42,14 @@ jobs:
       - name: Desktop tests
         run: dotnet test tests/Picer.E2E/Picer.E2E.csproj --configuration Debug --no-build --no-restore --filter "Category!=RuntimeComponent" --logger "trx;LogFileName=desktop.trx" --logger "console;verbosity=normal" --blame-hang --blame-hang-timeout 10m
 
+      - name: Verify real service with built gateway (trusted main only)
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        env:
+          PICER_LIVE_SERVICE_URL: ${{ secrets.PICER_LIVE_SERVICE_URL }}
+          PICER_LIVE_SERVICE_TOKEN: ${{ secrets.PICER_LIVE_SERVICE_TOKEN }}
+          PICER_LIVE_SERVICE_SPKI_PIN: ${{ secrets.PICER_LIVE_SERVICE_SPKI_PIN }}
+        run: dotnet run --project tools/Picer.ServiceProbe/Picer.ServiceProbe.csproj -c Release -- src/Picer.App/bin/Debug/net8.0-windows
+
       - name: Cleanup desktop processes
         if: always()
         shell: pwsh

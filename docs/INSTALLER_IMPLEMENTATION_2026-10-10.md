@@ -33,6 +33,14 @@ App 实际采用带 ViewModel 的窗口构造，不能依赖无参窗口的 remo
 - ModelServer CPU 环境完成新建 venv、依赖安装、模型加载和 worker 协议验证；只读检查不修改环境。证据：artifacts/modelserver-setup-validation/setup-verification.json。CUDA 与 Linux 环境尚未进行真实安装验证。
 - 登录自启入口由安装器定义；隔离安装测试关闭自启任务，未模拟 Windows 注销再登录。最终 CI 将重新构建并验收正式安装包。
 
+## 真实服务连接门禁
+
+按用户要求接入真实 IndexService：三个 GitHub Secrets（PICER_LIVE_SERVICE_URL、PICER_LIVE_SERVICE_TOKEN、PICER_LIVE_SERVICE_SPKI_PIN）仅在受信任 main CI 和 Release 安装验收步骤注入，不写入源码或分发包。PR 测试不获取这些凭据。
+
+Picer.ServiceProbe 动态加载待验收目录中的 Picer.Core.dll，调用真实 HttpIndexGateway，验证固定 DER SPKI 的 TLS、健康状态、一条照片记录的认证只读查询和错误令牌返回 401；禁止 HTTP 重定向，整体限时 60 秒。日志只输出布尔结果、程序集 SHA-256 和时间，不输出连接凭据、查询响应或照片信息。缺失凭据、证书变化或服务不可用都会使门禁失败，不静默跳过。首次本地真实连接检查已通过。
+
+Release 对 GUI 和驻留代理分别执行“安装 → 使用安装目录通信组件连接真实服务 → 升级/卸载检查”，然后才创建草稿版本。此检查不启动扫描、描述、模型调用、代理注册或任何索引修改，也不等同于全库同步与所有业务功能验收。
+
 当前本地 package-release 构建用于验收，最终公共 Release 在提交后由 CI 打包，不能把本地暂存资产写成已发布。安装器没有签名凭据，当前未签名；Windows 可能显示发布者未知，一键流程不绕过系统保护。支持目标为常规 Windows 10/11 x64，Windows N/Server 的 Media Foundation 等系统组件不包含在安装器内。
 
 所有结果以实际安装及发布记录补齐，不能沿用 v1.1.2 的 610+73 或已公开状态作为 v1.2.0 新安装代码的最终 CI/Release 结论。四项既有外部质量/硬件验收仍不因安装器产出而自动完成。
