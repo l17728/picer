@@ -6,10 +6,11 @@
 
 | 文档 | 用途 |
 |---|---|
+| [发布安装指南](RELEASE_GUIDE.md) | GUI/代理安装器、角色依赖、首次配对和服务器配置 |
 | [用户指南](USER_GUIDE.md) | 安装、目录照片和视频描述、搜索、移动修复、手动清除 |
 | [产品设计](PRODUCT_DESIGN.md) | 用户流程、功能范围和交互约束 |
 | [架构规格](SDD.md) | 数据模型、同步、模型服务、安全边界和数据库迁移 |
-| [开发计划](DEVELOPMENT_PLAN.md) | 已完成代码与暂停的真实环境验收 |
+| [开发计划](DEVELOPMENT_PLAN.md) | 已完成代码、新增性能计划与暂停的真实环境验收 |
 | [性能说明](PERFORMANCE.md) | 扫描、并发、缓存和性能验证范围 |
 | [服务部署说明](../server/README.md) | ModelServer 与 IndexService 的部署和配置 |
 | [Linux 升级流程](INDEX_SERVICE_AUTOMATED_UPGRADE_2026-09-30.md) | 备份、升级、健康检查和回滚 |
@@ -17,11 +18,11 @@
 
 ## 最近实现与验证
 
-- [视频哈希 USN 修复](VIDEO_HASH_USN_FIX_2026-10-09.md)：v1.1.0 首次 CI 成功后两次真实缓存失败；v1.1.1（1f0e376）补强逐文件 USN 身份，严格构建及相关 27/27 通过，v1.1.1 的 CI 37932196317 已通过单元 610/610、WPF 73/73；Release 37932206084 仅因目录监控测试的异步通知时序失败。测试修复保留全部断言，等待通知最多 3 秒，严格构建及 6 项定向测试通过。正式发布提交 c8daa9c 的 [CI 37934489618](https://github.com/l17728/picer/actions/runs/37934489618) 已成功，TRX 已核对单元 610/610、WPF 73/73，失败、跳过和超时均为零。[v1.1.2](https://github.com/l17728/picer/releases/tag/v1.1.2)（c8daa9c）已于 2026-10-10 00:45:21 UTC 正式公开，非草稿、非预发布。[Release 38008954566](https://github.com/l17728/picer/actions/runs/38008954566) 重复通过单元 610/610、WPF 73/73；[Offline 38009843679](https://github.com/l17728/picer/actions/runs/38009843679) 成功。6 个二进制包、完整 GUI 和 runtime 共 8 个包全部完成 digest 核验；Release 共 13 项资产，统一 SHA256SUMS 已上传并核验 digest。隔离包在原 45 秒阈值内重新冒烟通过：窗口响应、使用包内运行时、正常关闭。脚本 finally 覆盖原始启动错误的问题已修；首次启动迟延的环境原因未确定，不据此认定产品缺陷。
-- [发布与部署记录](RELEASE_DEPLOYMENT_2026-10-09.md)：已完成实际本机/远端 schema 45 迁移、安装更新和能力核验；本地修复已部署，远端最新版部署 125050635Z 已成功，schema 45 及二进制哈希核验通过，v1.1.0 草稿未公开。以此记录区分历史部署与最终候选状态。
-- [剩余代码复查与修复](RESIDUAL_CODE_FIXES_2026-10-09.md)：历史 schema 45 实施阶段的 605 项分轮证据及 WPF 73/73；之后 v1.1.0 确有一次完整 CI 605/605，但不能代替后续 USN 修复的最终验证。
-- [四项代码补齐](REMAINING_CODE_IMPLEMENTATION_2026-10-09.md)：持久增量扫描、视频内容共享、镜像水位及清除流程。
-- [系统审查修复](SYSTEM_REVIEW_FIXES_2026-10-09.md)：功能、易用性、健壮性和并发审查的修复证据。
+- [安装实现与验收](INSTALLER_IMPLEMENTATION_2026-10-10.md)：v1.2.1（0d50de4）CI/Release 各 623 单元、86 WPF 全通过；GUI/代理安装生命周期及安装后的真实索引、缩略图读取通过，离线资产和公开状态以该记录为准。
+- [当前能力状态](CURRENT_CAPABILITIES_2026-10-09.md)：本机 5 处 159 文件核验、GUI/Agent 响应、远端 20261010T024817097Z 与三数据库 schema 45 验证。
+- [性能与新增计划](PERFORMANCE.md)：用户新增视频流式读取/播放，尚未实现，不计作已交付能力。
+- [历史发布部署](RELEASE_DEPLOYMENT_2026-10-09.md)：v1.1.2 已公开及此前 CI、备份、部署证据。
+- [视频 USN 修复](VIDEO_HASH_USN_FIX_2026-10-09.md)、[代码复查](RESIDUAL_CODE_FIXES_2026-10-09.md)、[四项代码补齐](REMAINING_CODE_IMPLEMENTATION_2026-10-09.md)：此前已实现能力的历史证据。
 
 ## 历史文档的使用规则
 
