@@ -70,6 +70,12 @@ public sealed class VideoStreamDecodeTests(Xunit.Abstractions.ITestOutputHelper 
         public Task<RemoteMediaInfo> GetMediaInfoAsync(long id, bool video, CancellationToken token = default) => Task.FromResult(Info);
         public async Task<Stream> OpenMediaRangeAsync(long id, bool video, RemoteMediaInfo expected, long offset, int count, CancellationToken token = default)
         {
+            // Model a bounded remote source: an unlimited in-memory/LAN source can fill
+            // the decoder's read-ahead buffers before it closes its initial open-ended
+            // Range, making byte counts depend on runner speed rather than seek support.
+            // Keep the byte assertion unchanged; a complete 80 MiB transfer would take
+            // over 20 seconds and must not be needed to decode any of the frames.
+            await Task.Delay(TimeSpan.FromMilliseconds(250), token);
             await using var file = File.OpenRead(path);
             file.Position = offset;
             var bytes = new byte[count]; await file.ReadExactlyAsync(bytes.AsMemory(), token);
