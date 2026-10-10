@@ -25,6 +25,7 @@ public sealed class VideoPlaybackProxyTests
         }
         await proxy.FirstRead.WaitAsync(TimeSpan.FromSeconds(2));
         Assert.Equal(1, source.Requests);
+        Assert.Equal(16, source.Bytes);
         using (var request = new HttpRequestMessage(HttpMethod.Get, proxy.Url))
         {
             request.Headers.Add("Range", "bytes=0-7");
@@ -32,6 +33,7 @@ public sealed class VideoPlaybackProxyTests
             Assert.Equal(new byte[8], await response.Content.ReadAsByteArrayAsync());
         }
         Assert.Equal(2, source.Requests);
+        Assert.Equal(24, source.Bytes);
         foreach (var header in new[] { "Host", "Origin", "Sec-Fetch-Site" })
         {
             using var request = new HttpRequestMessage(HttpMethod.Get, proxy.Url);
@@ -68,6 +70,7 @@ public sealed class VideoPlaybackProxyTests
     {
         public RemoteMediaInfo Info { get; } = new(96L * MediaWire.BlockSize, "\"fixture-version\"", "video/mp4", true);
         public int Requests;
+        public long Bytes;
         public bool Block;
         public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource Canceled { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -78,6 +81,7 @@ public sealed class VideoPlaybackProxyTests
             try { if (Block) await Task.Delay(Timeout.Infinite, token); }
             catch (OperationCanceledException) { Canceled.TrySetResult(); throw; }
             var bytes = new byte[count]; Array.Fill(bytes, (byte)(offset / MediaWire.BlockSize));
+            Interlocked.Add(ref Bytes, count);
             return new MemoryStream(bytes);
         }
     }

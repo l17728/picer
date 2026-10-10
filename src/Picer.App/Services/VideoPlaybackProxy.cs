@@ -103,10 +103,8 @@ public sealed class VideoPlaybackProxy : IAsyncDisposable
             // Confirm real upstream bytes before treating the player as a network reader.
             if (count > 0)
             {
-                var first = await _reader.ReadBlockAsync(offset / MediaWire.BlockSize, token.Token);
-                var start = (int)(offset % MediaWire.BlockSize);
-                var initial = (int)Math.Min(count, first.Length - start);
-                await response.Body.WriteAsync(first.AsMemory(start, initial), token.Token);
+                var initial = (int)Math.Min(count, MediaWire.BlockSize - offset % MediaWire.BlockSize);
+                await _reader.CopyRangeAsync(response.Body, offset, initial, token.Token);
                 await response.Body.FlushAsync(token.Token);
                 Interlocked.Add(ref _bytesSent, initial);
                 _read.TrySetResult();
