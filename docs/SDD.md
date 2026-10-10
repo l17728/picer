@@ -1,6 +1,6 @@
 # Picer 软件设计说明（SDD）
 
-版本：1.5；更新：2026-10-10；SQLite schema 45。GUI 与驻留代理采用自包含安装和首次连接配对，远程 GUI 按服务模式跳过本地模型预检。本机五处程序、ModelServer 和远端 IndexService 已更新，三数据库完整性与升级前数量已核验。当前 v1.3.5 发布、安装和部署证据统一见[媒体实施记录](MEDIA_STREAMING_IMPLEMENTATION_2026-10-10.md)；旧版本记录保留为历史。
+版本：1.6；更新：2026-10-11；SQLite schema 45。GUI 与驻留代理采用自包含安装和首次连接配对，远程 GUI 按服务模式跳过本地模型预检。最新 v1.4.0 发布、安装及性能验证见[本版实施记录](PERFORMANCE_FOLLOWUP_IMPLEMENTATION_2026-10-10.md)；本次没有替换现有运行实例。本机五处程序、ModelServer、远端 IndexService 及三数据库的既有 v1.3.5 部署证据仍见[媒体实施记录](MEDIA_STREAMING_IMPLEMENTATION_2026-10-10.md)。
 
 本文描述已实现架构。产品交互见 [产品设计](PRODUCT_DESIGN.md)，操作见 [用户指南](USER_GUIDE.md)，当前验证与暂停事项见 [开发计划](DEVELOPMENT_PLAN.md)。早期方案和历史验收保存在带日期的实施报告中，不作为当前表结构或运行状态。
 
@@ -150,9 +150,9 @@ UI 先显示骨架，后台加载可取消，过时结果不得覆盖新选择�
 
 ## 13. 验证与历史证据
 
-v1.3.5（a6c319a）已正式发布并部署，schema 45。[CI 38042807569](https://github.com/l17728/picer/actions/runs/38042807569) 与 [Release 38042810432](https://github.com/l17728/picer/actions/runs/38042810432) 各通过 639 项单元、88 项桌面测试；两个安装器通过安装、重复升级、卸载、数据保留及真实索引/缩略图/视频 Range 读取验证。[Offline 38043813405](https://github.com/l17728/picer/actions/runs/38043813405) 通过固定资源、许可证及 1 项真实视频解码跳转测试，不等于执行了全部 RuntimeComponent 测试。发布、部署、失败候选与测量条件统一见[媒体实施记录](MEDIA_STREAMING_IMPLEMENTATION_2026-10-10.md)。
+v1.4.0（2676d5e）已正式发布，schema 45；CI 与 Release 均通过 665 项单元、92 项桌面测试。两个安装器的生命周期、数据保留及真实服务访问通过，离线资源与许可证门禁、真实视频解码/跳转 1 项通过。证据集中见[本版实施记录](PERFORMANCE_FOLLOWUP_IMPLEMENTATION_2026-10-10.md)，不将功能测试等同于全部 RuntimeComponent 或真实硬件验收。既有 v1.3.5 部署保留在[历史媒体记录](MEDIA_STREAMING_IMPLEMENTATION_2026-10-10.md)，本次未自动替换运行实例。
 
-v1.3.5 已交付，后续目录描述解耦等维护源码与安装版本分别记录。真实质量和硬件验收仍独立管理，四项旧 P2 按[开发计划](DEVELOPMENT_PLAN.md)暂停。旧架构方案、schema 和测试数字按报告日期阅读，见[历史文档索引](ARCHIVE_INDEX.md)。
+v1.4.0 已发布，源端能力须配套升级服务和代理后启用。真实质量和硬件验收仍独立管理，四项旧 P2 按[开发计划](DEVELOPMENT_PLAN.md)暂停。旧架构方案、schema 和测试数字按报告日期阅读，见[历史文档索引](ARCHIVE_INDEX.md)。
 
 ## 14. 安装与启动职责
 

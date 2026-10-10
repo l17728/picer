@@ -84,7 +84,7 @@ python3 setup-modelserver.py --model sface --model-path /srv/models/sface.onnx -
 
 ## 验证与发布边界
 
-v1.3.5（a6c319a）已正式发布并部署，schema 45。[CI 38042807569](https://github.com/l17728/picer/actions/runs/38042807569) 与 [Release 38042810432](https://github.com/l17728/picer/actions/runs/38042810432) 各通过 639 项单元、88 项桌面测试；两个安装器通过安装、重复升级、卸载、数据保留及真实索引/缩略图/视频 Range 读取验证。[Offline 38043813405](https://github.com/l17728/picer/actions/runs/38043813405) 通过固定资源、许可证及 1 项真实视频解码跳转测试，不等于执行了全部 RuntimeComponent 测试。发布、部署、失败候选与测量条件统一见[媒体实施记录](MEDIA_STREAMING_IMPLEMENTATION_2026-10-10.md)。
+v1.4.0（2676d5e）已正式发布，schema 45；CI 与 Release 均通过 665 项单元、92 项桌面测试。两个安装器的生命周期、数据保留及真实服务访问通过，离线资源与许可证门禁、真实视频解码/跳转 1 项通过。证据集中见[本版实施记录](PERFORMANCE_FOLLOWUP_IMPLEMENTATION_2026-10-10.md)，不将功能测试等同于全部 RuntimeComponent 或真实硬件验收。既有 v1.3.5 部署保留在[历史媒体记录](MEDIA_STREAMING_IMPLEMENTATION_2026-10-10.md)，本次未自动替换运行实例。
 
 首次配对与允许目录由隔离 UI/协议测试验证；安装后程序、视频工具及自包含运行环境另有实际运行证据。它们不等同于真实用户注销登录或所有硬件环境验收。构建和外部 CLI 失败须停止；每个上传资产小于 2 GB，完整离线资产仍保留固定哈希及许可证门禁。模型质量、真实场景和硬件验收按各自范围记录。
 
