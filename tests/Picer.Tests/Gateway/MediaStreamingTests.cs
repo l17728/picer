@@ -11,6 +11,25 @@ namespace Picer.Tests;
 public sealed class MediaStreamingTests
 {
     [Fact]
+    public async Task IfRangeMismatch_ReturnsCompleteRepresentationDespiteReadAheadLimit()
+    {
+        using var fixture = new GatewayServiceFixture();
+        var path = Path.Combine(fixture.Root, "if-range.mp4");
+        var content = Enumerable.Range(0, 17).Select(value => (byte)value).ToArray();
+        await File.WriteAllBytesAsync(path, content);
+        var video = new VideoRepository(fixture.Db).Upsert(fixture.SourceId, path);
+        await using var agent = await TestAgent.StartAsync(fixture);
+        using var client = CreateClient(fixture);
+        using var request = new HttpRequestMessage(HttpMethod.Get, $"api/gateway/v1/assets/videos/{video.Id}");
+        request.Headers.Add("Range", "bytes=0-3");
+        request.Headers.Add("If-Range", "\"older-version\"");
+        using var response = await client.SendAsync(request);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(content, await response.Content.ReadAsByteArrayAsync());
+        Assert.Equal(content.Length, agent.BytesRead);
+    }
+
+    [Fact]
     public async Task LegacyAgent_HeadDoesNotRequestOriginal_AndReportsDownloadFallback()
     {
         using var fixture = new GatewayServiceFixture();
@@ -60,7 +79,7 @@ public sealed class MediaStreamingTests
             Assert.Equal(HttpStatusCode.PartialContent, response.StatusCode);
             Assert.Equal(expected, await response.Content.ReadAsByteArrayAsync());
         }
-        Assert.InRange(agent.BytesRead, 8, MediaWire.BlockSize + 4);
+        Assert.Equal(8, agent.BytesRead);
         await agent.WaitForIdleAsync();
         Assert.Throws<IOException>(() => File.Open(path, FileMode.Open, FileAccess.Write, FileShare.None));
         agent.Release(etag);

@@ -61,7 +61,9 @@ public sealed class SocketMediaStream(WebSocket socket, MediaWire.Metadata metad
         if (buffer.IsEmpty || _position == Length) return 0;
         if (_block.Length == 0 || _position < _blockOffset || _position >= _blockOffset + _block.Length)
         {
-            var count = (int)Math.Min(MediaWire.BlockSize, Length - _position);
+            var remaining = Length - _position;
+            if (_position < _readAheadEnd) remaining = Math.Min(remaining, _readAheadEnd - _position);
+            var count = (int)Math.Min(MediaWire.BlockSize, remaining);
             try
             {
                 await MediaWire.SendJsonAsync(socket, new MediaWire.ReadRequest(_position, count), cancellationToken).ConfigureAwait(false);
@@ -78,6 +80,14 @@ public sealed class SocketMediaStream(WebSocket socket, MediaWire.Metadata metad
         return copied;
     }
     public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) => ReadAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask();
+    private long _readAheadEnd;
+    // Preserve the full seekable representation while avoiding reads past an HTTP range.
+    // A full-response fallback (for example If-Range mismatch) can still read beyond it.
+    public void LimitReadAhead(long endExclusive)
+    {
+        if (endExclusive <= 0 || endExclusive > Length) throw new ArgumentOutOfRangeException(nameof(endExclusive));
+        _readAheadEnd = endExclusive;
+    }
     public override int Read(byte[] buffer, int offset, int count) => ReadAsync(buffer.AsMemory(offset, count)).AsTask().GetAwaiter().GetResult();
     protected override void Dispose(bool disposing)
     {

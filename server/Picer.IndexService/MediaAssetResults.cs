@@ -36,6 +36,14 @@ internal static class MediaAssetResults
         catch (MediaSourceChangedException) { return Results.StatusCode(412); }
         if (stream is not null)
         {
+            if (RangeHeaderValue.TryParse(context.Request.Headers.Range.ToString(), out var range)
+                && range.Unit == "bytes" && range.Ranges.Count == 1 && stream.Length > 0)
+            {
+                var selected = range.Ranges.Single();
+                var start = selected.From ?? Math.Max(0, stream.Length - (selected.To ?? 0));
+                var end = selected.From.HasValue ? Math.Min(selected.To ?? (stream.Length - 1), stream.Length - 1) : stream.Length - 1;
+                if (start >= 0 && start <= end && start < stream.Length) stream.LimitReadAhead(end + 1);
+            }
             context.Response.Headers["X-Picer-Media-Streaming"] = "1";
             AppLogger.Info($"Media source ready; requestId={context.TraceIdentifier}; prepareMs={started.ElapsedMilliseconds}; bytes={stream.Length}; preview={previewSize}");
             try { return Results.Stream(stream, stream.Metadata.ContentType, entityTag: EntityTagHeaderValue.Parse(stream.Metadata.ETag), enableRangeProcessing: true); }
