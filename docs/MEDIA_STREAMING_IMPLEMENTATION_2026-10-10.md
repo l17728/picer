@@ -106,3 +106,7 @@ ModelServer 更新到最终 Windows 包，8091 健康，DLL 与发布包 SHA-256
 本机证据汇总：`artifacts/final-v1.3.5/final-evidence.json`、`artifacts/deploy/v1.3.5-program-checks.json`、`artifacts/deploy/local-db-v1.3.5.json`、`artifacts/deploy/media-installed-streaming-v1.3.5.log`；历史失败和未公开候选均保留。本轮性能代码、测试、安装、部署和发布已完成，四项原先暂停的外部 P2 验收保持暂停。
 
 按用户要求，正式发布后另从 Release 下载 GUI 安装包至 `D:\Picer-v1.3.5-win-x64-setup.exe`，完整文件大小和 SHA-256 均与上述发布资产一致；结果保存于 `artifacts/final-v1.3.5/root-installer.json`。
+
+## 发布后的文档基线
+
+文档收尾提交 `33ae0188d3ea286632193a7565b69d9bc4d49518` 的 [CI 38045197905](https://github.com/l17728/picer/actions/runs/38045197905) 成功，下载 TRX 核对 639 单元与 88 桌面全部通过。该提交只更新文档，不改变 v1.3.5 标签、安装资产或部署身份。之后的全面文档刷新范围见[刷新记录](DOCUMENTATION_REFRESH_2026-10-10.md)，不得将新文档提交冒充为发布二进制来源。

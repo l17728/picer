@@ -1,11 +1,12 @@
 # AGENTS.md
 
-Picer is a Windows-only .NET 8 WPF photo/video manager. Product UI and docs under `docs/` (including `docs/SDD.md`, the architecture spec) are written in Chinese; E2E tests assert on Chinese UI strings.
+Picer's GUI and MediaAgent are Windows x64 .NET 8 applications; IndexService and ModelServer also ship Linux x64 binaries. Product UI and docs under `docs/` (including `docs/SDD.md`, the architecture spec) are written in Chinese; E2E tests assert on Chinese UI strings. Current capabilities and paused acceptance work are recorded in `docs/CURRENT_CAPABILITIES_2026-10-09.md` and `docs/DEVELOPMENT_PLAN.md`; dated reports preserve historical evidence, not current task assignments.
 
 ## Projects
 
 - `src/Picer.Core` — net8.0 library: indexing, SQLite data layer (`Data/`), search/FTS5, vision/ONNX (`Vision/`), people, thumbnails, storage (local/WebDAV), file operations.
 - `src/Picer.App` — WPF UI (net8.0-windows), CommunityToolkit.Mvvm.
+- `src/Picer.MediaAgent` — Windows resident source agent: authorized media reads, scanning, video tools and model endpoint forwarding; bundled with the GUI or installed separately.
 - `server/Picer.IndexService` — HTTPS index gateway with authorized index sync, analysis, repair and index-purge endpoints; original media stays read-only. See `docs/INDEX_SERVICE_CS_DESIGN_2026-09-08.md`; gateway contracts live in `src/Picer.Core/Gateway/`.
 - `server/Picer.ModelServer` — separate ASP.NET Core API (deployed independently, has its own `Dockerfile` + `server/README.md`). Run: `dotnet run --project server/Picer.ModelServer`.
 - `tests/Picer.Tests` (xUnit) and `tests/Picer.E2E` (drives the real WPF app via UI Automation and the real Windows recycle bin; WPF tests use STA threads).
@@ -26,7 +27,7 @@ dotnet test tests/Picer.E2E/Picer.E2E.csproj -c Debug --no-build --no-restore --
 
 ## RuntimeComponent tests and offline runtime
 
-Tests tagged `[Trait("Category", "RuntimeComponent")]` need pinned offline assets in `third_party/runtime` (YuNet/SFace ONNX, FFmpeg, whisper.cpp, Chinese-CLIP, Florence-2) verified by exact SHA-256 (`RuntimeComponentService.RequiredComponents`, `tools/publish-self-contained.ps1`). CI excludes this category; the release workflow downloads `Picer-runtime-win-x64.zip` from the `runtime-v1` GitHub release tag and extracts it to `third_party/runtime`. These assets are git-ignored — a fresh clone won't have them.
+Tests tagged `[Trait("Category", "RuntimeComponent")]` need pinned offline assets in `third_party/runtime` (YuNet/SFace ONNX, FFmpeg, whisper.cpp, Chinese-CLIP, Florence-2) verified by exact SHA-256 (`RuntimeComponentService.RequiredComponents`, `tools/publish-self-contained.ps1`). CI and the ordinary release workflow exclude this category. The separate `offline-release.yml` workflow downloads `Picer-runtime-win-x64.zip` from `runtime-v1`, applies the verified overlay, publishes through the pinned asset/license gates, and runs `VideoStreamDecodeTests`. These assets are git-ignored — a fresh clone won't have them. Passing that one offline test does not mean every RuntimeComponent test ran.
 
 For face-model tests alone, `tools/Picer.VisionProbe/download-models.ps1` fetches YuNet/SFace into `PICER_MODEL_ROOT`.
 
@@ -43,7 +44,7 @@ For face-model tests alone, `tools/Picer.VisionProbe/download-models.ps1` fetche
 
 ## Architecture invariants (from docs/SDD.md — enforced by tests)
 
-- Indexing, search, and analysis must never modify, move, or delete original files. All destructive file operations go through `IUserAuthorizedFileOperation` (recycle bin), re-verifying path/size/mtime/hash at execution time; the index record is removed only after verified recycle success.
+- Indexing, search, and analysis must never modify, move, or delete original files. All destructive file operations go through `IUserAuthorizedFileOperation` (recycle bin), re-verifying path/size/mtime/hash at execution time; that flow removes the index record only after verified recycle success. Separately authorized index-only purge removes the selected reference and its owned data without deleting originals; shared content survives until its last reference is removed. Missing files never trigger automatic index purge.
 - Destructive flows follow the state machine `Detected -> Reviewed -> Confirmed -> Executing -> Verified -> Completed/PartiallyFailed`. Candidates/suggestions never auto-confirm.
 - SQLite schema changes are chained `PRAGMA user_version` migrations in `src/Picer.Core/Data/PicerDatabase.cs` (currently up to v45; deployed databases may be older). Migrations require a whole-file backup of `picer.db` + WAL + SHM with all writers closed; `DatabaseMigrationSafety` enforces staged migration and recoverable publication.
 - Privacy: SQL must be parameterized; never log credentials, face embeddings, person names/aliases, or AI question text. Remote/cloud features are opt-in and independently authorized; the full flow must work offline.
@@ -51,6 +52,6 @@ For face-model tests alone, `tools/Picer.VisionProbe/download-models.ps1` fetche
 
 ## Conventions
 
-- Commits follow Conventional Commits (`feat:`, `fix:`, `docs:`, `refactor:`, `chore:`), lowercase, no scope. CI runs on `main`; releases are triggered by `v*` tags.
+- Commits follow Conventional Commits (`feat:`, `fix:`, `docs:`, `refactor:`, `chore:`), lowercase, no scope. CI runs on `main`; `v*` tags trigger a draft release. Offline assets, installer/deployment evidence and the unified checksum manifest are verified before publishing the draft. Do not move published tags or claim a private repository release is anonymously downloadable.
 - Feature work is documented with a dated implementation report in `docs/` (e.g. `FACE_EVAL_005_IMPLEMENTATION_2026-09-07.md`).
 - `third_party/runtime/` is content-linked into the WPF app; `tools/publish-self-contained.ps1` fails if any pinned asset or license file is missing or hash-mismatched.

@@ -2,7 +2,9 @@
 
 模型服务端，与 `src/Picer.App` 客户端分离，负责模型目录、VL/ASR/TTS 路由、GPU 调度和人脸训练任务生命周期。远程索引与同步 API 属于独立的 `Picer.IndexService`。
 
-## 发布与恢复（2026-10-09）
+## 发布与恢复（2026-10-10）
+
+当前交付为 [v1.3.5](https://github.com/l17728/picer/releases/tag/v1.3.5)，包含 GUI/驻留安装器以及 IndexService、ModelServer 的 Windows/Linux x64 自包含包。仓库为私有，下载需要访问权限。组件职责与首次安装见[安装指南](../docs/RELEASE_GUIDE.md)，实际部署身份、备份及验证见[媒体实施记录](../docs/MEDIA_STREAMING_IMPLEMENTATION_2026-10-10.md)。本阶段代码开发已收尾，四项外部质量/硬件验收保持暂停。
 
 IndexService 当前数据库 schema 为 45，须与客户端配套升级。Linux 升级必须先停所有数据库写入者，备份 DB/WAL/SHM；失败时数据库和程序一起恢复，不能只降级二进制。具体命令、额外写入服务配置、关闭快照和失败停机行为见 [自动升级说明](../docs/INDEX_SERVICE_AUTOMATED_UPGRADE_2026-09-30.md)。
 
@@ -14,7 +16,7 @@ IndexService 当前数据库 schema 为 45，须与客户端配套升级。Linux
 
 Remote GUI 通过 `HttpIndexGateway` 使用 IndexService 的远程索引。Local GUI 的浏览、搜索和索引写入仍使用本机 SQLite/`LocalGateway`；它可选配远程 IndexService 做索引同步，而 AI 请求通过配对的 IndexService 中继。两种模式都不需要本机再启动一套 `Picer.IndexService`。媒体源机运行 `Picer.MediaAgent`，通过 WebSocket 连接 IndexService；AI 请求由 IndexService 转发给 MediaAgent，再由 MediaAgent 调用配置的模型端点。它依据下列变量注册真实能力；未配置的端点不会显示为 ready：
 
-- `PICER_FFMPEG_PATH`：ffmpeg.exe 路径（同目录可选 ffprobe.exe）。
+- `PICER_FFMPEG_PATH`：可选管理员 FFmpeg 路径覆盖。v1.3.5 的 GUI 同包代理及独立代理安装器均附带 FFmpeg、FFprobe 和许可证，并自动发现；普通用户无需设置该变量。手动覆盖时应同时核对相应探测工具是否可用。
 - `PICER_LOCAL_ASR_ENDPOINT`：本机 Qwen3-ASR/Whisper HTTP 端点。
 - `PICER_LOCAL_VL_ENDPOINT`：本机 VL HTTP 端点。
 - `PICER_LOCAL_TTS_ENDPOINT`：本机中文 TTS HTTP 端点。
@@ -25,7 +27,7 @@ Remote GUI 通过 `HttpIndexGateway` 使用 IndexService 的远程索引。Local
 
 `PICER_LOCAL_MODEL_API_KEY` 为代理显式凭据，优先使用。未设置时，HTTP(S) 回环端点复用本机 ModelServer 的凭据解析（`PICER_MODEL_SERVER_API_KEY`、用户 `.picer/model-server-key` 或既有本机 secrets 文件）；远程端点不读取或附加自动发现的本机凭据。密钥不通过 IndexService 配置广播。
 
-IndexService 的 `/service` 页面和 `/api/service/v1/capabilities` 会显示 Agent 实际注册状态。API Key 只应保存在 Service/Agent 侧，不能写入 GUI 配置或日志。
+IndexService 的 `/service` 页面和 `/api/service/v1/capabilities` 会显示 Agent 实际注册状态。模型 API Key 保存在 Service/Agent 侧，不写入 GUI 配置或日志；GUI 连接 IndexService 的配对令牌是另一种凭据，由当前 Windows 用户 DPAPI 保护。
 
 AI 问答上游有单独实现：`PICER_LOCAL_MODEL_ENDPOINT` 是 MediaAgent 进程环境变量，默认 `http://127.0.0.1:8090/api/vl/chat`；它当前不是 IndexService 广播配置项。若此 URL 指向 Local Model Console 暴露的模型 API，则 Console 的后端模型服务必须运行；仅打开 Console 管理网页不够。运行在 `8000` 的 `llama-server` 也不会自动接入，除非将 MediaAgent endpoint 显式指向它兼容的 API。
 
@@ -74,3 +76,20 @@ python3.12 server/setup-modelserver.py --venv "$HOME/.local/share/picer-model-wo
 ## AI 服务路由
 
 `PICER_LANGUAGE_MODEL_ENDPOINT` 配置语言模型服务（训练失败分析使用智谱）；`PICER_VL_MODEL_ENDPOINT` 配置统一平台管理的本地 VL 服务（训练样本视觉筛选为可选增强）。VL 未配置时，向量训练仍可正常提交，不会阻塞任务。可通过 `/api/ai/capabilities` 查看能力状态。
+
+## 原始媒体、预览与流式播放
+
+新通道要求 GUI、源 MediaAgent 和 IndexService 配套升级。Agent 广告 `media.binary.v1`，每次媒体读取使用独立认证 WebSocket，控制连接不承载大文件 Base64。原文件按 offset/count 拉取、单块最多 1 MiB，源端 256/1600 预览与独立限流避免下载挤占所有缩略图通道。
+
+HTTP HEAD 返回长度和不透明租约 ETag；后续 Range 复用同一身份，源代理保持只读共享句柄。源文件变更、旧租约过期或代理重连不能拼接为同一个下载。小 Range 预读限于请求末尾。旧代理不支持新能力时 HEAD 返回 405，客户端可按兼容策略下载；旧整文件协议仍有 64 MiB 限制。新增通道不依赖 GUI 上的 Python、CUDA 或 FFprobe。
+
+服务端/源端原文件与预览各自有界并发；GUI 默认 2 路下载，可选 2～4。播放器访问 GUI loopback 的临时单视频地址，不携带 IndexService 长期令牌。代理在线不等于模型 ready，IndexService `/health` 成功也不等于源文件或某个模型可用。
+
+## 安装后验收与维护
+
+1. 校验软件包摘要，确认实际部署的程序路径和 `/version` 身份。不同组件分别记录来源，不用旧 PID 或程序集通用版本代替二进制校验。
+2. 验证健康与能力状态，再用配对固定公钥和有效令牌读取受保护索引、照片/视频缩略图。源代理授权范围内才可读取原始媒体。
+3. 使用 `tools/Picer.ServiceProbe` 从实际安装目录加载 Gateway；环境变量为 `PICER_LIVE_SERVICE_URL`、`PICER_LIVE_SERVICE_TOKEN`、`PICER_LIVE_SERVICE_SPKI_PIN`。凭据通过受保护的进程环境提供，不抄到日志、命令历史或仓库。设置 `PICER_REQUIRE_STREAMING=1` 后必须通过视频 HEAD、首尾 Range 和租约验证；`mediaRangesVerified=false` 只表示兼容读取成功。
+4. 验证数据库 schema、完整性、外键以及预期记录数量；发生迁移或恢复时与关闭写入者后的备份比较。探针和健康检查不授权扫描全盘、付费分析或清除用户索引。
+
+源媒体仍在原电脑上；仅恢复索引服务无法替代源代理和原文件。维护前同时核对 GUI 自动启动代理、独立代理登录自启、系统服务及外部保活脚本，避免升级期间程序被重新拉起。远端服务故障先保留索引和脱敏日志，区分代理离线、授权路径失效、网络超时与模型失败，再选择对应恢复操作。

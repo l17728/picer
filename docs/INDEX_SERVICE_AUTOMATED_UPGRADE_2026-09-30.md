@@ -1,6 +1,6 @@
 # IndexService 一键升级与版本验收（2026-09-30）
 
-更新日期：2026-10-09。当前发布涉及 schema 45，客户端和 IndexService 应配套升级；新的视频内容身份协议不应依赖旧服务正确合并。
+更新日期：2026-10-10。本页为持续维护的部署手册，文件名保留最初日期。当前 v1.3.5 使用 schema 45，GUI、MediaAgent 和 IndexService 应配套升级，视频内容身份与二进制读取不能假定旧组件全部支持。实际发布、部署 ID、备份和哈希见[媒体实施记录](MEDIA_STREAMING_IMPLEMENTATION_2026-10-10.md)，历史部署号不能作为本次升级的默认目标。
 
 ## 使用方式
 
@@ -41,3 +41,7 @@ Windows 离线包使用 `publish-self-contained.ps1`，必须指定两个不同�
 - `GatewayContractTests.Version_ReportsAssemblyAndOptionalDeploymentIdentityWithoutAuthentication` 验证版本接口可读、字段结构正确且无需 API 鉴权。
 - `tools/deploy-indexservice-linux.ps1` 先通过 PowerShell AST 解析，再执行 Linux `dotnet publish`、上传、远端升级和版本 SHA 验收。
 - 远端升级不会因为 HTTP `/health` 成功就误报新程序已部署；必须匹配清单中的部署 ID 和可执行文件哈希。
+
+服务版本核验完成后，还应通过配对固定公钥执行受保护的索引与照片/视频缩略图读取；新媒体通道用安装目录的 ServiceProbe 并设置 `PICER_REQUIRE_STREAMING=1`，确认 HEAD、首尾 Range 和租约校验通过。探针所需连接信息见[服务说明](../server/README.md)，不把凭据写入脚本或输出。升级源代理期间先完成其他并行 CI 的真实服务检查，避免有意停机使连通性门禁失败。
+
+只修订文档或测试时，不为了凑齐标签名重写实际部署身份；记录来源提交、与最终标签的产品代码差异及核验依据。程序行为变化必须发布并部署相应新二进制。

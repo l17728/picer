@@ -1,6 +1,6 @@
 # Picer v1.3.5 安装指南
 
-更新：2026-10-10。本页说明 v1.3.5 的安装方式。正式可下载资产与发布状态以 GitHub Release 为准；发布流程检查安装、升级、卸载及真实服务连接，不代表所有系统环境都已经验收。[v1.1.2](https://github.com/l17728/picer/releases/tag/v1.1.2) 已正式发布，是独立的历史版本；本页新增安装器不是对旧版本资产的追溯承诺。
+更新：2026-10-10。当前正式版本为 [v1.3.5](https://github.com/l17728/picer/releases/tag/v1.3.5)，已完成发布及部署。仓库为私有，下载需要仓库访问权限；Release 非草稿不表示匿名公开下载。当前用户安装无需管理员权限，目标系统为 Windows 10/11 x64。
 
 ## 普通 Windows 用户选择哪个安装器
 
@@ -12,6 +12,7 @@
 | Picer.MediaAgent-v1.3.5-win-x64-binary.zip | 独立代理解压包 |
 | Picer.IndexService-v1.3.5-win-x64-binary.zip / Picer.IndexService-v1.3.5-linux-x64-binary.tar.gz | Windows/Linux 索引服务，管理员手动配置 |
 | Picer.ModelServer-v1.3.5-win-x64-binary.zip / Picer.ModelServer-v1.3.5-linux-x64-binary.tar.gz | 模型 API、worker 与 setup-modelserver.py 环境准备脚本 |
+| Picer-v1.3.5-win-x64-full.zip / Picer-runtime-v1.3.5-win-x64.zip | 完整 GUI 与固定 runtime 离线包；纯远程 GUI 无需这些模型资源 |
 | SHA256SUMS.txt | 实际发布资产的完整 SHA-256 校验清单 |
 
 两个安装器都包含自包含 .NET 和应用目录内的 MSVC CRT，不要求用户另外安装 .NET 或 VC++ Redistributable。GUI 内含代理，代理目录下 tools/ffmpeg 提供 ffmpeg.exe、ffprobe.exe 及 LICENSE，独立代理使用同样的相对目录；程序自动发现工具。普通 GUI/代理用户不再需要手动下载视频工具或设置工具路径。
@@ -83,12 +84,40 @@ python3 setup-modelserver.py --model sface --model-path /srv/models/sface.onnx -
 
 ## 验证与发布边界
 
-最终提交 0d50de4 的 CI 与 Release 均通过严格构建、623 项单元和 86 项 WPF 测试，失败和跳过均为零。配对测试包含真实 TLS 无凭据发现、网关固定公钥调用、DPAPI 保存及重载，以及实际服务模式不触发本地 runtime 提示。两个安装器另行完成安装生命周期验证；安装目录中的通信组件分别成功读取真实照片/视频索引及解码缩略图。完整证据和公开状态见[安装实现记录](INSTALLER_IMPLEMENTATION_2026-10-10.md)。
+v1.3.5（a6c319a）已正式发布并部署，schema 45。[CI 38042807569](https://github.com/l17728/picer/actions/runs/38042807569) 与 [Release 38042810432](https://github.com/l17728/picer/actions/runs/38042810432) 各通过 639 项单元、88 项桌面测试；两个安装器通过安装、重复升级、卸载、数据保留及真实索引/缩略图/视频 Range 读取验证。[Offline 38043813405](https://github.com/l17728/picer/actions/runs/38043813405) 通过固定资源、许可证及 1 项真实视频解码跳转测试，不等于执行了全部 RuntimeComponent 测试。发布、部署、失败候选与测量条件统一见[媒体实施记录](MEDIA_STREAMING_IMPLEMENTATION_2026-10-10.md)。
 
 首次配对与允许目录由隔离 UI/协议测试验证；安装后程序、视频工具及自包含运行环境另有实际运行证据。它们不等同于真实用户注销登录或所有硬件环境验收。构建和外部 CLI 失败须停止；每个上传资产小于 2 GB，完整离线资产仍保留固定哈希及许可证门禁。模型质量、真实场景和硬件验收按各自范围记录。
 
 ## v1.1.2 历史发布
 
-v1.1.2 于 2026-10-10 00:45:21 UTC 正式公开，非草稿、非预发布。Release 回归 610/610 单元、73/73 WPF，离线构建通过；当时为六个二进制包、完整 GUI、runtime 共八个包及其他说明/清单，共 13 项资产，摘要校验完成。
+v1.1.2 于 2026-10-10 00:45:21 UTC 正式发布，非草稿、非预发布。Release 回归 610/610 单元、73/73 WPF，离线构建通过；当时为六个二进制包、完整 GUI、runtime 共八个包及其他说明/清单，共 13 项资产，摘要校验完成。
 
 旧 v1.1.2 提供解压包而非本页的新 setup.exe；其固定 runtime 只附 ffmpeg.exe，源代理仍需额外 ffprobe.exe。这个旧版限制由 v1.3.5 新代理工具打包契约解决，不能反向声称旧包已经包含。本轮尚未改变 v1.1.2 的发布事实。
+
+## 安装包大小与校验
+
+GUI 安装器为 **325,997,754 字节（约 326.0 MB / 310.9 MiB）**，包含 GUI、同包驻留代理和上述运行依赖，不包含所有模型。SHA-256：
+
+```text
+14338f3f9776ef059094d94172fcd8ffafff49399c886c473dd44923cd221128
+```
+
+下载后用 `Get-FileHash -Algorithm SHA256 <安装包路径>` 与 Release 的统一 `SHA256SUMS.txt` 核对。此清单覆盖另外 14 项资产；不同版本不能混用校验值。此次实际部署机已另存一份到 `D:\Picer-v1.3.5-win-x64-setup.exe`，该路径不是用户的默认安装位置。
+
+## 选择运行方式
+
+| 电脑角色 | 安装与启动 |
+| --- | --- |
+| 只查看远程图库 | 安装 GUI 并配对 IndexService；本机代理默认关闭 |
+| 保存原始照片/视频 | 安装独立 MediaAgent，或配置 GUI 同包代理；授权目录并保持源代理在线 |
+| 同时查看并提供本机媒体 | GUI 与代理可同时运行；远程模式不自动撤销已配置的源代理 |
+| 索引或模型服务器 | 部署对应服务包；认证、数据根、证书和模型端点由管理员配置 |
+
+GUI 本地模式的“文件 → 索引服务状态”提供同包代理设置；远程模式隐藏此设置区，不能把它当作远程模式下的一键停止开关。独立代理通过托盘管理。GUI 的自动管理是按既有配置尝试启动，不是所有进程的自动角色发现或持续保活保证。
+
+## 发布维护流程
+
+1. 在确定提交上创建不可变版本标签；普通 Release 流水线严格构建、运行非 RuntimeComponent 测试、制作各组件包并验证两个安装器，结果先保存为草稿。
+2. 离线流水线要求同一标签已有成功 CI，验证固定 runtime 和 overlay 的哈希、许可证及真实解码跳转，再补齐离线资产。
+3. 验证部署、真实服务读取、资产大小与构建摘要，生成统一校验清单后才将草稿正式发布。私有仓库访问控制保持不变。
+4. 文档刷新只提交 main，不移动已发布标签、不重写历史安装包；后续代码修复使用新的维护版本。服务器更新与数据库保护见[部署说明](../server/README.md)。

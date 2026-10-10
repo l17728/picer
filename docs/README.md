@@ -2,6 +2,8 @@
 
 文档按源码现状、使用说明和历史证据阅读。以[当前能力与验证状态](CURRENT_CAPABILITIES_2026-10-09.md)判断哪些功能已经实现、验证或部署；历史报告中的“当前”“未完成”和旧测试数量仅指报告编写时。
 
+当前阶段：v1.3.5 已发布并部署，约定代码开发已收尾，进入实际使用与维护。四项真实质量/硬件验收仍暂停；不从旧规划重新推导开发任务。新用户从[仓库首页](../README.md)和安装指南开始。
+
 ## 当前说明
 
 | 文档 | 用途 |
@@ -15,10 +17,13 @@
 | [服务部署说明](../server/README.md) | ModelServer 与 IndexService 的部署和配置 |
 | [Linux 升级流程](INDEX_SERVICE_AUTOMATED_UPGRADE_2026-09-30.md) | 备份、升级、健康检查和回滚 |
 | [仓库协作约定](../AGENTS.md) | 构建、测试和架构不变量 |
+| [全部历史报告](ARCHIVE_INDEX.md) | 按日期浏览保留的设计、修复、评审与验收证据 |
+| [本次文档刷新记录](DOCUMENTATION_REFRESH_2026-10-10.md) | 现状校对范围、修正内容及文档检查 |
 
 ## 最近实现与验证
 
 - [远程媒体实施与验收](MEDIA_STREAMING_IMPLEMENTATION_2026-10-10.md)：照片预览、二进制 Range、播放器策略和有界并发；v1.3.5 的 CI/Release 各 639 单元、88 桌面测试通过，离线包通过真实视频解码与跳转验证；最终发布及部署证据以该记录为准。
+- [收尾文档基线 CI](https://github.com/l17728/picer/actions/runs/38045197905)：33ae018 的 639 单元、88 桌面通过；后续文档更新各自的 CI 结果不回写成发布标签的测试身份。
 - [当前能力状态](CURRENT_CAPABILITIES_2026-10-09.md)：本机五处程序、ModelServer、远端 IndexService 及三数据库 schema 45 的验证状态。
 - [性能说明](PERFORMANCE.md)：已实现的远程媒体读取与播放、测量条件及验收边界。
 - [历史安装实现与验收](INSTALLER_IMPLEMENTATION_2026-10-10.md)：v1.2.1 安装器、首次配对、离线资产及历史发布证据。

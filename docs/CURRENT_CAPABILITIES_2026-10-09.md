@@ -1,5 +1,7 @@
 # 当前能力与验证状态
 
+阶段结论（2026-10-10）：本阶段约定功能已交付，进入使用观察与维护。当前没有本轮已确认的未完成代码项；四项暂停的质量/硬件验收仍不计作已通过。后续新问题由复现和验证结果决定是否进入维护版本。
+
 [v1.3.5](https://github.com/l17728/picer/releases/tag/v1.3.5)（a6c319a）已正式发布，schema 45。仓库为私有，下载需要仓库访问权限；正式发布不表示匿名公开下载。[CI 38042807569](https://github.com/l17728/picer/actions/runs/38042807569) 与 [Release 38042810432](https://github.com/l17728/picer/actions/runs/38042810432) 均通过 639 项单元和 88 项桌面测试。两个安装器的安装、重复升级、卸载、数据保留及真实服务读取均通过；离线包通过固定资源、许可证及真实视频解码跳转验证。失败候选、重跑原因、实测性能和最终资产证据见[媒体实施记录](MEDIA_STREAMING_IMPLEMENTATION_2026-10-10.md)。
 
 GUI/独立 Agent 中文当前用户一键安装器已实现，包含自包含 .NET、app-local MSVC CRT，代理 tools/ffmpeg 目录同时提供 FFmpeg、FFprobe 及许可证并自动发现。纯远程 GUI 不需要 Python、CUDA 或模型 runtime，也不检查本地 runtime。首次从“文件 → 连接索引服务…”完成无凭据证书发现、指纹确认、固定公钥验证及 DPAPI 保存，无需编辑 JSON。模型端 setup-modelserver.py 默认 CPU 的实际验收已通过；GPU 和授权模型依然按服务端配置。详见[安装实现记录](INSTALLER_IMPLEMENTATION_2026-10-10.md)和[安装指南](RELEASE_GUIDE.md)。
