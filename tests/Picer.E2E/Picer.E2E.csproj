@@ -25,8 +25,13 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Picer.App\Picer.App.csproj" />
+    <ProjectReference Include="..\..\src\Picer.MediaAgent\Picer.MediaAgent.csproj" />
     <ProjectReference Include="..\..\server\Picer.IndexService\Picer.IndexService.csproj" />
     <ProjectReference Include="..\..\server\Picer.ModelServer\Picer.ModelServer.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.WindowsDesktop.App.WindowsForms" />
   </ItemGroup>
 
   <ItemGroup>

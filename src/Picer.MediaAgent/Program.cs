@@ -1,3 +1,4 @@
+using Picer.Core.Gateway;
 using System.Net.WebSockets;
 using System.Net.Http;
 using System.IO;
@@ -48,11 +49,12 @@ internal sealed class AgentApplication : IDisposable
     private const long MaxAssetBytes = 64L * 1024 * 1024;
     private const int MaxTaskPayloadChars = 16 * 1024 * 1024;
     private readonly NotifyIcon _icon;
-    private readonly CancellationTokenSource _stop = new();
-    private readonly string _serviceIp = Environment.GetEnvironmentVariable("PICER_INDEX_SERVICE_IP")?.Trim() ?? "";
-    private readonly string _token = Environment.GetEnvironmentVariable("PICER_INDEX_SERVICE_TOKEN")?.Trim() ?? "";
-    private readonly byte[]? _spkiPin = ReadSpkiPin();
-    private readonly string[] _roots;
+    private CancellationTokenSource _stop = new();
+    private bool _changingConnection;
+    private bool _settingsOpen;
+    private bool _disposed;
+    private MediaAgentSettings? _settings;
+    private string[] _roots = [];
     private readonly SemaphoreSlim _sendLock = new(1, 1);
     private readonly ConcurrentDictionary<string, CancellationTokenSource> _aiRequests = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, CancellationTokenSource> _taskRequests = new(StringComparer.Ordinal);
@@ -69,46 +71,78 @@ internal sealed class AgentApplication : IDisposable
     public AgentApplication()
     {
         _directoryScanner = new((path, video, token) => Picer.Core.Indexing.DirectoryMediaMetadataReader.ReadAsync(path, video, token, Setting("PICER_FFMPEG_PATH")));
-        _roots = ReadRoots();
         var menu = new ContextMenuStrip();
-        menu.Items.Add("重新连接", null, (_, _) => _stop.Cancel());
+        menu.Items.Add("代理设置", null, async (_, _) => await ConfigureAsync());
+        menu.Items.Add("重新连接", null, async (_, _) => await ReconnectAsync());
         menu.Items.Add("退出", null, (_, _) => Application.Exit());
         _icon = new NotifyIcon { Icon = System.Drawing.SystemIcons.Application, Visible = true, Text = "Picer 原图代理", ContextMenuStrip = menu };
-        _loop = Task.Run(() => RunAsync(_stop.Token));
+        _icon.DoubleClick += async (_, _) => await ConfigureAsync();
+        try
+        {
+            _settings = MediaAgentSettings.FromEnvironment(Environment.GetEnvironmentVariable) ?? AgentConfiguration.Load();
+            if (_settings is not null) AgentConfiguration.Save(_settings);
+        }
+        catch (Exception exception) when (exception is ArgumentException or FormatException or IOException or CryptographicException or JsonException or UnauthorizedAccessException)
+        { Log("agent settings require repair; type=" + exception.GetType().Name); }
+        // Defer first-run UI until the Windows Forms message loop is active.
+        var startup = new System.Windows.Forms.Timer { Interval = 100 };
+        startup.Tick += async (_, _) =>
+        {
+            startup.Stop(); startup.Dispose();
+            if (_settings is null) await ConfigureAsync(); else await ReconnectAsync();
+        };
+        startup.Start();
     }
 
-    private static string[] ReadRoots()
+    private async Task ConfigureAsync()
     {
-        var configured = Environment.GetEnvironmentVariable("PICER_MEDIA_AGENT_ROOTS");
-        return (configured ?? Environment.GetEnvironmentVariable("PICER_DATA_ROOT") ?? "")
-            .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Select(Path.GetFullPath).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        if (_changingConnection || _settingsOpen || _disposed) return;
+        _settingsOpen = true;
+        try
+        {
+            using var form = new AgentSettingsForm(_settings);
+            if (form.ShowDialog() == DialogResult.OK && form.Settings is { } settings)
+                await ReconnectAsync(settings);
+        }
+        finally { _settingsOpen = false; }
     }
 
-    private static byte[]? ReadSpkiPin()
+    private async Task ReconnectAsync(MediaAgentSettings? replacement = null)
     {
-        var value = Environment.GetEnvironmentVariable("PICER_INDEX_SERVICE_SPKI_PIN")?.Trim();
-        return string.IsNullOrWhiteSpace(value) ? null : Convert.FromBase64String(value);
+        if (_changingConnection || _disposed) return;
+        if (replacement is null && _settings is null) { await ConfigureAsync(); return; }
+        _changingConnection = true;
+        try
+        {
+            _icon.Text = "Picer 原图代理（正在重新连接）";
+            await _stop.CancelAsync();
+            if (_loop is not null) { try { await _loop; } catch (OperationCanceledException) { } }
+            _stop.Dispose();
+            _stop = new CancellationTokenSource();
+            _settings = replacement ?? _settings;
+            _roots = _settings!.Roots;
+            _runtimeConfig.Clear();
+            var token = _stop.Token;
+            _loop = Task.Run(() => RunAsync(token));
+        }
+        catch (Exception exception) { Log("reconnect failed; type=" + exception.GetType().Name); _icon.Text = "Picer 原图代理（连接失败）"; }
+        finally { _changingConnection = false; }
     }
 
     private async Task RunAsync(CancellationToken cancellationToken)
     {
-        if (string.IsNullOrWhiteSpace(_serviceIp)) { _icon.Text = "Picer 原图代理（未配置服务 IP）"; Log("missing service ip"); return; }
+        var settings = _settings!.Validate();
+        var pin = Convert.FromBase64String(settings.SpkiPin);
         while (!cancellationToken.IsCancellationRequested)
         {
             try
             {
-                Log($"connecting ip={_serviceIp}, roots={string.Join(';', _roots)}, tokenConfigured={!string.IsNullOrWhiteSpace(_token)}");
+                Log($"connecting; rootCount={settings.Roots.Length}");
                 using var socket = new ClientWebSocket();
-                socket.Options.RemoteCertificateValidationCallback = (_, certificate, _, _) =>
-                {
-                    if (certificate is null) return false;
-                    if (_spkiPin is null) return true;
-                    var actual = new X509Certificate2(certificate).PublicKey.ExportSubjectPublicKeyInfo();
-                    return CryptographicOperations.FixedTimeEquals(actual, _spkiPin);
-                };
-                if (!string.IsNullOrWhiteSpace(_token)) socket.Options.SetRequestHeader("Authorization", "Bearer " + _token);
-                await socket.ConnectAsync(new Uri($"wss://{_serviceIp}:8445/api/agent/v1/connect"), cancellationToken);
+                socket.Options.RemoteCertificateValidationCallback = (_, certificate, _, _) => MediaAgentSettings.MatchesCertificate(certificate, pin);
+                socket.Options.SetRequestHeader("Authorization", "Bearer " + settings.Token);
+                var endpoint = new UriBuilder(settings.ServiceUrl) { Scheme = "wss", Path = "/api/agent/v1/connect" };
+                await socket.ConnectAsync(endpoint.Uri, cancellationToken);
                 Log($"connected; socketState={socket.State}; processId={Environment.ProcessId}");
                 _icon.Text = "Picer 原图代理（已连接）";
                 await SendAsync(socket, new
@@ -120,15 +154,27 @@ internal sealed class AgentApplication : IDisposable
                     // deployed; never claim readiness from configuration alone.
                     capabilities = BuildCapabilities()
                 }, cancellationToken);
-                var receive = ReceiveAsync(socket, cancellationToken);
-                var heartbeat = HeartbeatAsync(socket, cancellationToken);
+                using var connection = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                var requests = new List<Task>();
+                var receive = ReceiveAsync(socket, requests, connection.Token);
+                var heartbeat = HeartbeatAsync(socket, connection.Token);
                 await Task.WhenAny(receive, heartbeat);
+                await connection.CancelAsync();
                 socket.Abort();
+                try { await Task.WhenAll(receive, heartbeat); }
+                finally
+                {
+                    try { await Task.WhenAll(requests); }
+                    catch (Exception exception) { Log("connection requests finished; type=" + exception.GetType().Name); }
+                    foreach (var requestId in _taskRequests.Keys)
+                        if (_taskRequests.TryRemove(requestId, out var registration)) registration.Dispose();
+                }
+
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { break; }
             catch (Exception exception)
             {
-                Log($"connection failed: {exception.GetType().Name}: {exception.Message}");
+                Log($"connection failed: {exception.GetType().Name}");
                 _icon.Text = "Picer 原图代理（未连接）";
                 try { await Task.Delay(TimeSpan.FromSeconds(5), cancellationToken); } catch (OperationCanceledException) { break; }
             }
@@ -157,7 +203,7 @@ internal sealed class AgentApplication : IDisposable
         }
     }
 
-    private async Task ReceiveAsync(ClientWebSocket socket, CancellationToken cancellationToken)
+    private async Task ReceiveAsync(ClientWebSocket socket, List<Task> requests, CancellationToken cancellationToken)
     {
         var buffer = new byte[64 * 1024];
         while (socket.State == WebSocketState.Open && !cancellationToken.IsCancellationRequested)
@@ -170,17 +216,23 @@ internal sealed class AgentApplication : IDisposable
             switch (type.GetString())
             {
                 case "asset.open":
-                    _ = ServeAssetAsync(socket, root, cancellationToken);
+                    requests.RemoveAll(task => task.IsCompleted);
+                    requests.Add(ServeAssetAsync(socket, root, cancellationToken));
                     break;
                 case "ai.open":
-                    _ = ServeAiAsync(socket, root, cancellationToken);
+                    requests.RemoveAll(task => task.IsCompleted);
+                    requests.Add(ServeAiAsync(socket, root, cancellationToken));
                     break;
                 case "task.open":
                     if (root.TryGetProperty("requestId", out var taskId))
                     {
                         var requestId = taskId.GetString() ?? "";
                         var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                        if (_taskRequests.TryAdd(requestId, linked)) _ = ServeTaskAsync(socket, root, linked.Token);
+                        if (_taskRequests.TryAdd(requestId, linked))
+                        {
+                            requests.RemoveAll(task => task.IsCompleted);
+                            requests.Add(ServeTaskAsync(socket, root, linked.Token));
+                        }
                         else linked.Dispose();
                     }
                     break;
@@ -237,7 +289,12 @@ internal sealed class AgentApplication : IDisposable
         return null;
     }
 
-    private string Setting(string name) => _runtimeConfig.TryGetValue(name, out var value) ? value : Environment.GetEnvironmentVariable(name)?.Trim() ?? "";
+    private string Setting(string name)
+    {
+        var value = Environment.GetEnvironmentVariable(name)?.Trim();
+        if (string.IsNullOrWhiteSpace(value)) _runtimeConfig.TryGetValue(name, out value);
+        return name == "PICER_FFMPEG_PATH" ? MediaAgentSettings.ResolveFfmpeg(value, AppContext.BaseDirectory) : value ?? "";
+    }
 
     private static async Task<ReadOnlyMemory<byte>?> ReceiveTextAsync(WebSocket socket, byte[] buffer, CancellationToken cancellationToken)
     {
@@ -838,16 +895,16 @@ internal sealed class AgentApplication : IDisposable
 
     public void Dispose()
     {
+        _disposed = true;
         _stop.Cancel();
+        _modelClient.Dispose();
         try { _loop?.Wait(TimeSpan.FromSeconds(2)); } catch { }
         _icon.Visible = false;
         _icon.Dispose();
-        _sendLock.Dispose();
-        _modelClient.Dispose();
-        foreach (var request in _aiRequests.Values) request.Cancel();
-        _aiRequests.Clear();
-        foreach (var request in _taskRequests.Values) request.Cancel();
-        _taskRequests.Clear();
-        _stop.Dispose();
+        // Native media work can take a moment to observe cancellation. Do not
+        // dispose its send semaphore/token source while its finally blocks run.
+        void ReleaseConnectionResources() { _sendLock.Dispose(); _stop.Dispose(); }
+        if (_loop is null || _loop.IsCompleted) ReleaseConnectionResources();
+        else _ = _loop.ContinueWith(_ => ReleaseConnectionResources(), TaskScheduler.Default);
     }
 }

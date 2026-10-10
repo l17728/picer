@@ -63,10 +63,19 @@ public partial class MainWindow : Window
             return;
         }
         await _mainVm.InitializeAsync();
+        if (!ShouldCheckLocalRuntime(AppServices.ServiceMode, System.IO.File.Exists(AppPaths.BackendConfigPath)))
+        {
+            if (!AppServices.ServiceMode)
+                _mainVm.StatusText = "尚未选择连接模式：可从“文件 → 连接索引服务…”配置远程图库，或选择本地模式。远程 GUI 不需要安装本地模型。";
+            return;
+        }
         var missing = new RuntimeComponentService(AppPaths.RuntimeRoot).GetMissingComponentNames();
         if (missing.Count > 0)
             _mainVm.StatusText = $"发布包缺少 {missing.Count} 个运行组件：{string.Join("、", missing.Take(3))}{(missing.Count > 3 ? "…" : "")}。请打开“运行组件”查看。";
     }
+
+    public static bool ShouldCheckLocalRuntime(bool serviceMode, bool hasBackendConfiguration) =>
+        !serviceMode && hasBackendConfiguration;
 
     private void SourcesTree_SelectedItemChanged(object sender, RoutedPropertyChangedEventArgs<object> e)
     {

@@ -66,10 +66,23 @@ jobs:
           path: |
             ${{ runner.temp }}/release-assets/*.zip
             ${{ runner.temp }}/release-assets/*.tar.gz
+            ${{ runner.temp }}/release-assets/*-setup.exe
             ${{ runner.temp }}/release-assets/*.txt
             ${{ runner.temp }}/release-assets/INSTALL.md
           compression-level: 0
           if-no-files-found: error
+      - name: Verify user installer lifecycle and bundled dependencies
+        shell: pwsh
+        run: ./tools/verify-user-installers.ps1 -Version $env:RELEASE_TAG -AssetDirectory "$env:RUNNER_TEMP/release-assets" -TestRoot "$env:RUNNER_TEMP/installer-validation"
+      - name: Upload installer validation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: installer-validation
+          path: |
+            ${{ runner.temp }}/installer-validation/**/*.json
+            ${{ runner.temp }}/installer-validation/**/*.log
+          if-no-files-found: warn
       - name: Publish draft for final runtime and deployment verification
         shell: pwsh
         run: |

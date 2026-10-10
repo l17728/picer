@@ -78,10 +78,16 @@ Assert-Runtime $runtimeSource
 New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
 dotnet publish (Join-Path $repoRoot 'src\Picer.App\Picer.App.csproj') -c Release -r win-x64 --self-contained true -o $OutputDirectory
 if ($LASTEXITCODE -ne 0) { throw 'Self-contained publish failed.' }
+& (Join-Path $PSScriptRoot 'copy-native-prerequisites.ps1') -Destination $OutputDirectory
 $agentOutput = Join-Path $OutputDirectory 'media-agent'
 New-Item -ItemType Directory -Force -Path $agentOutput | Out-Null
 dotnet publish (Join-Path $repoRoot 'src\Picer.MediaAgent\Picer.MediaAgent.csproj') -c Release -r win-x64 --self-contained true -o $agentOutput
 if ($LASTEXITCODE -ne 0) { throw 'Self-contained media agent publish failed.' }
+& (Join-Path $PSScriptRoot 'copy-native-prerequisites.ps1') -Destination $agentOutput
+$agentDependencies = & (Join-Path $PSScriptRoot 'prepare-installer-dependencies.ps1') -SkipCompiler
+$agentToolDirectory = Join-Path $agentOutput 'tools/ffmpeg'
+New-Item -ItemType Directory -Path $agentToolDirectory -Force | Out-Null
+Get-ChildItem -LiteralPath $agentDependencies.MediaTools -File | Copy-Item -Destination $agentToolDirectory -Force
 foreach ($file in @('Picer.MediaAgent.exe','Picer.MediaAgent.dll','Picer.MediaAgent.runtimeconfig.json','Picer.MediaAgent.deps.json','hostfxr.dll','coreclr.dll')) {
     if (-not (Test-Path -LiteralPath (Join-Path $agentOutput $file) -PathType Leaf)) { throw "Published media agent component is missing: $file" }
 }
@@ -103,6 +109,7 @@ foreach ($item in $native) {
 New-Item -ItemType Directory -Force -Path $ServiceOutputDirectory | Out-Null
 dotnet publish (Join-Path $repoRoot 'server\Picer.IndexService\Picer.IndexService.csproj') -c Release -r win-x64 --self-contained true -o $ServiceOutputDirectory
 if ($LASTEXITCODE -ne 0) { throw 'Index service publish failed.' }
+& (Join-Path $PSScriptRoot 'copy-native-prerequisites.ps1') -Destination $ServiceOutputDirectory
 Assert-Runtime (Join-Path $ServiceOutputDirectory 'runtime')
 if (-not (Test-Path -LiteralPath (Join-Path $ServiceOutputDirectory 'Picer.IndexService.exe'))) { throw 'Published index service executable is missing.' }
 

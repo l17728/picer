@@ -1,75 +1,90 @@
-# Picer v1.1.2 发布与安装
+# Picer v1.2.0 安装契约（尚未发布）
 
-此文说明发布契约，不代表 GitHub CI、Release 或部署已经成功。以对应提交的 Actions 结果、最终 Release 资产和实际健康检查为准。
+更新：2026-10-10。本页说明正在实现和验收的 v1.2.0 安装方式；安装器及登录自启的实际验收仍由发布流程进行，不表示新版本已发布或所有安装场景已通过。[v1.1.2](https://github.com/l17728/picer/releases/tag/v1.1.2) 已正式公开，是独立的历史版本；本页新增安装器不是对旧版本资产的追溯承诺。
 
-## 依赖安装在哪台机器
+## 普通 Windows 用户选择哪个安装器
 
-**仅作为远程客户端使用的 GUI 不需要安装 Python、CUDA、FFmpeg 或 FFprobe，也不需要下载模型/runtime 包。** GUI 经 IndexService 请求媒体处理和模型推理；打包时附带 MediaAgent 不表示每台 GUI 机器都必须启用代理。
-
-| 运行角色 | 所需外部组件 |
+| 计划资产 | 安装内容与用途 |
 | --- | --- |
-| 远程 GUI | 服务连接与配对配置；自包含程序包已含 .NET 运行时 |
-| IndexService（当前代理派发模式） | 连接源媒体代理和模型服务，不要求本机安装上述推理/媒体工具 |
-| MediaAgent（持有原照片/视频的源机器） | 执行视频任务时需要 ffmpeg.exe 和 ffprobe.exe；只转发模型请求，不因转发而需要 Python/CUDA |
-| ModelServer 的 Python 人脸推理/训练 worker | Python、对应依赖和模型；CUDA 仅在启用 NVIDIA GPU 推理时需要，worker 也支持 CPU |
-| 独立 Qwen/ASR 等模型服务 | 按具体服务安装其 Python/GPU/模型依赖，与远程 GUI 安装分开 |
+| Picer-v1.2.0-win-x64-setup.exe | GUI 与同包 MediaAgent；中文当前用户安装，无需管理员权限 |
+| Picer.MediaAgent-v1.2.0-win-x64-setup.exe | 仅安装原媒体所在电脑的驻留代理；中文当前用户安装，无需管理员权限 |
+| Picer-v1.2.0-win-x64-binary.zip | GUI 解压包，适合手动部署 |
+| Picer.MediaAgent-v1.2.0-win-x64-binary.zip | 独立代理解压包 |
+| Picer.IndexService-v1.2.0-win-x64-binary.zip / Picer.IndexService-v1.2.0-linux-x64-binary.tar.gz | Windows/Linux 索引服务，管理员手动配置 |
+| Picer.ModelServer-v1.2.0-win-x64-binary.zip / Picer.ModelServer-v1.2.0-linux-x64-binary.tar.gz | 模型 API、worker 与 setup-modelserver.py 环境准备脚本 |
+| SHA256SUMS.txt | 实际发布资产的完整 SHA-256 校验清单 |
 
-当前部署把 GUI、MediaAgent 和模型服务放在同一台 Windows 机器，因此依赖共同出现在这台电脑上，但它们属于代理/模型服务。视频探测链路为 GUI → IndexService → 源机器 MediaAgent → FFprobe；模型请求通过 IndexService 路由至代理/模型端点。GUI 不直接启动这些 Python worker 或 FFprobe。
+两个安装器都包含自包含 .NET 和应用目录内的 MSVC CRT，不要求用户另外安装 .NET 或 VC++ Redistributable。GUI 内含代理，代理目录下 tools/ffmpeg 提供 ffmpeg.exe、ffprobe.exe 及 LICENSE，独立代理使用同样的相对目录；程序自动发现工具。普通 GUI/代理用户不再需要手动下载视频工具或设置工具路径。
 
-## 下载哪个包
+目标系统为常规 Windows 10/11 x64。安装器目前没有代码签名凭据，因此未签名，Windows 可能显示“发布者未知”或安全提示；一键安装不绕过系统保护，应从正式 Release 下载并核对哈希。Windows N/Server 的 Media Foundation 等系统可选组件不随包提供，不能承诺这些特殊系统无需额外系统配置即可具备全部本地媒体能力。
 
-| 资产 | 用途 |
+安装器面向当前 Windows 用户；升级保留连接、配对和目录授权配置。卸载只移除程序及程序注册的启动入口，不删除用户图库、索引或用户配置。独立代理默认登录自启属于本轮安装器契约，实际安装/升级/卸载及自启行为须完成验收后才能宣称通过。未配置的新代理先展示设置，不因自启自行连接未知服务或授权目录。
+
+安装目录与用户数据目录分开。升级涉及数据库时仍须关闭同库写入者、备份 DB/WAL/SHM，再执行 schema 迁移；自动安装依赖不取消数据库保护要求。下载后按正式 Release 的 SHA256SUMS 校验安装器，不混用旧程序目录中的 DLL。
+
+## GUI 首次使用：不需要编辑 JSON 或环境变量
+
+纯远程 GUI 只连接索引服务，不需要 Python、CUDA 或模型/runtime 包，也不需要用户单独准备 FFmpeg/FFprobe。安装包带代理不表示必须启用代理；GUI 同机自动管理已授权代理也不能解释成 GUI 自身依赖模型执行环境。
+
+从“文件 → 连接索引服务…”进入中文配置：
+
+1. 选择远程模式，填写管理员提供的 HTTPS 服务地址和访问令牌。
+2. 点击“验证连接”。程序先只做 TLS 握手获取证书，此时不发送 HTTP 请求或令牌。
+3. 程序显示服务地址和证书公钥的 SHA-256 指纹。通过可信渠道与管理员核对，再明确确认；默认选择不信任。
+4. 确认后程序固定该证书公钥，禁止验证请求重定向，检查健康和受保护的只读访问。
+5. 验证成功后“保存并重启”。令牌由 Windows 当前用户 DPAPI 加密保存；修改地址或令牌后必须重新验证。
+
+显示给用户的 SHA-256 指纹用于核对；配置保存的是协议要求的原始 DER SPKI 公钥，不需要用户抄写几百字节的 Base64。拒绝确认、超时或验证失败不保存新连接。连接验证不启动扫描、模型分析或训练。
+
+未选择模式时界面提示连接入口，不把缺少本地模型当作安装失败。远程模式初始化后不执行通用本地运行组件缺失检查；明确选择本地模式后，本地执行的具体功能仍须相应组件。原始媒体只读约束不变。
+
+## 驻留代理首次使用
+
+在原照片/视频所在电脑安装独立代理，或启用 GUI 包中的代理。使用中文设置填写服务地址、令牌，获取并核对证书指纹，再选择一个或多个允许读取的目录根节点。只有用户允许的 N 个目录及其子树可作为源媒体范围；未配置目录时不自动扫描整盘。
+
+代理通过托盘入口打开设置、重新连接或退出；登录自启沿用已保存授权，新增目录或修改连接由用户操作。令牌按当前用户加密保存，升级继续使用已有配置。包内 FFmpeg/FFprobe 自动发现，无需普通用户设置 PICER_FFMPEG_PATH。已有管理员环境变量配置作为兼容入口，不能覆盖或扩大用户授权范围。
+
+视频处理链路为 GUI → IndexService → 源电脑 MediaAgent → 包内 FFmpeg/FFprobe。代理只转发模型请求时不需要 Python/CUDA；要使用 ASR、VL、人脸、TTS 等能力，管理员仍须配置真实模型端点。代理在线或显示 ready 不等于模型质量验收完成。
+
+## 依赖按运行角色划分
+
+| 角色 | 用户需要准备什么 |
 | --- | --- |
-| Picer-v1.1.2-win-x64-binary.zip | Windows GUI，内含 media-agent 子目录 |
-| Picer.MediaAgent-v1.1.2-win-x64-binary.zip | 独立 Windows 源媒体驻留代理 |
-| Picer.IndexService-v1.1.2-win-x64-binary.zip | Windows 索引服务 |
-| Picer.IndexService-v1.1.2-linux-x64-binary.tar.gz | Linux 索引/中转服务 |
-| Picer.ModelServer-v1.1.2-win-x64-binary.zip | Windows 模型 API 与 Python worker 源码 |
-| Picer.ModelServer-v1.1.2-linux-x64-binary.tar.gz | Linux 模型 API 与 Python worker 源码 |
-| SHA256SUMS.txt | 二进制及安装说明的校验值 |
-| Picer-v1.1.2-win-x64-full.zip | Windows GUI、内置代理、自包含 .NET 与固定运行组件 |
-| Picer-runtime-v1.1.2-win-x64.zip / SHA256SUMS-OFFLINE.txt | Windows 离线工具与固定模型及校验清单 |
+| 纯远程 GUI | 管理员提供的服务地址、令牌及可核对的证书指纹 |
+| 源媒体 MediaAgent | 相同连接信息及用户选择的允许目录；视频工具由安装包提供 |
+| IndexService（代理派发模式） | 服务数据目录、认证/TLS 和连接到媒体代理的配置 |
+| ModelServer Python worker | Python、脚本安装的依赖及已获授权的模型权重；CPU 为默认 |
+| GPU 模型部署 | 相容 GPU 驱动与 GPU 运行环境由管理员准备，不能由 GUI 安装器代替 |
+| 独立 Qwen/ASR/TTS 服务 | 按对应服务准备其模型和执行环境，不包含在 GUI 安装契约中 |
 
-这些是解压安装包，不是 MSI。二进制包含对应平台的 .NET 运行时及发布输出中的本机库，不包含全部 AI 模型、CUDA、Python 或外部模型服务。不要删除 DLL、runtimes、licenses 等依赖目录。Linux IndexService 主要通过 Windows MediaAgent 执行媒体工作，不能将 Windows 原生视觉库当作 Linux 本机推理能力。
+在同一台电脑安装 GUI、代理和模型时会同时出现这些组件，但各自职责仍独立。模型权重体积与授权各异，不把全部模型打入普通 GUI 安装器，也不宣称其完全离线具备任意模型能力。
 
-运行时基础资产 runtime-v1/Picer-runtime-win-x64.zip 经固定 SHA-256 和当前逐文件门禁验证后复用，不能只凭文件名或日期推断兼容性。需要本地运行组件的部署使用本 Release 的版本化 runtime 资产；纯远程 GUI 可直接选择 binary 包。完整包不需要再次解压 runtime；额外的代理工具和模型端点仅在对应角色机器上按下文配置。
+## 服务端手动安装
 
-## 校验和 Windows 安装
+IndexService 解压对应 Windows/Linux 二进制包，配置 PICER_INDEX_DATA_ROOT、PICER_INDEX_SERVICE_PORT 和 PICER_INDEX_SERVICE_TOKEN。Windows 启动 Picer.IndexService.exe；Linux 为 Picer.IndexService 设置可执行权限后启动。生产环境配置 HTTPS、访问控制、进程管理及备份。服务端与 GUI 使用同一配对公钥协议，不能为省略证书确认而关闭验证。
 
-先以 Get-FileHash -Algorithm SHA256 核对下载文件与清单。解压到新的安装目录，保留整包结构；不要覆盖正在运行的安装或混用新旧依赖。
+ModelServer 的 Windows/Linux 包均携带 setup-modelserver.py、worker 和固定依赖清单。准备 Python 3.10–3.12 x64 与已获授权的模型文件，在解压目录执行以下命令即可建立隔离 venv、安装固定依赖并加载验证识别模型与 YuNet（路径替换为实际模型文件）：
 
-将版本化 Windows runtime 包按其目录结构解压到 GUI 安装根的 runtime 子目录，以及需要本地执行的 Windows IndexService 安装根的 runtime 子目录。避免出现 runtime/runtime 双层目录。在 GUI“运行组件”执行完整校验及运行自检，缺失或固定哈希不符必须修复，不能禁用校验。InsightFace/Qwen 等配置的外部模型仍需各自准备和授权。
+```powershell
+python setup-modelserver.py --model sface --model-path "D:\models\sface.onnx" --detector-path "D:\models\yunet.onnx"
+```
 
-启动 GUI：Picer.App.exe。升级旧库前关闭全部同库写入进程，完整备份 DB/WAL/SHM；当前 schema 45 升级失败时恢复匹配版本程序和备份，不能手动降低 user_version。
+```bash
+python3 setup-modelserver.py --model sface --model-path /srv/models/sface.onnx --detector-path /srv/models/yunet.onnx
+```
 
-## 独立代理与索引服务
+默认 CPU；需要 GPU 时显式增加 `--device cuda`，需相容 CUDA 12.4 的驱动与可用 GPU。可用 `--venv` 指定独立环境，不在原环境直接切换 CPU/CUDA。Linux Python 需可用的 venv 模块；Windows Python worker 还须满足其原生依赖所需的 VC++ x64 运行库，这属于服务器环境，不是 GUI 用户前置依赖。成功后在启动服务前读取 venv 内的 worker-env.ps1 或 worker-env.sh；`--check` 仅复核已准备环境，不安装依赖、不写配置。`--embeddings-only` 只验证预计算向量校准，不能据此声称图像检测/向量提取已就绪。
 
-独立代理运行 Picer.MediaAgent.exe。配置进程环境：
+脚本不自动安装 GPU 驱动，不下载授权未确认的模型权重。默认安装需要访问 pypi.org 与 download.pytorch.org；完全离线服务器需另行由管理员准备并部署兼容环境，当前命令不提供自动离线依赖安装。模型服务配置 PICER_MODEL_SERVER_API_KEY 和 HTTPS/受控反向代理；准备环境成功后还须启动服务，验证健康及一次实际模型请求。
 
-- PICER_INDEX_SERVICE_IP：索引服务地址，按服务配对配置填写。
-- PICER_INDEX_SERVICE_TOKEN 与 PICER_INDEX_SERVICE_SPKI_PIN：配对令牌和可信公钥指纹，不写入共享脚本或日志。
-- PICER_MEDIA_AGENT_ROOTS：允许读取的源根目录列表；分隔方式按当前代理配置，通常使用分号。
-- PICER_FFMPEG_PATH：指向同时包含 ffmpeg.exe 与 ffprobe.exe 的可信 FFmpeg 工具目录中的 ffmpeg.exe。本次固定 runtime 只附带 ffmpeg.exe，独立代理的视频探测和能力注册还需另备 ffprobe.exe；GUI 组件自检通过不代表代理媒体依赖齐备。
-- PICER_LOCAL_ASR_ENDPOINT、PICER_LOCAL_VL_ENDPOINT、PICER_LOCAL_TTS_ENDPOINT、PICER_LOCAL_FACE_ENDPOINT：实际已启动的模型端点；未配置不等于能力 ready。
+## 验证与发布边界
 
-GUI 内含的 media-agent 同样需要实际源访问权限和服务配置。代理执行扫描/抽帧不修改原媒体，缓存清除不删除原文件。
+GUI 配对与运行模式的 12 项定向测试已通过，包含真实 TLS 无凭据发现、网关固定公钥调用、DPAPI 保存及重载，以及实际服务模式不触发本地 runtime 提示。代理的 12 项定向测试通过。严格构建通过的范围及安装器实际验收记录见[安装实现记录](INSTALLER_IMPLEMENTATION_2026-10-10.md)；不能把这些代码测试描述成安装器已经验收或发布。
 
-IndexService 配置 PICER_INDEX_DATA_ROOT、PICER_INDEX_SERVICE_PORT、PICER_INDEX_SERVICE_TOKEN，Windows 启动 Picer.IndexService.exe；Linux 解压 tar.gz 后先 chmod +x Picer.IndexService，再运行 ./Picer.IndexService。生产环境通过服务管理器启动、配置访问控制与 TLS，不能把服务绑定公网即视为安全安装完成。Linux 配置 Windows MediaAgent 连接和实际模型路由。
+正式发布仍须检验当前用户安装、首次配对、允许目录、登录自启、保留配置的升级、卸载不删数据，以及安装后的程序/工具/CRT 实际运行。构建和外部 CLI 失败须停止；每个上传资产小于 2 GB，完整离线资产仍保留固定哈希及许可证门禁。模型质量、真实场景和硬件验收按各自范围记录。
 
-## ModelServer 的额外依赖
+## v1.1.2 历史发布
 
-包内 worker/face_worker.py 与 worker/requirements.txt 随版本发布。requirements 是所需依赖名称清单，不是跨 CPU/CUDA 的可复现锁文件。使用独立 Python 环境安装 torch、numpy、onnxruntime、opencv-python-headless；GPU 部署须根据驱动选择相容 PyTorch/CUDA 和 ONNX Runtime，不能同时盲装互斥 CPU/GPU 发行版。
+v1.1.2 于 2026-10-10 00:45:21 UTC 正式公开，非草稿、非预发布。Release 回归 610/610 单元、73/73 WPF，离线构建通过；当时为六个二进制包、完整 GUI、runtime 共八个包及其他说明/清单，共 13 项资产，摘要校验完成。
 
-设置 PICER_GPU_WORKER_PYTHON 为该环境 Python 完整路径，PICER_GPU_WORKER_SCRIPT 为安装目录 worker/face_worker.py，按需配置 PICER_GPU_WORKER_USE_CUDA。模型权重外置并按对应模型环境变量提供，例如 PICER_INSIGHTFACE_MODEL_PATH；不得依赖源码中的开发机默认路径。配置 PICER_MODEL_SERVER_API_KEY，生产环境使用 HTTPS/受控反向代理。Linux 先 chmod +x Picer.ModelServer，再启动；Windows 运行 Picer.ModelServer.exe。
-
-Qwen ASR/VL、TTS 和其他推理服务按部署方案单独安装。ModelServer 二进制和 Python worker 并不包含这些权重或完整 GPU 运行环境。启动 /health 成功只证明 API 可达，还需验证已配置能力和一次真实请求。
-
-## 发布流程与门禁
-
-CI 保留两套非 RuntimeComponent 测试，单用例挂起诊断为 10 分钟、总作业上限 60 分钟，避免真实 100k 规模测试被原 60 秒门限误杀。Release 工作流校验已存在 tag 的提交，严格构建并执行同样的两套测试，再打六个包；命令失败立即停止。
-
-tools/package-release.ps1 是明确的外置运行资产二进制发行模式，仅从新 staging 中移除模型/工具 runtime 目录，不过滤发布所需 DLL 和本机依赖。它不替代 tools/publish-self-contained.ps1；完整离线发行仍须通过后者全部固定大小、哈希及许可证检查。每个上传资产必须小于 2,000,000,000 字节，超限须拆分组件并重新生成清单，不上传截断包。
-
-工作流创建 draft Release，发布负责人补齐通过原固定哈希校验的版本化运行资产、对应清单及安装冒烟证据后再公开。工作流手动重跑要求已有 tag，不自动给任意分支创建版本标签；已有同名 Release 时停止供人工核对，避免悄悄替换已发布资产。
-
-RuntimeComponent 检验和本轮真实部署独立于轻量包 CI。历史本机 605 分轮单元证据与 WPF 73/73 不能替代当前提交的 GitHub CI 结果，模型质量/硬件暂停验收也不因生成安装包自动完成。
+旧 v1.1.2 提供解压包而非本页的新 setup.exe；其固定 runtime 只附 ffmpeg.exe，源代理仍需额外 ffprobe.exe。这个旧版限制由 v1.2.0 新代理工具打包契约解决，不能反向声称旧包已经包含。本轮尚未改变 v1.1.2 的发布事实。

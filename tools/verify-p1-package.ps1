@@ -1,7 +1,8 @@
-﻿param([string]$PackageRoot = 'D:\picer\artifacts\p1-release-20261008\Picer-win-x64')
+﻿param([string]$PackageRoot = 'D:\picer\artifacts\p1-release-20261008\Picer-win-x64', [string]$TestRoot)
 $ErrorActionPreference = 'Stop'
+if ([string]::IsNullOrWhiteSpace($TestRoot)) { $TestRoot = Join-Path $PSScriptRoot '../artifacts/p1-tests' }
 $PackageRoot = (Resolve-Path -LiteralPath $PackageRoot).Path.TrimEnd('\', '/')
-$smokeRoot = Join-Path 'D:\picer\artifacts\p1-tests' ('package-smoke-' + [Guid]::NewGuid().ToString('N'))
+$smokeRoot = Join-Path ([IO.Path]::GetFullPath($TestRoot)) ('package-smoke-' + [Guid]::NewGuid().ToString('N'))
 $bootstrap = Join-Path $smokeRoot 'bootstrap'
 New-Item -ItemType Directory -Path $bootstrap -Force | Out-Null
 Set-Content -LiteralPath (Join-Path $bootstrap 'backend.json') -Value '{"mode":"local"}' -Encoding UTF8

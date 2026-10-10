@@ -1,0 +1,4 @@
+# CUDA 12.x / cuDNN 9; paired with torch 2.6.0 cu124, never with CPU onnxruntime.
+numpy==1.26.4
+opencv-python-headless==4.10.0.84
+onnxruntime-gpu==1.20.1

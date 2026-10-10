@@ -23,6 +23,7 @@
                 <MenuItem Header="删除所选" Command="{Binding DeleteSelectedFilesCommand}"/>
                 <MenuItem Header="备份与恢复" Click="DataProtection_Click"/>
                 <MenuItem Header="索引服务状态" Click="IndexService_Click"/>
+                <MenuItem Header="连接索引服务…" Click="BackendSettings_Click"/>
                 <MenuItem Header="切换本地/远程模式…" Click="BackendSettings_Click"/>
             </MenuItem>
             <MenuItem Header="AI 功能(_A)" AutomationProperties.Name="AI 功能菜单">

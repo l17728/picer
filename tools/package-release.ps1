@@ -11,6 +11,7 @@ if ((Test-Path -LiteralPath $output) -and @(Get-ChildItem -LiteralPath $output -
 New-Item -ItemType Directory -Path $output -Force | Out-Null
 $stage = Join-Path $output 'staging'
 New-Item -ItemType Directory -Path $stage | Out-Null
+$installerDependencies = & (Join-Path $PSScriptRoot 'prepare-installer-dependencies.ps1')
 $packages = @(
     @{ Name='Picer'; Project='src/Picer.App/Picer.App.csproj'; Rid='win-x64'; Executable='Picer.App.exe' },
     @{ Name='Picer.MediaAgent'; Project='src/Picer.MediaAgent/Picer.MediaAgent.csproj'; Rid='win-x64'; Executable='Picer.MediaAgent.exe' },
@@ -22,6 +23,9 @@ $packages = @(
 function Publish-Binary($project, $rid, $destination) {
     dotnet publish (Join-Path $repoRoot $project) -c Release -r $rid --self-contained true -o $destination --warnaserror
     if ($LASTEXITCODE -ne 0) { throw "Publish failed: $project ($rid)" }
+    if ($rid -eq 'win-x64') {
+        & (Join-Path $PSScriptRoot 'copy-native-prerequisites.ps1') -Destination $destination
+    }
     $licenses = Join-Path $destination 'licenses'
     New-Item -ItemType Directory -Path $licenses -Force | Out-Null
     $runtimeLicenses = Join-Path $repoRoot 'third_party/runtime/licenses'
@@ -63,9 +67,17 @@ foreach ($package in $packages) {
     if ($package.Name -eq 'Picer') {
         Publish-Binary 'src/Picer.MediaAgent/Picer.MediaAgent.csproj' 'win-x64' (Join-Path $destination 'media-agent')
     }
+    if ($package.Name -in @('Picer', 'Picer.MediaAgent')) {
+        $agentDirectory = if ($package.Name -eq 'Picer') { Join-Path $destination 'media-agent' } else { $destination }
+        $toolDirectory = Join-Path $agentDirectory 'tools/ffmpeg'
+        New-Item -ItemType Directory -Path $toolDirectory -Force | Out-Null
+        Get-ChildItem -LiteralPath $installerDependencies.MediaTools -File | Copy-Item -Destination $toolDirectory -Force
+    }
     if ($package.Name -eq 'Picer.ModelServer') {
         Copy-Item -LiteralPath (Join-Path $repoRoot 'server/Picer.ModelServer/worker') -Destination $destination -Recurse -Force
-        @('torch','numpy','onnxruntime','opencv-python-headless') | Set-Content -LiteralPath (Join-Path $destination 'worker/requirements.txt') -Encoding utf8
+        foreach ($setupFile in @('setup-modelserver.py', 'modelserver-requirements-cpu.txt', 'modelserver-requirements-cuda.txt')) {
+            Copy-Item -LiteralPath (Join-Path $repoRoot "server/$setupFile") -Destination $destination
+        }
         Copy-Item -LiteralPath (Join-Path $repoRoot 'server/README.md') -Destination (Join-Path $destination 'SERVER-README.md')
     }
     Copy-Item -LiteralPath (Join-Path $repoRoot 'docs/RELEASE_GUIDE.md') -Destination (Join-Path $destination 'INSTALL.md')
@@ -83,8 +95,12 @@ foreach ($package in $packages) {
     }
     if ((Get-Item -LiteralPath $archive).Length -ge 2000000000) { throw "Asset exceeds 2 GB limit: $name" }
 }
+& (Join-Path $PSScriptRoot 'build-installers.ps1') -Version $Version `
+    -GuiDirectory (Join-Path $stage "Picer-$Version-win-x64-binary") `
+    -AgentDirectory (Join-Path $stage "Picer.MediaAgent-$Version-win-x64-binary") `
+    -OutputDirectory $output -CompilerPath $installerDependencies.Compiler
 Copy-Item -LiteralPath (Join-Path $repoRoot 'docs/RELEASE_GUIDE.md') -Destination (Join-Path $output 'INSTALL.md')
 Get-ChildItem -LiteralPath $output -File | Sort-Object Name | ForEach-Object {
     "$((Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant())  $($_.Name)"
 } | Set-Content -LiteralPath (Join-Path $output 'SHA256SUMS.txt') -Encoding ascii
-Write-Output "Binary assets ready: $output. External runtime/models are required as documented."
+Write-Output "All component packages and self-contained user installers ready: $output. Model services are configured separately."
