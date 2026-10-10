@@ -91,7 +91,17 @@ public sealed class MediaAgentSettingsTests : IDisposable
             using var client = await listener.AcceptTcpClientAsync(timeout.Token);
             using var tls = new System.Net.Security.SslStream(client.GetStream());
             await tls.AuthenticateAsServerAsync(new System.Net.Security.SslServerAuthenticationOptions { ServerCertificate = certificate }, timeout.Token);
-            return await tls.ReadAsync(new byte[1], timeout.Token);
+            var applicationByte = new byte[] { 0xff };
+            try { return await tls.ReadAsync(applicationByte, timeout.Token); }
+            catch (IOException exception) when (exception.InnerException is System.Net.Sockets.SocketException
+                { SocketErrorCode: System.Net.Sockets.SocketError.ConnectionReset })
+            {
+                // Schannel can reset a closing TLS 1.3 connection with unread session
+                // tickets even after close_notify. No application byte was observed.
+                // Other I/O failures and any received HTTP byte still fail this test.
+                Assert.Equal(0xff, applicationByte[0]);
+                return 0;
+            }
         });
         var address = "https://localhost:" + ((System.Net.IPEndPoint)listener.LocalEndpoint).Port;
         byte[] discovered;
