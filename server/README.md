@@ -6,7 +6,7 @@
 
 IndexService 新增独立后台一致性检查：启动后 45 秒开始，每轮间隔 10 秒，照片与视频交替，每批 32 条并轮转内容审计。仅在单个支持 `directory.verify.v1` 的来源代理在线时执行，遇到前台工作让路；不扫描新文件，不自动清除索引。设置 `PICER_BACKGROUND_INDEX_CHECK=0` 并重启服务可关闭。检查点位于服务数据目录的 `consistency-checkpoint.json`，只有数字游标。更多协议、兼容和发布证据见[七项性能与后台维护改造](../docs/PERFORMANCE_FOLLOWUP_IMPLEMENTATION_2026-10-10.md)。
 
-最新正式版为 [v1.4.0](https://github.com/l17728/picer/releases/tag/v1.4.0)，包含 GUI/驻留安装器以及 IndexService、ModelServer 的 Windows/Linux x64 自包含包。仓库为私有，下载需要访问权限。组件职责与首次安装见[安装指南](../docs/RELEASE_GUIDE.md)，本版验证见[性能与后台维护实施记录](../docs/PERFORMANCE_FOLLOWUP_IMPLEMENTATION_2026-10-10.md)。本次未自动替换运行中的服务，既有 v1.3.5 部署身份与备份见[媒体实施记录](../docs/MEDIA_STREAMING_IMPLEMENTATION_2026-10-10.md)。四项外部质量/硬件验收保持暂停。
+最新正式版为 [v1.4.0](https://github.com/l17728/picer/releases/tag/v1.4.0)，包含 GUI/驻留安装器以及 IndexService、ModelServer 的 Windows/Linux x64 自包含包。仓库为私有，下载需要访问权限。组件职责与首次安装见[安装指南](../docs/RELEASE_GUIDE.md)，本版验证见[性能与后台维护实施记录](../docs/PERFORMANCE_FOLLOWUP_IMPLEMENTATION_2026-10-10.md)。2026-10-12 已完成服务升级，见[部署记录](../docs/DEPLOYMENT_V1_4_0_2026-10-12.md)；既有 v1.3.5 部署身份与备份见[媒体实施记录](../docs/MEDIA_STREAMING_IMPLEMENTATION_2026-10-10.md)。四项外部质量/硬件验收保持暂停。
 
 IndexService 当前数据库 schema 为 45，须与客户端配套升级。Linux 升级必须先停所有数据库写入者，备份 DB/WAL/SHM；失败时数据库和程序一起恢复，不能只降级二进制。具体命令、额外写入服务配置、关闭快照和失败停机行为见 [自动升级说明](../docs/INDEX_SERVICE_AUTOMATED_UPGRADE_2026-09-30.md)。
 

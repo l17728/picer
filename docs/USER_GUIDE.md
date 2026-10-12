@@ -1,6 +1,6 @@
 # Picer 用户指南
 
-最新正式版为 [v1.4.0](https://github.com/l17728/picer/releases/tag/v1.4.0)，schema 45；私有仓库下载需要访问权限。测试、安装及发布证据见[本版实施记录](PERFORMANCE_FOLLOWUP_IMPLEMENTATION_2026-10-10.md)。本次发布没有替换正在运行的旧实例，使用新源端能力需配套升级 GUI、Agent 和 IndexService。
+最新正式版为 [v1.4.0](https://github.com/l17728/picer/releases/tag/v1.4.0)，schema 45；私有仓库下载需要访问权限。测试、安装及发布证据见[本版实施记录](PERFORMANCE_FOLLOWUP_IMPLEMENTATION_2026-10-10.md)。现有部署已于 2026-10-12 配套升级 GUI、Agent、IndexService 和 ModelServer，见[v1.4.0 部署记录](DEPLOYMENT_V1_4_0_2026-10-12.md)。其他用户启用新源端能力仍需配套升级。
 
 下载 [v1.4.0 正式 Release](https://github.com/l17728/picer/releases/tag/v1.4.0) 的 GUI 或独立驻留程序一键安装器，详见[安装说明](RELEASE_GUIDE.md)。GUI 安装器为 326,030,607 字节（约 326.0 MB）；共 10 个软件包、15 项资产，下载后核对统一 SHA256SUMS。
 
