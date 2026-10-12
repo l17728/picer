@@ -20,6 +20,12 @@
 | [全部历史报告](ARCHIVE_INDEX.md) | 按日期浏览保留的设计、修复、评审与验收证据 |
 | [本次文档刷新记录](DOCUMENTATION_REFRESH_2026-10-10.md) | 现状校对范围、修正内容及文档检查 |
 
+## 新设计与评审（尚未实现）
+
+- [跨电脑接入建议方案](ACCOUNT_SPACE_DEVICE_AUTH_PROPOSAL_2026-10-12.md)：登录、照片空间、设备授权与产品流程。
+- [账号、空间与设备授权 SDD 1.0](ACCOUNT_SPACE_DEVICE_AUTH_SDD_2026-10-12.md)：权限、协议、数据同步、迁移恢复、并发和验收契约。
+- [专家评审汇总](ACCOUNT_SPACE_DEVICE_AUTH_REVIEW_2026-10-12.md)：三个独立代理覆盖多领域，23项发现修订复核关闭；不代表代码已实现。
+
 ## 最近实现与验证
 
 - [七项性能与后台维护改造](PERFORMANCE_FOLLOWUP_IMPLEMENTATION_2026-10-10.md)：缓存锁、并发预读、小 Range、连接复用、源端预处理、缩略图优先和独立后台检查，本次发布证据集中记录于此。
