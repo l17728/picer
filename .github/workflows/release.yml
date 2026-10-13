@@ -58,7 +58,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Desktop tests failed' }
       - name: Package every component (external runtime distribution)
         shell: pwsh
-        run: ./tools/package-release.ps1 -Version $env:RELEASE_TAG -OutputDirectory "$env:RUNNER_TEMP/release-assets"
+        run: |
+          ./tools/package-release.ps1 -Version $env:RELEASE_TAG -OutputDirectory "$env:RUNNER_TEMP/release-assets"
+          if ($LASTEXITCODE -ne 0) { throw 'Package build failed' }
+          Copy-Item docs/OFFLINE_INSTALL.md "$env:RUNNER_TEMP/release-assets/OFFLINE-INSTALL.txt"
       - name: Upload binary packages
         continue-on-error: true
         uses: actions/upload-artifact@v4
