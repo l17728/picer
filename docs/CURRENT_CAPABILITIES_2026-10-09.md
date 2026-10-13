@@ -1,10 +1,10 @@
 # 当前能力与验证状态
 
-新增设计说明（2026-10-12）：[账号、空间与设备授权 SDD](ACCOUNT_SPACE_DEVICE_AUTH_SDD_2026-10-12.md)已评审定稿，但账号登录、多租户隔离、设备管理与授权文件均尚未实现。本页下方的已交付能力不包含这些目标功能，详见[评审汇总](ACCOUNT_SPACE_DEVICE_AUTH_REVIEW_2026-10-12.md)。
+状态更新（2026-10-14）：账号、空间与设备授权客户端流程已随 v1.5.1 发布；生产 IndexService 仍运行旧令牌兼容模式，尚未启用网页登录/多租户开户。上线切换门槛和当前部署状态见[部署记录](DEPLOYMENT_V1_5_1_2026-10-14.md)及[账号系统实施记录](ACCOUNT_SPACE_DEVICE_AUTH_IMPLEMENTATION_2026-10-13.md)。
 
-阶段结论（2026-10-12）：v1.4.0 已发布，目录描述启动延迟修复、七项性能优化及自动后台一致性检查已完成。现有实例已按用户指令升级，见[v1.4.0 部署记录](DEPLOYMENT_V1_4_0_2026-10-12.md)；下表中的旧版本验收仍保留原证据身份；四项暂停的质量/硬件验收仍不计作已通过。
+阶段结论（2026-10-14）：v1.5.1 已正式发布，生产 IndexService、ModelServer 和本地 GUI 已升级；schema 46 迁移已完成。下表中的旧版本验收仍保留原证据身份；四项暂停的质量/硬件验收仍不计作已通过。
 
-最新正式版为 [v1.4.0](https://github.com/l17728/picer/releases/tag/v1.4.0)，schema 45；私有仓库下载需要访问权限。本版 665/665 单元、92/92 桌面、安装器及离线包验证见[性能与后台维护实施记录](PERFORMANCE_FOLLOWUP_IMPLEMENTATION_2026-10-10.md)；既有部署记录见[媒体实施记录](MEDIA_STREAMING_IMPLEMENTATION_2026-10-10.md)。
+最新正式版为 [v1.5.1](https://github.com/l17728/picer/releases/tag/v1.5.1)，schema 46。CI 715/715 单元及 94/94 桌面测试、离线视频解码/跳转和各组件安装包验证通过；部署证据见[部署记录](DEPLOYMENT_V1_5_1_2026-10-14.md)。
 
 GUI/独立 Agent 中文当前用户一键安装器已实现，包含自包含 .NET、app-local MSVC CRT，代理 tools/ffmpeg 目录同时提供 FFmpeg、FFprobe 及许可证并自动发现。纯远程 GUI 不需要 Python、CUDA 或模型 runtime，也不检查本地 runtime。首次从“文件 → 连接索引服务…”完成无凭据证书发现、指纹确认、固定公钥验证及 DPAPI 保存，无需编辑 JSON。模型端 setup-modelserver.py 默认 CPU 的实际验收已通过；GPU 和授权模型依然按服务端配置。详见[安装实现记录](INSTALLER_IMPLEMENTATION_2026-10-10.md)和[安装指南](RELEASE_GUIDE.md)。
 

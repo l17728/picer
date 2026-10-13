@@ -92,4 +92,4 @@ Invoke-Native $scp ($scpArgs + @($remoteScript, "${target}:$remoteScriptPath"))
 Write-Host 'Running remote atomic upgrade and waiting for health/version verification...'
 Invoke-Native $ssh ($sshArgs + @($target, $remoteCommand))
 Write-Host "Upgrade verified. deploymentId=$deploymentId sha256=$executableHash"
-Write-Host "Remote status endpoint: https://$Server:8445/version"
+Write-Host "Remote status endpoint: https://${Server}:8445/version"

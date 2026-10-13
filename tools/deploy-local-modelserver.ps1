@@ -28,6 +28,24 @@ $backupReady = $false
 $stopped = $false
 $changed = $false
 function Stop-VerifiedModelServer {
+    $managerListener = @(Get-NetTCPConnection -LocalPort 8090 -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique)
+    if ($managerListener.Count -gt 0) {
+        foreach ($managerId in $managerListener) {
+            $managerProcess = Get-CimInstance Win32_Process -Filter "ProcessId=$managerId"
+            $managerEntry = Join-Path $ModelRoot 'manager\server.js'
+            if (-not $managerProcess.CommandLine -or $managerProcess.CommandLine.IndexOf($managerEntry, [StringComparison]::OrdinalIgnoreCase) -lt 0) {
+                throw 'Port 8090 belongs to an unverified supervisor; refusing to stop the inference process.'
+            }
+        }
+        $stopResult = Invoke-RestMethod -Method Post -Uri 'http://127.0.0.1:8090/api/services/picer-model/stop' -TimeoutSec 15
+        if (-not $stopResult.ok) { throw 'ModelServer supervisor did not confirm an orderly stop.' }
+        $released = $false
+        for ($attempt = 0; $attempt -lt 40; $attempt++) {
+            if (-not (Get-NetTCPConnection -LocalPort 8091 -State Listen -ErrorAction SilentlyContinue)) { $released = $true; break }
+            Start-Sleep -Milliseconds 250
+        }
+        if (-not $released) { throw 'ModelServer supervisor stopped the request but port 8091 remains occupied.' }
+    }
     $listener = Get-NetTCPConnection -LocalPort 8091 -State Listen -ErrorAction SilentlyContinue
     $owned = @(Get-CimInstance Win32_Process | Where-Object { $_.Name -in @('dotnet.exe', 'Picer.ModelServer.exe') -and $_.CommandLine -and $_.CommandLine.IndexOf($dll, [StringComparison]::OrdinalIgnoreCase) -ge 0 })
     foreach ($serviceId in @(@($listener.OwningProcess) + @($owned.ProcessId) | Select-Object -Unique)) {

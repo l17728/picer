@@ -4,9 +4,9 @@ Picer 提供照片和视频索引、目录描述、人物管理、文字检索�
 
 ## 当前版本
 
-[v1.4.0](https://github.com/l17728/picer/releases/tag/v1.4.0) 已正式发布，数据库 schema 45。目录描述解耦、七项性能优化及独立后台一致性检查已完成；2026-10-12 已完成现有部署升级，见[部署记录](docs/DEPLOYMENT_V1_4_0_2026-10-12.md)。人脸质量、人工标注视频转录、AEC3 房间体验及低配置设备四项外部验收仍暂停。仓库为私有，Release 下载需要访问权限。
+[v1.5.1](https://github.com/l17728/picer/releases/tag/v1.5.1) 已正式发布，数据库 schema 46。包含账号/空间/设备授权实现、流式目录描述与可靠性改进，以及 GUI、Agent、IndexService、ModelServer 的组件包和离线安装包。现有生产 IndexService 已升级到 schema 46，但继续以旧令牌协议运行；账号门户/多租户模式尚未在生产启用，切换门禁见[部署记录](docs/DEPLOYMENT_V1_5_1_2026-10-14.md)。人脸质量、人工标注视频转录、AEC3 房间体验及低配置设备四项外部验收仍暂停。仓库为私有，Release 下载需要访问权限。
 
-普通 Windows 用户下载 `Picer-v1.4.0-win-x64-setup.exe`，大小 **326,030,607 字节（约 326 MB）**。安装器包含 GUI、驻留程序、自包含 .NET/Kestrel 和媒体工具；纯远程客户端不需要 Python、CUDA 或模型包。新装 GUI 默认不启动本机驻留代理；保存原始媒体的电脑按授权配置运行代理。新源端能力需配套升级 Agent 和 IndexService。完整安装与验证见[安装指南](docs/RELEASE_GUIDE.md)及[本版实施记录](docs/PERFORMANCE_FOLLOWUP_IMPLEMENTATION_2026-10-10.md)。
+普通 Windows 用户下载 `Picer-v1.5.1-win-x64-setup.exe`，大小 **326,183,841 字节（约 326 MB）**。安装器包含 GUI、驻留程序、自包含 .NET/Kestrel 和媒体工具；纯远程客户端不需要 Python、CUDA 或模型包。新装 GUI 默认不启动本机驻留代理；保存原始媒体的电脑按授权配置运行代理。新源端能力需配套升级 Agent 和 IndexService。完整安装与验证见[安装指南](docs/RELEASE_GUIDE.md)、[离线安装说明](docs/OFFLINE_INSTALL.md)和[v1.5.1 部署记录](docs/DEPLOYMENT_V1_5_1_2026-10-14.md)。
 
 ## 从哪里开始
 
