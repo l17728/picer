@@ -11,6 +11,27 @@ namespace Picer.E2E;
 
 public sealed class DirectoryMediaDescriptionTests
 {
+    [Fact]
+    public async Task FirstDescriptionStartsBeforeDiscoveryFinishes()
+    {
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var calls = 0;
+        async IAsyncEnumerable<DirectoryDescriptionItem> Discover()
+        {
+            yield return new(new ImageRecord { Id = 1, Path = "one.jpg" }, null, false);
+            await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            yield return new(new ImageRecord { Id = 2, Path = "already.jpg" }, null, true);
+            yield return new(null, new VideoRecord(3, 1, "video.mp4", 1, DateTime.UtcNow, 1, 2, 2, null, null, "active"), false);
+        }
+        var runner = new MediaDescriptionBatch((_, _) => { Interlocked.Increment(ref calls); started.TrySetResult(); return Task.FromResult(true); },
+            (_, _) => { Interlocked.Increment(ref calls); return Task.FromResult(true); });
+        var messages = new List<string>();
+        await runner.RunStreamingAsync(Discover(), new Capture(messages), CancellationToken.None, 2, 2);
+        Assert.Equal(2, calls);
+        Assert.Contains("原有描述跳过 1", messages[^1]);
+        Assert.Contains("2/2", messages[^1]);
+    }
+
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
@@ -107,13 +128,28 @@ public sealed class DirectoryMediaDescriptionTests
             [new ImageRecord { Id = 1, Path = "D:/media/photo.jpg" }],
             [new VideoRecord(2, 1, "D:/media/video.mp4", 1, DateTime.UtcNow, 1, 1, 1, null, null, "active")]);
         var runner = new MediaDescriptionBatch((_, _) => Task.FromResult(false), (_, _) => throw new AnalysisStageException(AnalysisStage.Preprocess, "HTTP_403", false));
-        await runner.RunAsync(plan, new Capture([]), CancellationToken.None, failures: new FailureCapture(failures));
+        await Assert.ThrowsAsync<DescriptionServiceUnavailableException>(() => runner.RunAsync(plan, new Capture([]), CancellationToken.None, failures: new FailureCapture(failures)));
         Assert.Equal(2, failures.Count); Assert.False(failures[0].IsVideo); Assert.True(failures[1].IsVideo);
         Assert.Equal(AnalysisStage.Preprocess, failures[1].Stage); Assert.False(failures[1].Retryable); Assert.Equal("HTTP_403", failures[1].Error);
         failures.Clear(); using var cancelled = new CancellationTokenSource();
         runner = new MediaDescriptionBatch((_, _) => { cancelled.Cancel(); return Task.FromCanceled<bool>(cancelled.Token); }, (_, _) => Task.FromResult(true));
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => runner.RunAsync(plan, new Capture([]), cancelled.Token, failures: new FailureCapture(failures)));
         Assert.Empty(failures);
+    }
+
+    [Fact]
+    public async Task UnavailableServiceStopsBatchWithoutFailingEveryRemainingPhoto()
+    {
+        var attempted = 0;
+        var plan = new DirectoryMediaDescriptionPlan("D:/media", 100, 0,
+            Enumerable.Range(1, 100).Select(id => new ImageRecord { Id = id, Path = $"D:/media/{id}.jpg" }).ToArray(), []);
+        var runner = new MediaDescriptionBatch((_, _) =>
+        {
+            Interlocked.Increment(ref attempted);
+            throw new AnalysisStageException(AnalysisStage.Preprocess, "HTTP_503", true);
+        }, (_, _) => Task.FromResult(true));
+        await Assert.ThrowsAsync<DescriptionServiceUnavailableException>(() => runner.RunAsync(plan, new Capture([]), CancellationToken.None, photoConcurrency: 2));
+        Assert.InRange(attempted, 6, 7);
     }
 
     [Fact]

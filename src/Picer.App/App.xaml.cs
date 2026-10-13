@@ -1,4 +1,4 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
 using System.IO;
 using System.Windows;
 using Picer.App.Infrastructure;
@@ -141,6 +141,7 @@ public partial class App : Application
     {
         try
         {
+            if (AppPaths.LoadIndexBackend().DeviceAuthentication) return;
             LogInfo("正在后台同步 MediaAgent 授权源目录并刷新单实例代理");
             var settings = MediaAgentController.Load();
             if (!settings.Enabled || string.IsNullOrWhiteSpace(settings.ServiceIp))

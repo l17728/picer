@@ -16,12 +16,13 @@ public static partial class AppServices
     {
         var checkpoint = await UiWork.RunDatabaseAsync("RemoteMirror.Checkpoint", Db.GetMirrorCheckpoint, cancellationToken).ConfigureAwait(false);
         GatewayChangePage page;
-        try { page = await gateway.GetChangesAsync(new(checkpoint?.Epoch, checkpoint?.MediaRevision ?? 0), cancellationToken).ConfigureAwait(false); }
+        try { page = await gateway.GetChangesAsync(new(checkpoint?.Epoch, checkpoint?.MediaRevision ?? 0, MetadataRevision: checkpoint?.MetadataRevision), cancellationToken).ConfigureAwait(false); }
         catch (NotSupportedException) { return new(false, null, 0); }
         var reset = checkpoint is null || page.ResetRequired;
         if (page.ResetRequired)
             page = await gateway.GetChangesAsync(new(), cancellationToken).ConfigureAwait(false);
         if (page.ResetRequired) throw new InvalidDataException("mirror_epoch_reset_failed");
+        sources = page.Sources ?? sources;
         var sourceMap = new Dictionary<long, long>();
         foreach (var source in sources)
             sourceMap[source.Id] = await UiWork.RunDatabaseAsync("RemoteMirror.Source", () => Db.AddSource(source.Path, reconcileAliases: true).Id, cancellationToken).ConfigureAwait(false);
@@ -75,7 +76,7 @@ public static partial class AppServices
             }
             after = page.Next;
             if (!page.HasMore) break;
-            page = await gateway.GetChangesAsync(new(epoch, after, through), cancellationToken).ConfigureAwait(false);
+            page = await gateway.GetChangesAsync(new(epoch, after, through, Snapshot: page.Snapshot), cancellationToken).ConfigureAwait(false);
         }
         var updated = new MirrorCheckpoint(epoch, through, reset ? 0 : checkpoint!.MetadataRevision);
         if (reset)

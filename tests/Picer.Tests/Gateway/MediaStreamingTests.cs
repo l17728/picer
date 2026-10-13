@@ -11,6 +11,34 @@ namespace Picer.Tests;
 public sealed class MediaStreamingTests
 {
     [Fact]
+    public async Task AgentReplacementCancelsStalledMediaAndNewRequestsRecover()
+    {
+        using var fixture = new GatewayServiceFixture();
+        var path = Path.Combine(fixture.Root, "reconnect.jpg");
+        using (var image = new ImageMagick.MagickImage(ImageMagick.MagickColors.Red, 32, 32))
+        {
+            using var output = File.Create(path);
+            image.Write(output, ImageMagick.MagickFormat.Jpeg);
+        }
+        var info = new FileInfo(path);
+        var record = fixture.Db.UpsertImage(new Picer.Core.Models.ImageRecord { SourceId = fixture.SourceId, Path = path,
+            FileSize = info.Length, ModifiedUtc = info.LastWriteTimeUtc });
+        await using var stalled = await TestAgent.StartAsync(fixture);
+        stalled.StallMedia = true;
+        using var gateway = new HttpIndexGateway(fixture.BaseUrl, "picer-test-token", fixture.SpkiPin);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(35));
+        var pending = gateway.OpenPhotoAnalysisInputAsync(record, timeout.Token);
+        while (stalled.MediaConnections == 0) await Task.Delay(20, timeout.Token);
+        await using var recovered = await TestAgent.StartAsync(fixture);
+        // The read-only client may recover on its bounded retry after the old handshake is cancelled.
+        await using var result = await pending.WaitAsync(TimeSpan.FromSeconds(20));
+        Assert.NotNull(result);
+        using var copy = new MemoryStream(); await result.CopyToAsync(copy, timeout.Token);
+        Assert.True(copy.Length > 0);
+        Assert.True(recovered.MediaConnections > 0);
+    }
+
+    [Fact]
     public async Task IdlePoolDoesNotStarveNewFilesBeyondConnectionLimit()
     {
         using var fixture = new GatewayServiceFixture();
@@ -536,6 +564,7 @@ public sealed class MediaStreamingTests
         public long BytesRead => Interlocked.Read(ref _bytes);
         public int MediaConnections => _connections;
         public int OriginalRequests;
+        public bool StallMedia;
         public static async Task<TestAgent> StartAsync(GatewayServiceFixture fixture, bool binary = true, bool reuse = true, bool analysis = true)
         {
             var agent = new TestAgent(fixture);
@@ -580,6 +609,7 @@ public sealed class MediaStreamingTests
             try
             {
                 await socket.ConnectAsync(Endpoint("api/agent/v1/media/" + request.GetProperty("requestId").GetString()), _stop.Token);
+                if (StallMedia) await Task.Delay(Timeout.InfiniteTimeSpan, _stop.Token);
                 long last = 0;
                 var requestedPath = request.GetProperty("path").GetString()!;
                 if (!File.Exists(requestedPath)) requestedPath = Path.Combine(fixture.Root, Path.GetFileName(requestedPath));

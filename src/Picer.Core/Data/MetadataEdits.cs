@@ -1,4 +1,4 @@
-﻿using System.Globalization;
+using System.Globalization;
 using Microsoft.Data.Sqlite;
 
 namespace Picer.Core.Data;
@@ -79,6 +79,13 @@ public sealed partial class PicerDatabase
     public IReadOnlyList<MetadataEdit> MergeMetadataEdits(IReadOnlyList<MetadataEdit> edits)
     {
         using var transaction = BeginTransaction();
+        var result = MergeMetadataEditsInTransaction(edits, transaction);
+        transaction.Commit();
+        return result;
+    }
+
+    public IReadOnlyList<MetadataEdit> MergeMetadataEditsInTransaction(IReadOnlyList<MetadataEdit> edits, SqliteTransaction transaction)
+    {
         var accepted = new List<MetadataEdit>();
         foreach (var edit in edits)
         {
@@ -92,7 +99,6 @@ public sealed partial class PicerDatabase
         foreach (var edit in winners) ApplyMetadataEdit(edit, transaction);
         var keys = accepted.Select(edit => MetadataContentKey(BindVideoMetadataIdentity(edit, transaction), transaction)).Where(key => key is not null).ToHashSet();
         var acknowledged = winners.Where(edit => keys.Contains(MetadataContentKey(edit, transaction))).ToArray();
-        transaction.Commit();
         return acknowledged;
     }
 
@@ -101,6 +107,11 @@ public sealed partial class PicerDatabase
         using var transaction = BeginTransaction();
         foreach (var edit in GetMetadataEdits(transaction)) ApplyMetadataEdit(edit, transaction);
         transaction.Commit();
+    }
+
+    public void ReplayMetadataEditsInTransaction(SqliteTransaction transaction)
+    {
+        foreach (var edit in GetMetadataEdits(transaction)) ApplyMetadataEdit(edit, transaction);
     }
 
     private bool MetadataEntityExists(MetadataEdit edit, SqliteTransaction transaction)

@@ -1,4 +1,4 @@
-﻿using System.Net.Http.Headers;
+using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
@@ -13,7 +13,7 @@ using Picer.Core.Vision;
 
 namespace Picer.Core.Gateway;
 
-public sealed class IndexSyncClient(HttpClient client) : IDisposable
+public sealed class IndexSyncClient(HttpClient client, bool accountMode = false, bool canWrite = true) : IDisposable
 {
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
     private string? _lastReviewFingerprint;
@@ -27,13 +27,14 @@ public sealed class IndexSyncClient(HttpClient client) : IDisposable
         try
         {
             using var reviewDatabase = database.OpenIndependentConnection();
+            if (!canWrite || accountMode && reviewDatabase.GetMirrorCheckpoint() is null) return;
             var decisions = reviewDatabase.GetFaceReviewDecisions();
             var fingerprint = Fingerprint(decisions);
             if (fingerprint == _lastReviewFingerprint) return;
             var complete = true;
             foreach (var batch in decisions.Chunk(500))
             {
-                using var response = await client.PostAsJsonAsync("api/sync/v1/face-review-decisions", batch, Json, cancellationToken);
+                using var response = await PostMirrorEditAsync("api/sync/v1/face-review-decisions", batch, reviewDatabase, cancellationToken);
                 response.EnsureSuccessStatusCode();
                 var accepted = await response.Content.ReadFromJsonAsync<GatewayFaceReviewDecision[]>(Json, cancellationToken)
                     ?? throw new InvalidOperationException("face_review_ack_missing");
@@ -52,11 +53,12 @@ public sealed class IndexSyncClient(HttpClient client) : IDisposable
     {
         var acknowledged = new HashSet<string>(StringComparer.Ordinal);
         using var independent = database.OpenIndependentConnection();
-        foreach (var batch in independent.GetMetadataEdits().Where(edit => edit.Kind is not ("video-tag-link" or "video-concept")
+        if (accountMode && independent.GetMirrorCheckpoint() is null) return;
+        foreach (var batch in independent.GetMetadataEdits().Where(edit => canWrite && (edit.Kind is not ("video-tag-link" or "video-concept")
             || edit.VideoContentIdentity is { Length: 71 } identity && identity.StartsWith("sha256:", StringComparison.Ordinal)
-                && identity[7..].All(Uri.IsHexDigit)).Chunk(500))
+                && identity[7..].All(Uri.IsHexDigit))).Chunk(500))
         {
-            using var response = await client.PostAsJsonAsync("api/sync/v1/metadata-edits", batch, Json, cancellationToken).ConfigureAwait(false);
+            using var response = await PostMirrorEditAsync("api/sync/v1/metadata-edits", batch, independent, cancellationToken).ConfigureAwait(false);
             response.EnsureSuccessStatusCode();
             var winners = await response.Content.ReadFromJsonAsync<MetadataEdit[]>(Json, cancellationToken).ConfigureAwait(false)
                 ?? throw new InvalidOperationException("metadata_ack_missing");
@@ -67,6 +69,15 @@ public sealed class IndexSyncClient(HttpClient client) : IDisposable
         independent.MergeMetadataEdits(remote ?? []);
         foreach (var winner in remote ?? []) acknowledged.Add(winner.OperationId);
         Volatile.Write(ref _acknowledgedMetadataOperations, acknowledged);
+    }
+
+    private async Task<HttpResponseMessage> PostMirrorEditAsync<T>(string path, T payload, PicerDatabase database, CancellationToken cancellationToken)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Post, path) { Content = JsonContent.Create(payload, options: Json) };
+        if (accountMode)
+            request.Headers.Add("X-Picer-Mirror-Epoch", database.GetMirrorCheckpoint()?.Epoch
+                ?? throw new InvalidOperationException("remote_baseline_required"));
+        return await client.SendAsync(request, cancellationToken).ConfigureAwait(false);
     }
 
     public static IndexSyncClient Create(string baseUrl, string token, byte[]? expectedSpkiPin = null)

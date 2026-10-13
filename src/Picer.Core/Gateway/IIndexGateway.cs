@@ -12,6 +12,7 @@ public sealed record GatewayVideoPage(IReadOnlyList<VideoRecord> Items, string? 
 
 public interface IIndexGateway : IDisposable
 {
+    Task ReleaseReadSnapshotAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
     Task<GatewayChangePage> GetChangesAsync(GatewayChangeRequest request, CancellationToken cancellationToken = default)
         => Task.FromException<GatewayChangePage>(new NotSupportedException("mirror_change_feed_unavailable"));
     Task<GatewayHealth> GetHealthAsync(CancellationToken cancellationToken = default);

@@ -18,6 +18,13 @@ public sealed class ServiceFaceAnalyzer : IImageFaceAnalyzer, IDisposable
     private readonly string _endpoint;
     private readonly string _modelVersion;
 
+    public ServiceFaceAnalyzer(Uri serviceEndpoint, HttpClient authorizedClient, string modelVersion = "service-face")
+    {
+        _endpoint = new Uri(serviceEndpoint, "api/service/v1/face/detect").ToString();
+        _modelVersion = modelVersion;
+        _client = authorizedClient;
+    }
+
     public ServiceFaceAnalyzer(Uri serviceEndpoint, string bearerToken, byte[]? expectedSpkiPin = null, string modelVersion = "service-face")
     {
         _endpoint = new Uri(serviceEndpoint, "api/service/v1/face/detect").ToString();

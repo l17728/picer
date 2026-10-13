@@ -17,6 +17,7 @@ using Picer.Core.Video;
 using Picer.Core.SemanticSearch;
 using Picer.Core.Search;
 using Picer.App.Infrastructure;
+using Picer.Core.Identity;
 
 namespace Picer.App;
 
@@ -30,6 +31,8 @@ public static partial class AppServices
     private static IIndexGateway? SyncGateway { get; set; }
     public static IndexSyncClient? SyncClient { get; private set; }
     public static bool ServiceMode { get; private set; }
+    private static DeviceAccountClient? AccountClient { get; set; }
+    public static string RemoteDataRoot { get; private set; } = AppPaths.DataRoot;
     public static PicerDatabase Db { get; private set; } = null!;
     public static IStorageProvider Storage { get; private set; } = null!;
     public static ThumbnailService Thumbnails { get; private set; } = null!;
@@ -75,26 +78,34 @@ public static partial class AppServices
 
         var backend = AppPaths.LoadIndexBackend();
         ServiceMode = backend.Mode == IndexBackendConfig.ServiceMode;
+        if (backend.DeviceAuthentication)
+            AccountClient = new WindowsDeviceCredentialStore(AppPaths.AccountCredentialPath).OpenClient();
         if (ServiceMode && backend.BaseUrl is { Length: > 0 } serviceUrl)
-            SyncClient = IndexSyncClient.Create(serviceUrl, RequireToken(backend), backend.SpkiPin);
+            SyncClient = backend.DeviceAuthentication
+                ? new IndexSyncClient(AccountClient!.CreateSpaceClient(), accountMode: true,
+                    canWrite: AccountClient.Connection.Session!.Scope.Split(' ').Contains("index.write", StringComparer.Ordinal))
+                : IndexSyncClient.Create(serviceUrl, RequireToken(backend), backend.SpkiPin);
         if (ServiceMode)
         {
-            Gateway = backend.BaseUrl is { Length: > 0 } baseUrl
+            RemoteDataRoot = backend.CachePartition is { } partition
+                ? Path.Combine(AppPaths.DataRoot, "spaces", partition) : AppPaths.DataRoot;
+            Gateway = backend.DeviceAuthentication ? new HttpIndexGateway(AccountClient!.CreateSpaceClient(), ownsClient: true)
+                : backend.BaseUrl is { Length: > 0 } baseUrl
                 ? new HttpIndexGateway(baseUrl, RequireToken(backend), backend.SpkiPin)
                 : new PipeIndexGateway(backend.PipeName ?? throw new InvalidOperationException("service-endpoint.json 缺少管道名与 URL。"), RequireToken(backend));
             AppLogger.Info("AppServices 已进入 service 模式（零构建逻辑，仅网关）");
-            Db = new PicerDatabase(Path.Combine(AppPaths.DataRoot, "remote-mirror.db"));
+            Db = new PicerDatabase(Path.Combine(RemoteDataRoot, "remote-mirror.db"));
             Config = StorageConfig.Load(ConfigPath);
-            Storage = Config.CreateProvider(Path.Combine(AppPaths.DataRoot, "remote-cache"));
-            Thumbnails = new ThumbnailService(Path.Combine(AppPaths.DataRoot, "remote-thumbs"));
-            RemoteThumbnails = new RemoteThumbnailCache(Path.Combine(AppPaths.DataRoot, "remote-thumbs"));
+            Storage = Config.CreateProvider(Path.Combine(RemoteDataRoot, "remote-cache"));
+            Thumbnails = new ThumbnailService(Path.Combine(RemoteDataRoot, "remote-thumbs"));
+            RemoteThumbnails = new RemoteThumbnailCache(Path.Combine(RemoteDataRoot, "remote-thumbs"));
             Index = new IndexEngine(Db, Storage, Thumbnails);
             FileOperations = new WindowsRecycleBinFileOperation();
-            Geocoder = new NominatimReverseGeocoder(Path.Combine(AppPaths.DataRoot, "remote-geocoding-cache.json"));
+            Geocoder = new NominatimReverseGeocoder(Path.Combine(RemoteDataRoot, "remote-geocoding-cache.json"));
             LocationHierarchy = new LocationHierarchyService(Db, Geocoder);
             VisionRepository = new VisionAnalysisRepository(Db);
             People = new PeopleService(Db);
-            FaceThumbnails = new FaceThumbnailService(Path.Combine(AppPaths.DataRoot, "remote-face-thumbs"));
+            FaceThumbnails = new FaceThumbnailService(Path.Combine(RemoteDataRoot, "remote-face-thumbs"));
             FaceSuggestions = new FaceSuggestionEngine(VisionRepository, People);
             UnknownFaceClusters = new UnknownFaceClusterer(VisionRepository);
             FaceValidation = new FaceValidationService(Db, VisionRepository);
@@ -104,7 +115,7 @@ public static partial class AppServices
             Videos = new VideoRepository(Db);
             MediaSearch = new MediaSearchTool(Db, Videos);
             VideoIndex = new VideoIndexService(Db, Videos);
-            VideoSummaries = new VideoSummaryService(Videos, Path.Combine(AppPaths.DataRoot, "remote-video-summary-cache"),
+            VideoSummaries = new VideoSummaryService(Videos, Path.Combine(RemoteDataRoot, "remote-video-summary-cache"),
                 (work, token) => Infrastructure.UiWork.RunDatabaseAsync(work, token));
             ClipRepository = new ClipSemanticRepository(Db);
             FlorenceResults = new FlorenceResultRepository(Db);
@@ -117,7 +128,9 @@ public static partial class AppServices
                 if (backend.BaseUrl is not { Length: > 0 } remoteFaceUrl
                     || !Uri.TryCreate(remoteFaceUrl.TrimEnd('/') + "/", UriKind.Absolute, out var remoteFaceEndpoint))
                     throw new InvalidOperationException("IndexService face endpoint is not configured");
-                FaceAnalyzer = new ServiceFaceAnalyzer(remoteFaceEndpoint, RequireToken(backend), backend.SpkiPin, "insightface-arcface");
+                FaceAnalyzer = backend.DeviceAuthentication
+                    ? new ServiceFaceAnalyzer(remoteFaceEndpoint, AccountClient!.CreateSpaceClient(TimeSpan.FromMinutes(5)), "insightface-arcface")
+                    : new ServiceFaceAnalyzer(remoteFaceEndpoint, RequireToken(backend), backend.SpkiPin, "insightface-arcface");
                 VideoFaceTimeline = new VideoFaceTimelineService(Db, FaceAnalyzer, VisionRepository, People, includeAllModels: false);
                 AppLogger.Info("remote mode video face timeline initialized from mirrored metadata");
             }
@@ -306,6 +319,7 @@ public static partial class AppServices
             }
         }
         var sources = await mirrorGateway.ListSourcesAsync(cancellationToken).ConfigureAwait(false);
+        await using var readScope = new GatewayReadSnapshotScope(mirrorGateway);
         try
         {
             var preferences = SyncClient is not null
@@ -659,7 +673,8 @@ public static partial class AppServices
             && Uri.TryCreate(configuredService.TrimEnd('/') + "/", UriKind.Absolute, out var configuredServiceEndpoint))
         {
             AppLogger.Info($"视频转写统一使用 IndexService 中继；mode={(ServiceMode ? "remote" : "local")}");
-            return new ServiceVideoTranscriptionService(configuredServiceEndpoint, configuredBackend.Token ?? "");
+            return new ServiceVideoTranscriptionService(configuredServiceEndpoint, configuredBackend.Token ?? "",
+                CreatePinnedServiceClient(configuredBackend, TimeSpan.FromMinutes(30)), disposeClient: true);
         }
         if (ServiceMode)
         {
@@ -667,7 +682,8 @@ public static partial class AppServices
             if (backend.BaseUrl is { Length: > 0 } baseUrl && Uri.TryCreate(baseUrl.TrimEnd('/') + "/", UriKind.Absolute, out var serviceEndpoint))
             {
                 AppLogger.Info("远程视频转写使用 IndexService Service 路由");
-                return new ServiceVideoTranscriptionService(serviceEndpoint, backend.Token ?? "");
+                return new ServiceVideoTranscriptionService(serviceEndpoint, backend.Token ?? "",
+                    CreatePinnedServiceClient(backend, TimeSpan.FromMinutes(30)), disposeClient: true);
             }
             AppLogger.Warn("远程视频转写不可用：IndexService 端点未配置");
             return null;
@@ -686,20 +702,12 @@ public static partial class AppServices
         var isLocal = AiProviderIds.IsLocal(provider.Id);
         if (TryGetAiServiceBackend(out var backend))
         {
-            if (backend.BaseUrl is { Length: > 0 } remoteBase && !string.IsNullOrWhiteSpace(backend.Token)
+            if (backend.BaseUrl is { Length: > 0 } remoteBase && (backend.DeviceAuthentication || !string.IsNullOrWhiteSpace(backend.Token))
                 && Uri.TryCreate(remoteBase.TrimEnd('/') + "/api/ai/v1/chat/stream", UriKind.Absolute, out var remoteEndpoint))
             {
                 AppLogger.Info($"AI chat client routed through IndexService; feature={featureId}");
-                var handler = new HttpClientHandler();
-                handler.ServerCertificateCustomValidationCallback = (_, certificate, _, _) =>
-                {
-                    if (certificate is null) return false;
-                    if (backend.SpkiPin is null) return true;
-                    var pin = HttpIndexGateway.ComputeSpkiPin(new System.Security.Cryptography.X509Certificates.X509Certificate2(certificate));
-                    return System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(pin, backend.SpkiPin);
-                };
-                var client = new HttpClient(handler) { Timeout = TimeSpan.FromMinutes(5) };
-                return new OpenAiCompatibleChatClient(remoteEndpoint, backend.Token, model.Id, client, disposeClient: true);
+                var client = CreatePinnedServiceClient(backend, TimeSpan.FromMinutes(5));
+                return new OpenAiCompatibleChatClient(remoteEndpoint, backend.Token ?? "", model.Id, client, disposeClient: true);
             }
             AppLogger.Warn($"AI chat client unavailable: remote IndexService endpoint missing; feature={featureId}");
             return null;
@@ -715,6 +723,12 @@ public static partial class AppServices
         if (ServiceMode)
         {
             (Gateway as IDisposable)?.Dispose();
+            SyncClient?.Dispose();
+            (FaceAnalyzer as IDisposable)?.Dispose();
+            FaceTraining?.Dispose();
+            AccountClient?.Dispose(); AccountClient = null;
+            Db?.Dispose();
+            (Geocoder as IDisposable)?.Dispose();
             return;
         }
         VisionAnalysis?.Dispose();
@@ -781,6 +795,14 @@ public static partial class AppServices
 
     internal static HttpClient CreatePinnedServiceClient(IndexBackendOptions backend, TimeSpan timeout)
     {
+        if (backend.DeviceAuthentication)
+        {
+            var account = AccountClient ?? throw new InvalidOperationException("照片空间尚未登录。");
+            var session = account.Connection.Session ?? throw new InvalidOperationException("照片空间尚未登录。");
+            if (backend.BaseUrl != DeviceAuthorization.SpaceAddress(account.Connection.Origin, session.SpaceId))
+                throw new InvalidOperationException("照片空间已变更，请重新启动程序。");
+            return account.CreateSpaceClient(timeout);
+        }
         var handler = new HttpClientHandler
         {
             ServerCertificateCustomValidationCallback = (_, certificate, _, _) =>

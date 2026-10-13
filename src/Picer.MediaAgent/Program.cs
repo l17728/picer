@@ -10,6 +10,7 @@ using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using System.Collections.Concurrent;
 using System.Windows.Forms;
+using Picer.Core.Identity;
 
 namespace Picer.MediaAgent;
 
@@ -54,6 +55,7 @@ internal sealed partial class AgentApplication : IDisposable
     private bool _settingsOpen;
     private bool _disposed;
     private MediaAgentSettings? _settings;
+    private DeviceAccountClient? _accountClient;
     private string[] _roots = [];
     private readonly SemaphoreSlim _sendLock = new(1, 1);
     private readonly ConcurrentDictionary<string, CancellationTokenSource> _aiRequests = new(StringComparer.Ordinal);
@@ -132,17 +134,24 @@ internal sealed partial class AgentApplication : IDisposable
     private async Task RunAsync(CancellationToken cancellationToken)
     {
         var settings = _settings!.Validate();
+        using var account = settings.DeviceCredentialPath is { } credentialPath ? new WindowsDeviceCredentialStore(credentialPath).OpenClient() : null;
+        if (account is not null && (account.Connection.Origin != settings.ServiceUrl || account.Connection.SpkiPin != settings.SpkiPin || account.Connection.ClientKind != "agent"))
+            throw new InvalidDataException("agent_device_connection_mismatch");
+        _accountClient = account;
         var pin = Convert.FromBase64String(settings.SpkiPin);
         while (!cancellationToken.IsCancellationRequested)
         {
             try
             {
                 Log($"connecting; rootCount={settings.Roots.Length}");
-                using var socket = new ClientWebSocket();
-                socket.Options.RemoteCertificateValidationCallback = (_, certificate, _, _) => MediaAgentSettings.MatchesCertificate(certificate, pin);
-                socket.Options.SetRequestHeader("Authorization", "Bearer " + settings.Token);
-                var endpoint = new UriBuilder(settings.ServiceUrl) { Scheme = "wss", Path = "/api/agent/v1/connect" };
-                await socket.ConnectAsync(endpoint.Uri, cancellationToken);
+                using var socket = account is not null ? await account.ConnectWebSocketAsync("api/agent/v1/connect", cancellationToken) : new ClientWebSocket();
+                if (account is null)
+                {
+                    socket.Options.RemoteCertificateValidationCallback = (_, certificate, _, _) => MediaAgentSettings.MatchesCertificate(certificate, pin);
+                    socket.Options.SetRequestHeader("Authorization", "Bearer " + settings.Token);
+                    var endpoint = new UriBuilder(settings.ServiceUrl) { Scheme = "wss", Path = "/api/agent/v1/connect" };
+                    await socket.ConnectAsync(endpoint.Uri, cancellationToken);
+                }
                 Log($"connected; socketState={socket.State}; processId={Environment.ProcessId}");
                 _mediaPreviews.Clear();
                 _mediaLeases.Clear();

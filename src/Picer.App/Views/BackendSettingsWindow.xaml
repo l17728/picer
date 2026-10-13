@@ -5,6 +5,10 @@
         <RadioButton x:Name="LocalModeBox" Content="本地模式（本机索引）" GroupName="Mode" Checked="Mode_Checked" Margin="0,4"/>
         <RadioButton x:Name="RemoteModeBox" Content="远程模式（HTTPS 索引服务）" GroupName="Mode" Checked="Mode_Checked" Margin="0,4"/>
         <StackPanel x:Name="ConnectionFields" Margin="0,12,0,0">
+            <Button Content="登录照片空间 / 导入设备认证文件…" Click="Account_Click" HorizontalAlignment="Left" Padding="16,6" Margin="0,0,0,12"/>
+            <TextBlock x:Name="AccountStatusText" TextWrapping="Wrap" Margin="0,0,0,10"/>
+            <Expander Header="旧版服务：共享令牌与证书">
+            <StackPanel>
             <TextBlock Text="HTTPS 服务地址（由管理员提供，包含端口）"/>
             <TextBox x:Name="IpBox" Padding="6" AutomationProperties.Name="HTTPS 服务地址"/>
             <TextBlock Text="访问令牌" Margin="0,8,0,0"/>
@@ -13,6 +17,8 @@
             <TextBox x:Name="PinBox" IsReadOnly="True" TextWrapping="Wrap" Padding="6" AutomationProperties.Name="证书公钥指纹"/>
             <TextBlock Text="请通过可信渠道核对地址和指纹。令牌使用当前 Windows 用户加密保存。验证检查健康及只读访问权限，不启动扫描或分析。" TextWrapping="Wrap" Margin="0,8,0,0"/>
             <Button x:Name="VerifyButton" Content="验证连接" Click="Verify_Click" HorizontalAlignment="Left" Padding="16,6" Margin="0,8,0,0"/>
+            </StackPanel>
+            </Expander>
         </StackPanel>
         <TextBlock x:Name="ErrorText" Foreground="#B00020" TextWrapping="Wrap" Margin="0,10,0,0"/>
         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0"><Button Content="取消" Click="Cancel_Click" Padding="16,6" Margin="0,0,8,0"/><Button x:Name="SaveButton" Content="保存并重启" Click="Save_Click" Padding="16,6" IsDefault="True"/></StackPanel>

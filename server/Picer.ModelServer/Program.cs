@@ -25,6 +25,11 @@ builder.Services.AddSingleton<ModelCandidateRankingStore>();
 builder.Services.AddSingleton<EvaluationDatasetStore>();
 builder.Services.AddSingleton<GpuEmbeddingService>();
 builder.Services.AddSingleton<GpuTrainingWorkerHost>();
+builder.Services.AddSingleton(_ => new ModelInferenceRelay(new HttpClient(new SocketsHttpHandler
+{
+    AllowAutoRedirect = false, UseCookies = false, MaxConnectionsPerServer = 8,
+    PooledConnectionLifetime = TimeSpan.FromMinutes(10), ConnectTimeout = TimeSpan.FromSeconds(10)
+}) { Timeout = Timeout.InfiniteTimeSpan }));
 var app = builder.Build();
 
 // Restore the observable job list after a server restart. Terminal records are
@@ -126,31 +131,21 @@ app.MapGet("/api/ai/capabilities", () => Results.Ok(new
     language = new { enabled = !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("PICER_LANGUAGE_MODEL_API_KEY")), model = DefaultLanguageModel },
     vision = new { enabled = !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("PICER_VL_MODEL_ENDPOINT")), model = "qwen3-vl-8b-instruct", optionalForTraining = true }
 }));
-app.MapPost("/api/ai/chat/completions", async (HttpRequest request) =>
+app.MapPost("/api/ai/chat/completions", async (HttpContext context, ModelInferenceRelay relay) =>
 {
     var endpoint = Environment.GetEnvironmentVariable("PICER_LANGUAGE_MODEL_ENDPOINT") ?? DefaultLanguageModelEndpoint;
     if (string.IsNullOrWhiteSpace(endpoint)) return Results.Problem("统一模型平台尚未配置语言模型服务端点", statusCode: 503);
-    using var client = new HttpClient { Timeout = TimeSpan.FromMinutes(5) };
-    using var upstream = new HttpRequestMessage(HttpMethod.Post, endpoint);
-    upstream.Content = new StreamContent(request.Body);
-    upstream.Content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/json");
     var key = Environment.GetEnvironmentVariable("PICER_LANGUAGE_MODEL_API_KEY");
-    if (!string.IsNullOrWhiteSpace(key)) upstream.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", key);
-    var response = await client.SendAsync(upstream);
-    return Results.Content(await response.Content.ReadAsStringAsync(), "application/json", statusCode: (int)response.StatusCode);
+    await relay.InvokeAsync(context, new Uri(endpoint), key, TimeSpan.FromMinutes(5));
+    return Results.Empty;
 });
-app.MapPost("/api/ai/vision/completions", async (HttpRequest request) =>
+app.MapPost("/api/ai/vision/completions", async (HttpContext context, ModelInferenceRelay relay) =>
 {
     var endpoint = Environment.GetEnvironmentVariable("PICER_VL_MODEL_ENDPOINT");
     if (string.IsNullOrWhiteSpace(endpoint)) return Results.Problem("统一模型平台尚未配置本地 VL 服务端点", statusCode: 503);
-    using var client = new HttpClient { Timeout = TimeSpan.FromMinutes(10) };
-    using var upstream = new HttpRequestMessage(HttpMethod.Post, endpoint);
-    upstream.Content = new StreamContent(request.Body);
-    upstream.Content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/json");
     var key = Environment.GetEnvironmentVariable("PICER_VL_MODEL_API_KEY");
-    if (!string.IsNullOrWhiteSpace(key)) upstream.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", key);
-    var response = await client.SendAsync(upstream);
-    return Results.Content(await response.Content.ReadAsStringAsync(), "application/json", statusCode: (int)response.StatusCode);
+    await relay.InvokeAsync(context, new Uri(endpoint), key, TimeSpan.FromMinutes(10));
+    return Results.Empty;
 });
 app.MapGet("/api/face-training/runtime", async (GpuEmbeddingService worker, CancellationToken ct) =>
     Results.Json(await worker.GetRuntimeAsync(ct)));

@@ -16,8 +16,25 @@ public sealed partial class HttpIndexGateway : IIndexGateway, IMediaAssetGateway
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
     private readonly HttpClient _client;
     private readonly bool _ownsClient;
+    private string? _mirrorEpoch;
+    private string? _readSnapshot;
+    public async Task ReleaseReadSnapshotAsync(CancellationToken cancellationToken = default)
+    {
+        var snapshot = Interlocked.Exchange(ref _readSnapshot, null);
+        if (snapshot is null) return;
+        using var response = await _client.DeleteAsync("api/sync/v2/read-snapshots/" + Uri.EscapeDataString(snapshot), cancellationToken).ConfigureAwait(false);
+        response.EnsureSuccessStatusCode();
+    }
 
     public byte[]? DiscoveredSpkiPin { get; private set; }
+
+    public HttpIndexGateway(HttpClient authorizedClient, bool ownsClient = false)
+    {
+        if (authorizedClient.BaseAddress is null || authorizedClient.BaseAddress.Scheme != Uri.UriSchemeHttps)
+            throw new ArgumentException("An authenticated HTTPS client with a base address is required.", nameof(authorizedClient));
+        _client = authorizedClient;
+        _ownsClient = ownsClient;
+    }
 
     public HttpIndexGateway(string baseUrl, string bearerToken, byte[]? expectedSpkiPin = null, HttpClient? client = null)
     {
@@ -64,8 +81,11 @@ public sealed partial class HttpIndexGateway : IIndexGateway, IMediaAssetGateway
         if (response.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.MethodNotAllowed)
             throw new NotSupportedException("mirror_change_feed_unavailable");
         response.EnsureSuccessStatusCode();
-        return await response.Content.ReadFromJsonAsync<GatewayChangePage>(Json, cancellationToken).ConfigureAwait(false)
+        var page = await response.Content.ReadFromJsonAsync<GatewayChangePage>(Json, cancellationToken).ConfigureAwait(false)
             ?? throw new InvalidDataException("mirror_change_feed_empty");
+        if (!page.ResetRequired) Volatile.Write(ref _mirrorEpoch, page.Epoch);
+        Volatile.Write(ref _readSnapshot, page.Snapshot);
+        return page;
     }
 
     public async Task<GatewayHealth> GetHealthAsync(CancellationToken cancellationToken = default)
@@ -275,6 +295,7 @@ public sealed partial class HttpIndexGateway : IIndexGateway, IMediaAssetGateway
         for (var attempt = 0; attempt < 3; attempt++)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            var delay = TimeSpan.FromMilliseconds(200 * (attempt + 1) + Random.Shared.Next(100));
             try
             {
                 var response = await send(cancellationToken).ConfigureAwait(false);
@@ -282,6 +303,12 @@ public sealed partial class HttpIndexGateway : IIndexGateway, IMediaAssetGateway
                     HttpStatusCode.InternalServerError or HttpStatusCode.BadGateway or HttpStatusCode.ServiceUnavailable or HttpStatusCode.GatewayTimeout)
                     || attempt == 2) return response;
                 Logging.AppLogger.Warn($"Index gateway retry: operation={operation}; attempt={attempt + 1}/3; status={(int)response.StatusCode}");
+                var retryAfter = response.Headers.RetryAfter?.Delta ?? response.Headers.RetryAfter?.Date - DateTimeOffset.UtcNow;
+                if (retryAfter is { } requested && requested > delay)
+                    delay = requested;
+                // Do not retry before a long server-directed cooldown or keep a GUI
+                // task asleep indefinitely. Return the busy response to the caller.
+                if (delay > TimeSpan.FromSeconds(30)) return response;
                 response.Dispose();
             }
             catch (HttpRequestException exception) when (attempt < 2)
@@ -289,7 +316,7 @@ public sealed partial class HttpIndexGateway : IIndexGateway, IMediaAssetGateway
                 last = exception;
                 Logging.AppLogger.Warn($"Index gateway retry: operation={operation}; attempt={attempt + 1}/3; errorType={exception.GetType().Name}; innerType={exception.InnerException?.GetType().Name}; transportError={exception.HttpRequestError}");
             }
-            await Task.Delay(TimeSpan.FromMilliseconds(200 * (attempt + 1)), cancellationToken).ConfigureAwait(false);
+            await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
         }
         throw new HttpRequestException("远程索引服务重试失败", last);
     }
@@ -303,14 +330,14 @@ public sealed partial class HttpIndexGateway : IIndexGateway, IMediaAssetGateway
 
     public async Task<IReadOnlyList<Tag>> ListTagsAsync(CancellationToken cancellationToken = default)
     {
-        using var response = await GetWithRetryAsync("api/gateway/v1/tags", cancellationToken);
+        using var response = await GetSnapshotReadAsync("api/gateway/v1/tags", cancellationToken);
         await EnsureSuccessAsync(response, cancellationToken);
         return await response.Content.ReadFromJsonAsync<IReadOnlyList<Tag>>(Json, cancellationToken) ?? [];
     }
 
     public async Task<IReadOnlyList<Album>> ListAlbumsAsync(CancellationToken cancellationToken = default)
     {
-        using var response = await GetWithRetryAsync("api/gateway/v1/albums", cancellationToken);
+        using var response = await GetSnapshotReadAsync("api/gateway/v1/albums", cancellationToken);
         await EnsureSuccessAsync(response, cancellationToken);
         return await response.Content.ReadFromJsonAsync<IReadOnlyList<Album>>(Json, cancellationToken) ?? [];
     }
@@ -323,15 +350,22 @@ public sealed partial class HttpIndexGateway : IIndexGateway, IMediaAssetGateway
 
     public async Task<GatewayMetadata> GetMetadataAsync(CancellationToken cancellationToken, bool includeEmbeddings, bool includeFaceModels)
     {
-        using var response = await GetWithRetryAsync($"api/gateway/v1/metadata?includeEmbeddings={includeEmbeddings.ToString().ToLowerInvariant()}&includeFaceModels={includeFaceModels.ToString().ToLowerInvariant()}", cancellationToken);
+        using var response = await GetSnapshotReadAsync($"api/gateway/v1/metadata?includeEmbeddings={includeEmbeddings.ToString().ToLowerInvariant()}&includeFaceModels={includeFaceModels.ToString().ToLowerInvariant()}", cancellationToken);
         await EnsureSuccessAsync(response, cancellationToken);
         return await response.Content.ReadFromJsonAsync<GatewayMetadata>(Json, cancellationToken)
             ?? new GatewayMetadata([], [], []);
     }
 
+    private Task<HttpResponseMessage> GetSnapshotReadAsync(string path, CancellationToken token) => SendWithRetryAsync(async ct =>
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, path);
+        if (Volatile.Read(ref _readSnapshot) is { } snapshot) request.Headers.Add("X-Picer-Read-Snapshot", snapshot);
+        return await _client.SendAsync(request, ct).ConfigureAwait(false);
+    }, token);
+
     public async Task<IReadOnlyList<PersonSummary>> ListPeopleAsync(CancellationToken cancellationToken = default)
     {
-        using var response = await GetWithRetryAsync("api/gateway/v1/people", cancellationToken);
+        using var response = await GetSnapshotReadAsync("api/gateway/v1/people", cancellationToken);
         await EnsureSuccessAsync(response, cancellationToken);
         return await response.Content.ReadFromJsonAsync<IReadOnlyList<PersonSummary>>(Json, cancellationToken) ?? [];
     }
@@ -388,17 +422,26 @@ public sealed partial class HttpIndexGateway : IIndexGateway, IMediaAssetGateway
 
     public async Task<bool> PurgeVideoAsync(long id, CancellationToken cancellationToken = default)
     {
-        using var response = await _client.PostAsJsonAsync($"api/gateway/v1/videos/{id}/purge", new { }, Json, cancellationToken);
+        using var response = await PostPurgeAsync($"api/gateway/v1/videos/{id}/purge", cancellationToken);
         response.EnsureSuccessStatusCode();
         return (await response.Content.ReadFromJsonAsync<PipeFlagResponse>(Json, cancellationToken))?.Value == true;
     }
 
     public async Task<bool> PurgeMissingImageAsync(long id, CancellationToken cancellationToken = default)
     {
-        using var response = await _client.PostAsJsonAsync($"api/gateway/v1/images/{id}/purge-missing", new { }, Json, cancellationToken);
+        using var response = await PostPurgeAsync($"api/gateway/v1/images/{id}/purge-missing", cancellationToken);
         response.EnsureSuccessStatusCode();
         return (await response.Content.ReadFromJsonAsync<PipeFlagResponse>(Json, cancellationToken))?.Value == true;
     }
+
+    private Task<HttpResponseMessage> PostPurgeAsync(string path, CancellationToken cancellationToken)
+    {
+        var request = new HttpRequestMessage(HttpMethod.Post, path) { Content = JsonContent.Create(new { }) };
+        if (Volatile.Read(ref _mirrorEpoch) is { } epoch) request.Headers.Add("X-Picer-Mirror-Epoch", epoch);
+        return SendPurgeAsync(request, cancellationToken);
+    }
+    private async Task<HttpResponseMessage> SendPurgeAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+    { using (request) return await _client.SendAsync(request, cancellationToken).ConfigureAwait(false); }
 
     public async Task<string> BackupAsync(string destinationPath, CancellationToken cancellationToken = default)
     {

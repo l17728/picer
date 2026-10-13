@@ -25,18 +25,23 @@ internal sealed partial class AgentApplication
         var gate = size == 1280 ? _analysisReaders : size > 0 ? _previewReaders : _mediaReaders;
         var elapsed = Stopwatch.StartNew();
         var entered = false;
-        using var socket = new ClientWebSocket();
+        ClientWebSocket? socket = null;
         try
         {
             var settings = _settings ?? throw new IOException("media_settings_missing");
-            socket.Options.RemoteCertificateValidationCallback = (_, certificate, _, _) => MediaAgentSettings.MatchesCertificate(certificate, Convert.FromBase64String(settings.SpkiPin));
-            socket.Options.SetRequestHeader("Authorization", "Bearer " + settings.Token);
-            var endpoint = new UriBuilder(settings.ServiceUrl) { Scheme = "wss", Path = "/api/agent/v1/media/" + id };
             using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
             deadline.CancelAfter(TimeSpan.FromMinutes(2));
             await gate.WaitAsync(deadline.Token); entered = true;
             var queueMs = elapsed.ElapsedMilliseconds;
-            await socket.ConnectAsync(endpoint.Uri, deadline.Token);
+            if (_accountClient is { } account) socket = await account.ConnectWebSocketAsync("api/agent/v1/media/" + id, deadline.Token);
+            else
+            {
+                socket = new ClientWebSocket();
+                socket.Options.RemoteCertificateValidationCallback = (_, certificate, _, _) => MediaAgentSettings.MatchesCertificate(certificate, Convert.FromBase64String(settings.SpkiPin));
+                socket.Options.SetRequestHeader("Authorization", "Bearer " + settings.Token);
+                var endpoint = new UriBuilder(settings.ServiceUrl) { Scheme = "wss", Path = "/api/agent/v1/media/" + id };
+                await socket.ConnectAsync(endpoint.Uri, deadline.Token);
+            }
             await MediaFileSession.ServeAsync(socket, request.GetProperty("path").GetString()!, _roots, size,
                 Mime(request.GetProperty("path").GetString()!), _mediaPreviews,
                 metrics => Log($"media block; requestId={id}; queueMs={queueMs}; {metrics}"), token, _mediaLeases,
@@ -48,12 +53,12 @@ internal sealed partial class AgentApplication
         catch (Exception exception) when (exception is IOException or InvalidDataException or UnauthorizedAccessException or OperationCanceledException or WebSocketException or ArgumentException)
         {
             Log($"media closed; requestId={id}; elapsedMs={elapsed.ElapsedMilliseconds}; reason={exception.GetType().Name}");
-            if (socket.State == WebSocketState.Open)
+            if (socket?.State == WebSocketState.Open)
             {
                 try { using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(2)); await MediaWire.SendJsonAsync(socket, new MediaWire.Metadata(0, "", "", exception is MediaSourceChangedException ? "media_source_changed" : "media_source_unavailable"), stop.Token); }
                 catch (Exception) { }
             }
         }
-        finally { socket.Abort(); if (entered) gate.Release(); }
+        finally { socket?.Abort(); socket?.Dispose(); if (entered) gate.Release(); }
     }
 }

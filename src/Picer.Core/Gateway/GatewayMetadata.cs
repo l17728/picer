@@ -70,14 +70,14 @@ public sealed record GatewayMetadata(
         IReadOnlyList<ImageLocationHierarchyRow> locations)
         : this(albumImages, imageTags, locations, [], [], [], [], [], []) { }
 
-    public IReadOnlyList<GatewayVideoFace> VideoFacesOrEmpty => VideoFaces ?? [];
-    public IReadOnlyList<GatewayCloudVisionAnalysis> CloudVisionAnalysesOrEmpty => CloudVisionAnalyses ?? [];
-    public IReadOnlyList<GatewaySceneGroupDescription> SceneGroupDescriptionsOrEmpty => SceneGroupDescriptions ?? [];
-    public IReadOnlyList<GatewayFaceReviewState> FaceReviewStatesOrEmpty => FaceReviewStates ?? [];
-    public IReadOnlyList<GatewayFaceCandidateCluster> FaceCandidateClustersOrEmpty => FaceCandidateClusters ?? [];
-    public IReadOnlyList<GatewayFaceCandidateMember> FaceCandidateMembersOrEmpty => FaceCandidateMembers ?? [];
-    public IReadOnlyList<GatewayFaceTrainingArtifact> FaceTrainingArtifactsOrEmpty => FaceTrainingArtifacts ?? [];
-    public IReadOnlyList<GatewayFacePersonPrototype> FacePersonPrototypesOrEmpty => FacePersonPrototypes ?? [];
-    public IReadOnlyList<GatewayFacePersonPolicy> FacePersonPoliciesOrEmpty => FacePersonPolicies ?? [];
-    public IReadOnlyList<GatewayFaceModelSetting> FaceModelSettingsOrEmpty => FaceModelSettings ?? [];
+    [JsonIgnore] public IReadOnlyList<GatewayVideoFace> VideoFacesOrEmpty => VideoFaces ?? [];
+    [JsonIgnore] public IReadOnlyList<GatewayCloudVisionAnalysis> CloudVisionAnalysesOrEmpty => CloudVisionAnalyses ?? [];
+    [JsonIgnore] public IReadOnlyList<GatewaySceneGroupDescription> SceneGroupDescriptionsOrEmpty => SceneGroupDescriptions ?? [];
+    [JsonIgnore] public IReadOnlyList<GatewayFaceReviewState> FaceReviewStatesOrEmpty => FaceReviewStates ?? [];
+    [JsonIgnore] public IReadOnlyList<GatewayFaceCandidateCluster> FaceCandidateClustersOrEmpty => FaceCandidateClusters ?? [];
+    [JsonIgnore] public IReadOnlyList<GatewayFaceCandidateMember> FaceCandidateMembersOrEmpty => FaceCandidateMembers ?? [];
+    [JsonIgnore] public IReadOnlyList<GatewayFaceTrainingArtifact> FaceTrainingArtifactsOrEmpty => FaceTrainingArtifacts ?? [];
+    [JsonIgnore] public IReadOnlyList<GatewayFacePersonPrototype> FacePersonPrototypesOrEmpty => FacePersonPrototypes ?? [];
+    [JsonIgnore] public IReadOnlyList<GatewayFacePersonPolicy> FacePersonPoliciesOrEmpty => FacePersonPolicies ?? [];
+    [JsonIgnore] public IReadOnlyList<GatewayFaceModelSetting> FaceModelSettingsOrEmpty => FaceModelSettings ?? [];
 }

@@ -12,6 +12,7 @@ public partial class BackendSettingsWindow : Window
     private ServiceConnectionSetup? _verified;
     private CancellationTokenSource? _probe;
     private byte[]? _confirmedPin;
+    private bool _accountVerified;
 
     public BackendSettingsWindow()
     {
@@ -25,6 +26,7 @@ public partial class BackendSettingsWindow : Window
                 TokenBox.Password = backend.Token ?? "";
                 PinBox.Text = backend.SpkiPin is null ? "" : Convert.ToHexString(SHA256.HashData(backend.SpkiPin));
                 RemoteModeBox.IsChecked = true;
+                if (backend.DeviceAuthentication) AccountStatusText.Text = "已保存照片空间连接，请登录并验证后保存。";
             }
             else if (File.Exists(AppPaths.BackendConfigPath)) LocalModeBox.IsChecked = true;
             else RemoteModeBox.IsChecked = true;
@@ -40,12 +42,22 @@ public partial class BackendSettingsWindow : Window
         if (ConnectionFields is not null) ConnectionFields.IsEnabled = RemoteModeBox.IsChecked == true;
     }
     private void Cancel_Click(object sender, RoutedEventArgs e) => Close();
+    private void Account_Click(object sender, RoutedEventArgs e)
+    {
+        var connection = new AccountConnectionWindow(AppPaths.AccountCredentialPath, forUpload: false) { Owner = this };
+        if (connection.ShowDialog() != true || connection.Result?.Session is not { } session) return;
+        _accountVerified = true;
+        _verified = null;
+        AccountStatusText.Text = $"已验证：{session.AccountName} / {session.SpaceName}。保存后重启使用此空间。";
+        ErrorText.Text = "";
+    }
     private ServiceConnectionSetup ReadConnection() => ServiceConnectionSetup.Parse(IpBox.Text, TokenBox.Password,
         _confirmedPin is null ? "" : Convert.ToBase64String(_confirmedPin));
 
     private async void Verify_Click(object sender, RoutedEventArgs e)
     {
         _verified = null;
+        _accountVerified = false;
         _confirmedPin = null;
         VerifyButton.IsEnabled = SaveButton.IsEnabled = false;
         ErrorText.Text = "正在验证连接和证书…";
@@ -88,7 +100,9 @@ public partial class BackendSettingsWindow : Window
         try
         {
             var processPath = Environment.ProcessPath ?? throw new InvalidOperationException("无法定位当前程序。");
-            if (RemoteModeBox.IsChecked == true)
+            if (RemoteModeBox.IsChecked == true && _accountVerified)
+                AppPaths.SaveIndexBackendAccount();
+            else if (RemoteModeBox.IsChecked == true)
             {
                 var connection = ReadConnection();
                 if (_verified is null || connection.BaseUrl != _verified.BaseUrl || connection.Token != _verified.Token ||

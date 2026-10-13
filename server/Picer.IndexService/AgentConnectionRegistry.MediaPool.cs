@@ -19,7 +19,13 @@ internal sealed partial class AgentConnectionRegistry
         public void Close()
         {
             if (Interlocked.Exchange(ref _closed, 1) != 0) return;
-            try { Socket.Abort(); Socket.Dispose(); } finally { close(); }
+            try
+            {
+                try { Socket.Abort(); }
+                catch (Exception exception) when (exception is WebSocketException or ObjectDisposedException) { }
+                finally { Socket.Dispose(); }
+            }
+            finally { close(); }
         }
     }
 
@@ -109,7 +115,8 @@ internal sealed partial class AgentConnectionRegistry
     public void StopMediaConnections()
     {
         _mediaExpiry.Dispose();
-        ClearPooledMedia(stopping: true);
+        try { ClearPooledMedia(stopping: true); }
+        finally { foreach (var session in _sessions.Values) session.Dispose(); }
     }
 
     private static MediaWire.Metadata ValidateMediaMetadata(MediaWire.Metadata metadata)

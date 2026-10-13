@@ -57,6 +57,8 @@ public sealed record ImageTagLink(long ImageId, long TagId);
 
 public sealed class IndexApiHandlers(PicerDatabase db, ThumbnailService thumbnails, VideoRepository videos)
 {
+    internal PicerDatabase OpenSpaceConnection() => db.OpenIndependentConnection();
+    internal void DisposeDatabase() => db.Dispose();
     public Func<long, CancellationToken, Task<bool>>? VideoPurgeHandler { get; set; }
     public Task<bool> PurgeVideoAsync(long id, CancellationToken token)
     {
@@ -73,6 +75,7 @@ public sealed class IndexApiHandlers(PicerDatabase db, ThumbnailService thumbnai
         // (for example /opt/picer-index/G:\\Apple照片).  The MediaAgent runs
         // on the Windows source host and must receive the original Windows
         // path, not the server storage prefix.
+        if (Picer.Core.Identity.PublishedMediaPath.TryUnqualify(path, out _, out var original)) path = original;
         return Picer.Core.Indexing.MediaSourcePath.ForStorage(path);
     }
     public GatewayHealth Health() => new("ok", PicerDatabase.CurrentSchemaVersion, "1.0",
@@ -218,6 +221,8 @@ public sealed class IndexApiHandlers(PicerDatabase db, ThumbnailService thumbnai
     public IReadOnlyList<Tag> ListTags() => SemanticEngine.GetTags(db);
     public IReadOnlyList<Album> ListAlbums() => SemanticEngine.GetAlbums(db);
     public GatewayMetadata GetMetadata(bool includeEmbeddings = true, bool includeFaceModels = true)
+        => ReadMetadata(db, includeEmbeddings, includeFaceModels);
+    public static GatewayMetadata ReadMetadata(PicerDatabase db, bool includeEmbeddings = true, bool includeFaceModels = true)
     {
         var albumImages = new List<GatewayAlbumImageLink>();
         using (var command = db.Command("SELECT ai.album_id,ai.image_id FROM album_images ai JOIN images i ON i.id=ai.image_id WHERE i.status='active'"))
@@ -339,14 +344,17 @@ public sealed class IndexApiHandlers(PicerDatabase db, ThumbnailService thumbnai
     }
 }
 
-public sealed record IndexServiceInstance(WebApplication App, X509Certificate2 Certificate, IndexApiHandlers Handlers, IndexEngine Engine, ScanJobManager Jobs);
+public sealed record IndexServiceInstance(WebApplication App, X509Certificate2 Certificate, IndexApiHandlers Handlers, IndexEngine Engine, ScanJobManager Jobs)
+{
+    public Func<string, long, string?, CancellationToken, Task>? PrepareIndexPurgeAsync { get; init; }
+}
 
 public static class IndexServiceHost
 {
-    public static IndexServiceInstance Build(string dataRoot, int port = 8445, string? bearerToken = null)
+    public static IndexServiceInstance Build(string dataRoot, int port = 8445, string? bearerToken = null, bool isolatedSpace = false)
     {
         Directory.CreateDirectory(dataRoot);
-        AppLogger.Initialize(Path.Combine(dataRoot, "logs"));
+        if (!isolatedSpace) AppLogger.Initialize(Path.Combine(dataRoot, "logs"));
         AppLogger.Info("Picer.IndexService 启动开始");
         var db = new PicerDatabase(Path.Combine(dataRoot, "picer.db"));
         var thumbnails = new ThumbnailService(Path.Combine(dataRoot, "thumbs"));
@@ -362,7 +370,7 @@ public static class IndexServiceHost
         // Keep the secure loopback default for local deployments.  Cross-
         // machine LAN deployments explicitly opt in with
         // PICER_INDEX_SERVICE_BIND=0.0.0.0 (or a specific interface).
-        var bindAddress = Environment.GetEnvironmentVariable("PICER_INDEX_SERVICE_BIND");
+        var bindAddress = isolatedSpace ? IPAddress.Loopback.ToString() : Environment.GetEnvironmentVariable("PICER_INDEX_SERVICE_BIND");
         if (string.IsNullOrWhiteSpace(bindAddress)) bindAddress = IPAddress.Loopback.ToString();
         if (!IPAddress.TryParse(bindAddress, out var parsedBindAddress))
             throw new InvalidOperationException($"PICER_INDEX_SERVICE_BIND 不是有效的 IP 地址：{bindAddress}");
@@ -394,13 +402,13 @@ public static class IndexServiceHost
                 AppLogger.Warn($"Persisted service configuration is invalid; agents will register without replay: {exception.GetType().Name}");
             }
         }
-        var agents = new AgentConnectionRegistry(journal, savedServiceConfig);
+        var agents = new AgentConnectionRegistry(journal, savedServiceConfig, isolatedSpace);
         var mediaPreviews = new MediaPreviewCache();
         var app = builder.Build();
         app.Lifetime.ApplicationStopping.Register(agents.StopMediaConnections);
         var maintenance = new BackgroundConsistencyScheduler(new Picer.Core.Indexing.MediaConsistencyMaintenance(
             db.OpenIndependentConnection, agents.VerifyExistingAsync, Path.Combine(dataRoot, "consistency-checkpoint.json")));
-        if (Environment.GetEnvironmentVariable("PICER_BACKGROUND_INDEX_CHECK") != "0")
+        if (!isolatedSpace && Environment.GetEnvironmentVariable("PICER_BACKGROUND_INDEX_CHECK") != "0")
             app.Lifetime.ApplicationStarted.Register(maintenance.Start);
         app.Lifetime.ApplicationStopping.Register(maintenance.Stop);
         app.UseWebSockets();
@@ -570,6 +578,13 @@ async function load(){const [c,g]=await Promise.all([fetch('/api/service/v1/capa
         {
             if (!context.Request.Path.StartsWithSegments("/api")) { await next(); return; }
             try { await next(); }
+            catch (Exception exception) when (exception is MediaChannelBusyException or OperationCanceledException)
+            {
+                if (context.Response.HasStarted || context.RequestAborted.IsCancellationRequested) { context.Abort(); return; }
+                context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+                context.Response.Headers.RetryAfter = "5";
+                await context.Response.WriteAsJsonAsync(new { error = "service_temporarily_unavailable" });
+            }
             catch (Exception exception)
             {
                 if (context.Response.HasStarted || context.RequestAborted.IsCancellationRequested)
@@ -686,6 +701,17 @@ async function load(){const [c,g]=await Promise.all([fetch('/api/service/v1/capa
                 return Results.File(output.ToArray(), "image/jpeg");
             }
             catch (MediaSourceChangedException) { return Results.StatusCode(StatusCodes.Status412PreconditionFailed); }
+            catch (MediaChannelBusyException)
+            {
+                context.Response.Headers.RetryAfter = "5";
+                return Results.Json(new { error = "photo_analysis_input_busy" }, statusCode: StatusCodes.Status503ServiceUnavailable);
+            }
+            catch (OperationCanceledException) when (!token.IsCancellationRequested)
+            {
+                context.Response.Headers.RetryAfter = "5";
+                AppLogger.Warn("Photo analysis input unavailable; reason=media_channel_timeout");
+                return Results.Json(new { error = "photo_analysis_input_timeout" }, statusCode: StatusCodes.Status503ServiceUnavailable);
+            }
             catch (Exception exception) when (exception is IOException or WebSocketException or UnauthorizedAccessException)
             {
                 AppLogger.Warn($"Photo analysis input failed; errorType={exception.GetType().Name}");
@@ -1274,7 +1300,24 @@ async function load(){const [c,g]=await Promise.all([fetch('/api/service/v1/capa
             maintenance.Dispose();
             db.Dispose();
         });
-        return new IndexServiceInstance(app, certificate, handlers, engine, jobs);
+        return new IndexServiceInstance(app, certificate, handlers, engine, jobs)
+        {
+            PrepareIndexPurgeAsync = async (kind, id, agent, token) =>
+            {
+                mediaPreviews.Clear();
+                await agents.ClearMediaCachesAsync(token);
+                if (kind != "video") return;
+                using var connection = db.OpenIndependentConnection();
+                var purger = new VideoRecordPurger(connection);
+                var snapshot = purger.Inspect(id);
+                if (snapshot is not { LastReference: true } || snapshot.Keyframes.Count == 0) return;
+                var sourcePath = IndexApiHandlers.NormalizeAgentPath(snapshot.Path);
+                var frames = snapshot.Keyframes.Select(IndexApiHandlers.NormalizeAgentPath).ToArray();
+                var payload = JsonSerializer.Serialize(new VideoRecordPurger.SourceCacheRequest(sourcePath, frames, purger.GetProtectedKeyframes(snapshot)));
+                var result = await agents.RequestTaskAsync(agent, "video.purge-cache", payload, token);
+                if (!string.Equals(result?.Trim(), "true", StringComparison.Ordinal)) throw new IOException("video_cache_purge_not_confirmed");
+            }
+        };
     }
 
     private static byte[] EmbeddingBytes(float[] values)

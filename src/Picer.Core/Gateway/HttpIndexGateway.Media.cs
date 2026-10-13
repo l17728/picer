@@ -18,9 +18,13 @@ public sealed partial class HttpIndexGateway
     public async Task<Stream?> OpenPhotoAnalysisInputAsync(Picer.Core.Models.ImageRecord image, CancellationToken cancellationToken = default)
     {
         var identity = new MediaWire.SourceFingerprint(image.FileSize, image.ModifiedUtc, image.ContentSha256 ?? image.Sha256);
-        using var request = new HttpRequestMessage(HttpMethod.Post, "api/gateway/v1/analysis-input")
-        { Content = JsonContent.Create(new MediaWire.AnalysisInputRequest(image.Id, identity)) };
-        var response = await _client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
+        // Preparation is read-only and safe to retry; never retry a model inference here.
+        var response = await SendWithRetryAsync(async token =>
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Post, "api/gateway/v1/analysis-input")
+            { Content = JsonContent.Create(new MediaWire.AnalysisInputRequest(image.Id, identity)) };
+            return await _client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token).ConfigureAwait(false);
+        }, cancellationToken).ConfigureAwait(false);
         if (response.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.NotImplemented or HttpStatusCode.MethodNotAllowed)
         { response.Dispose(); return null; }
         try

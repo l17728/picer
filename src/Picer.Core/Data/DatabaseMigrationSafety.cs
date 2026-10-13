@@ -9,6 +9,19 @@ namespace Picer.Core.Data;
 /// <summary>Closed-file snapshots and recoverable publication of a migrated staging database.</summary>
 internal static class DatabaseMigrationSafety
 {
+    internal static void CopyClosed(string source, string destination)
+    {
+        source = Path.GetFullPath(source); destination = Path.GetFullPath(destination);
+        if (!File.Exists(source) || string.Equals(source, destination, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
+            throw new ArgumentException("closed_snapshot_requires_distinct_existing_source");
+        using var startup = Enter(source);
+        using var access = ExclusiveAccess(source);
+        SqliteConnection.ClearAllPools();
+        using var files = ClosedFiles.Open(source);
+        Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+        files.CopyTo(destination);
+    }
+
     private sealed record Pending(string BackupDirectory);
 
     internal static IDisposable Enter(string path)

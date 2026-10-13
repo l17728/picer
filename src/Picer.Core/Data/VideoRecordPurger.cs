@@ -6,7 +6,7 @@ namespace Picer.Core.Data;
 public enum VideoPurgeCacheScope { Local, Remote }
 
 /// <summary>Explicit index/cache deletion only. Original media is never removed.</summary>
-public sealed class VideoRecordPurger(PicerDatabase db, VideoPurgeCacheScope cacheScope = VideoPurgeCacheScope.Local)
+public sealed class VideoRecordPurger(PicerDatabase db, VideoPurgeCacheScope cacheScope = VideoPurgeCacheScope.Local, bool allowSourceCacheCleanup = true)
 {
     public sealed record SourceCacheRequest(string Path, IReadOnlyList<string> Keyframes, IReadOnlyList<string>? ProtectedKeyframes = null);
     public sealed record Snapshot(long Id, long ContentId, string Path, bool LastReference, IReadOnlyList<string> Keyframes, IReadOnlyList<long> FaceIds);
@@ -62,7 +62,7 @@ public sealed class VideoRecordPurger(PicerDatabase db, VideoPurgeCacheScope cac
             foreach (var face in snapshot.FaceIds)
                 DeleteFiles(Path.Combine(root, remote ? "remote-video-face-thumbs" : "video-face-thumbs"), $"{face}.v*.jpg");
         }
-        if (!remote && (OperatingSystem.IsWindows() || !snapshot.Path.Contains('\\')))
+        if (allowSourceCacheCleanup && !remote && (OperatingSystem.IsWindows() || !snapshot.Path.Contains('\\')))
             PurgeSourceCaches(new(snapshot.Path, snapshot.Keyframes, protectedFrames.ToArray()));
         db.ReassignVideoMetadataEdits(id);
         using var remove = db.Command("""

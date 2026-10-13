@@ -143,6 +143,21 @@ public sealed class DatabaseMigrationSafetyTests : IDisposable
     private void CreateLegacy() => Execute(DatabasePath,
         "CREATE TABLE evidence(value TEXT); INSERT INTO evidence VALUES('retained'); PRAGMA user_version=1;");
 
+    [Fact]
+    public void ClosedMigrationBackupPreservesOriginalAndRejectsAnOpenWriterLease()
+    {
+        CreateLegacy();
+        var before = File.ReadAllBytes(DatabasePath);
+        var copy = Path.Combine(_root, "backup", "picer.db");
+        using (var lease = DatabaseMigrationSafety.OpenLifetimeLease(DatabasePath))
+            Assert.Throws<IOException>(() => ClosedDatabaseBackup.Create(DatabasePath, copy));
+        Assert.False(File.Exists(copy));
+        ClosedDatabaseBackup.Create(DatabasePath, copy);
+        Assert.Equal(before, File.ReadAllBytes(copy));
+        Assert.Equal(before, File.ReadAllBytes(DatabasePath));
+        Assert.Throws<IOException>(() => ClosedDatabaseBackup.Create(DatabasePath, copy));
+    }
+
     private static SqliteConnection Open(string path)
     {
         var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = path, Pooling = false }.ToString());

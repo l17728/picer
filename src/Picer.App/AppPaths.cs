@@ -11,9 +11,28 @@ public static class AppPaths
     private static string DataLocationPath => Path.Combine(BootstrapDirectory, "data-location.json");
     public static string BackendConfigPath => Path.Combine(BootstrapDirectory, "backend.json");
     public static string ServiceEndpointPath => Path.Combine(BootstrapDirectory, "service-endpoint.json");
-    public static Picer.Core.Gateway.IndexBackendOptions LoadIndexBackend() =>
-        Picer.Core.Gateway.IndexBackendConfig.Load(BackendConfigPath, ServiceEndpointPath,
+    public static string AccountCredentialPath => Path.Combine(BootstrapDirectory, "account-device.bin");
+    public static string AgentCredentialPath => Path.Combine(BootstrapDirectory, "agent-device.bin");
+    public static Picer.Core.Gateway.IndexBackendOptions LoadIndexBackend()
+    {
+        var backend = Picer.Core.Gateway.IndexBackendConfig.Load(BackendConfigPath, ServiceEndpointPath,
             static cipher => System.Security.Cryptography.ProtectedData.Unprotect(cipher, null, System.Security.Cryptography.DataProtectionScope.CurrentUser));
+        if (!backend.DeviceAuthentication) return backend;
+        var connection = new Picer.Core.Identity.WindowsDeviceCredentialStore(AccountCredentialPath).Load();
+        var session = connection.Session ?? throw new InvalidOperationException("请先登录照片空间。");
+        return backend with
+        {
+            BaseUrl = Picer.Core.Identity.DeviceAuthorization.SpaceAddress(connection.Origin, session.SpaceId),
+            SpkiPin = Convert.FromBase64String(connection.SpkiPin),
+            CachePartition = Picer.Core.Identity.DeviceAuthorization.Digest(connection.ServiceId + ":" + session.AccountId + ":" + session.SpaceId)
+        };
+    }
+
+    public static void SaveIndexBackendAccount()
+    {
+        Directory.CreateDirectory(BootstrapDirectory);
+        File.WriteAllText(BackendConfigPath, "{\"mode\":\"service\",\"authentication\":\"device\"}");
+    }
 
     public static void SaveIndexBackendLocal()
     {

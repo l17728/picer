@@ -458,7 +458,8 @@ public partial class VideoViewModel(VideoRepository repository, VideoIndexServic
                 Uri.TryCreate(baseUrl.TrimEnd('/') + "/", UriKind.Absolute, out var endpoint))
             {
                 mediaProcessor = new ServiceVideoMediaProcessor(endpoint, backend.Token ?? "",
-                    Path.Combine(AppPaths.DataRoot, "remote-video-keyframes"));
+                    Path.Combine(AppServices.RemoteDataRoot, "remote-video-keyframes"),
+                    AppServices.CreatePinnedServiceClient(backend, TimeSpan.FromMinutes(30)));
                 ownedProcessor = (IDisposable)mediaProcessor;
                 AppLogger.Info($"远程关键帧命令动态绑定 IndexService：endpoint={endpoint}");
             }
@@ -730,7 +731,7 @@ public partial class VideoViewModel(VideoRepository repository, VideoIndexServic
             ?? throw new InvalidOperationException("video_reference_missing");
         using var operation = VideoOperationLifetime.Begin(video.Path, cancellationToken);
         cancellationToken = operation.Token;
-        var directory = Path.Combine(AppPaths.DataRoot, "remote-video-keyframes", videoId.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        var directory = Path.Combine(AppServices.RemoteDataRoot, "remote-video-keyframes", videoId.ToString(System.Globalization.CultureInfo.InvariantCulture));
         Directory.CreateDirectory(directory);
         using var concurrency = new SemaphoreSlim(4, 4);
         var downloads = frames.Select(async (frame, ordinal) =>

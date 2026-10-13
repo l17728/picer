@@ -1,4 +1,4 @@
-﻿using Microsoft.Data.Sqlite;
+using Microsoft.Data.Sqlite;
 using Picer.Core.Data;
 using System.Text.RegularExpressions;
 
@@ -42,6 +42,21 @@ internal static class LegacySchemaFixture
 
     internal static void RevertVersion45(SqliteConnection connection)
     {
+        using (var reset = connection.CreateCommand())
+        {
+            reset.CommandText = """
+                DROP TABLE IF EXISTS sync_source_bindings;
+                DROP TABLE IF EXISTS sync_exports;
+                DROP TABLE IF EXISTS sync_outbox;
+                DROP TABLE IF EXISTS sync_operation_receipts;
+                DROP TABLE IF EXISTS sync_entity_identities;
+                DROP TABLE IF EXISTS sync_publishers;
+                DROP TABLE IF EXISTS sync_purge_journal;
+                DROP TABLE IF EXISTS sync_space_state;
+                DROP TABLE IF EXISTS library_identity;
+                """;
+            reset.ExecuteNonQuery();
+        }
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT 1 FROM pragma_table_info('metadata_edits') WHERE name='video_content_identity'";
         if (command.ExecuteScalar() is null) return;

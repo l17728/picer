@@ -84,7 +84,7 @@ internal static class MediaAgentController
         File.WriteAllText(ConfigPath, JsonSerializer.Serialize(settings, new JsonSerializerOptions { WriteIndented = true }));
     }
 
-    public static bool Start(string serviceIp, string token, string? spkiPin, IEnumerable<string> roots)
+    public static bool Start(string serviceIp, string token, string? spkiPin, IEnumerable<string> roots, string? deviceCredentialPath = null)
     {
         var executable = FindExecutable();
         if (executable is null)
@@ -96,13 +96,15 @@ internal static class MediaAgentController
         var info = new ProcessStartInfo(executable) { UseShellExecute = false, CreateNoWindow = true };
         info.Environment["PICER_INDEX_SERVICE_IP"] = serviceIp;
         info.Environment["PICER_INDEX_SERVICE_TOKEN"] = token;
+        if (deviceCredentialPath is not null) info.Environment["PICER_AGENT_DEVICE_CREDENTIAL_PATH"] = deviceCredentialPath;
+        else info.Environment.Remove("PICER_AGENT_DEVICE_CREDENTIAL_PATH");
         if (!string.IsNullOrWhiteSpace(spkiPin)) info.Environment["PICER_INDEX_SERVICE_SPKI_PIN"] = spkiPin;
         // Historical keyframes/crops are generated assets, not source files.
         // Allow these specific caches, never the entire application-data root
         // (which also contains credentials and databases).
         var generatedRoots = new[] { "thumbs", "face-thumbs", "video-keyframes", "video-summary-cache" }
             .Select(directory => Path.Combine(AppPaths.DataRoot, directory));
-        info.Environment["PICER_MEDIA_AGENT_ROOTS"] = string.Join(';', roots.Concat(LoadRepairRoots()).Concat(generatedRoots)
+        info.Environment["PICER_MEDIA_AGENT_ROOTS"] = string.Join(';', (deviceCredentialPath is null ? roots.Concat(LoadRepairRoots()).Concat(generatedRoots) : roots)
             .Select(Path.GetFullPath).Distinct(StringComparer.OrdinalIgnoreCase));
         _process = Process.Start(info);
         if (_process is null) return false;

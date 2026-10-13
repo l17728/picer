@@ -5,7 +5,6 @@ using System.Windows.Controls;
 using Picer.App.Infrastructure;
 using Picer.App.ViewModels;
 using Picer.Core.Gateway;
-using Picer.Core.Indexing;
 using Picer.Core.Video;
 using Picer.Core.Vision;
 
@@ -21,11 +20,9 @@ public sealed class DirectoryMediaDescriptionWindow : Window
     private readonly Button _retry = new() { Content = "仅重试失败项", IsEnabled = false, Margin = new Thickness(12, 0, 0, 0) };
     private readonly ObservableCollection<MediaDescriptionFailure> _failures = [];
     private readonly CancellationTokenSource _lifetime = new();
-    private CancellationTokenSource? _previewCancellation;
     private readonly ComboBox _concurrency = new() { ItemsSource = new[] { 1, 2, 3, 4 }, SelectedItem = 2, Width = 70, Margin = new Thickness(8, 0, 0, 0) };
     private CancellationTokenSource? _cancellation;
     private DirectoryMediaDescriptionPlan? _plan;
-    private int _selectionVersion;
 
     public DirectoryMediaDescriptionWindow(bool loadOnShow = true)
     {
@@ -53,12 +50,16 @@ public sealed class DirectoryMediaDescriptionWindow : Window
         _retry.Click += async (_, _) => await StartAsync(retryOnly: true);
         _cancel.Click += (_, _) => _cancellation?.Cancel();
         Closing += (_, e) => { if (_cancellation is not null) { _cancellation.Cancel(); e.Cancel = true; _status.Text = "正在取消，已完成描述将保留；结束后可关闭窗口。"; } };
-        Closed += (_, _) => { _lifetime.Cancel(); _previewCancellation?.Cancel(); };
+        Closed += (_, _) => _lifetime.Cancel();
         if (loadOnShow) Loaded += async (_, _) =>
         {
             try
             {
-                var paths = await UiWork.RunDatabaseAsync(() => AppServices.Db.GetDirectoryTreePaths(_lifetime.Token), _lifetime.Token);
+                var paths = await Task.Run(() =>
+                {
+                    using var reader = AppServices.Db.OpenIndependentConnection();
+                    return reader.GetDirectoryTreePaths(_lifetime.Token);
+                }, _lifetime.Token);
                 var roots = await Task.Run(() => DirectoryTreeModel.Build(paths, _lifetime.Token), _lifetime.Token);
                 PopulateDirectoryModels(roots);
                 _status.Text = "请选择目录；重新运行会继续处理尚未完成的文件。";
@@ -96,28 +97,15 @@ public sealed class DirectoryMediaDescriptionWindow : Window
         return node;
     }
 
-    private async Task PreviewAsync()
+    private Task PreviewAsync()
     {
-        if (_tree.SelectedItem is not TreeViewItem { Tag: string directory } || _cancellation is not null) return;
-        var version = ++_selectionVersion;
+        if (_tree.SelectedItem is not TreeViewItem { Tag: string directory } || _cancellation is not null) return Task.CompletedTask;
         _failures.Clear(); _retry.IsEnabled = false;
-        _previewCancellation?.Cancel(); _previewCancellation?.Dispose();
-        _previewCancellation = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
-        var token = _previewCancellation.Token;
-        _plan = null;
-        _start.IsEnabled = false;
-        try
-        {
-            var plan = await UiWork.RunDatabaseAsync(() => DirectoryMediaDescriptionPlan.Build(AppServices.Db,
-                AppServices.CloudVisionRepository, AppServices.Videos, directory, token), token);
-            if (version != _selectionVersion || token.IsCancellationRequested) return;
-            _plan = plan;
-            _status.Text = $"当前索引范围：照片 {plan.TotalPhotos} 张、视频 {plan.TotalVideos} 个；已有描述 {plan.SkippedCount} 项；待描述照片 {plan.Photos.Count} 张、视频 {plan.Videos.Count} 个。";
+        _plan = new(directory, 0, 0, [], []);
+        _status.Text = "已选择目录。开始后边发现边描述，数量持续更新；已有有效描述自动跳过。";
             _authorization.Text = "点击开始，将通过 AI 模型设置中的照片分析/视频总结服务处理全部待描述项。照片副本、最多 12 帧的视频拼图及已有转写会经过已配置的索引服务；远程索引服务也会接收中转数据。云端配置还会将内容发送给模型服务商。不上传原视频，不修改原文件。开始前将显示实际模型与处理范围。";
-            _start.IsEnabled = true;
-        }
-        catch (OperationCanceledException) when (token.IsCancellationRequested) { }
-        catch (Exception exception) { if (version == _selectionVersion) _status.Text = "预览失败：" + exception.Message; }
+        _start.IsEnabled = true;
+        return Task.CompletedTask;
     }
 
     private async Task StartAsync(bool retryOnly = false)
@@ -127,29 +115,18 @@ public sealed class DirectoryMediaDescriptionWindow : Window
         (CloudVisionAnalysisService Service, OpenAiCompatibleCloudVisionAnalyzer Analyzer, CloudVisionRunPolicy Policy, string ProviderLabel, bool IsLocal)? photo = null, video = null;
         try
         {
-            var retryPaths = retryOnly ? _failures.Where(failure => failure.Retryable).Select(failure => failure.Path).ToArray() : [];
+            var retryPaths = retryOnly ? _failures.Where(failure => failure.Retryable).Select(failure => failure.Path).ToHashSet(StringComparer.OrdinalIgnoreCase) : null;
             _failures.Clear(); _retry.IsEnabled = false;
-            _previewCancellation?.Cancel();
             _cancellation = new(); _tree.IsEnabled = false; _start.IsEnabled = false; _cancel.IsEnabled = true;
             _concurrency.IsEnabled = false;
             var token = _cancellation.Token;
-            _status.Text = "正在读取索引中的待描述项…";
-            plan = await UiWork.RunDatabaseAsync(() => DirectoryMediaDescriptionPlan.Build(AppServices.Db,
-                AppServices.CloudVisionRepository, AppServices.Videos, plan.Directory, token), token);
-            if (retryOnly)
-            {
-                var retryPhotos = plan.Photos.Where(image => retryPaths.Any(path => DirectoryMediaImport.Contains(path, image.Path))).ToArray();
-                var retryVideos = plan.Videos.Where(item => retryPaths.Any(path => DirectoryMediaImport.Contains(path, item.Path))).ToArray();
-                plan = plan with { DeferredCount = plan.PendingCount - retryPhotos.Length - retryVideos.Length, Photos = retryPhotos, Videos = retryVideos };
-            }
-            _plan = plan;
-            if (plan.PendingCount == 0) { _status.Text = "当前索引中没有待描述项；新增文件请通过独立索引任务入库。"; return; }
-            photo = plan.Photos.Count > 0 ? AppServices.CreateCloudVisionService(AiFeatureIds.PhotoAnalysis) : null;
-            video = plan.Videos.Count > 0 ? AppServices.CreateCloudVisionService(AiFeatureIds.VideoSummary) : null;
-            if (plan.Photos.Count > 0 && photo is null || plan.Videos.Count > 0 && video is null)
+            _status.Text = "准备边发现边描述…";
+            photo = AppServices.CreateCloudVisionService(AiFeatureIds.PhotoAnalysis);
+            video = AppServices.CreateCloudVisionService(AiFeatureIds.VideoSummary);
+            if (photo is null && video is null)
                 throw new InvalidOperationException("请先在 AI 模型设置中启用并配置照片分析与视频内容总结服务。");
-            var modelText = $"照片：{photo?.ProviderLabel ?? "无待处理项"}\n视频：{video?.ProviderLabel ?? "无待处理项"}";
-            if (MessageBox.Show(this, $"{modelText}\n\n将描述 {plan.Photos.Count} 张照片和 {plan.Videos.Count} 个视频（含所有子目录）。已有结果跳过；云端模型可能产生费用。\n\n是否开始？",
+            var modelText = $"照片：{photo?.ProviderLabel ?? "未配置，遇到待描述照片时将暂停"}\n视频：{video?.ProviderLabel ?? "未配置，遇到待描述视频时将暂停"}";
+            if (MessageBox.Show(this, $"{modelText}\n\n将处理所选目录及全部子目录中的照片和视频，边发现边描述，数量持续更新。已有结果跳过；云端模型可能产生费用。\n\n是否开始？",
                 "确认目录媒体描述", MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No) != MessageBoxResult.Yes) return;
             ICloudVisionAnalyzer? photoAnalyzer = photo?.Analyzer;
             if (photoAnalyzer is not null)
@@ -163,6 +140,7 @@ public sealed class DirectoryMediaDescriptionWindow : Window
             {
                 try
                 {
+                if (photoService is null) throw new AnalysisStageException(AnalysisStage.Model, "model_not_configured", false);
                 if (await UiWork.RunDatabaseAsync(() => AppServices.CloudVisionRepository.HasCurrentDescription(image), ct)) return true;
                 var result = await photoService!.AnalyzeAsync([(image, (IReadOnlyList<VisualConceptScore>)[], "directory-requested")],
                     cancellationToken: ct, runPolicy: photo!.Value.Policy with { MaximumImagesPerRun = 1 });
@@ -184,6 +162,7 @@ public sealed class DirectoryMediaDescriptionWindow : Window
                 var stage = AnalysisStage.Preprocess;
                 try
                 {
+                if (video is null) throw new AnalysisStageException(AnalysisStage.Model, "model_not_configured", false);
                 if (await UiWork.RunDatabaseAsync(() => AppServices.Videos.HasCurrentSummary(item), ct)) return true;
                 var frames = await UiWork.RunDatabaseAsync(() => AppServices.Videos.GetKeyframes(item.Id, existingOnly: !AppServices.ServiceMode), ct);
                 if (frames.Count == 0)
@@ -211,12 +190,14 @@ public sealed class DirectoryMediaDescriptionWindow : Window
             var concurrency = photo?.IsLocal == true ? (int)(_concurrency.SelectedItem ?? 2) : 1;
             var videoConcurrency = video?.IsLocal == true ? (int)(_concurrency.SelectedItem ?? 2) : 1;
             taskStage = AnalysisStage.Model;
-            await runner.RunAsync(plan, new Progress<string>(value => _status.Text = value), token, concurrency, videoConcurrency,
+            var discovery = DirectoryDescriptionDiscovery.DiscoverAsync(AppServices.Db, plan.Directory, retryPaths, token);
+            await runner.RunStreamingAsync(discovery, new Progress<string>(value => _status.Text = value), token, concurrency, videoConcurrency,
                 new Progress<MediaDescriptionFailure>(failure => _failures.Add(failure)));
             _status.Text += "；处理结束，失败项可再次运行。";
         }
         catch (OperationCanceledException) when (_cancellation?.IsCancellationRequested == true) { _status.Text = "已取消；完成的照片和视频描述已保留，再次开始会自动跳过。"; }
         catch (DescriptionBudgetExceededException exception) { _status.Text = exception.Message; }
+        catch (DescriptionServiceUnavailableException exception) { _status.Text = exception.Message; }
         catch (AnalysisBudgetExceededException exception) { _status.Text = exception.Message; }
         catch (Exception exception)
         {

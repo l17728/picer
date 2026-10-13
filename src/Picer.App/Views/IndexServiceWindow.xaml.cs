@@ -54,7 +54,7 @@ public partial class IndexServiceWindow : Window
         AgentButton.Content = "重新启动代理";
     }
 
-    private async void Sync_Click(object sender, RoutedEventArgs e)
+    private async void LegacySync_Click(object sender, RoutedEventArgs e)
     {
         if (AppServices.ServiceMode || AppServices.Db is null) { HealthText.Text = "当前不是本地索引，不能从此窗口推送本地索引。"; return; }
         var ip = AgentIpBox.Text.Trim();

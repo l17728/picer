@@ -2,10 +2,10 @@ using System.Net.Http.Headers;
 
 namespace Picer.Core.Video;
 
-public sealed class ServiceVideoTranscriptionService(Uri serviceEndpoint, string bearerToken, HttpClient? client = null) : IVideoTranscriptionService, IDisposable
+public sealed class ServiceVideoTranscriptionService(Uri serviceEndpoint, string bearerToken, HttpClient? client = null, bool disposeClient = false) : IVideoTranscriptionService, IDisposable
 {
     private readonly HttpClient _client = client ?? new HttpClient { Timeout = TimeSpan.FromMinutes(30) };
-    private readonly bool _ownsClient = client is null;
+    private readonly bool _ownsClient = client is null || disposeClient;
     public string ModelVersion => "service-asr";
 
     public async Task<string> TranscribeAsync(VideoRecord video, CancellationToken cancellationToken = default)

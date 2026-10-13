@@ -1,0 +1,26 @@
+<Window x:Class="Picer.App.Views.AccountConnectionWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="登录照片空间" Width="680" SizeToContent="Height" WindowStartupLocation="CenterOwner" ResizeMode="NoResize">
+    <StackPanel Margin="22">
+        <TextBlock Text="连接你的照片空间" FontSize="22" FontWeight="SemiBold"/>
+        <TextBlock x:Name="PurposeText" TextWrapping="Wrap" Margin="0,10,0,14"/>
+        <TextBlock Text="HTTPS 服务地址（由服务管理员提供）"/>
+        <TextBox x:Name="AddressBox" Padding="8" AutomationProperties.Name="照片空间服务地址"/>
+        <WrapPanel Margin="0,10,0,0">
+            <Button x:Name="LoginButton" Content="在浏览器中注册或登录" Click="Login_Click" Padding="14,6"/>
+            <Button Content="导入服务地址文件…" Click="ServiceFile_Click" Padding="14,6" Margin="8,0,0,0"/>
+        </WrapPanel>
+        <TextBlock Text="在网页中选择空间、核对设备指纹并下载认证文件。已有账号直接登录即可；本地使用无需账号。" TextWrapping="Wrap" Margin="0,14,0,8"/>
+        <TextBlock Text="当前设备指纹" FontWeight="SemiBold"/>
+        <TextBox x:Name="DeviceFingerprint" IsReadOnly="True" TextWrapping="Wrap" Padding="8" AutomationProperties.Name="设备配对指纹"/>
+        <TextBlock Text="认证文件只能在生成请求的这台电脑使用，有效期 15 分钟。远程查看不会自动启动本机驻留程序。" TextWrapping="Wrap" Margin="0,10,0,12"/>
+        <Button x:Name="ImportButton" Content="导入设备认证文件…" Click="Import_Click" Padding="14,6" HorizontalAlignment="Left"/>
+        <TextBlock x:Name="StatusText" TextWrapping="Wrap" Margin="0,14,0,10" AutomationProperties.Name="照片空间连接状态"/>
+        <WrapPanel HorizontalAlignment="Right">
+            <Button x:Name="ResetButton" Content="忘记连接并重新配对" Click="Reset_Click" Padding="14,6" Margin="0,0,8,0"/>
+            <Button Content="取消" Click="Cancel_Click" Padding="14,6" Margin="0,0,8,0"/>
+            <Button x:Name="FinishButton" Content="使用此照片空间" Click="Finish_Click" IsEnabled="False" Padding="14,6"/>
+        </WrapPanel>
+    </StackPanel>
+</Window>

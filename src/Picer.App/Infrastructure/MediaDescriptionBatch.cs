@@ -7,6 +7,7 @@ using Picer.Core.Vision;
 namespace Picer.App.Infrastructure;
 
 internal sealed class DescriptionBudgetExceededException() : InvalidOperationException("已达到描述费用预算，已完成结果保留。请调整预算或稍后继续。");
+internal sealed class DescriptionServiceUnavailableException() : InvalidOperationException("服务连续不可用，任务已暂停，未处理项保持待描述。请检查来源设备、索引服务和模型服务后重新开始；已完成结果会自动跳过。");
 internal sealed record MediaDescriptionFailure(bool IsVideo, long Id, string Path, string Error,
     AnalysisStage Stage = AnalysisStage.Model, bool Retryable = true)
 {
@@ -18,19 +19,34 @@ internal sealed class MediaDescriptionBatch(
     Func<ImageRecord, CancellationToken, Task<bool>> describePhoto,
     Func<VideoRecord, CancellationToken, Task<bool>> describeVideo)
 {
-    public async Task RunAsync(DirectoryMediaDescriptionPlan plan, IProgress<string> progress, CancellationToken token,
+    public Task RunAsync(DirectoryMediaDescriptionPlan plan, IProgress<string> progress, CancellationToken token,
         int photoConcurrency = 1, int videoConcurrency = 1, IProgress<MediaDescriptionFailure>? failures = null)
+        => RunStreamingAsync(Items(plan), progress, token, photoConcurrency, videoConcurrency, failures, plan.SkippedCount);
+
+    private static async IAsyncEnumerable<DirectoryDescriptionItem> Items(DirectoryMediaDescriptionPlan plan)
+    {
+        await Task.CompletedTask;
+        foreach (var photo in plan.Photos) yield return new(photo, null, false);
+        foreach (var video in plan.Videos) yield return new(null, video, false);
+    }
+
+    public async Task RunStreamingAsync(IAsyncEnumerable<DirectoryDescriptionItem> items, IProgress<string> progress, CancellationToken token,
+        int photoConcurrency = 1, int videoConcurrency = 1, IProgress<MediaDescriptionFailure>? failures = null, int initialSkipped = 0)
     {
         var completed = 0;
         var failed = 0;
         var count = 0;
         var reportGate = new object();
+        var serviceFailures = 0;
+        var discovered = 0;
+        var skipped = initialSkipped;
+        void Report() { lock (reportGate) progress.Report($"已发现待描述 {discovered} 项；已处理 {count}/{discovered}：成功或复用 {completed}，失败 {failed}；原有描述跳过 {skipped}（持续发现中）"); }
         async Task RunOne(Func<Task<bool>> work, string kind, long id, string path, CancellationToken workerToken)
         {
             token.ThrowIfCancellationRequested();
             try
             {
-                if (await work()) Interlocked.Increment(ref completed);
+                if (await work()) { Interlocked.Increment(ref completed); Interlocked.Exchange(ref serviceFailures, 0); }
                 else { Interlocked.Increment(ref failed); failures?.Report(new(kind == "video", id, path, "分析未完成，可重试")); }
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested || workerToken.IsCancellationRequested) { throw; }
@@ -41,21 +57,36 @@ internal sealed class MediaDescriptionBatch(
                 Interlocked.Increment(ref failed);
                 var detail = exception as AnalysisStageException ?? AnalysisStageException.Wrap(AnalysisStage.Model, exception);
                 failures?.Report(new(kind == "video", id, path, detail.ErrorCode, detail.Stage, detail.Retryable));
-                Core.Logging.AppLogger.Warn($"Directory description item failed; kind={kind}; errorType={exception.GetType().Name}");
+                Core.Logging.AppLogger.Warn($"Directory description item failed; kind={kind}; stage={detail.Stage}; errorType={exception.GetType().Name}; code={SafeCode(detail.ErrorCode)}");
+                if (detail.ErrorCode is "HTTP_401" or "HTTP_403" or "model_not_configured" ||
+                    IsServiceFailure(detail.ErrorCode) && Interlocked.Increment(ref serviceFailures) >= 6)
+                    throw new DescriptionServiceUnavailableException();
+                if (!IsServiceFailure(detail.ErrorCode)) Interlocked.Exchange(ref serviceFailures, 0);
             }
-            lock (reportGate) progress.Report($"已处理 {++count}/{plan.PendingCount}：成功或复用 {completed}，失败 {failed}；原有描述跳过 {plan.SkippedCount}");
+            Interlocked.Increment(ref count); Report();
         }
-        if (photoConcurrency <= 1)
-            foreach (var photo in plan.Photos) await RunOne(() => describePhoto(photo, token), "photo", photo.Id, photo.Path, token);
-        else
-            await Parallel.ForEachAsync(plan.Photos, new ParallelOptions { MaxDegreeOfParallelism = Math.Clamp(photoConcurrency, 1, 4), CancellationToken = token },
-                async (photo, workerToken) => await RunOne(() => describePhoto(photo, workerToken), "photo", photo.Id, photo.Path, workerToken));
-        if (videoConcurrency <= 1)
-            foreach (var video in plan.Videos) await RunOne(() => describeVideo(video, token), "video", video.Id, video.Path, token);
-        else
-            await Parallel.ForEachAsync(plan.Videos, new ParallelOptions { MaxDegreeOfParallelism = Math.Clamp(videoConcurrency, 1, 4), CancellationToken = token },
-                async (video, workerToken) => await RunOne(() => describeVideo(video, workerToken), "video", video.Id, video.Path, workerToken));
+        using var photos = new SemaphoreSlim(Math.Clamp(photoConcurrency, 1, 4));
+        using var videos = new SemaphoreSlim(Math.Clamp(videoConcurrency, 1, 4));
+        await Parallel.ForEachAsync(items, new ParallelOptions { MaxDegreeOfParallelism = Math.Clamp(Math.Max(photoConcurrency, videoConcurrency), 1, 4), CancellationToken = token },
+            async (item, workerToken) =>
+            {
+                if (item.Described) { Interlocked.Increment(ref skipped); if (skipped % 32 == 0) Report(); return; }
+                Interlocked.Increment(ref discovered); Report();
+                var gate = item.IsVideo ? videos : photos;
+                await gate.WaitAsync(workerToken);
+                try
+                {
+                    await RunOne(() => item.IsVideo ? describeVideo(item.Video!, workerToken) : describePhoto(item.Photo!, workerToken),
+                        item.IsVideo ? "video" : "photo", item.Id, item.Path, workerToken);
+                }
+                finally { gate.Release(); }
+            });
+        progress.Report($"发现完成；已处理 {count}/{discovered}：成功或复用 {completed}，失败 {failed}；原有描述跳过 {skipped}");
     }
+
+    private static bool IsServiceFailure(string code) => code is "HTTP_408" or "HTTP_429" or "HTTP_500" or "HTTP_502" or "HTTP_503" or "HTTP_504"
+        or "HttpRequestException" or "request_timeout" or "media_channel_busy";
+    private static string SafeCode(string code) => code.Length <= 64 && code.All(character => char.IsAsciiLetterOrDigit(character) || character == '_') ? code : "analysis_failed";
 
     internal sealed class PhotoInputAnalyzer(ICloudVisionAnalyzer inner, string cacheRoot, IMediaAssetGateway? assets = null) : ICloudVisionAnalyzer
     {

@@ -6,8 +6,9 @@ namespace Picer.IndexService;
 
 internal sealed partial class AgentConnectionRegistry
 {
-    private sealed class MediaLease
+    private sealed class MediaLease(string agentId)
     {
+        public string AgentId { get; } = agentId;
         public TaskCompletionSource<WebSocket> Connected { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource Closed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
@@ -15,6 +16,9 @@ internal sealed partial class AgentConnectionRegistry
     private readonly SemaphoreSlim _mediaSlots = new(4, 4);
     private readonly SemaphoreSlim _previewSlots = new(2, 2);
     private readonly SemaphoreSlim _analysisSlots = new(2, 2);
+    private readonly SemaphoreSlim _mediaAdmission = new(8, 8);
+    private readonly SemaphoreSlim _previewAdmission = new(4, 4);
+    private readonly SemaphoreSlim _analysisAdmission = new(4, 4);
 
     public async Task ClearMediaCachesAsync(CancellationToken token)
     {
@@ -23,28 +27,41 @@ internal sealed partial class AgentConnectionRegistry
         {
             try { await session.SendAsync(new { type = "media.cache.clear" }, token); }
             catch (WebSocketException) { }
+            catch (OperationCanceledException) when (!token.IsCancellationRequested) { }
         }
     }
 
     public async Task HandleMediaAsync(HttpContext context, string ticket)
     {
-        if (!context.WebSockets.IsWebSocketRequest || !_media.TryRemove(ticket, out var lease))
+        if (!context.WebSockets.IsWebSocketRequest || !_media.TryGetValue(ticket, out var candidate) ||
+            _strictRouting && candidate.AgentId != context.Request.Headers["X-Picer-Agent-Grant"].ToString() ||
+            !_media.TryRemove(new KeyValuePair<string, MediaLease>(ticket, candidate)))
         { context.Response.StatusCode = 404; return; }
+        var lease = candidate;
         using var socket = await context.WebSockets.AcceptWebSocketAsync();
         if (!lease.Connected.TrySetResult(socket)) return;
-        using var aborted = context.RequestAborted.Register(() => { socket.Abort(); lease.Closed.TrySetResult(); });
+        using var aborted = context.RequestAborted.Register(() => { try { SafeAbort(socket); } finally { lease.Closed.TrySetResult(); } });
         await lease.Closed.Task;
     }
 
     public async Task<SocketMediaStream?> OpenMediaAsync(string? agentId, string path, int previewSize, CancellationToken token, string? expectedETag = null, bool keepLease = false,
         MediaWire.SourceFingerprint? sourceFingerprint = null)
     {
+        var admission = previewSize == 1280 ? _analysisAdmission : previewSize > 0 ? _previewAdmission : _mediaAdmission;
+        if (!await admission.WaitAsync(0, token)) throw new MediaChannelBusyException();
+        try { return await OpenMediaCoreAsync(agentId, path, previewSize, token, expectedETag, keepLease, sourceFingerprint); }
+        finally { admission.Release(); }
+    }
+
+    private async Task<SocketMediaStream?> OpenMediaCoreAsync(string? agentId, string path, int previewSize, CancellationToken token, string? expectedETag, bool keepLease,
+        MediaWire.SourceFingerprint? sourceFingerprint)
+    {
         if (string.IsNullOrWhiteSpace(agentId) && _sessions.Count > 1) throw new IOException("media_agent_selection_required");
         var session = await WaitForSessionAsync(agentId, token);
         if (session is null || !session.Capabilities.Contains(MediaWire.Capability)) return null;
         if (previewSize == 1280 && !session.Capabilities.Contains(MediaWire.AnalysisInputCapability)) return null;
         var slots = previewSize == 1280 ? _analysisSlots : previewSize > 0 ? _previewSlots : _mediaSlots;
-        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token, session.Disconnected);
         deadline.CancelAfter(TimeSpan.FromMinutes(2));
         var reusable = previewSize == 0 && session.Capabilities.Contains(MediaWire.ReuseCapability)
             && (keepLease || expectedETag?.StartsWith("\"lease-", StringComparison.Ordinal) == true);
@@ -72,11 +89,12 @@ internal sealed partial class AgentConnectionRegistry
         try
         {
             if (previewSize == 0 && slots.CurrentCount == 0) EvictIdleMedia();
-            await slots.WaitAsync(deadline.Token);
+            if (!await slots.WaitAsync(TimeSpan.FromSeconds(15), deadline.Token))
+                throw new MediaChannelBusyException();
         }
         finally { if (previewSize == 0) Interlocked.Decrement(ref _mediaWaiters); }
         var ticket = Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(32)).ToLowerInvariant();
-        var lease = new MediaLease();
+        var lease = new MediaLease(session.AgentId);
         _media[ticket] = lease;
         var transferred = false;
         WebSocket? socket = null;
@@ -99,6 +117,8 @@ internal sealed partial class AgentConnectionRegistry
             }
             else result = new SocketMediaStream(socket, metadata, () => { lease.Closed.TrySetResult(); slots.Release(); });
             transferred = true;
+            result.CancelWhen(session.Disconnected);
+            session.Disconnected.ThrowIfCancellationRequested();
             return result;
         }
         finally
@@ -107,11 +127,16 @@ internal sealed partial class AgentConnectionRegistry
             if (!transferred)
             {
                 lease.Connected.TrySetCanceled();
-                socket?.Abort();
-                lease.Closed.TrySetResult();
-                slots.Release();
+                try { SafeAbort(socket); }
+                finally { lease.Closed.TrySetResult(); slots.Release(); }
             }
         }
+    }
+
+    private static void SafeAbort(WebSocket? socket)
+    {
+        try { socket?.Abort(); }
+        catch (Exception exception) when (exception is ObjectDisposedException or WebSocketException) { }
     }
     public async Task ManageMediaLeaseAsync(string etag, bool release, CancellationToken token)
     {
@@ -124,3 +149,5 @@ internal sealed partial class AgentConnectionRegistry
         }
     }
 }
+
+internal sealed class MediaChannelBusyException() : IOException("media_channel_busy");

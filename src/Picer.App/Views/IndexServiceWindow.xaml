@@ -20,10 +20,14 @@
         </GroupBox>
         <WrapPanel Margin="0,12,0,0">
             <Button Content="切换本地/远程模式…" Click="SwitchMode_Click" Padding="14,4" Margin="0,0,8,0"/>
-            <Button x:Name="SyncButton" Content="同步本地索引" Click="Sync_Click" Padding="14,4" Margin="0,0,8,0"/>
+            <Button x:Name="SyncButton" Content="上传到我的照片空间…" Click="Sync_Click" Padding="14,4" Margin="0,0,8,0"/>
+            <Button x:Name="PauseSyncButton" Content="暂停上传" Click="PauseSync_Click" Visibility="Collapsed" Padding="14,4" Margin="0,0,8,0"/>
             <Button x:Name="BrowseButton" Content="浏览图库" Click="Browse_Click" Padding="14,4" Margin="0,0,8,0"/>
             <Button x:Name="ProbeButton" Content="测试连接" Click="Probe_Click" Padding="14,4" Margin="0,0,8,0"/>
             <Button Content="关闭" Click="Close_Click" Padding="14,4"/>
         </WrapPanel>
+        <Expander Header="旧版服务兼容" Margin="0,10,0,0">
+            <Button Content="使用已有共享令牌同步旧版服务" Click="LegacySync_Click" Padding="10,4" HorizontalAlignment="Left"/>
+        </Expander>
     </StackPanel>
 </Window>

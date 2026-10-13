@@ -41,13 +41,19 @@ public static class MediaWire
 
 /// <summary>Seekable remote reader, bounded to one binary block. Never downloads an entire file in memory.</summary>
 public sealed class SocketMediaStream(WebSocket socket, MediaWire.Metadata metadata, Action onDispose,
-    Func<WebSocket, bool>? returnConnection = null) : Stream
+    Func<WebSocket, bool>? returnConnection = null, TimeSpan? ioTimeout = null) : Stream
 {
     private byte[] _block = [];
     private long _blockOffset;
     private long _position;
     private int _disposed;
     private bool _faulted;
+    private CancellationTokenRegistration _lifetime;
+    public void CancelWhen(CancellationToken token)
+    {
+        _lifetime = token.UnsafeRegister(_ => { _faulted = true; Dispose(); }, null);
+        if (Volatile.Read(ref _disposed) != 0) _lifetime.Unregister();
+    }
     public MediaWire.Metadata Metadata { get; } = metadata;
     public override bool CanRead => _disposed == 0;
     public override bool CanSeek => _disposed == 0;
@@ -72,8 +78,10 @@ public sealed class SocketMediaStream(WebSocket socket, MediaWire.Metadata metad
             var count = (int)Math.Min(MediaWire.BlockSize, remaining);
             try
             {
-                await MediaWire.SendJsonAsync(socket, new MediaWire.ReadRequest(_position, count), cancellationToken).ConfigureAwait(false);
-                _block = await MediaWire.ReceiveAsync(socket, WebSocketMessageType.Binary, count, cancellationToken).ConfigureAwait(false);
+                using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                deadline.CancelAfter(ioTimeout ?? TimeSpan.FromMinutes(2));
+                await MediaWire.SendJsonAsync(socket, new MediaWire.ReadRequest(_position, count), deadline.Token).ConfigureAwait(false);
+                _block = await MediaWire.ReceiveAsync(socket, WebSocketMessageType.Binary, count, deadline.Token).ConfigureAwait(false);
                 if (_block.Length != count) throw new EndOfStreamException("media_source_changed");
                 _blockOffset = _position;
             }
@@ -103,8 +111,21 @@ public sealed class SocketMediaStream(WebSocket socket, MediaWire.Metadata metad
             try { returned = !_faulted && socket.State == WebSocketState.Open && returnConnection?.Invoke(socket) == true; }
             finally
             {
-                if (!returned) { socket.Abort(); socket.Dispose(); }
-                _block = []; onDispose();
+                _lifetime.Unregister();
+                try
+                {
+                    if (!returned)
+                    {
+                        try { socket.Abort(); }
+                        catch (Exception exception) when (exception is WebSocketException or ObjectDisposedException) { }
+                        finally
+                        {
+                            try { socket.Dispose(); }
+                            catch (Exception exception) when (exception is WebSocketException or ObjectDisposedException) { }
+                        }
+                    }
+                }
+                finally { _block = []; onDispose(); }
             }
         }
         base.Dispose(disposing);

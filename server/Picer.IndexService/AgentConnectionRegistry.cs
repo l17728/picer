@@ -14,10 +14,12 @@ internal sealed partial class AgentConnectionRegistry
     private readonly TaskJournal _journal;
     private readonly object _configLock = new();
     private JsonElement? _currentConfig;
-    public AgentConnectionRegistry(TaskJournal journal, JsonElement? currentConfig = null)
+    private readonly bool _strictRouting;
+    public AgentConnectionRegistry(TaskJournal journal, JsonElement? currentConfig = null, bool strictRouting = false)
     {
         _journal = journal;
         _currentConfig = currentConfig?.Clone();
+        _strictRouting = strictRouting;
         _mediaExpiry = new(_ => SweepMedia(), null, TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(2));
     }
     public int OnlineCount => _sessions.Count;
@@ -43,7 +45,11 @@ internal sealed partial class AgentConnectionRegistry
                 var type = root.TryGetProperty("type", out var typeElement) ? typeElement.GetString() : null;
                 if (type == "agent.register")
                 {
+                    // A socket owns exactly one registration. Re-registering would
+                    // otherwise dispose the same socket while installing its replacement.
+                    if (session is not null) break;
                     var agentId = root.TryGetProperty("agentId", out var idElement) ? idElement.GetString() : null;
+                    if (_strictRouting) agentId = context.Request.Headers["X-Picer-Agent-Grant"].ToString();
                     if (string.IsNullOrWhiteSpace(agentId)) continue;
                     session = new AgentSession(agentId, socket);
                     if (root.TryGetProperty("capabilities", out var capabilityElement) && capabilityElement.ValueKind == JsonValueKind.Array)
@@ -91,7 +97,7 @@ internal sealed partial class AgentConnectionRegistry
                 }
             }
         }
-        catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested) { }
+        catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested || session?.Disconnected.IsCancellationRequested == true) { }
         catch (WebSocketException) { }
         finally
         {
@@ -112,6 +118,7 @@ internal sealed partial class AgentConnectionRegistry
             var result = await socket.ReceiveAsync(buffer, cancellationToken);
             if (result.MessageType == WebSocketMessageType.Close) return null;
             if (result.MessageType != WebSocketMessageType.Text) continue;
+            if (message.Length + result.Count > MaxTaskPayloadChars) throw new InvalidDataException("agent_message_too_large");
             message.Write(buffer, 0, result.Count);
             if (result.EndOfMessage) return message.ToArray();
         }
@@ -124,7 +131,7 @@ internal sealed partial class AgentConnectionRegistry
         // (and a reconnect may replace the registered id).  This is a single-
         // tenant service, so safely fall back only when exactly one agent is
         // online; never guess when multiple source agents are connected.
-        if (session is null && _sessions.Count == 1)
+        if (!_strictRouting && session is null && _sessions.Count == 1)
             session = _sessions.Values.Single();
         if (session is null) return null;
         return await session.RequestAsync(path, cancellationToken);
@@ -190,7 +197,7 @@ internal sealed partial class AgentConnectionRegistry
         {
             var session = !string.IsNullOrWhiteSpace(agentId)
                 ? _sessions.GetValueOrDefault(agentId)
-                : _sessions.Values.FirstOrDefault();
+                : _strictRouting ? null : _sessions.Values.FirstOrDefault();
             if (session is not null || (_sessions.Count > 1 && !string.IsNullOrWhiteSpace(agentId))) return session;
             if (attempt < 5) await Task.Delay(TimeSpan.FromMilliseconds(500), cancellationToken);
         }
@@ -199,20 +206,22 @@ internal sealed partial class AgentConnectionRegistry
 
     private sealed class AgentSession(string agentId, WebSocket socket) : IDisposable
     {
+        private readonly CancellationTokenSource _disconnected = new();
+        private int _disposed;
+        public CancellationToken Disconnected => _disconnected.Token;
         private readonly SemaphoreSlim _sendLock = new(1, 1);
         private readonly ConcurrentDictionary<string, TaskCompletionSource<(string, byte[])?>> _pending = new();
         private readonly ConcurrentDictionary<string, TaskCompletionSource<string?>> _taskPending = new();
         private readonly ConcurrentDictionary<string, Channel<byte[]>> _taskStreams = new();
         private readonly ConcurrentDictionary<string, Channel<AiMessage>> _aiPending = new();
         public string AgentId { get; } = agentId;
-        public IReadOnlyCollection<string> Capabilities => _capabilities;
-        private readonly HashSet<string> _capabilities = new(StringComparer.OrdinalIgnoreCase);
+        public IReadOnlyCollection<string> Capabilities => Volatile.Read(ref _capabilities);
+        private HashSet<string> _capabilities = new(StringComparer.OrdinalIgnoreCase);
         private WebSocket Socket { get; } = socket;
 
         public void SetCapabilities(IEnumerable<string> capabilities)
         {
-            _capabilities.Clear();
-            foreach (var capability in capabilities) _capabilities.Add(capability);
+            Volatile.Write(ref _capabilities, new HashSet<string>(capabilities, StringComparer.OrdinalIgnoreCase));
         }
 
         public AgentSession DisposeAndReplace(AgentSession replacement)
@@ -223,9 +232,11 @@ internal sealed partial class AgentConnectionRegistry
 
         public async Task SendAsync(object payload, CancellationToken cancellationToken)
         {
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, Disconnected);
+            deadline.CancelAfter(TimeSpan.FromSeconds(30));
             var bytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(payload));
-            await _sendLock.WaitAsync(cancellationToken);
-            try { await Socket.SendAsync(bytes, WebSocketMessageType.Text, true, cancellationToken); }
+            await _sendLock.WaitAsync(deadline.Token);
+            try { await Socket.SendAsync(bytes, WebSocketMessageType.Text, true, deadline.Token); }
             finally { _sendLock.Release(); }
         }
 
@@ -350,11 +361,16 @@ internal sealed partial class AgentConnectionRegistry
 
         public void Dispose()
         {
+            if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+            try { _disconnected.Cancel(); }
+            catch (AggregateException) { AppLogger.Warn("MediaAgent disconnect callback failed; closing remaining requests"); }
+            SafeAbort(Socket);
             foreach (var pending in _pending.Values) pending.TrySetCanceled();
             foreach (var pending in _taskPending.Values) pending.TrySetCanceled();
             foreach (var stream in _taskStreams.Values) stream.Writer.TryComplete(new IOException("media_agent_disconnected"));
             foreach (var pending in _aiPending.Values) pending.Writer.TryComplete(new IOException("media_agent_disconnected"));
-            _sendLock.Dispose();
+            // Waiters may still unwind and release the send gate after a disconnect.
+            // Cancellation belongs to the session; disposing a live semaphore strands those waiters.
         }
 
         private sealed record AiMessage(byte[] Payload, string? Error);

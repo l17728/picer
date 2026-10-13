@@ -7,9 +7,9 @@ namespace Picer.Core.Data;
 /// <summary>Explicit user-requested purge; missing-file scans never call this.</summary>
 public sealed class ImageRecordPurger(PicerDatabase db)
 {
-    public bool Purge(long id, bool requireMissing = true)
+    public bool Purge(long id, bool requireMissing = true, bool transactionHeld = false)
     {
-        using var transaction = db.BeginTransaction();
+        using var transaction = transactionHeld ? null : db.BeginTransaction();
         var record = db.GetImage(id);
         if (record is null) return true;
         if (requireMissing && record.Status != ImageStatus.Missing) return false;
@@ -104,7 +104,7 @@ public sealed class ImageRecordPurger(PicerDatabase db)
             DeleteMatches(assets, hash.ToLowerInvariant() + ".part");
         }
         Picer.Core.Indexing.DirectoryMediaChangeTracker.Shared.ForgetFile(record.Path);
-        transaction.Commit();
+        transaction?.Commit();
         return true;
     }
 

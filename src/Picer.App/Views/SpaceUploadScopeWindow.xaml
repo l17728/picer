@@ -1,0 +1,34 @@
+<Window x:Class="Picer.App.Views.SpaceUploadScopeWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="选择上传范围" Width="680" Height="540" WindowStartupLocation="CenterOwner">
+    <DockPanel Margin="20">
+        <StackPanel DockPanel.Dock="Top">
+            <TextBlock Text="将本地索引纳入照片空间" FontSize="22" FontWeight="SemiBold"/>
+            <TextBlock x:Name="DestinationText" Margin="0,10" TextWrapping="Wrap"/>
+            <TextBlock Text="选择来源目录（包含已索引的子目录）。原始文件仍在本机；远程读取原图需要另行授权驻留程序。" TextWrapping="Wrap"/>
+        </StackPanel>
+        <StackPanel DockPanel.Dock="Bottom" Margin="0,12,0,0">
+            <WrapPanel>
+                <CheckBox x:Name="PhotosBox" Content="照片索引及描述" IsChecked="True" Margin="0,0,20,8"/>
+                <CheckBox x:Name="VideosBox" Content="视频索引及描述" IsChecked="True" Margin="0,0,20,8"/>
+            </WrapPanel>
+            <CheckBox x:Name="PeopleBox" Content="包含人物、人脸和识别数据" Margin="0,0,0,8"/>
+            <CheckBox x:Name="LocationBox" Content="包含精确位置和 GPS" Margin="0,0,0,8"/>
+            <CheckBox x:Name="ServeMediaBox" Content="上传后授权驻留程序，允许远程读取所选目录的照片、视频和缩略图" Margin="0,0,0,8"/>
+            <TextBlock Text="描述本身也可能含有人名、地点等信息。更改本次范围不会移除空间中此前已上传的内容。" TextWrapping="Wrap" Foreground="#555"/>
+            <TextBlock x:Name="StatusText" TextWrapping="Wrap" Margin="0,8"/>
+            <WrapPanel HorizontalAlignment="Right">
+                <Button Content="取消" IsCancel="True" Padding="16,6" Margin="0,0,8,0"/>
+                <Button Content="上传所选索引" Click="Upload_Click" Padding="16,6"/>
+            </WrapPanel>
+        </StackPanel>
+        <ListBox x:Name="SourcesList" Margin="0,12,0,0" ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+            <ListBox.ItemTemplate>
+                <DataTemplate>
+                    <CheckBox Content="{Binding Path}" IsChecked="{Binding Selected}" Margin="4,6"/>
+                </DataTemplate>
+            </ListBox.ItemTemplate>
+        </ListBox>
+    </DockPanel>
+</Window>

@@ -10,7 +10,8 @@ namespace Picer.Core.Gateway;
 
 public sealed record MediaAgentSettings(string ServiceUrl, string Token, string SpkiPin, string[] Roots)
 {
-    private sealed record Stored(string ServiceUrl, string TokenCipher, string SpkiPin, string[] Roots);
+    public string? DeviceCredentialPath { get; init; }
+    private sealed record Stored(string ServiceUrl, string TokenCipher, string SpkiPin, string[] Roots, string? DeviceCredentialPath = null);
 
     public static string NormalizeServiceUrl(string value)
     {
@@ -31,7 +32,8 @@ public sealed record MediaAgentSettings(string ServiceUrl, string Token, string 
     public MediaAgentSettings Validate()
     {
         var url = NormalizeServiceUrl(ServiceUrl);
-        if (string.IsNullOrWhiteSpace(Token) || Token.Any(char.IsControl)) throw new ArgumentException("请填写有效的服务令牌。");
+        if (DeviceCredentialPath is null && (string.IsNullOrWhiteSpace(Token) || Token.Any(char.IsControl))) throw new ArgumentException("请填写有效的服务令牌。");
+        if (DeviceCredentialPath is not null && !Path.IsPathFullyQualified(DeviceCredentialPath)) throw new ArgumentException("设备凭据必须使用完整路径。");
         _ = ValidateSpkiPin(SpkiPin);
         if (Roots is null) throw new ArgumentException("请至少选择一个允许读取的媒体目录。");
         var roots = Roots.Select(Path.GetFullPath).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
@@ -62,7 +64,7 @@ public sealed record MediaAgentSettings(string ServiceUrl, string Token, string 
     {
         var settings = Validate();
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
-        var stored = new Stored(settings.ServiceUrl, Convert.ToBase64String(protect(Encoding.UTF8.GetBytes(settings.Token))), settings.SpkiPin, settings.Roots);
+        var stored = new Stored(settings.ServiceUrl, Convert.ToBase64String(protect(Encoding.UTF8.GetBytes(settings.Token))), settings.SpkiPin, settings.Roots, settings.DeviceCredentialPath);
         var temporary = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
         try { File.WriteAllText(temporary, JsonSerializer.Serialize(stored)); File.Move(temporary, path, true); }
         finally { if (File.Exists(temporary)) File.Delete(temporary); }
@@ -72,15 +74,17 @@ public sealed record MediaAgentSettings(string ServiceUrl, string Token, string 
     {
         if (!File.Exists(path)) return null;
         var stored = JsonSerializer.Deserialize<Stored>(File.ReadAllText(path)) ?? throw new InvalidDataException("代理设置无效。");
-        return new MediaAgentSettings(stored.ServiceUrl, Encoding.UTF8.GetString(unprotect(Convert.FromBase64String(stored.TokenCipher))), stored.SpkiPin, stored.Roots).Validate();
+        return (new MediaAgentSettings(stored.ServiceUrl, Encoding.UTF8.GetString(unprotect(Convert.FromBase64String(stored.TokenCipher))), stored.SpkiPin, stored.Roots)
+            { DeviceCredentialPath = stored.DeviceCredentialPath }).Validate();
     }
 
     public static MediaAgentSettings? FromEnvironment(Func<string, string?> get)
     {
         var address = get("PICER_INDEX_SERVICE_IP");
         if (string.IsNullOrWhiteSpace(address)) return null;
-        return new MediaAgentSettings(address, get("PICER_INDEX_SERVICE_TOKEN") ?? "", get("PICER_INDEX_SERVICE_SPKI_PIN") ?? "",
-            (get("PICER_MEDIA_AGENT_ROOTS") ?? "").Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)).Validate();
+        return (new MediaAgentSettings(address, get("PICER_INDEX_SERVICE_TOKEN") ?? "", get("PICER_INDEX_SERVICE_SPKI_PIN") ?? "",
+            (get("PICER_MEDIA_AGENT_ROOTS") ?? "").Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            { DeviceCredentialPath = get("PICER_AGENT_DEVICE_CREDENTIAL_PATH") }).Validate();
     }
 
     public static string ResolveFfmpeg(string? configured, string baseDirectory)

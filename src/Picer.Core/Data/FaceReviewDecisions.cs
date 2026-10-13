@@ -42,10 +42,16 @@ public sealed partial class PicerDatabase
     public IReadOnlyList<GatewayFaceReviewDecision> MergeFaceReviewDecisions(IReadOnlyList<GatewayFaceReviewDecision> incoming)
     {
         using var transaction = BeginTransaction();
+        var result = MergeFaceReviewDecisionsInTransaction(incoming, transaction);
+        transaction.Commit();
+        return result;
+    }
+
+    public IReadOnlyList<GatewayFaceReviewDecision> MergeFaceReviewDecisionsInTransaction(IReadOnlyList<GatewayFaceReviewDecision> incoming, SqliteTransaction transaction)
+    {
         MergeFaceReviewDecisions(incoming, transaction);
         var decisions = GetFaceReviewDecisions(transaction);
         ApplyFaceReviewDecisions(decisions, transaction);
-        transaction.Commit();
         var requested = incoming.Select(item => item.FaceId).ToHashSet();
         return decisions.Where(item => requested.Contains(item.FaceId)).ToArray();
     }

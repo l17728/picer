@@ -1,4 +1,4 @@
-﻿using Microsoft.Data.Sqlite;
+using Microsoft.Data.Sqlite;
 using Picer.Core.Gateway;
 using Picer.Core.Models;
 using Picer.Core.Search;
@@ -8,7 +8,7 @@ namespace Picer.Core.Data;
 
 public sealed partial class PicerDatabase : IDisposable
 {
-    public const int CurrentSchemaVersion = 45;
+    public const int CurrentSchemaVersion = 46;
     private readonly SqliteConnection _conn;
     private readonly string _connectionString;
     private readonly FileStream? _lifetimeLease;
@@ -1163,6 +1163,7 @@ public sealed partial class PicerDatabase : IDisposable
             });
         }
         if (schemaVersion < 45) VideoMetadataIdentityMigration.Apply(_conn);
+        if (schemaVersion < 46) SpaceSyncIdentityMigration.Apply(_conn);
         }
         catch
         {
@@ -1580,6 +1581,24 @@ public sealed partial class PicerDatabase : IDisposable
     /// <summary>Imports a read-only gateway record while preserving its server id.</summary>
     public void UpsertMirroredImage(ImageRecord rec)
     {
+        using (var begin = Command("SAVEPOINT mirror_image_upsert")) begin.ExecuteNonQuery();
+        try
+        {
+            UpsertMirroredImageCore(rec);
+            using var release = Command("RELEASE mirror_image_upsert"); release.ExecuteNonQuery();
+        }
+        catch
+        {
+            using var rollback = Command("ROLLBACK TO mirror_image_upsert; RELEASE mirror_image_upsert"); rollback.ExecuteNonQuery();
+            throw;
+        }
+    }
+
+    private void UpsertMirroredImageCore(ImageRecord rec)
+    {
+        // Use UPDATE + conditional INSERT inside the savepoint: SQLite's UPSERT
+        // DO UPDATE forces ABORT on nested derivative triggers, overriding their
+        // INSERT OR IGNORE and rejecting updates to already-known content hashes.
         // A mirror may have been populated by an older source-path mapping.
         // Reconciliation is keyed by the authoritative image id, but SQLite
         // also enforces a unique path. Remove only the stale mirror row that
@@ -1592,20 +1611,16 @@ public sealed partial class PicerDatabase : IDisposable
             removeStale.ExecuteNonQuery();
         }
         using var cmd = Command("""
+            UPDATE images SET source_id=$sid,path=$p,file_size=$fs,modified_utc=$m,sha256=$sha,width=$w,height=$h,
+                taken_utc=$t,camera=$cam,gps=$gps,thumb_path=$th,status=$st,indexed_utc=$ix,ahash=$ah,dhash=$dh,
+                file_created_utc=$created,content_sha256=$csha
+            WHERE id=$id AND (source_id,path,file_size,modified_utc,sha256,width,height,taken_utc,camera,gps,thumb_path,
+                status,indexed_utc,ahash,dhash,file_created_utc,content_sha256)
+                IS NOT ($sid,$p,$fs,$m,$sha,$w,$h,$t,$cam,$gps,$th,$st,$ix,$ah,$dh,$created,$csha);
             INSERT INTO images (id, source_id, path, file_size, modified_utc, sha256, width, height,
                                 taken_utc, camera, gps, thumb_path, status, indexed_utc, ahash, dhash, file_created_utc, content_sha256)
-            VALUES ($id, $sid, $p, $fs, $m, $sha, $w, $h, $t, $cam, $gps, $th, $st, $ix, $ah, $dh, $created, $csha)
-            ON CONFLICT(id) DO UPDATE SET source_id=excluded.source_id, path=excluded.path, file_size=excluded.file_size,
-              modified_utc=excluded.modified_utc, sha256=excluded.sha256, width=excluded.width, height=excluded.height,
-              taken_utc=excluded.taken_utc, camera=excluded.camera, gps=excluded.gps, thumb_path=excluded.thumb_path,
-              status=excluded.status, indexed_utc=excluded.indexed_utc, ahash=excluded.ahash, dhash=excluded.dhash,
-              file_created_utc=excluded.file_created_utc, content_sha256=excluded.content_sha256
-            WHERE (images.source_id,images.path,images.file_size,images.modified_utc,images.sha256,images.width,images.height,
-                   images.taken_utc,images.camera,images.gps,images.thumb_path,images.status,images.indexed_utc,
-                   images.ahash,images.dhash,images.file_created_utc,images.content_sha256)
-              IS NOT (excluded.source_id,excluded.path,excluded.file_size,excluded.modified_utc,excluded.sha256,excluded.width,excluded.height,
-                      excluded.taken_utc,excluded.camera,excluded.gps,excluded.thumb_path,excluded.status,excluded.indexed_utc,
-                      excluded.ahash,excluded.dhash,excluded.file_created_utc,excluded.content_sha256)
+            SELECT $id, $sid, $p, $fs, $m, $sha, $w, $h, $t, $cam, $gps, $th, $st, $ix, $ah, $dh, $created, $csha
+            WHERE NOT EXISTS(SELECT 1 FROM images WHERE id=$id);
             """);
         cmd.Parameters.AddWithValue("$id", rec.Id);
         BindRecord(cmd, rec);
@@ -1724,15 +1739,16 @@ public sealed partial class PicerDatabase : IDisposable
     }
 
     public IReadOnlyList<GatewayDetectedFace> GetAllMirroredFaces()
+        => EnumerateMirroredFaces().ToArray();
+
+    public IEnumerable<GatewayDetectedFace> EnumerateMirroredFaces()
     {
-        using var command = Command("SELECT id,image_id,model_version,ordinal,box_x,box_y,box_width,box_height,confidence,landmarks_json,embedding,created_utc,is_archived FROM detected_faces");
+        using var command = Command("SELECT id,image_id,model_version,ordinal,box_x,box_y,box_width,box_height,confidence,landmarks_json,embedding,created_utc,is_archived FROM detected_faces ORDER BY id");
         using var reader = command.ExecuteReader();
-        var result = new List<GatewayDetectedFace>();
         while (reader.Read())
-            result.Add(new GatewayDetectedFace(reader.GetInt64(0), reader.GetInt64(1), reader.GetString(2), reader.GetInt32(3),
+            yield return new GatewayDetectedFace(reader.GetInt64(0), reader.GetInt64(1), reader.GetString(2), reader.GetInt32(3),
                 reader.GetDouble(4), reader.GetDouble(5), reader.GetDouble(6), reader.GetDouble(7), reader.GetDouble(8),
-                reader.IsDBNull(9) ? null : reader.GetString(9), reader.IsDBNull(10) ? null : (byte[])reader[10], reader.GetString(11), reader.GetBoolean(12)));
-        return result;
+                reader.IsDBNull(9) ? null : reader.GetString(9), reader.IsDBNull(10) ? null : (byte[])reader[10], reader.GetString(11), reader.GetBoolean(12));
     }
 
     public IReadOnlyList<GatewayFaceAssignment> GetAllMirroredFaceAssignments()
@@ -1964,9 +1980,10 @@ public sealed partial class PicerDatabase : IDisposable
         remove.ExecuteNonQuery();
     }
 
-    public void UpsertMirroredVideoMetadata(GatewayMetadata metadata, bool authoritative = false)
+    public void UpsertMirroredVideoMetadata(GatewayMetadata metadata, bool authoritative = false, SqliteTransaction? externalTransaction = null)
     {
-        using var transaction = BeginTransaction();
+        using var ownedTransaction = externalTransaction is null ? BeginTransaction() : null;
+        var transaction = externalTransaction ?? ownedTransaction!;
         if (authoritative)
         {
             ReconcileVideoRows("video_detected_faces", "id", metadata.VideoFacesOrEmpty.Select(face => face.Id));
@@ -2007,7 +2024,7 @@ public sealed partial class PicerDatabase : IDisposable
             command.Parameters.AddWithValue("$modified", (object?)summary.SourceModifiedUtc ?? DBNull.Value);
             command.Transaction = transaction; command.Parameters.AddWithValue("$video", new VideoContentRepository(this).GetContentId(summary.VideoId)); command.Parameters.AddWithValue("$provider", summary.Provider); command.Parameters.AddWithValue("$model", summary.ModelVersion); command.Parameters.AddWithValue("$prompt", summary.PromptVersion); command.Parameters.AddWithValue("$summary", summary.Summary); command.Parameters.AddWithValue("$json", summary.ResultJson); command.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("o")); command.ExecuteNonQuery();
         }
-        transaction.Commit();
+        ownedTransaction?.Commit();
     }
 
     public void UpsertMirroredImageTag(long imageId, long tagId)
