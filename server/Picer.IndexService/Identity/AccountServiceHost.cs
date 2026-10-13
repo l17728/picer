@@ -83,6 +83,7 @@ public static class AccountServiceHost
         AccountIdentityApi.Map(app, accounts, publicOrigin, Convert.ToBase64String(ServiceSecurity.ComputeSpkiPin(certificate)), signingKey);
         app.MapGet("/", () => Results.Redirect("/account"));
         app.MapGet("/health", () => Results.Json(new { status = "ok", protocol = 2 }));
+        app.MapGet("/version", IndexServiceHost.Version);
         app.MapMethods("/spaces/{spaceId}/{**path}", ["GET", "HEAD", "POST", "PUT", "DELETE"], async (HttpContext context, string spaceId, string? path) =>
         {
             if (!Guid.TryParseExact(spaceId, "N", out _)) return Results.NotFound();

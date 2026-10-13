@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Security.Cryptography;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using Picer.Core.Identity;
 using Picer.IndexService;
@@ -29,6 +30,14 @@ public sealed class AccountPortalTests
             };
             using var http = new HttpClient(handler) { BaseAddress = new Uri(address) };
             http.DefaultRequestHeaders.Host = "picer.test";
+            using (var versionResponse = await http.GetAsync("/version"))
+            {
+                versionResponse.EnsureSuccessStatusCode();
+                using var version = JsonDocument.Parse(await versionResponse.Content.ReadAsStringAsync());
+                Assert.Equal("Picer.IndexService", version.RootElement.GetProperty("service").GetString());
+                Assert.False(string.IsNullOrWhiteSpace(version.RootElement.GetProperty("assemblyVersion").GetString()));
+                Assert.True(version.RootElement.GetProperty("startedUtc").GetDateTimeOffset() <= DateTimeOffset.UtcNow);
+            }
             var service = await http.GetFromJsonAsync<ServiceDiscovery>("/identity/service");
             Assert.NotNull(service);
             using var deviceKey = ECDsa.Create(ECCurve.NamedCurves.nistP256);

@@ -351,6 +351,45 @@ public sealed record IndexServiceInstance(WebApplication App, X509Certificate2 C
 
 public static class IndexServiceHost
 {
+    public static IResult Version()
+    {
+        var assembly = typeof(IndexApiHandlers).Assembly;
+        var deploymentPath = Path.Combine(AppContext.BaseDirectory, "deployment.json");
+        string? deploymentId = null;
+        string? binarySha256 = null;
+        string? sourceCommit = null;
+        string? builtUtc = null;
+        if (File.Exists(deploymentPath))
+        {
+            try
+            {
+                using var deployment = JsonDocument.Parse(File.ReadAllBytes(deploymentPath));
+                var root = deployment.RootElement;
+                deploymentId = root.TryGetProperty("deploymentId", out var id) ? id.GetString() : null;
+                binarySha256 = root.TryGetProperty("binarySha256", out var hash) ? hash.GetString() : null;
+                sourceCommit = root.TryGetProperty("sourceCommit", out var commit) ? commit.GetString() : null;
+                builtUtc = root.TryGetProperty("builtUtc", out var built) ? built.GetString() : null;
+            }
+            catch (JsonException exception)
+            {
+                AppLogger.Warn($"Deployment manifest is invalid; type={exception.GetType().Name}");
+            }
+        }
+
+        return Results.Json(new
+        {
+            service = "Picer.IndexService",
+            assemblyVersion = assembly.GetName().Version?.ToString() ?? "unknown",
+            informationalVersion = assembly.GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute), false)
+                .OfType<System.Reflection.AssemblyInformationalVersionAttribute>().FirstOrDefault()?.InformationalVersion,
+            deploymentId,
+            binarySha256,
+            sourceCommit,
+            builtUtc,
+            startedUtc = Process.GetCurrentProcess().StartTime.ToUniversalTime()
+        });
+    }
+
     public static IndexServiceInstance Build(string dataRoot, int port = 8445, string? bearerToken = null, bool isolatedSpace = false)
     {
         Directory.CreateDirectory(dataRoot);
@@ -425,44 +464,7 @@ async function load(){const [c,g]=await Promise.all([fetch('/api/service/v1/capa
 </script></body></html>
 """, "text/html; charset=utf-8"));
         app.MapGet("/health", () => Results.Json(handlers.Health()));
-        app.MapGet("/version", () =>
-        {
-            var assembly = typeof(IndexApiHandlers).Assembly;
-            var deploymentPath = Path.Combine(AppContext.BaseDirectory, "deployment.json");
-            string? deploymentId = null;
-            string? binarySha256 = null;
-            string? sourceCommit = null;
-            string? builtUtc = null;
-            if (File.Exists(deploymentPath))
-            {
-                try
-                {
-                    using var deployment = JsonDocument.Parse(File.ReadAllBytes(deploymentPath));
-                    var root = deployment.RootElement;
-                    deploymentId = root.TryGetProperty("deploymentId", out var id) ? id.GetString() : null;
-                    binarySha256 = root.TryGetProperty("binarySha256", out var hash) ? hash.GetString() : null;
-                    sourceCommit = root.TryGetProperty("sourceCommit", out var commit) ? commit.GetString() : null;
-                    builtUtc = root.TryGetProperty("builtUtc", out var built) ? built.GetString() : null;
-                }
-                catch (JsonException exception)
-                {
-                    AppLogger.Warn($"Deployment manifest is invalid; type={exception.GetType().Name}");
-                }
-            }
-
-            return Results.Json(new
-            {
-                service = "Picer.IndexService",
-                assemblyVersion = assembly.GetName().Version?.ToString() ?? "unknown",
-                informationalVersion = assembly.GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute), false)
-                    .OfType<System.Reflection.AssemblyInformationalVersionAttribute>().FirstOrDefault()?.InformationalVersion,
-                deploymentId,
-                binarySha256,
-                sourceCommit,
-                builtUtc,
-                startedUtc = Process.GetCurrentProcess().StartTime.ToUniversalTime()
-            });
-        });
+        app.MapGet("/version", Version);
         app.MapGet("/api/service/v1/capabilities", () =>
         {
             var agentOnline = agents.OnlineCount > 0;
