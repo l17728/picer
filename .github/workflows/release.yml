@@ -60,6 +60,7 @@ jobs:
         shell: pwsh
         run: ./tools/package-release.ps1 -Version $env:RELEASE_TAG -OutputDirectory "$env:RUNNER_TEMP/release-assets"
       - name: Upload binary packages
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: release-binaries
@@ -80,6 +81,7 @@ jobs:
         run: ./tools/verify-user-installers.ps1 -Version $env:RELEASE_TAG -AssetDirectory "$env:RUNNER_TEMP/release-assets" -TestRoot "$env:RUNNER_TEMP/installer-validation" -VerifyLiveService
       - name: Upload installer validation evidence
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: installer-validation
@@ -99,6 +101,7 @@ jobs:
         run: Get-Process Picer.App,testhost,vstest.console -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
       - name: Upload test evidence
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: release-test-reports
