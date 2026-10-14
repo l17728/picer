@@ -159,7 +159,7 @@ public static class AccountServiceHost
                     if (context.Request.Headers.TryGetValue(name, out var value)) request.Headers.TryAddWithoutValidation(name, value.ToArray());
                 using var response = await lease.Runtime.Client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellation.Token);
                 context.Response.StatusCode = (int)response.StatusCode;
-                foreach (var name in new[] { "ETag", "Accept-Ranges", "Content-Range", "Content-Type", "Content-Length", "Last-Modified", "Retry-After" })
+                foreach (var name in new[] { "ETag", "Accept-Ranges", "Content-Range", "Content-Type", "Content-Length", "Last-Modified", "Retry-After", "X-Picer-Media-Streaming" })
                 {
                     if (response.Headers.TryGetValues(name, out var values) || response.Content.Headers.TryGetValues(name, out values))
                         context.Response.Headers[name] = values.ToArray();

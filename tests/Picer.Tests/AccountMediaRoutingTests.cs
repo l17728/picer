@@ -77,6 +77,14 @@ public sealed class AccountMediaRoutingTests
             using (var binding = await gui.SpaceClient.PostAsJsonAsync("api/sync/v2/source-bindings",
                        new SpaceSourceBindingRequest(publisher.PublisherId, first.Connection.Session!.GrantId, [1]), deadline.Token))
                 binding.EnsureSuccessStatusCode();
+            var headServing = ServeOneAsync();
+            using (var head = await gui.SpaceClient.SendAsync(new HttpRequestMessage(HttpMethod.Head,
+                       $"api/gateway/v1/assets/images/{imageId}"), deadline.Token))
+            {
+                Assert.Equal(HttpStatusCode.OK, head.StatusCode);
+                Assert.Contains("1", head.Headers.GetValues("X-Picer-Media-Streaming"));
+            }
+            await headServing;
             var serving = ServeOneAsync();
             var unexpected = MediaWire.ReceiveJsonAsync<JsonElement>(secondSocket, deadline.Token);
             var downloaded = await gui.SpaceClient.GetByteArrayAsync($"api/gateway/v1/assets/images/{imageId}?agentId={second.Connection.Session!.GrantId}", deadline.Token);

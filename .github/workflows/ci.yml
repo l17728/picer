@@ -44,6 +44,8 @@ jobs:
           PICER_LIVE_SERVICE_SPKI_PIN: ${{ secrets.PICER_LIVE_SERVICE_SPKI_PIN }}
           PICER_LIVE_SERVICE_ACCOUNT: ${{ secrets.PICER_LIVE_SERVICE_ACCOUNT }}
           PICER_LIVE_SERVICE_PASSWORD: ${{ secrets.PICER_LIVE_SERVICE_PASSWORD }}
+          PICER_REQUIRE_THUMBNAILS: "1"
+          PICER_REQUIRE_STREAMING: "1"
         run: dotnet run --project tools/Picer.ServiceProbe/Picer.ServiceProbe.csproj -c Release -- src/Picer.App/bin/Debug/net8.0-windows
 
       - name: Unit and integration tests
