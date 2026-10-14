@@ -11,6 +11,11 @@ on:
         description: SHA-256 of the runtime overlay asset in that draft
         required: true
         type: string
+      overlaySourceTag:
+        description: Existing release tag containing identical verified runtime assets
+        required: true
+        default: v1.5.1
+        type: string
 
 permissions:
   contents: write
@@ -28,6 +33,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       RELEASE_TAG: ${{ inputs.version }}
       OVERLAY_SHA256: ${{ inputs.overlaySha256 }}
+      OVERLAY_SOURCE_TAG: ${{ inputs.overlaySourceTag }}
       DOTNET_CLI_TELEMETRY_OPTOUT: 1
       DOTNET_NOLOGO: 1
     steps:
@@ -36,6 +42,7 @@ jobs:
         run: |
           if ($env:RELEASE_TAG -notmatch '^v\d+\.\d+\.\d+([-.][0-9A-Za-z.-]+)?$') { throw 'Invalid release tag' }
           if ($env:OVERLAY_SHA256 -notmatch '^[0-9a-fA-F]{64}$') { throw 'Invalid overlay SHA-256' }
+          if ($env:OVERLAY_SOURCE_TAG -notmatch '^v\d+\.\d+\.\d+([-.][0-9A-Za-z.-]+)?$') { throw 'Invalid overlay source tag' }
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.version }}
@@ -71,8 +78,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Base runtime download failed' }
           $base = Join-Path $downloads 'Picer-runtime-win-x64.zip'
           if ((Get-Item -LiteralPath $base).Length -ne 508299995 -or (Get-FileHash -LiteralPath $base -Algorithm SHA256).Hash -ne '2f68ce7a731fa1950ead73eb172ee5e3931d670552d7fc1d524540ec8a65f8f7') { throw 'Base runtime integrity failed' }
-          $overlayName = "Picer-runtime-$env:RELEASE_TAG-overlay.zip"
-          gh release download $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --pattern $overlayName --dir $downloads
+          $overlayName = "Picer-runtime-$env:OVERLAY_SOURCE_TAG-overlay.zip"
+          gh release download $env:OVERLAY_SOURCE_TAG --repo $env:GITHUB_REPOSITORY --pattern $overlayName --dir $downloads
           if ($LASTEXITCODE -ne 0) { throw 'Overlay download failed' }
           $overlay = Join-Path $downloads $overlayName
           if ((Get-FileHash -LiteralPath $overlay -Algorithm SHA256).Hash -ne $env:OVERLAY_SHA256) { throw 'Overlay integrity failed' }
