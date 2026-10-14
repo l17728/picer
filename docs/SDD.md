@@ -169,3 +169,9 @@ GUI 安装器不为同包代理注册登录自启，默认代理配置为禁用�
 生产 IndexService 已于 2026-10-14 切换到账号门户模式，公网注册开放，Let's Encrypt 证书由 Certbot deploy hook 更新。旧数据库已迁入 `legacy-owner` 空间并保留迁移备份。公网健康、身份发现及注册页已通过验证；真实注册、第二设备配对、媒体访问和 CI 账号凭据切换仍是剩余的全链路验收门槛。当前实现边界及运维步骤见[账号切换执行记录](INCIDENT_ANALYSIS_AND_ACCOUNT_CUTOVER_2026-10-14.md)、[账户系统实施记录](ACCOUNT_SPACE_DEVICE_AUTH_IMPLEMENTATION_2026-10-13.md)和[v1.5.1 部署记录](DEPLOYMENT_V1_5_1_2026-10-14.md)。
 
 目录描述失败按阶段归类并写入脱敏的结构化日志：运行/尝试关联 ID、媒体记录 ID、阶段、稳定错误码、重试性、耗时和内层异常类型；不得记录原路径、图片内容、提示词、异常原文或凭据。旧日志不具备该字段时只能说明失败规模，不能反推具体根因。
+
+## 2026-10-14 账号媒体验收状态更新
+
+本节更新并取代本文件前文关于“CI 账号模式切换、真实设备配对和媒体读取仍未完成”的状态描述。CI 使用生产账号完成设备登录、配对、媒体授权和撤销；严格真实服务探测强制校验照片/视频缩略图解码及视频首尾 Range 读取，并明确报告 `photoThumbnailDecoded=true`、`videoThumbnailDecoded=true`、`mediaRangesVerified=true`。生产 IndexService 已部署账号空间媒体代理修复。CI `38590850055` 的严格公网探测、构建、单元/集成测试和桌面 E2E 全部通过。公网真实的新账号注册没有在生产环境另建测试账号，注册表单及授权文件流程由隔离 HTTPS E2E 覆盖。
+
+2026-10-14 还修复了生产健康检查的 Host/Origin 不匹配问题，避免 systemd 定时探测误判并周期性重启服务。详情见[账号空间媒体链路与健康检查修复](ACCOUNT_SERVICE_MEDIA_ACCEPTANCE_2026-10-14.md)。
