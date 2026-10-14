@@ -29,6 +29,7 @@ $publishDir = Join-Path $OutputRoot "$deploymentId\publish"
 $packagePath = Join-Path $OutputRoot "picer-index-$deploymentId.zip"
 $remoteScript = Join-Path $PSScriptRoot 'deploy-indexservice-linux.sh'
 $remoteArchive = "/tmp/picer-index-$deploymentId.zip"
+$remoteParts = "/tmp/picer-index-$deploymentId.parts"
 $remoteScriptPath = "/tmp/picer-index-$deploymentId.sh"
 
 if (-not (Test-Path -LiteralPath $remoteScript -PathType Leaf)) { throw "Remote deployment script missing: $remoteScript" }
@@ -86,7 +87,25 @@ $remoteCommand = "PICER_DEPLOY_WRITER_UNITS='$writerUnits' bash $remoteScriptPat
 Write-Host "Uploading package and rollback-aware installer to $target..."
 $scpArgs = @('-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=yes')
 if ($IdentityFile) { $scpArgs += @('-i', (Resolve-Path -LiteralPath $IdentityFile).Path) }
-Invoke-Native $scp ($scpArgs + @($packagePath, "${target}:$remoteArchive"))
+Invoke-Native $ssh ($sshArgs + @($target, "mkdir -m 700 '$remoteParts'"))
+$chunkRoot = Join-Path $OutputRoot "$deploymentId\chunks"
+New-Item -ItemType Directory -Path $chunkRoot -Force | Out-Null
+$chunkSize = 4MB
+$buffer = New-Object byte[] $chunkSize
+$inputStream = [System.IO.File]::OpenRead($packagePath)
+try {
+    $chunkIndex = 0
+    while (($read = $inputStream.Read($buffer, 0, $buffer.Length)) -gt 0) {
+        $partPath = Join-Path $chunkRoot ('part-{0:D4}' -f $chunkIndex)
+        $partStream = [System.IO.File]::Open($partPath, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
+        try { $partStream.Write($buffer, 0, $read) } finally { $partStream.Dispose() }
+        Invoke-Native $scp ($scpArgs + @($partPath, "${target}:$remoteParts/$(Split-Path -Leaf $partPath)"))
+        $chunkIndex++
+        Write-Host "Uploaded package chunk $chunkIndex"
+    }
+} finally { $inputStream.Dispose() }
+$assemble = "set -eu; cat '$remoteParts'/part-* > '$remoteArchive'; printf '%s  %s\n' '$archiveHash' '$remoteArchive' | sha256sum --check -; rm -f '$remoteParts'/part-*; rmdir '$remoteParts'"
+Invoke-Native $ssh ($sshArgs + @($target, "bash -c '$assemble'"))
 Invoke-Native $scp ($scpArgs + @($remoteScript, "${target}:$remoteScriptPath"))
 
 Write-Host 'Running remote atomic upgrade and waiting for health/version verification...'
