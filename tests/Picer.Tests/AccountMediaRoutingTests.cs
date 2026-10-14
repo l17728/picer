@@ -58,6 +58,7 @@ public sealed class AccountMediaRoutingTests
             }
             var mediaRoot = Path.Combine(root, "media"); Directory.CreateDirectory(mediaRoot);
             var path = Path.Combine(mediaRoot, "photo.jpg");
+            using var mediaLeases = new MediaReadLeasePool();
             var bytes = RandomNumberGenerator.GetBytes(4096); await File.WriteAllBytesAsync(path, bytes, deadline.Token);
             SpacePublisher publisher; long imageId;
             using (var database = new PicerDatabase(Path.Combine(instance.Accounts.SpaceRoot(space.Id), "picer.db")))
@@ -83,6 +84,22 @@ public sealed class AccountMediaRoutingTests
             {
                 Assert.Equal(HttpStatusCode.OK, head.StatusCode);
                 Assert.Contains("1", head.Headers.GetValues("X-Picer-Media-Streaming"));
+                var etag = head.Headers.ETag ?? throw new InvalidDataException("The source response omitted its entity tag.");
+                var rangeServing = ServeOneAsync();
+                using var request = new HttpRequestMessage(HttpMethod.Get, $"api/gateway/v1/assets/images/{imageId}");
+                request.Headers.Range = new System.Net.Http.Headers.RangeHeaderValue(0, 63);
+                request.Headers.IfMatch.Add(etag);
+                using var range = await gui.SpaceClient.SendAsync(request, deadline.Token);
+                Assert.Equal(HttpStatusCode.PartialContent, range.StatusCode);
+                Assert.Equal(0L, range.Content.Headers.ContentRange?.From);
+                Assert.Equal(63L, range.Content.Headers.ContentRange?.To);
+                Assert.Equal(bytes.AsSpan(0, 64).ToArray(), await range.Content.ReadAsByteArrayAsync(deadline.Token));
+                await rangeServing;
+                using var released = await gui.SpaceClient.PostAsJsonAsync("api/gateway/v1/media-lease",
+                    new MediaLeaseRequest(etag.ToString(), true), deadline.Token);
+                Assert.Equal(HttpStatusCode.NoContent, released.StatusCode);
+                var releaseNotice = await MediaWire.ReceiveJsonAsync<JsonElement>(secondSocket, deadline.Token);
+                Assert.Equal("media.release", releaseNotice.GetProperty("type").GetString());
             }
             await headServing;
             var serving = ServeOneAsync();
@@ -99,11 +116,15 @@ public sealed class AccountMediaRoutingTests
             {
                 JsonElement command;
                 do { command = await MediaWire.ReceiveJsonAsync<JsonElement>(firstSocket, deadline.Token); }
-                while (command.GetProperty("type").GetString() == "agent.config");
+                while (command.GetProperty("type").GetString() is "agent.config" or "media.release" or "media.keepalive");
                 Assert.Equal("media.open", command.GetProperty("type").GetString());
                 Assert.Equal(path, command.GetProperty("path").GetString());
+                var expectedETag = command.TryGetProperty("expectedETag", out var expected) && expected.ValueKind == JsonValueKind.String
+                    ? expected.GetString() : null;
+                var keepLease = command.TryGetProperty("keepLease", out var keep) && keep.GetBoolean();
                 using var media = await first.ConnectWebSocketAsync("api/agent/v1/media/" + command.GetProperty("requestId").GetString(), deadline.Token);
-                try { await MediaFileSession.ServeAsync(media, path, [mediaRoot], 0, "image/jpeg", new MediaPreviewCache(), _ => { }, deadline.Token); }
+                try { await MediaFileSession.ServeAsync(media, path, [mediaRoot], 0, "image/jpeg", new MediaPreviewCache(), _ => { }, deadline.Token,
+                    mediaLeases, expectedETag, keepLease); }
                 catch (Exception exception) when (exception is WebSocketException or IOException) { }
             }
 

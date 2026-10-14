@@ -155,7 +155,7 @@ public static class AccountServiceHost
                     request.Content = new StreamContent(context.Request.Body);
                     if (context.Request.ContentType is { } contentType) request.Content.Headers.TryAddWithoutValidation("Content-Type", contentType);
                 }
-                foreach (var name in new[] { "Range", "If-Range", "If-None-Match", "If-Modified-Since", "Accept" })
+                foreach (var name in new[] { "Range", "If-Range", "If-Match", "If-None-Match", "If-Modified-Since", "Accept" })
                     if (context.Request.Headers.TryGetValue(name, out var value)) request.Headers.TryAddWithoutValidation(name, value.ToArray());
                 using var response = await lease.Runtime.Client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellation.Token);
                 context.Response.StatusCode = (int)response.StatusCode;
@@ -196,6 +196,7 @@ public static class SpaceRoutePermissions
             return "source.serve";
         if (method == "GET" && path == "/health") return "index.read";
         if (method == "GET" && path == "/api/sync/v1/metadata-edits") return "index.read";
+        if (method == "POST" && path == "/api/gateway/v1/media-lease") return "media.read";
         var mediaParts = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
         if (method is "GET" or "HEAD" && mediaParts.Length == 6 && mediaParts[0] == "api" && mediaParts[1] == "gateway" &&
             mediaParts[2] == "v1" && mediaParts[3] == "assets" && mediaParts[4] is "images" or "videos" &&
