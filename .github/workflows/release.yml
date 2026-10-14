@@ -79,8 +79,9 @@ jobs:
         shell: pwsh
         env:
           PICER_LIVE_SERVICE_URL: ${{ secrets.PICER_LIVE_SERVICE_URL }}
-          PICER_LIVE_SERVICE_TOKEN: ${{ secrets.PICER_LIVE_SERVICE_TOKEN }}
           PICER_LIVE_SERVICE_SPKI_PIN: ${{ secrets.PICER_LIVE_SERVICE_SPKI_PIN }}
+          PICER_LIVE_SERVICE_ACCOUNT: ${{ secrets.PICER_LIVE_SERVICE_ACCOUNT }}
+          PICER_LIVE_SERVICE_PASSWORD: ${{ secrets.PICER_LIVE_SERVICE_PASSWORD }}
         run: ./tools/verify-user-installers.ps1 -Version $env:RELEASE_TAG -AssetDirectory "$env:RUNNER_TEMP/release-assets" -TestRoot "$env:RUNNER_TEMP/installer-validation" -VerifyLiveService
       - name: Upload installer validation evidence
         if: always()
