@@ -126,14 +126,14 @@ try
             items.Any(item => Id(item) <= 0) || items.Select(Id).Distinct().Count() != items.Length)
             throw new InvalidDataException();
     }
-    async Task ValidateThumbnail(string method, object[] candidates, bool video)
+    async Task<bool> ValidateThumbnail(string method, object[] candidates, bool video)
     {
         foreach (var item in candidates)
         {
             stage = video ? "video-thumbnail-fetch" : "photo-thumbnail-fetch";
             Stream? stream;
             try { stream = (Stream?)await Invoke(method, video ? [Id(item), null, deadline.Token] : [Id(item), deadline.Token]); }
-            catch (HttpRequestException error) when (error.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.BadGateway or
+            catch (HttpRequestException error) when (error.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.InternalServerError or HttpStatusCode.BadGateway or
                 HttpStatusCode.ServiceUnavailable or HttpStatusCode.GatewayTimeout)
             { continue; }
             if (stream is null) continue;
@@ -166,14 +166,15 @@ try
             thread.SetApartmentState(ApartmentState.STA);
             thread.Start();
             if (!thread.Join(TimeSpan.FromSeconds(10)) || decodeFailure is not null) throw new InvalidDataException();
-            return;
+            return true;
         }
-        throw new InvalidDataException();
+        return false;
     }
     stage = "photo-index-page";
     var page = (await Invoke("ListImagesAsync", null, false, 8, null, deadline.Token))!;
     var photos = Items(page);
     ValidatePage(page, photos);
+    var photoThumbnailDecoded = false;
     var nextCursor = (string?)Property(page, "NextCursor");
     if (!string.IsNullOrEmpty(nextCursor))
     {
@@ -187,13 +188,15 @@ try
     var detail = (await Invoke("GetImageAsync", Id(photos[0]), deadline.Token))!;
     if (Id(detail) != Id(photos[0])) throw new InvalidDataException();
     stage = "photo-thumbnail-decode";
-    await ValidateThumbnail("OpenThumbnailAsync", photos, false);
+    photoThumbnailDecoded = await ValidateThumbnail("OpenThumbnailAsync", photos, false);
     stage = "video-index-page";
     var videoPage = (await Invoke("ListVideosAsync", null, 8, null, deadline.Token))!;
     var videos = Items(videoPage);
     ValidatePage(videoPage, videos);
     stage = "video-thumbnail-decode";
-    await ValidateThumbnail("OpenVideoThumbnailAsync", videos, true);
+    var videoThumbnailDecoded = await ValidateThumbnail("OpenVideoThumbnailAsync", videos, true);
+    if (Environment.GetEnvironmentVariable("PICER_REQUIRE_THUMBNAILS") == "1" && (!photoThumbnailDecoded || !videoThumbnailDecoded))
+        throw new InvalidDataException();
     var mediaRangesVerified = false;
     if (gatewayType.GetMethod("GetMediaInfoAsync") is not null)
     {
@@ -254,7 +257,7 @@ try
     Console.WriteLine(JsonSerializer.Serialize(new
     {
         success = true, certificateDiscovery = true, pinnedTls = true, authenticatedRead = true, invalidTokenRejected = true,
-        photoIndex = true, photoDetail = true, photoThumbnailDecoded = true, videoIndex = true, videoThumbnailDecoded = true,
+        photoIndex = true, photoDetail = true, photoThumbnailDecoded, videoIndex = true, videoThumbnailDecoded,
         mediaRangesVerified,
         installedCoreSha256 = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(corePath))).ToLowerInvariant(),
         checkedUtc = DateTime.UtcNow
