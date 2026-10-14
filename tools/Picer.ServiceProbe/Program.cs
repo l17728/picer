@@ -131,7 +131,11 @@ try
         foreach (var item in candidates)
         {
             stage = video ? "video-thumbnail-fetch" : "photo-thumbnail-fetch";
-            using var stream = (Stream?)await Invoke(method, video ? [Id(item), null, deadline.Token] : [Id(item), deadline.Token]);
+            Stream? stream;
+            try { stream = (Stream?)await Invoke(method, video ? [Id(item), null, deadline.Token] : [Id(item), deadline.Token]); }
+            catch (HttpRequestException error) when (error.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.BadGateway or
+                HttpStatusCode.ServiceUnavailable or HttpStatusCode.GatewayTimeout)
+            { continue; }
             if (stream is null) continue;
             stage = video ? "video-thumbnail-read" : "photo-thumbnail-read";
             using var bytes = new MemoryStream();

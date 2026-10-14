@@ -743,14 +743,37 @@ async function load(){const [c,g]=await Promise.all([fetch('/api/service/v1/capa
                 return crop is null ? Results.NotFound() : Results.Stream(crop, "image/jpeg");
             }
         });
-        app.MapGet("/api/gateway/v1/video-thumbs/{id:long}", async (long id, string? agentId, CancellationToken cancellationToken) =>
+        app.MapGet("/api/gateway/v1/video-thumbs/{id:long}", async (long id, string? agentId, HttpContext context, CancellationToken cancellationToken) =>
         {
             var path = handlers.GetFirstVideoKeyframePath(id);
-            Stream? stream = !string.IsNullOrWhiteSpace(path) && File.Exists(path) ? File.OpenRead(path) : null;
+            Stream? stream = null;
+            if (!string.IsNullOrWhiteSpace(path) && File.Exists(path))
+            {
+                try { stream = File.OpenRead(path); }
+                catch (Exception exception) when (exception is IOException or UnauthorizedAccessException) { }
+            }
             if (stream is null && !string.IsNullOrWhiteSpace(path))
             {
-                var bytes = await mediaPreviews.GetAsync($"video:{agentId}:{path}", token => MediaAssetResults.PreviewAsync(agents, agentId, IndexApiHandlers.NormalizeAgentPath(path), 256, token), cancellationToken);
-                stream = new MemoryStream(bytes, writable: false);
+                try
+                {
+                    var bytes = await mediaPreviews.GetAsync($"video:{agentId}:{path}", token => MediaAssetResults.PreviewAsync(agents, agentId, IndexApiHandlers.NormalizeAgentPath(path), 256, token), cancellationToken);
+                    stream = new MemoryStream(bytes, writable: false);
+                }
+                catch (MediaChannelBusyException)
+                {
+                    context.Response.Headers.RetryAfter = "2";
+                    return Results.Json(new { error = "video_thumbnail_busy" }, statusCode: StatusCodes.Status503ServiceUnavailable);
+                }
+                catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+                {
+                    context.Response.Headers.RetryAfter = "5";
+                    return Results.Json(new { error = "video_thumbnail_timeout" }, statusCode: StatusCodes.Status503ServiceUnavailable);
+                }
+                catch (Exception exception) when (exception is IOException or WebSocketException or TimeoutException or InvalidOperationException or UnauthorizedAccessException)
+                {
+                    AppLogger.Warn($"Video thumbnail unavailable; errorType={exception.GetType().Name}");
+                    return Results.Json(new { error = "video_thumbnail_unavailable" }, statusCode: StatusCodes.Status503ServiceUnavailable);
+                }
             }
             return stream is null ? Results.NotFound() : Results.Stream(stream, "image/jpeg");
         });
