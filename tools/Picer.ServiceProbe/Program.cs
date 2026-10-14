@@ -1,12 +1,16 @@
 using System.Net;
 using System.Net.Http;
+using System.Net.Http.Json;
 using System.IO;
 using System.Reflection;
 using System.Runtime.Loader;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Collections;
+using System.Text.RegularExpressions;
 using System.Windows.Media.Imaging;
+using Picer.Core.Gateway;
+using Picer.Core.Identity;
 
 // Load the gateway from the installed payload, not a source project reference.
 // Credentials enter only through the environment and are never printed.
@@ -17,10 +21,14 @@ try
     var root = Path.GetFullPath(args[0]);
     var url = Environment.GetEnvironmentVariable("PICER_LIVE_SERVICE_URL") ?? "";
     var token = Environment.GetEnvironmentVariable("PICER_LIVE_SERVICE_TOKEN") ?? "";
+    var accountLogin = Environment.GetEnvironmentVariable("PICER_LIVE_SERVICE_ACCOUNT") ?? "";
+    var accountPassword = Environment.GetEnvironmentVariable("PICER_LIVE_SERVICE_PASSWORD") ?? "";
     var pin = Convert.FromBase64String(Environment.GetEnvironmentVariable("PICER_LIVE_SERVICE_SPKI_PIN") ?? "");
     if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) || uri.Scheme != "https" ||
         uri.UserInfo.Length != 0 || uri.AbsolutePath != "/" || uri.Query.Length != 0 ||
-        uri.Fragment.Length != 0 || string.IsNullOrWhiteSpace(token) || pin.Length == 0)
+        uri.Fragment.Length != 0 || pin.Length == 0 ||
+        (string.IsNullOrWhiteSpace(token) == string.IsNullOrWhiteSpace(accountLogin)) ||
+        (string.IsNullOrWhiteSpace(accountLogin) != string.IsNullOrWhiteSpace(accountPassword)))
         throw new ArgumentException();
     var corePath = Path.Combine(root, "Picer.Core.dll");
     var context = new AssemblyLoadContext("InstalledGateway", isCollectible: true);
@@ -40,7 +48,63 @@ try
     handler.ServerCertificateCustomValidationCallback = (_, certificate, _, _) => certificate is not null &&
         CryptographicOperations.FixedTimeEquals(certificate.PublicKey.ExportSubjectPublicKeyInfo(), pin);
     using var client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(130) };
-    using var gateway = (IDisposable)Activator.CreateInstance(gatewayType, url, token, pin, client)!;
+    DeviceAccountClient? accountClient = null;
+    ECDsa? accountKey = null;
+    HttpClient? accountPortal = null;
+    IDisposable gateway;
+    if (!string.IsNullOrWhiteSpace(accountLogin))
+    {
+        stage = "account-device-pairing";
+        var cookieJar = new CookieContainer();
+        var portalHandler = new HttpClientHandler { AllowAutoRedirect = false, CookieContainer = cookieJar };
+        portalHandler.ServerCertificateCustomValidationCallback = (_, certificate, _, _) => certificate is not null &&
+            CryptographicOperations.FixedTimeEquals(certificate.PublicKey.ExportSubjectPublicKeyInfo(), pin);
+        accountPortal = new HttpClient(portalHandler) { BaseAddress = uri, Timeout = TimeSpan.FromSeconds(30) };
+        var portal = accountPortal;
+        using var discoveryResponse = await portal.GetAsync("identity/service", deadline.Token);
+        discoveryResponse.EnsureSuccessStatusCode();
+        var serviceDiscovery = await discoveryResponse.Content.ReadFromJsonAsync<ServiceDiscovery>(DeviceAuthorization.Json, deadline.Token)
+            ?? throw new InvalidDataException();
+        if (serviceDiscovery.Origin != url || serviceDiscovery.SpkiPin != Convert.ToBase64String(pin)) throw new InvalidDataException();
+        accountKey = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        var connection = new DeviceConnection(url, serviceDiscovery.ServiceId, serviceDiscovery.SpkiPin, serviceDiscovery.SigningKey,
+            "picer-live-ci", Guid.NewGuid().ToString("N"), "Picer GitHub CI probe", "gui");
+        accountClient = new DeviceAccountClient(connection, accountKey, _ => { }, handler);
+        var enrollment = await accountClient.BeginEnrollmentAsync(deadline.Token);
+        if (enrollment.ApprovalUrl != url + "/account/approve?request=" + connection.RequestId) throw new InvalidDataException();
+
+        async Task<(string Token, string Html)> ReadForm(string path)
+        {
+            using var response = await portal.GetAsync(path, deadline.Token);
+            response.EnsureSuccessStatusCode();
+            var html = await response.Content.ReadAsStringAsync(deadline.Token);
+            var match = Regex.Match(html, "<input[^>]*name=['\"](?<name>[^'\"]+)['\"][^>]*value=['\"](?<value>[^'\"]+)['\"][^>]*>", RegexOptions.IgnoreCase);
+            if (!match.Success) throw new InvalidDataException();
+            return (System.Net.WebUtility.HtmlDecode(match.Groups["value"].Value), html);
+        }
+        var (loginToken, _) = await ReadForm("account/login?request=" + connection.RequestId);
+        using (var login = await portal.PostAsync("account/login", new FormUrlEncodedContent(new Dictionary<string, string>
+        { ["__RequestVerificationToken"] = loginToken, ["request"] = connection.RequestId, ["login"] = accountLogin, ["password"] = accountPassword }), deadline.Token))
+            if ((int)login.StatusCode is < 300 or >= 400) throw new InvalidDataException();
+
+        var approvalPath = "account/approve?request=" + connection.RequestId;
+        var (approvalToken, approvalHtml) = await ReadForm(approvalPath);
+        var spaceMatch = Regex.Match(approvalHtml, "<option value=['\"](?<space>[0-9a-f]{32})['\"]>", RegexOptions.IgnoreCase);
+        if (!spaceMatch.Success) throw new InvalidDataException();
+        using var approved = await portal.PostAsync("account/approve", new FormUrlEncodedContent(new Dictionary<string, string>
+        {
+            ["__RequestVerificationToken"] = approvalToken, ["request"] = connection.RequestId,
+            ["space"] = spaceMatch.Groups["space"].Value
+        }), deadline.Token);
+        approved.EnsureSuccessStatusCode();
+        await accountClient.ImportAsync(await approved.Content.ReadAsByteArrayAsync(deadline.Token), deadline.Token);
+        gateway = (IDisposable)Activator.CreateInstance(gatewayType, accountClient.CreateSpaceClient(), true)!;
+    }
+    else gateway = (IDisposable)Activator.CreateInstance(gatewayType, url, token, pin, client)!;
+    using var gatewayLifetime = gateway;
+    using var accountLifetime = accountClient;
+    using var accountKeyLifetime = accountKey;
+    using var accountPortalLifetime = accountPortal;
 
     async Task<object?> Invoke(string method, params object?[] parameters)
     {
@@ -159,8 +223,27 @@ try
     }
     if (Environment.GetEnvironmentVariable("PICER_REQUIRE_STREAMING") == "1" && !mediaRangesVerified)
         throw new InvalidDataException();
+    if (accountPortal is not null && accountClient?.Connection.Session is { } session)
+    {
+        stage = "account-probe-device-revocation";
+        using var accountPage = await accountPortal.GetAsync("account", deadline.Token);
+        accountPage.EnsureSuccessStatusCode();
+        var accountHtml = await accountPage.Content.ReadAsStringAsync(deadline.Token);
+        var article = Regex.Matches(accountHtml, "<article>(?<body>.*?)</article>", RegexOptions.IgnoreCase | RegexOptions.Singleline)
+            .Cast<Match>().FirstOrDefault(match => match.Groups["body"].Value.Contains("Picer GitHub CI probe", StringComparison.Ordinal));
+        if (article is null) throw new InvalidDataException();
+        var grant = Regex.Match(article.Groups["body"].Value, "name=['\"]grant['\"] value=['\"](?<id>[0-9a-f]{32})['\"]", RegexOptions.IgnoreCase);
+        var csrf = Regex.Match(accountHtml, "name=['\"]__RequestVerificationToken['\"] value=['\"](?<value>[^'\"]+)['\"]", RegexOptions.IgnoreCase);
+        if (!grant.Success || !csrf.Success || grant.Groups["id"].Value != session.GrantId) throw new InvalidDataException();
+        using var revoked = await accountPortal.PostAsync("account/revoke", new FormUrlEncodedContent(new Dictionary<string, string>
+        { ["__RequestVerificationToken"] = System.Net.WebUtility.HtmlDecode(csrf.Groups["value"].Value), ["grant"] = session.GrantId }), deadline.Token);
+        if ((int)revoked.StatusCode is < 300 or >= 400) throw new InvalidDataException();
+    }
     stage = "invalid-token-rejected";
-    using var rejectedRequest = new HttpRequestMessage(HttpMethod.Get, new Uri(uri, "api/gateway/v1/images?pageSize=1"));
+    var rejectedAddress = accountClient?.Connection.Session is { } currentSession
+        ? new Uri(DeviceAuthorization.SpaceAddress(url, currentSession.SpaceId) + "/api/gateway/v1/images?pageSize=1")
+        : new Uri(uri, "api/gateway/v1/images?pageSize=1");
+    using var rejectedRequest = new HttpRequestMessage(HttpMethod.Get, rejectedAddress);
     rejectedRequest.Headers.Authorization = new("Bearer", "invalid-probe-" + Guid.NewGuid().ToString("N"));
     using var rejectedResponse = await client.SendAsync(rejectedRequest, deadline.Token);
     if (rejectedResponse.StatusCode != HttpStatusCode.Unauthorized) throw new InvalidOperationException();

@@ -8,4 +8,7 @@
     <PlatformTarget>x64</PlatformTarget>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
   </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Picer.Core\Picer.Core.csproj" />
+  </ItemGroup>
 </Project>

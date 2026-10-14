@@ -42,6 +42,8 @@ jobs:
           PICER_LIVE_SERVICE_URL: ${{ secrets.PICER_LIVE_SERVICE_URL }}
           PICER_LIVE_SERVICE_TOKEN: ${{ secrets.PICER_LIVE_SERVICE_TOKEN }}
           PICER_LIVE_SERVICE_SPKI_PIN: ${{ secrets.PICER_LIVE_SERVICE_SPKI_PIN }}
+          PICER_LIVE_SERVICE_ACCOUNT: ${{ secrets.PICER_LIVE_SERVICE_ACCOUNT }}
+          PICER_LIVE_SERVICE_PASSWORD: ${{ secrets.PICER_LIVE_SERVICE_PASSWORD }}
         run: dotnet run --project tools/Picer.ServiceProbe/Picer.ServiceProbe.csproj -c Release -- src/Picer.App/bin/Debug/net8.0-windows
 
       - name: Unit and integration tests
