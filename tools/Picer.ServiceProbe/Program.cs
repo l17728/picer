@@ -100,7 +100,8 @@ try
         using var approved = await portal.PostAsync("account/approve", new FormUrlEncodedContent(new Dictionary<string, string>
         {
             ["__RequestVerificationToken"] = approvalToken, ["request"] = connection.RequestId,
-            ["space"] = spaceMatch.Groups["space"].Value
+            ["space"] = spaceMatch.Groups["space"].Value,
+            ["media"] = "yes"
         }), deadline.Token);
         approved.EnsureSuccessStatusCode();
         stage = "account-credential-import";
@@ -205,15 +206,52 @@ try
     if (Environment.GetEnvironmentVariable("PICER_REQUIRE_THUMBNAILS") == "1" && (!photoThumbnailDecoded || !videoThumbnailDecoded))
         throw new InvalidDataException();
     var mediaRangesVerified = false;
+    var videoMetadataResponses = 0;
+    var videoStreamingCandidates = 0;
+    var videoMetadataUnavailable = 0;
     if (gatewayType.GetMethod("GetMediaInfoAsync") is not null)
     {
-        foreach (var video in videos)
+        // The first global page may contain old/unbound source rows whose cached
+        // thumbnails still work. Probe videos grouped by source so an unrelated
+        // unbound directory cannot hide a healthy source agent later in the index.
+        var sourceIds = new List<long>();
+        if (gatewayType.GetMethod("ListSourcesAsync") is not null)
+        {
+            stage = "video-range-source-list";
+            var sources = (IEnumerable)(await Invoke("ListSourcesAsync", deadline.Token))!;
+            sourceIds.AddRange(sources.Cast<object>().Select(Id));
+        }
+        var rangeCandidates = new List<object>();
+        foreach (var sourceId in sourceIds)
+        {
+            if (rangeCandidates.Count >= 40) break;
+            stage = "video-range-source-page";
+            var sourcePage = (await Invoke("ListVideosAsync", sourceId, 8, null, deadline.Token))!;
+            rangeCandidates.AddRange(Items(sourcePage));
+        }
+        if (rangeCandidates.Count == 0) rangeCandidates.AddRange(videos);
+
+        foreach (var video in rangeCandidates.DistinctBy(Id))
         {
             stage = "video-range-metadata";
             object info;
             try { info = (await Invoke("GetMediaInfoAsync", Id(video), true, deadline.Token))!; }
-            catch (HttpRequestException) { continue; }
-            if (!(bool)Property(info, "SupportsStreaming")!) break;
+            catch (HttpRequestException error)
+            {
+                if (error.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
+                {
+                    Console.Error.WriteLine("Video range metadata authorization failed; HTTP status=" + (int)error.StatusCode.Value);
+                    throw;
+                }
+                videoMetadataUnavailable++;
+                continue;
+            }
+            videoMetadataResponses++;
+            if (!(bool)Property(info, "SupportsStreaming")!)
+            {
+                continue;
+            }
+            videoStreamingCandidates++;
             var length = Convert.ToInt64(Property(info, "Length"));
             try
             {
@@ -236,19 +274,24 @@ try
         }
     }
     if (Environment.GetEnvironmentVariable("PICER_REQUIRE_STREAMING") == "1" && !mediaRangesVerified)
+    {
+        Console.Error.WriteLine($"No video range completed; metadataResponses={videoMetadataResponses}; streamingCandidates={videoStreamingCandidates}; unavailable={videoMetadataUnavailable}.");
         throw new InvalidDataException();
+    }
     if (accountPortal is not null && accountClient?.Connection.Session is { } session)
     {
-        stage = "account-probe-device-revocation";
+        stage = "account-probe-device-list";
         using var accountPage = await accountPortal.GetAsync("account", deadline.Token);
         accountPage.EnsureSuccessStatusCode();
         var accountHtml = await accountPage.Content.ReadAsStringAsync(deadline.Token);
-        var article = Regex.Matches(accountHtml, "<article>(?<body>.*?)</article>", RegexOptions.IgnoreCase | RegexOptions.Singleline)
-            .Cast<Match>().FirstOrDefault(match => match.Groups["body"].Value.Contains("Picer GitHub CI probe", StringComparison.Ordinal));
-        if (article is null) throw new InvalidDataException();
-        var grant = Regex.Match(article.Groups["body"].Value, "name=['\"]grant['\"] value=['\"](?<id>[0-9a-f]{32})['\"]", RegexOptions.IgnoreCase);
+        var grantId = session.GrantId;
+        var grant = Regex.Matches(accountHtml, "<article>(?<body>.*?)</article>", RegexOptions.IgnoreCase | RegexOptions.Singleline)
+            .Cast<Match>().Select(match => Regex.Match(match.Groups["body"].Value,
+                "name=['\"]?grant['\"]?\\s+value=['\"](?<id>[0-9a-f]{32})['\"]", RegexOptions.IgnoreCase))
+            .FirstOrDefault(match => match.Success && match.Groups["id"].Value == grantId);
         var csrf = Regex.Match(accountHtml, "name=['\"]__RequestVerificationToken['\"] value=['\"](?<value>[^'\"]+)['\"]", RegexOptions.IgnoreCase);
-        if (!grant.Success || !csrf.Success || grant.Groups["id"].Value != session.GrantId) throw new InvalidDataException();
+        if (grant is null || !csrf.Success) throw new InvalidDataException();
+        stage = "account-probe-device-revocation";
         using var revoked = await accountPortal.PostAsync("account/revoke", new FormUrlEncodedContent(new Dictionary<string, string>
         { ["__RequestVerificationToken"] = System.Net.WebUtility.HtmlDecode(csrf.Groups["value"].Value), ["grant"] = session.GrantId }), deadline.Token);
         if ((int)revoked.StatusCode is < 300 or >= 400) throw new InvalidDataException();
