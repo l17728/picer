@@ -1,10 +1,10 @@
 # 当前能力与验证状态
 
-状态更新（2026-10-14）：账号、空间与设备授权客户端流程已随 v1.5.1 发布；生产 IndexService 仍运行旧令牌兼容模式，尚未启用网页登录/多租户开户。上线切换门槛和当前部署状态见[部署记录](DEPLOYMENT_V1_5_1_2026-10-14.md)及[账号系统实施记录](ACCOUNT_SPACE_DEVICE_AUTH_IMPLEMENTATION_2026-10-13.md)。
+状态更新（2026-10-15）：生产 IndexService 已切换到账号门户/多租户模式，旧索引已迁入 `legacy-owner` 空间；CI 已切换到真实账号登录，并通过公网设备配对、批准、媒体读取和撤销验收。v1.5.2 已发布。首次注册表单由隔离 HTTPS E2E 验证，尚未在生产创建一次性注册账号。详见[部署记录](DEPLOYMENT_V1_5_1_2026-10-14.md)、[媒体验收记录](ACCOUNT_SERVICE_MEDIA_ACCEPTANCE_2026-10-14.md)及[v1.5.2 发布记录](RELEASE_1_5_2_2026-10-15.md)。
 
 阶段结论（2026-10-14）：v1.5.1 已正式发布，生产 IndexService、ModelServer 和本地 GUI 已升级；schema 46 迁移已完成。下表中的旧版本验收仍保留原证据身份；四项暂停的质量/硬件验收仍不计作已通过。
 
-最新正式版为 [v1.5.1](https://github.com/l17728/picer/releases/tag/v1.5.1)，schema 46。CI 715/715 单元及 94/94 桌面测试、离线视频解码/跳转和各组件安装包验证通过；部署证据见[部署记录](DEPLOYMENT_V1_5_1_2026-10-14.md)。
+最新正式版为 [v1.5.2](https://github.com/l17728/picer/releases/tag/v1.5.2)，schema 46。CI 严格构建、真实服务探测、单元/集成测试和桌面 E2E 均通过；离线视频代理解码/跳转和所有发行资产验证通过。发布摘要见[v1.5.2 发布记录](RELEASE_1_5_2_2026-10-15.md)。
 
 GUI/独立 Agent 中文当前用户一键安装器已实现，包含自包含 .NET、app-local MSVC CRT，代理 tools/ffmpeg 目录同时提供 FFmpeg、FFprobe 及许可证并自动发现。纯远程 GUI 不需要 Python、CUDA 或模型 runtime，也不检查本地 runtime。首次从“文件 → 连接索引服务…”完成无凭据证书发现、指纹确认、固定公钥验证及 DPAPI 保存，无需编辑 JSON。模型端 setup-modelserver.py 默认 CPU 的实际验收已通过；GPU 和授权模型依然按服务端配置。详见[安装实现记录](INSTALLER_IMPLEMENTATION_2026-10-10.md)和[安装指南](RELEASE_GUIDE.md)。
 

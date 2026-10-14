@@ -16,7 +16,7 @@ IndexService 已切换到账号门户模式，公网注册开启，`https://124-
 
 首个迁移口令保存在运维 Windows 用户 DPAPI 保护的 `D:\PicerData\bootstrap\account-activation\legacy-owner-password.dpapi`。该文件只能由创建它的 Windows 用户解密。若遗失，可在服务停机时用 `Picer.IndexService --reset-account-password --account legacy-owner --password-stdin` 重置；该命令撤销旧会话并要求下次登录改密。密码不可放在命令行或日志中。
 
-CI 仍需完成账号模式切换：设置 `PICER_LIVE_SERVICE_ACCOUNT`、`PICER_LIVE_SERVICE_PASSWORD`、主机名 URL 和新 SPKI pin，并删除旧 `PICER_LIVE_SERVICE_TOKEN`。随后必须确认 CI 的真实服务探测通过，并完成一个新设备配对、批准、数据读取和撤销闭环。该验收未完成前不把服务切换标记为最终验收。
+状态更新（2026-10-15）：CI 已切换到账号凭据、主机名 URL 和 SPKI pin。探测程序要求令牌模式与账号模式互斥；当前真实 CI 结果证明运行的是账号登录分支，旧令牌凭据未参与探测。CI 真实服务探测现已通过新设备注册、账户审批、媒体读取和撤销闭环，严格照片/视频媒体结果见[媒体验收记录](ACCOUNT_SERVICE_MEDIA_ACCEPTANCE_2026-10-14.md)。隔离 HTTPS E2E 覆盖注册页面流程；尚未在生产创建额外账户验证首次注册。
 
 ## 运维限制
 
