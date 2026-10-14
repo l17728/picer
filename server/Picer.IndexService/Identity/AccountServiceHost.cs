@@ -2,6 +2,7 @@ using System.Net;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using Picer.Core.Identity;
+using Picer.Core.Logging;
 
 namespace Picer.IndexService.Identity;
 
@@ -14,6 +15,7 @@ public static class AccountServiceHost
     {
         publicOrigin = DeviceAuthorization.NormalizeOrigin(publicOrigin);
         Directory.CreateDirectory(root);
+        AppLogger.Initialize(Path.Combine(root, "logs"));
         // v2 storage deliberately has a separate root: old executables cannot open it as a v1 service database.
         var accounts = new AccountStore(Path.Combine(root, "accounts-v2"));
         var guardRoot = Environment.GetEnvironmentVariable("PICER_RESTORE_GUARD_ROOT")
