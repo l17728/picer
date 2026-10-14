@@ -24,4 +24,25 @@ public sealed class AnalysisStageExceptionTests
         Assert.Equal(AnalysisStage.Save, failure.Stage); Assert.StartsWith("SQLite_19_", failure.ErrorCode);
         Assert.DoesNotContain("sensitive", failure.Message);
     }
+
+    [Fact]
+    public void SocketFailureInHttpInnerExceptionGetsStableRetryableCode()
+    {
+        var socket = new System.Net.Sockets.SocketException((int)System.Net.Sockets.SocketError.ConnectionReset);
+        var failure = AnalysisStageException.Wrap(AnalysisStage.Preprocess, new HttpRequestException("private endpoint", socket));
+
+        Assert.Equal("socket_" + (int)System.Net.Sockets.SocketError.ConnectionReset, failure.ErrorCode);
+        Assert.True(failure.Retryable);
+        Assert.DoesNotContain("private endpoint", failure.Message);
+    }
+
+    [Fact]
+    public void MissingSourceFileIsNotMarkedRetryable()
+    {
+        var failure = AnalysisStageException.Wrap(AnalysisStage.Preprocess, new FileNotFoundException("private path"));
+
+        Assert.Equal("input_file_missing", failure.ErrorCode);
+        Assert.False(failure.Retryable);
+        Assert.DoesNotContain("private path", failure.Message);
+    }
 }

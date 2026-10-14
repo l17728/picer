@@ -40,14 +40,17 @@ internal sealed class MediaDescriptionBatch(
         var serviceFailures = 0;
         var discovered = 0;
         var skipped = initialSkipped;
+        var runId = Guid.NewGuid().ToString("N");
         void Report() { lock (reportGate) progress.Report($"已发现待描述 {discovered} 项；已处理 {count}/{discovered}：成功或复用 {completed}，失败 {failed}；原有描述跳过 {skipped}（持续发现中）"); }
         async Task RunOne(Func<Task<bool>> work, string kind, long id, string path, CancellationToken workerToken)
         {
             token.ThrowIfCancellationRequested();
+            var attemptId = Guid.NewGuid().ToString("N");
+            var started = System.Diagnostics.Stopwatch.GetTimestamp();
             try
             {
                 if (await work()) { Interlocked.Increment(ref completed); Interlocked.Exchange(ref serviceFailures, 0); }
-                else { Interlocked.Increment(ref failed); failures?.Report(new(kind == "video", id, path, "分析未完成，可重试")); }
+                else { Interlocked.Increment(ref failed); failures?.Report(new(kind == "video", id, path, "analysis_not_completed")); Core.Logging.AppLogger.Warn($"Directory description item failed; runId={runId}; attemptId={attemptId}; kind={kind}; mediaId={id}; stage=Unknown; errorType=NoResult; innerTypes=none; code=analysis_not_completed; retryable=true; elapsedMs={ElapsedMilliseconds(started)}"); }
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested || workerToken.IsCancellationRequested) { throw; }
             catch (DescriptionBudgetExceededException) { throw; }
@@ -57,7 +60,7 @@ internal sealed class MediaDescriptionBatch(
                 Interlocked.Increment(ref failed);
                 var detail = exception as AnalysisStageException ?? AnalysisStageException.Wrap(AnalysisStage.Model, exception);
                 failures?.Report(new(kind == "video", id, path, detail.ErrorCode, detail.Stage, detail.Retryable));
-                Core.Logging.AppLogger.Warn($"Directory description item failed; kind={kind}; stage={detail.Stage}; errorType={exception.GetType().Name}; code={SafeCode(detail.ErrorCode)}");
+                Core.Logging.AppLogger.Warn($"Directory description item failed; runId={runId}; attemptId={attemptId}; kind={kind}; mediaId={id}; stage={detail.Stage}; errorType={SafeType(exception)}; innerTypes={SafeInnerTypes(exception)}; code={SafeCode(detail.ErrorCode)}; retryable={detail.Retryable}; elapsedMs={ElapsedMilliseconds(started)}");
                 if (detail.ErrorCode is "HTTP_401" or "HTTP_403" or "model_not_configured" ||
                     IsServiceFailure(detail.ErrorCode) && Interlocked.Increment(ref serviceFailures) >= 6)
                     throw new DescriptionServiceUnavailableException();
@@ -85,7 +88,16 @@ internal sealed class MediaDescriptionBatch(
     }
 
     private static bool IsServiceFailure(string code) => code is "HTTP_408" or "HTTP_429" or "HTTP_500" or "HTTP_502" or "HTTP_503" or "HTTP_504"
-        or "HttpRequestException" or "request_timeout" or "media_channel_busy";
+        or "HttpRequestException" or "request_timeout" or "media_channel_busy" || code.StartsWith("socket_", StringComparison.Ordinal);
+    private static long ElapsedMilliseconds(long started) => (long)System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+    private static string SafeType(Exception exception) => exception.GetType().Name is { Length: <= 64 } name && name.All(char.IsAsciiLetterOrDigit) ? name : "Exception";
+    private static string SafeInnerTypes(Exception exception)
+    {
+        var types = new List<string>();
+        for (var inner = exception.InnerException; inner is not null && types.Count < 4; inner = inner.InnerException)
+            types.Add(SafeType(inner));
+        return types.Count == 0 ? "none" : string.Join(',', types);
+    }
     private static string SafeCode(string code) => code.Length <= 64 && code.All(character => char.IsAsciiLetterOrDigit(character) || character == '_') ? code : "analysis_failed";
 
     internal sealed class PhotoInputAnalyzer(ICloudVisionAnalyzer inner, string cacheRoot, IMediaAssetGateway? assets = null) : ICloudVisionAnalyzer

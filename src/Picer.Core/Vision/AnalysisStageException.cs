@@ -16,8 +16,12 @@ public sealed class AnalysisStageException(AnalysisStage stage, string errorCode
         var code = exception switch
         {
             System.Net.Http.HttpRequestException { StatusCode: { } status } => "HTTP_" + (int)status,
+            System.Net.Http.HttpRequestException request when FindInner<System.Net.Sockets.SocketException>(request) is { } socket => "socket_" + (int)socket.SocketErrorCode,
+            System.Net.Sockets.SocketException socket => "socket_" + (int)socket.SocketErrorCode,
             Microsoft.Data.Sqlite.SqliteException sql => $"SQLite_{sql.SqliteErrorCode}_{sql.SqliteExtendedErrorCode}",
             FileNotFoundException => "input_file_missing",
+            DirectoryNotFoundException => "input_directory_missing",
+            IOException => "io_failure",
             UnauthorizedAccessException => "access_denied",
             OperationCanceledException or TimeoutException => "request_timeout",
             System.Text.Json.JsonException => "invalid_model_json",
@@ -25,9 +29,16 @@ public sealed class AnalysisStageException(AnalysisStage stage, string errorCode
             InvalidDataException when exception.Message == "The vision API returned invalid JSON." => "invalid_model_json",
             _ => exception.GetType().Name
         };
-        var retryable = exception is not (ArgumentException or NotSupportedException or UnauthorizedAccessException);
+        var retryable = exception is not (ArgumentException or NotSupportedException or UnauthorizedAccessException or FileNotFoundException or DirectoryNotFoundException);
         if (exception is System.Net.Http.HttpRequestException { StatusCode: { } statusCode } && (int)statusCode is 400 or 401 or 403 or 404) retryable = false;
         return new(stage, code, retryable, exception);
+    }
+
+    private static T? FindInner<T>(Exception exception) where T : Exception
+    {
+        for (var current = exception.InnerException; current is not null; current = current.InnerException)
+            if (current is T match) return match;
+        return null;
     }
 
     public static AnalysisStageException FromStored(string? value)

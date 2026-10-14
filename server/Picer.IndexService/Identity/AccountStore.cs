@@ -229,6 +229,23 @@ public sealed partial class AccountStore
         transaction.Commit();
     }
 
+    internal void ResetPasswordForAdministration(string login, string newPassword)
+    {
+        login = NormalizeLogin(login);
+        if (newPassword.Length is < 12 or > 128 || newPassword.All(char.IsWhiteSpace))
+            throw new ArgumentException("invalid_password");
+        using var connection = Open();
+        var id = Scalar(connection, null, "SELECT id FROM accounts WHERE login=$login AND disabled=0", ("$login", login)) as string
+            ?? throw new InvalidOperationException("account_not_found");
+        var replacement = _passwords.HashPassword(id, newPassword);
+        using var fence = EnterRevocationFence();
+        using var transaction = connection.BeginTransaction();
+        if (Execute(connection, transaction, "UPDATE accounts SET password_hash=$new,security_epoch=security_epoch+1,must_change_password=1,failed=0,locked_until=0 WHERE id=$id AND disabled=0",
+            ("$new", replacement), ("$id", id)) != 1) throw new InvalidOperationException("account_not_found");
+        Execute(connection, transaction, "DELETE FROM credential_responses WHERE grant_id IN (SELECT id FROM device_grants WHERE account_id=$id)", ("$id", id));
+        transaction.Commit();
+    }
+
     public T ExecuteAuthorizedWrite<T>(AuthorizedDevice expected, string token, Func<AuthorizedDevice, T> action)
     {
         _authorizationFence.EnterReadLock();

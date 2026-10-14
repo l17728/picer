@@ -9,6 +9,8 @@ public static class AccountAdministration
     {
         try
         {
+            if (arguments.Length > 1 && arguments[1] == "--reset-account-password")
+                return RunPasswordReset(arguments, dataRoot);
             var options = Parse(arguments);
             if (!options.TryGetValue("--database", out var database) || !options.TryGetValue("--owner", out var owner))
                 throw new ArgumentException("missing_options");
@@ -33,14 +35,26 @@ public static class AccountAdministration
         }
     }
 
+    private static int RunPasswordReset(string[] arguments, string dataRoot)
+    {
+        var options = Parse(arguments);
+        if (!options.TryGetValue("--account", out var login) || !options.ContainsKey("--password-stdin"))
+            throw new ArgumentException("missing_options");
+        var accounts = new AccountStore(Path.Combine(dataRoot, "accounts-v2"));
+        accounts.ResetPasswordForAdministration(login, ReadPassword(fromStandardInput: true));
+        Console.WriteLine("璐﹀彿瀵嗙爜宸查噸缃€傚叾浠栬澶囩殑浼氳瘽宸插け鏁堬紝涓嬫鐧诲綍蹇呴』璁剧疆鏂板瘑鐮併€?");
+        return 0;
+    }
+
     private static Dictionary<string, string> Parse(string[] arguments)
     {
         var values = new Dictionary<string, string>(StringComparer.Ordinal);
         for (var i = 1; i < arguments.Length; i++)
         {
             var name = arguments[i];
+            if (name == "--reset-account-password") continue;
             if (name == "--password-stdin") { if (!values.TryAdd(name, "true")) throw new ArgumentException("duplicate_option"); }
-            else if (name is "--database" or "--owner" or "--space")
+            else if (name is "--database" or "--owner" or "--space" or "--account")
             {
                 if (++i >= arguments.Length || !values.TryAdd(name, arguments[i])) throw new ArgumentException("invalid_option");
             }

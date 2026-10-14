@@ -1,0 +1,25 @@
+# 2026-10-14 目录描述失败诊断与账号切换执行记录
+
+## 10 月 13 日照片描述失败
+
+本地 `picer-2026-10-13.log` 记录了 09:33–10:09 的 1,308 条照片项失败，没有视频项失败。任务逐项继续执行，旧日志统一记录 `AnalysisStageException`，没有阶段、HTTP 状态或可识别的底层网络错误，因此无法从现存证据确定这些失败由原图读取、模型请求还是写入引起。当天 23:23 的索引同步 TLS 断连发生在另一时段，不能用来解释该批描述失败。远端分析表也没有保留 10 月 13 日对应失败记录。
+
+日志现在为每项失败记录随机运行 ID、尝试 ID、媒体记录 ID、阶段、稳定错误码、可重试标记、耗时和最多四层内异常类型；不记录路径、异常消息、媒体内容、模型提示词或凭据。HTTP 错误码和嵌套 SocketException（例如 Windows 10054）被分别分类，源文件不存在标记为不可重试。新版本运行后才能产生这些字段，旧日志无法追溯补全。
+
+回归测试覆盖 HTTP 状态/隐私、SocketException 分类、缺失文件重试性、保存阶段和管理密码重置行为。
+
+## 生产账号空间迁移
+
+2026-10-14 已停止旧服务及健康检查定时器，并将旧索引数据库迁入账号 `legacy-owner` 的空间 `a38485697d7b401ea3b4fcdabd57c375`。迁移副本位于 `/var/lib/picer-index/accounts-v2/legacy-migration/1d85f359af7d49d09ae666d53e6ce91d`，包括完整旧数据库副本。源设备状态仍为未绑定；迁移不授予任何机器或目录读取原照片/视频的权限。
+
+IndexService 已切换到账号门户模式，公网注册开启，`https://124-156-193-122.sslip.io:8445` 使用 Let's Encrypt 证书。证书 PFX 存在服务数据目录，Certbot deploy hook 会原子替换 PFX 并重启服务。健康端点、服务身份端点和注册表单已从公网验证成功。旧客户端令牌兼容接口已停止提供；需重新登录、配对并按需授权来源设备/目录。
+
+首个迁移口令保存在运维 Windows 用户 DPAPI 保护的 `D:\PicerData\bootstrap\account-activation\legacy-owner-password.dpapi`。该文件只能由创建它的 Windows 用户解密。若遗失，可在服务停机时用 `Picer.IndexService --reset-account-password --account legacy-owner --password-stdin` 重置；该命令撤销旧会话并要求下次登录改密。密码不可放在命令行或日志中。
+
+CI 仍需完成账号模式切换：设置 `PICER_LIVE_SERVICE_ACCOUNT`、`PICER_LIVE_SERVICE_PASSWORD`、主机名 URL 和新 SPKI pin，并删除旧 `PICER_LIVE_SERVICE_TOKEN`。随后必须确认 CI 的真实服务探测通过，并完成一个新设备配对、批准、数据读取和撤销闭环。该验收未完成前不把服务切换标记为最终验收。
+
+## 运维限制
+
+- 管理员密码恢复必须先停止 IndexService，确认没有并发写入。
+- 公网注册目前开放；服务尚无自助密码找回。管理员需通过本机运维流程重置账户。
+- 迁移后的照片/视频索引可在授权空间内管理，但读取原始媒体需要已配对的 MediaAgent 与用户明确授权的源目录。
