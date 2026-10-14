@@ -1,8 +1,24 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-url="${PICER_INDEX_HEALTH_URL:-https://127.0.0.1:8445/health}"
-if curl --silent --show-error --fail --max-time 8 --insecure "$url" >/dev/null; then
+if [[ -n "${PICER_INDEX_HEALTH_URL:-}" ]]; then
+  url=$PICER_INDEX_HEALTH_URL
+else
+  public_origin=$(systemctl show picer-index.service -p Environment --value \
+    | tr ' ' '\n' | sed -n 's/^PICER_INDEX_PUBLIC_ORIGIN=//p' | tail -n 1)
+  if [[ -n "$public_origin" ]]; then
+    url="${public_origin%/}/health"
+  else
+    url='https://127.0.0.1:8445/health'
+  fi
+fi
+
+curl_args=(--silent --show-error --fail --max-time 8 --insecure)
+if [[ "$url" =~ ^https://([^/]+)(/.*)?$ ]]; then
+  authority=${BASH_REMATCH[1]}
+  curl_args+=(--resolve "$authority:127.0.0.1")
+fi
+if curl "${curl_args[@]}" "$url" >/dev/null; then
   exit 0
 fi
 
