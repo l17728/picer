@@ -61,6 +61,7 @@ try
             CryptographicOperations.FixedTimeEquals(certificate.PublicKey.ExportSubjectPublicKeyInfo(), pin);
         accountPortal = new HttpClient(portalHandler) { BaseAddress = uri, Timeout = TimeSpan.FromSeconds(30) };
         var portal = accountPortal;
+        stage = "account-service-discovery";
         using var discoveryResponse = await portal.GetAsync("identity/service", deadline.Token);
         discoveryResponse.EnsureSuccessStatusCode();
         var serviceDiscovery = await discoveryResponse.Content.ReadFromJsonAsync<ServiceDiscovery>(DeviceAuthorization.Json, deadline.Token)
@@ -70,6 +71,7 @@ try
         var connection = new DeviceConnection(url, serviceDiscovery.ServiceId, serviceDiscovery.SpkiPin, serviceDiscovery.SigningKey,
             "picer-live-ci", Guid.NewGuid().ToString("N"), "Picer GitHub CI probe", "gui");
         accountClient = new DeviceAccountClient(connection, accountKey, _ => { }, handler);
+        stage = "account-enrollment-request";
         var enrollment = await accountClient.BeginEnrollmentAsync(deadline.Token);
         if (enrollment.ApprovalUrl != url + "/account/approve?request=" + connection.RequestId) throw new InvalidDataException();
 
@@ -82,21 +84,26 @@ try
             if (!match.Success) throw new InvalidDataException();
             return (System.Net.WebUtility.HtmlDecode(match.Groups["value"].Value), html);
         }
+        stage = "account-login-form";
         var (loginToken, _) = await ReadForm("account/login?request=" + connection.RequestId);
+        stage = "account-login-submit";
         using (var login = await portal.PostAsync("account/login", new FormUrlEncodedContent(new Dictionary<string, string>
         { ["__RequestVerificationToken"] = loginToken, ["request"] = connection.RequestId, ["login"] = accountLogin, ["password"] = accountPassword }), deadline.Token))
             if ((int)login.StatusCode is < 300 or >= 400) throw new InvalidDataException();
 
         var approvalPath = "account/approve?request=" + connection.RequestId;
+        stage = "account-approval-form";
         var (approvalToken, approvalHtml) = await ReadForm(approvalPath);
         var spaceMatch = Regex.Match(approvalHtml, "<option value=['\"](?<space>[0-9a-f]{32})['\"]>", RegexOptions.IgnoreCase);
         if (!spaceMatch.Success) throw new InvalidDataException();
+        stage = "account-device-approval";
         using var approved = await portal.PostAsync("account/approve", new FormUrlEncodedContent(new Dictionary<string, string>
         {
             ["__RequestVerificationToken"] = approvalToken, ["request"] = connection.RequestId,
             ["space"] = spaceMatch.Groups["space"].Value
         }), deadline.Token);
         approved.EnsureSuccessStatusCode();
+        stage = "account-credential-import";
         await accountClient.ImportAsync(await approved.Content.ReadAsByteArrayAsync(deadline.Token), deadline.Token);
         gateway = (IDisposable)Activator.CreateInstance(gatewayType, accountClient.CreateSpaceClient(), true)!;
     }
