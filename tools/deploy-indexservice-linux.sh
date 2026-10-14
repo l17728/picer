@@ -221,11 +221,21 @@ mv -f "$new_manifest" "$install_dir/deployment.json"
 systemctl start "$service"
 
 verified=0
+public_origin=$(systemctl show "$service" -p Environment --value | tr ' ' '\n' | sed -n 's/^PICER_INDEX_PUBLIC_ORIGIN=//p' | tail -n 1)
+if [[ -n "$public_origin" ]]; then
+    probe_origin="$public_origin"
+    probe_host=${public_origin#*://}
+    probe_host=${probe_host%%:*}
+    probe_resolve=(--resolve "$probe_host:8445:127.0.0.1")
+else
+    probe_origin='https://127.0.0.1:8445'
+    probe_resolve=()
+fi
 for attempt in {1..300}; do
     if (( attempt % 15 == 0 )); then echo "Waiting for schema migration and service health ($attempt/300)..."; fi
     if systemctl is-active --quiet "$service"; then
-        version=$(curl --insecure --silent --show-error --max-time 3 https://127.0.0.1:8445/version 2>/dev/null || true)
-        health=$(curl --insecure --silent --show-error --max-time 3 https://127.0.0.1:8445/health 2>/dev/null || true)
+        version=$(curl "${probe_resolve[@]}" --insecure --silent --show-error --max-time 3 "$probe_origin/version" 2>/dev/null || true)
+        health=$(curl "${probe_resolve[@]}" --insecure --silent --show-error --max-time 3 "$probe_origin/health" 2>/dev/null || true)
         if [[ "$version" == *"$expected_hash"* && "$version" == *"$deployment_id"* && "$health" == *'"status":"ok"'* ]]; then
             verified=1
             break
@@ -242,4 +252,4 @@ fi
 
 success=1
 echo "Upgrade successful: deploymentId=$deployment_id sha256=$expected_hash"
-echo "Version endpoint: https://127.0.0.1:8445/version"
+echo "Version endpoint: $probe_origin/version"

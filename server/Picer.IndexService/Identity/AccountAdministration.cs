@@ -9,7 +9,7 @@ public static class AccountAdministration
     {
         try
         {
-            if (arguments.Length > 1 && arguments[1] == "--reset-account-password")
+            if (arguments.Length > 0 && arguments[0] == "--reset-account-password")
                 return RunPasswordReset(arguments, dataRoot);
             var options = Parse(arguments);
             if (!options.TryGetValue("--database", out var database) || !options.TryGetValue("--owner", out var owner))

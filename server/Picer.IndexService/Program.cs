@@ -6,7 +6,7 @@ if (string.IsNullOrWhiteSpace(dataRoot))
     dataRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Picer", "service-data");
 if (args.Length > 0)
 {
-    if (args[0] == "--migrate-legacy")
+    if (args[0] is "--migrate-legacy" or "--reset-account-password")
         Environment.ExitCode = AccountAdministration.RunMigration(args, dataRoot);
     else
     {
