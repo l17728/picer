@@ -263,5 +263,7 @@ catch (Exception error)
     Console.Error.WriteLine("Live service verification failed at stage: " + stage);
     while (error.InnerException is not null) error = error.InnerException;
     Console.Error.WriteLine("Failure type: " + error.GetType().Name);
+    if (error is HttpRequestException { StatusCode: { } statusCode })
+        Console.Error.WriteLine("HTTP status: " + (int)statusCode);
     return 1;
 }
