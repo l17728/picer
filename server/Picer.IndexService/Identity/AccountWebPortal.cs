@@ -117,8 +117,14 @@ public static partial class AccountWebPortal
         {
             await antiforgery.ValidateRequestAsync(context);
             var form = await context.Request.ReadFormAsync(context.RequestAborted);
-            var account = store.Authenticate(form["login"].ToString(), form["password"].ToString());
-            if (account is null) return Page("登录未成功", "<p>账号或密码不正确，或账号暂时锁定。请稍后重试。</p><a href='/account/login'>返回登录</a>", 401);
+            var login = form["login"].ToString();
+            var password = form["password"].ToString();
+            var account = store.Authenticate(login, password);
+            if (account is null)
+            {
+                Core.Logging.AppLogger.Warn($"Account portal login rejected; accountMatch={store.ContainsLogin(login)}; loginFieldPresent={form.ContainsKey("login")}; passwordFieldPresent={form.ContainsKey("password")}");
+                return Page("登录未成功", "<p>账号或密码不正确，或账号暂时锁定。请稍后重试。</p><a href='/account/login'>返回登录</a>", 401);
+            }
             await SignIn(context, store, account);
             if (store.RequiresPasswordChange(account)) return Results.Redirect("/account/password");
             return Results.Redirect(Destination(form["request"].ToString()));

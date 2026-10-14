@@ -12,6 +12,8 @@ public sealed class AccountPasswordAdministrationTests
         {
             var store = new AccountStore(root);
             var account = store.Register("reset-test", "old-password-123", "test-space");
+            Assert.True(store.ContainsLogin("reset-test"));
+            Assert.False(store.ContainsLogin("missing-test"));
 
             store.ResetPasswordForAdministration("reset-test", "new-password-456");
 

@@ -183,6 +183,14 @@ public sealed partial class AccountStore
         transaction.Commit(); return updated == 1 ? id : null;
     }
 
+    internal bool ContainsLogin(string login)
+    {
+        try { login = NormalizeLogin(login); }
+        catch (ArgumentException) { return false; }
+        using var connection = Open();
+        return Convert.ToInt64(Scalar(connection, null, "SELECT COUNT(*) FROM accounts WHERE login=$login AND disabled=0", ("$login", login))) == 1;
+    }
+
     public IReadOnlyList<AccountSpace> ListSpaces(string accountId)
     {
         using var connection = Open(); using var command = Command(connection, null,
