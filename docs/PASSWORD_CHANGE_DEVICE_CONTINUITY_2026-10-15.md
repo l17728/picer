@@ -14,4 +14,8 @@
 
 `AccountAuthorizationTests.ChangingPasswordPreservesExistingDeviceAccessAndRefresh` 覆盖旧密码失效、新密码生效、已配对设备访问继续有效及刷新令牌轮换。`AccountPasswordAdministrationTests.AdministrativeResetRevokesOldCredentialAndRequiresChange` 保证管理员重置仍撤销旧设备凭据。
 
-部署后还需对生产 MediaAgent 媒体读取和真实服务探针做验收。生产账号此前已执行过一次旧逻辑改密，旧设备会话已经失效；仅部署此修复不会恢复已失效会话，需要对现存 MediaAgent 做一次配对恢复。后续用户主动改密不再中断设备。
+## 生产部署记录
+
+2026-10-15 已部署到生产 IndexService：提交 `34877c678816`，部署号 `20261015T024053934Z`，二进制 SHA-256 `a733e8a831491cad9677e8b0757329c173381322db5edf40de2bf739b04d719b`。原子升级脚本已生成备份 `/opt/picer-index.backup-20261015T024053934Z`；部署后 `/health` 为 `ok`，`/version` 与提交、部署号及二进制哈希一致。
+
+CI `38671650255` 的构建步骤通过，但真实服务探针在 `video-thumbnail-fetch` 报 `SocketException`，因此后续单元和桌面测试未执行。此前运行 `38667943065` 也在同一视频缩略图阶段失败。生产账号在修复部署前曾通过旧逻辑改密，已失效的本机 MediaAgent 会话不会被部署自动恢复；仍需一次性重新配对并将原索引来源重新绑定到该 Agent。原照片、视频和索引未被此次部署修改。后续用户主动改密会保留已授权设备连接。
