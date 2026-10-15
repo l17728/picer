@@ -1,6 +1,6 @@
 # Picer 开发计划与交付状态
 
-更新：2026-10-15。v1.5.3 是当前正式版；v1.5.4 候选修复已完成本机代码和 E2E 验证，等待 GitHub CI/Release 门禁。生产 IndexService 已处于账号门户/多租户模式；旧数据迁移、CI 账号凭据切换及真实设备配对/照片视频读取/撤销闭环已完成。首次注册流程仅在隔离 HTTPS E2E 验证，尚未创建生产测试账户。四项原先暂停的外部质量/硬件 P2 验收仍暂停，见下文。
+更新：2026-10-15。v1.5.4 是当前正式版，远程缩略图重试可靠性修复和跨电脑登录现有照片空间指南已发布。生产 IndexService 已处于账号门户/多租户模式；旧数据迁移、CI 账号凭据切换及真实设备配对/照片视频读取/撤销闭环已完成。首次注册流程仅在隔离 HTTPS E2E 验证，尚未创建生产测试账户。四项原先暂停的外部质量/硬件 P2 验收仍暂停，见下文。
 
 ## 新需求设计状态（2026-10-12）
 
@@ -30,7 +30,7 @@
 
 ## 2. 当前发布与验证
 
-最新正式版为 [v1.5.1](https://github.com/l17728/picer/releases/tag/v1.5.1)，schema 46；私有仓库下载需要访问权限。组件包包含 GUI、MediaAgent、IndexService、ModelServer；用户一键安装器和离线完整包均已发布。安装、哈希及部署状态见[v1.5.1 部署记录](DEPLOYMENT_V1_5_1_2026-10-14.md)。
+最新正式版为 [v1.5.4](https://github.com/l17728/picer/releases/tag/v1.5.4)，schema 46；私有仓库下载需要访问权限。组件包包含 GUI、MediaAgent、IndexService、ModelServer；GUI 与 MediaAgent 一键安装器、组件包和离线完整包均已发布。安装、哈希与验收状态见[v1.5.4 发布记录](RELEASE_1_5_4_2026-10-15.md)；生产服务部署状态见[v1.5.1 部署记录](DEPLOYMENT_V1_5_1_2026-10-14.md)。
 
 GUI/独立 Agent 中文当前用户一键安装器已实现，包含自包含 .NET、app-local MSVC CRT，代理 tools/ffmpeg 目录同时提供 FFmpeg、FFprobe 及许可证并自动发现。纯远程 GUI 不需要 Python、CUDA 或模型 runtime，也不检查本地 runtime。首次从“文件 → 连接索引服务…”完成无凭据证书发现、指纹确认、固定公钥验证及 DPAPI 保存，无需编辑 JSON。模型端 setup-modelserver.py 默认 CPU 的实际验收已通过；GPU 和授权模型依然按服务端配置。详见[安装实现记录](INSTALLER_IMPLEMENTATION_2026-10-10.md)和[安装指南](RELEASE_GUIDE.md)。
 

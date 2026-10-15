@@ -4,7 +4,7 @@
 
 ## 在新电脑安装并登录
 
-1. 在 Picer GitHub 项目的 **Releases** 页面下载最新的 `Picer-<版本>-win-x64-setup.exe`，双击安装并启动 Picer。远程浏览只需 GUI；新电脑不必安装或启动 MediaAgent，也不需要 Python、CUDA、FFmpeg 或本地模型。
+1. 打开 [Picer v1.5.4 Release](https://github.com/l17728/picer/releases/tag/v1.5.4)，下载 `Picer-v1.5.4-win-x64-setup.exe`，双击安装并启动 Picer。远程浏览只需 GUI；新电脑不必安装或启动 MediaAgent，也不需要 Python、CUDA、FFmpeg 或本地模型。
 2. 在 Picer 主窗口左上角点 **文件 → 连接索引服务…**。
 3. 在“连接索引服务 / 本地模式”窗口选择 **远程模式（HTTPS 索引服务）**，再点 **登录照片空间 / 导入设备认证文件…**。
 4. 在“登录照片空间”窗口，如果管理员或原电脑提供了 `.picer-service` 文件，点 **导入服务地址文件…**，选中该文件。它只填写服务地址，不含账号或登录凭据。没有该文件时，在 **HTTPS 服务地址** 框输入管理员提供的完整地址（包含 `https://` 和端口）。
