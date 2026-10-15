@@ -15,13 +15,13 @@ public sealed class AccountAuthorizationTests : IDisposable
     private string PublicKey => DeviceAuthorization.ExportPublicKey(_device);
     public AccountAuthorizationTests() => _store = new(_root, _clock);
 
-    private (string Account, string Login, DeviceAuthorizationFile File, DeviceSession Session, string Attempt) Enroll(bool editing = false)
+    private (string Account, string Login, DeviceAuthorizationFile File, DeviceSession Session, string Attempt) Enroll(bool editing = false, string clientKind = "gui")
     {
         var login = "user-" + Guid.NewGuid().ToString("N");
         var account = _store.Register(login, "test-password-123!", "我的照片");
         var space = Assert.Single(_store.ListSpaces(account));
         var request = Guid.NewGuid().ToString("N");
-        _store.CreateEnrollment(new(request, PublicKey, "测试电脑", "gui"));
+        _store.CreateEnrollment(new(request, PublicKey, "测试电脑", clientKind));
         var file = _store.ApproveEnrollment(account, request, space.Id, "https://photos.example", "test-pin", _signing, editing, false);
         var attempt = Guid.NewGuid().ToString("N");
         var session = _store.Redeem(request, file.RedemptionCode, PublicKey, attempt);
@@ -104,7 +104,7 @@ public sealed class AccountAuthorizationTests : IDisposable
     [Fact]
     public void ChangingPasswordPreservesExistingDeviceAccessAndRefresh()
     {
-        var entry = Enroll();
+        var entry = Enroll(clientKind: "agent");
         var authorizedBefore = Assert.IsType<AuthorizedDevice>(_store.Authorize(entry.Session.AccessToken, PublicKey));
 
         _store.ChangePassword(entry.Account, "test-password-123!", "new-test-password-456!");
