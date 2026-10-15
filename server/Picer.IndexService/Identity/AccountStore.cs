@@ -229,11 +229,12 @@ public sealed partial class AccountStore
         if (hash is null || _passwords.VerifyHashedPassword(id, hash, currentPassword) == PasswordVerificationResult.Failed)
             throw new UnauthorizedAccessException("invalid_password");
         var replacement = _passwords.HashPassword(id, newPassword);
-        using var fence = EnterRevocationFence();
         using var transaction = connection.BeginTransaction();
-        if (Execute(connection, transaction, "UPDATE accounts SET password_hash=$new,security_epoch=security_epoch+1,must_change_password=0,failed=0,locked_until=0 WHERE id=$id AND password_hash=$old AND disabled=0",
+        // An authenticated password change updates the login secret while keeping
+        // explicitly enrolled devices usable. Device removal and administrative
+        // password reset remain the revocation mechanisms.
+        if (Execute(connection, transaction, "UPDATE accounts SET password_hash=$new,must_change_password=0,failed=0,locked_until=0 WHERE id=$id AND password_hash=$old AND disabled=0",
             ("$new", replacement), ("$id", id), ("$old", hash)) != 1) throw new UnauthorizedAccessException("account_changed");
-        Execute(connection, transaction, "DELETE FROM credential_responses WHERE grant_id IN (SELECT id FROM device_grants WHERE account_id=$id)", ("$id", id));
         transaction.Commit();
     }
 

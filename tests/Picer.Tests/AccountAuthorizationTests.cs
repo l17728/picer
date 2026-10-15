@@ -15,16 +15,17 @@ public sealed class AccountAuthorizationTests : IDisposable
     private string PublicKey => DeviceAuthorization.ExportPublicKey(_device);
     public AccountAuthorizationTests() => _store = new(_root, _clock);
 
-    private (string Account, DeviceAuthorizationFile File, DeviceSession Session, string Attempt) Enroll(bool editing = false)
+    private (string Account, string Login, DeviceAuthorizationFile File, DeviceSession Session, string Attempt) Enroll(bool editing = false)
     {
-        var account = _store.Register("user-" + Guid.NewGuid().ToString("N"), "test-password-123!", "我的照片");
+        var login = "user-" + Guid.NewGuid().ToString("N");
+        var account = _store.Register(login, "test-password-123!", "我的照片");
         var space = Assert.Single(_store.ListSpaces(account));
         var request = Guid.NewGuid().ToString("N");
         _store.CreateEnrollment(new(request, PublicKey, "测试电脑", "gui"));
         var file = _store.ApproveEnrollment(account, request, space.Id, "https://photos.example", "test-pin", _signing, editing, false);
         var attempt = Guid.NewGuid().ToString("N");
         var session = _store.Redeem(request, file.RedemptionCode, PublicKey, attempt);
-        return (account, file, session, attempt);
+        return (account, login, file, session, attempt);
     }
 
     [Fact]
@@ -98,6 +99,23 @@ public sealed class AccountAuthorizationTests : IDisposable
         Assert.True(_store.IsAuthorizationCurrent(device));
         _store.Revoke(entry.Account, device.GrantId);
         Assert.False(_store.IsAuthorizationCurrent(device));
+    }
+
+    [Fact]
+    public void ChangingPasswordPreservesExistingDeviceAccessAndRefresh()
+    {
+        var entry = Enroll();
+        var authorizedBefore = Assert.IsType<AuthorizedDevice>(_store.Authorize(entry.Session.AccessToken, PublicKey));
+
+        _store.ChangePassword(entry.Account, "test-password-123!", "new-test-password-456!");
+
+        Assert.Equal(entry.Account, _store.Authenticate(entry.Login, "new-test-password-456!"));
+        Assert.Null(_store.Authenticate(entry.Login, "test-password-123!"));
+        var authorizedAfter = Assert.IsType<AuthorizedDevice>(_store.Authorize(entry.Session.AccessToken, PublicKey));
+        Assert.Equal(authorizedBefore.GrantId, authorizedAfter.GrantId);
+        Assert.True(_store.IsAuthorizationCurrent(authorizedAfter));
+        var refreshed = _store.Refresh(entry.Session.RefreshToken, PublicKey, Guid.NewGuid().ToString("N"));
+        Assert.NotNull(_store.Authorize(refreshed.AccessToken, PublicKey));
     }
 
     [Fact]

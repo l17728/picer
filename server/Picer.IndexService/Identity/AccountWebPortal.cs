@@ -213,7 +213,7 @@ public static partial class AccountWebPortal
         app.MapPost("/account/logout", async (HttpContext context, IAntiforgery antiforgery) =>
         { await antiforgery.ValidateRequestAsync(context); await context.SignOutAsync(CookieScheme); return Results.Redirect("/account/login"); });
         app.MapGet("/account/password", (HttpContext context, IAntiforgery antiforgery) => Subject(context) is null ? Results.Redirect("/account/login") :
-            Page("修改密码", Form(context, antiforgery, "/account/password", "", "<p>修改密码后，所有设备需要重新登录。首次使用管理员代建账号时必须设置自己的密码。</p>" +
+            Page("修改密码", Form(context, antiforgery, "/account/password", "", "<p>修改密码不会中断已授权设备。若设备丢失或怀疑凭据泄露，请在设备列表中撤销对应设备。首次使用管理员代建账号时必须设置自己的密码。</p>" +
                 "<label>当前密码<input type=password name=current autocomplete=current-password maxlength=128 required></label>" +
                 "<label>新密码<input type=password name=password autocomplete=new-password minlength=12 maxlength=128 required></label>" +
                 "<label>确认新密码<input type=password name=confirm autocomplete=new-password minlength=12 maxlength=128 required></label><button>保存新密码</button>")));
