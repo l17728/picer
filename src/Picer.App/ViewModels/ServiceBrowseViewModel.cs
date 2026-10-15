@@ -42,7 +42,10 @@ public partial class ServiceBrowseViewModel : ObservableObject
 {
     private readonly ClientServices _services;
     private readonly IIndexGateway _gateway;
-    private readonly ThumbnailWorkScheduler _thumbnailGate = new(4);
+    // The authenticated service also serves mirror/index traffic. Keep visible
+    // thumbnail requests below its per-device admission limit.
+    private readonly ThumbnailWorkScheduler _thumbnailGate = new(2);
+    private readonly ThumbnailRetryTracker _thumbnailRetries = new();
     private sealed class ThumbnailLoad(CancellationToken token, bool visible) : IDisposable
     {
         public readonly CancellationTokenSource Stop = CancellationTokenSource.CreateLinkedTokenSource(token);
@@ -191,11 +194,29 @@ public partial class ServiceBrowseViewModel : ObservableObject
                 var ordered = visible.Select(index => index >= 0 && index < Items.Count ? Items[index] : null)
                     .Concat(near.Where(item => !visible.Contains(Items.IndexOf(item))))
                     .OfType<ServicePhotoItem>().ToArray();
-                var pending = ordered.Where(item => !item.IsVideo && !item.HasThumbnail && !item.IsThumbnailLoading)
+                var now = DateTimeOffset.UtcNow;
+                var pending = ordered.Where(item => !item.IsVideo && !item.HasThumbnail && !item.IsThumbnailLoading
+                        && _thumbnailRetries.CanRetry(item.Id, now))
                     .Take(Math.Max(0, 8 - _thumbnailLoads.Count)).ToArray();
                 if (pending.Length == 0)
                 {
                     if (_thumbnailLoads.Count > 0) { await Task.Delay(80); continue; }
+                    var nextRetry = ordered.Where(item => !item.IsVideo && !item.HasThumbnail && !item.IsThumbnailLoading)
+                        .Select(item => _thumbnailRetries.GetRetryAt(item.Id))
+                        .Where(retryAt => retryAt is not null)
+                        .Select(retryAt => retryAt!.Value)
+                        .DefaultIfEmpty(DateTimeOffset.MaxValue)
+                        .Min();
+                    if (nextRetry != DateTimeOffset.MaxValue)
+                    {
+                        var delay = nextRetry - DateTimeOffset.UtcNow;
+                        if (delay > TimeSpan.Zero)
+                        {
+                            var pageToken = _thumbnailPageCts?.Token ?? CancellationToken.None;
+                            await Task.Delay(delay, pageToken);
+                            continue;
+                        }
+                    }
                     return;
                 }
                 foreach (var item in pending) _ = LoadThumbnailAsync(item, _thumbnailPageCts?.Token ?? CancellationToken.None,
@@ -338,7 +359,7 @@ public partial class ServiceBrowseViewModel : ObservableObject
 
     private async Task LoadThumbnailAsync(ServicePhotoItem item, CancellationToken cancellationToken, bool prefetch = false)
     {
-        if (item.IsVideo || item.HasThumbnail || item.IsThumbnailLoading) return;
+        if (item.IsVideo || item.HasThumbnail || item.IsThumbnailLoading || !_thumbnailRetries.CanRetry(item.Id, DateTimeOffset.UtcNow)) return;
         item.IsThumbnailLoading = true;
         using var work = new ThumbnailLoad(cancellationToken, !prefetch);
         _thumbnailLoads[item] = work;
@@ -350,7 +371,11 @@ public partial class ServiceBrowseViewModel : ObservableObject
                     record, downloadToken => _gateway.OpenThumbnailAsync(item.Id, downloadToken), work.Stop.Token,
                     prefetch: !Volatile.Read(ref work.Visible));
                 work.Stop.Token.ThrowIfCancellationRequested();
-                if (path is null || !File.Exists(path)) return;
+                if (path is null || !File.Exists(path))
+                {
+                    _thumbnailRetries.RecordFailure(item.Id, DateTimeOffset.UtcNow);
+                    return;
+                }
                 var image = new BitmapImage();
                 image.BeginInit();
                 image.CacheOption = BitmapCacheOption.OnLoad;
@@ -359,12 +384,15 @@ public partial class ServiceBrowseViewModel : ObservableObject
                 image.EndInit();
                 image.Freeze();
                 Application.Current.Dispatcher.Invoke(() => item.Thumbnail = image);
+                _thumbnailRetries.RecordSuccess(item.Id);
         }
         catch (OperationCanceledException)
         {
         }
         catch (Exception)
         {
+            if (!cancellationToken.IsCancellationRequested)
+                _thumbnailRetries.RecordFailure(item.Id, DateTimeOffset.UtcNow);
         }
         finally
         {
