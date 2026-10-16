@@ -177,6 +177,13 @@ public sealed class AccountAuthorizationTests : IDisposable
         => Assert.Null(SpaceRoutePermissions.RequiredScope(method, path));
 
     [Fact]
+    public void AiStreamRequiresExplicitAnalysisGrant()
+    {
+        Assert.Equal("analysis.run", SpaceRoutePermissions.RequiredScope("POST", "/api/ai/v1/chat/stream"));
+        Assert.Null(SpaceRoutePermissions.RequiredScope("GET", "/api/ai/v1/chat/stream"));
+    }
+
+    [Fact]
     public void AuthorizationDocumentRejectsDuplicatePropertiesAndExcessiveDepth()
     {
         Assert.Throws<InvalidDataException>(() => DeviceAuthorization.ReadDocument<System.Text.Json.JsonElement>("{\"id\":1,\"ID\":2}"u8.ToArray()));
