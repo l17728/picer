@@ -16,4 +16,6 @@
 
 - `AiStreamRequiresExplicitAnalysisGrant` 验证 AI 流式接口只接受 POST 且要求 `analysis.run`。
 - `CompatibleAnalyzer_UsesDeviceAuthenticationFromHttpClient` 验证 DPoP 凭据不会被空 API key 覆盖。
-- 生产修复需要部署更新后的 IndexService；部署后应验证 `/version` 的部署身份，并使用现有获准设备重新运行目录描述。已完成的描述会跳过，待处理项目继续执行。
+- 定向授权测试通过；提交 `e0b3d7ef58a9039cf29cf5e49a38a1415428556e` 的 GitHub CI 全绿。
+- 生产 IndexService 已通过原子升级脚本部署，部署 ID 为 `20261016T083009784Z`，二进制 SHA-256 为 `07ff7e7a21d9bbcc938ed13d7f2937a64eba8ecf9381c77ede3bbce8b47f103e`。脚本验证了 `/health`、`/version` 部署身份和二进制哈希，并在切换前创建数据库备份。
+- 本机 GUI 当前已启动。原描述任务不会自动续跑；在原目录范围重新点击“开始描述照片和视频”即可继续，已有描述会跳过。设备权限已确认包含 `analysis.run`，不需要重新配对。
