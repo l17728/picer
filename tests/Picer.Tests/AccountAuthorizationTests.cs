@@ -191,6 +191,15 @@ public sealed class AccountAuthorizationTests : IDisposable
     }
 
     [Fact]
+    public void VideoKeyframeRoutesRequireMediaReadGrant()
+    {
+        Assert.Equal("media.read", SpaceRoutePermissions.RequiredScope("GET", "/api/gateway/v1/video-keyframes/123"));
+        Assert.Equal("media.read", SpaceRoutePermissions.RequiredScope("GET", "/api/gateway/v1/video-keyframes/by-video/528/0"));
+        Assert.Null(SpaceRoutePermissions.RequiredScope("POST", "/api/gateway/v1/video-keyframes/123"));
+        Assert.Null(SpaceRoutePermissions.RequiredScope("GET", "/api/gateway/v1/video-keyframes/by-video/0/0"));
+    }
+
+    [Fact]
     public void AuthorizationDocumentRejectsDuplicatePropertiesAndExcessiveDepth()
     {
         Assert.Throws<InvalidDataException>(() => DeviceAuthorization.ReadDocument<System.Text.Json.JsonElement>("{\"id\":1,\"ID\":2}"u8.ToArray()));

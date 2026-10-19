@@ -198,6 +198,17 @@ public static class SpaceRoutePermissions
         if (method == "GET" && path == "/api/sync/v1/metadata-edits") return "index.read";
         if (method == "POST" && path == "/api/ai/v1/chat/stream") return "analysis.run";
         if (method == "POST" && path == "/api/gateway/v1/analysis-input") return "analysis.run";
+        if (method == "GET")
+        {
+            var videoKeyframeParts = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
+            if (videoKeyframeParts.Length == 5 && videoKeyframeParts[0] == "api" && videoKeyframeParts[1] == "gateway" &&
+                videoKeyframeParts[2] == "v1" && videoKeyframeParts[3] == "video-keyframes" &&
+                long.TryParse(videoKeyframeParts[4], out var keyframeId) && keyframeId > 0) return "media.read";
+            if (videoKeyframeParts.Length == 7 && videoKeyframeParts[0] == "api" && videoKeyframeParts[1] == "gateway" &&
+                videoKeyframeParts[2] == "v1" && videoKeyframeParts[3] == "video-keyframes" && videoKeyframeParts[4] == "by-video" &&
+                long.TryParse(videoKeyframeParts[5], out var videoId) && videoId > 0 &&
+                int.TryParse(videoKeyframeParts[6], out var ordinal) && ordinal >= 0) return "media.read";
+        }
         if (method == "POST" && path == "/api/gateway/v1/media-lease") return "media.read";
         var mediaParts = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
         if (method is "GET" or "HEAD" && mediaParts.Length == 6 && mediaParts[0] == "api" && mediaParts[1] == "gateway" &&
