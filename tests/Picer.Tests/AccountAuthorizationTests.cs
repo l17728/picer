@@ -200,6 +200,16 @@ public sealed class AccountAuthorizationTests : IDisposable
     }
 
     [Fact]
+    public void RemoteVideoDescriptionRoutesRequireExplicitScopes()
+    {
+        Assert.Equal("media.read", SpaceRoutePermissions.RequiredScope("GET", "/api/service/v1/video-probe/123"));
+        Assert.Equal("analysis.run", SpaceRoutePermissions.RequiredScope("POST", "/api/service/v1/video-keyframes/123"));
+        Assert.Equal("analysis.run", SpaceRoutePermissions.RequiredScope("POST", "/api/service/v1/video-transcribe/123"));
+        Assert.Null(SpaceRoutePermissions.RequiredScope("GET", "/api/service/v1/video-transcribe/123"));
+        Assert.Null(SpaceRoutePermissions.RequiredScope("POST", "/api/service/v1/video-keyframes/not-an-id"));
+    }
+
+    [Fact]
     public void AuthorizationDocumentRejectsDuplicatePropertiesAndExcessiveDepth()
     {
         Assert.Throws<InvalidDataException>(() => DeviceAuthorization.ReadDocument<System.Text.Json.JsonElement>("{\"id\":1,\"ID\":2}"u8.ToArray()));

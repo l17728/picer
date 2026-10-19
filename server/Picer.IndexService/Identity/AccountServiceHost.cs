@@ -159,7 +159,7 @@ public static class AccountServiceHost
                     if (context.Request.Headers.TryGetValue(name, out var value)) request.Headers.TryAddWithoutValidation(name, value.ToArray());
                 using var response = await lease.Runtime.Client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellation.Token);
                 context.Response.StatusCode = (int)response.StatusCode;
-                foreach (var name in new[] { "ETag", "Accept-Ranges", "Content-Range", "Content-Type", "Content-Length", "Last-Modified", "Retry-After", "X-Picer-Media-Streaming" })
+                foreach (var name in new[] { "ETag", "Accept-Ranges", "Content-Range", "Content-Type", "Content-Length", "Last-Modified", "Retry-After", "X-Picer-Media-Streaming", "X-Picer-Analysis-Input" })
                 {
                     if (response.Headers.TryGetValues(name, out var values) || response.Content.Headers.TryGetValues(name, out values))
                         context.Response.Headers[name] = values.ToArray();
@@ -198,6 +198,13 @@ public static class SpaceRoutePermissions
         if (method == "GET" && path == "/api/sync/v1/metadata-edits") return "index.read";
         if (method == "POST" && path == "/api/ai/v1/chat/stream") return "analysis.run";
         if (method == "POST" && path == "/api/gateway/v1/analysis-input") return "analysis.run";
+        var serviceParts = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (serviceParts.Length == 5 && serviceParts[0] == "api" && serviceParts[1] == "service" &&
+            serviceParts[2] == "v1" && long.TryParse(serviceParts[4], out var serviceMediaId) && serviceMediaId > 0)
+        {
+            if (method == "GET" && serviceParts[3] == "video-probe") return "media.read";
+            if (method == "POST" && serviceParts[3] is "video-keyframes" or "video-transcribe") return "analysis.run";
+        }
         if (method == "GET")
         {
             var videoKeyframeParts = path.Split('/', StringSplitOptions.RemoveEmptyEntries);

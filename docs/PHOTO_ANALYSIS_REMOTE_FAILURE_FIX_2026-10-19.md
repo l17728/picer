@@ -25,3 +25,9 @@
 - `StrictSpaceRoutesAiToItsOnlyEligibleProxyWhenClientHasNoAgentId`：通过，覆盖严格账户空间的 AI 代理选择。
 - IndexService Release 构建：`--warnaserror`，零警告、零错误。
 - 本机实测：授权原图流 1,949,911 字节成功读取、缓冲和解码；本次测试使用的生产 IndexService 在该修复部署前仍返回 HTTP 503，因此不把它记为描述成功。
+
+## 目录照片与视频批处理复查（2026-10-19）
+
+GUI 现场日志显示照片在进入模型前收到 `InvalidDataException`，视频预处理请求收到 `HTTP_403`。照片失败是账号空间代理转发响应时漏掉 `X-Picer-Analysis-Input` 校验头：上游已返回有效 JPEG，但 GUI 无法验证而拒绝输入。视频失败是账号空间路由权限表未覆盖 `video-probe`、`video-keyframes` 和 `video-transcribe` 服务路由，远程设备因此被拒绝。
+
+修复为代理转发校验头，并把视频探测映射到 `media.read`、关键帧提取和转录映射到 `analysis.run`。回归测试覆盖授权方法、路由和无效 ID；三个目标测试全部通过。部署后仍需在 GUI 中重试目录描述，确认照片与视频结果均能写回照片空间。
