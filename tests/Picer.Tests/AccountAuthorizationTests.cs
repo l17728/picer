@@ -184,6 +184,13 @@ public sealed class AccountAuthorizationTests : IDisposable
     }
 
     [Fact]
+    public void PhotoAnalysisInputRequiresExplicitAnalysisGrant()
+    {
+        Assert.Equal("analysis.run", SpaceRoutePermissions.RequiredScope("POST", "/api/gateway/v1/analysis-input"));
+        Assert.Null(SpaceRoutePermissions.RequiredScope("GET", "/api/gateway/v1/analysis-input"));
+    }
+
+    [Fact]
     public void AuthorizationDocumentRejectsDuplicatePropertiesAndExcessiveDepth()
     {
         Assert.Throws<InvalidDataException>(() => DeviceAuthorization.ReadDocument<System.Text.Json.JsonElement>("{\"id\":1,\"ID\":2}"u8.ToArray()));
