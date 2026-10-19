@@ -3,6 +3,8 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using System.Text.Encodings.Web;
+using Picer.Core.Models;
+using Picer.Core.Logging;
 
 namespace Picer.Core.Vision;
 
@@ -13,21 +15,31 @@ public sealed record CloudVisionApiOptions(
     string Provider,
     int MaximumImageEdge = 1280,
     int MaximumOutputTokens = 500,
-    string PromptVersion = "picer-photo-v2-concise");
+    string PromptVersion = "picer-photo-v2-concise",
+    bool UseClientAuthentication = false);
+
+public sealed class VisionStreamException(string code) : Exception("Vision stream failed: " + code)
+{
+    public string ErrorCode { get; } = code;
+}
 
 public sealed class OpenAiCompatibleCloudVisionAnalyzer : ICloudVisionAnalyzer, IDisposable
 {
     private readonly CloudVisionApiOptions _options;
     private readonly HttpClient _client;
     private readonly bool _ownsClient;
+    private readonly Func<ImageRecord, CancellationToken, Task<Stream?>>? _imageStreamFactory;
 
-    public OpenAiCompatibleCloudVisionAnalyzer(CloudVisionApiOptions options, HttpClient? client = null, bool disposeClient = false)
+    public OpenAiCompatibleCloudVisionAnalyzer(CloudVisionApiOptions options, HttpClient? client = null, bool disposeClient = false,
+        Func<ImageRecord, CancellationToken, Task<Stream?>>? imageStreamFactory = null)
     {
-        if (string.IsNullOrWhiteSpace(options.ApiKey)) throw new ArgumentException("API key is required.", nameof(options));
+        if (string.IsNullOrWhiteSpace(options.ApiKey) && !options.UseClientAuthentication)
+            throw new ArgumentException("API key is required unless authentication is supplied by the HTTP client.", nameof(options));
         if (options.MaximumImageEdge is < 256 or > 4096) throw new ArgumentOutOfRangeException(nameof(options));
         _options = options;
         _client = client ?? new HttpClient { Timeout = TimeSpan.FromMinutes(2) };
         _ownsClient = client is null || disposeClient;
+        _imageStreamFactory = imageStreamFactory;
     }
 
     public string Provider => _options.Provider;
@@ -36,7 +48,8 @@ public sealed class OpenAiCompatibleCloudVisionAnalyzer : ICloudVisionAnalyzer, 
 
     public async Task<CloudVisionResult> AnalyzeAsync(CloudVisionRequest request, CancellationToken cancellationToken)
     {
-        var imageDataUrl = await CreateSanitizedImageDataUrlAsync(request.Image.Path, cancellationToken).ConfigureAwait(false);
+        var imageDataUrl = await CreateSanitizedImageDataUrlAsync(request.Image, cancellationToken).ConfigureAwait(false);
+        AppLogger.Info($"Photo analysis image preprocessing completed; imageId={request.Image.Id}");
         var contextJson = JsonSerializer.Serialize(new
         {
             location = request.Location,
@@ -64,9 +77,12 @@ public sealed class OpenAiCompatibleCloudVisionAnalyzer : ICloudVisionAnalyzer, 
             }
         };
         using var message = new HttpRequestMessage(HttpMethod.Post, _options.Endpoint);
-        message.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _options.ApiKey);
+        if (!string.IsNullOrWhiteSpace(_options.ApiKey))
+            message.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _options.ApiKey);
         message.Content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
+        AppLogger.Info($"Photo analysis model request started; provider={_options.Provider}; model={_options.Model}");
         using var response = await _client.SendAsync(message, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
+        AppLogger.Info($"Photo analysis model response received; status={(int)response.StatusCode}");
         response.EnsureSuccessStatusCode();
         var responseText = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
         using var envelope = TryParseJson(responseText);
@@ -93,36 +109,91 @@ public sealed class OpenAiCompatibleCloudVisionAnalyzer : ICloudVisionAnalyzer, 
     private static string? ExtractStreamContent(string text)
     {
         var builder = new StringBuilder();
+        var eventName = "";
         foreach (var line in text.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
         {
+            if (line.StartsWith("event:", StringComparison.OrdinalIgnoreCase))
+            {
+                eventName = line[6..].Trim();
+                continue;
+            }
             var payload = line.StartsWith("data:", StringComparison.OrdinalIgnoreCase) ? line[5..].Trim() : line.Trim();
             if (payload is "[DONE]" or "") continue;
             try
             {
                 using var chunk = JsonDocument.Parse(payload);
-                var choice = chunk.RootElement.GetProperty("choices")[0];
+                var root = chunk.RootElement;
+                if (eventName.Equals("error", StringComparison.OrdinalIgnoreCase) ||
+                    root.TryGetProperty("error", out _))
+                {
+                    var code = TryGetSafeErrorCode(root);
+                    throw new VisionStreamException(code);
+                }
+                if (!root.TryGetProperty("choices", out var choices) || choices.ValueKind != JsonValueKind.Array || choices.GetArrayLength() == 0)
+                {
+                    eventName = "";
+                    continue;
+                }
+                var choice = choices[0];
                 if (choice.TryGetProperty("delta", out var delta) && delta.TryGetProperty("content", out var value)) builder.Append(value.GetString());
                 else if (choice.TryGetProperty("message", out var message) && message.TryGetProperty("content", out var full)) builder.Append(full.GetString());
             }
+            catch (VisionStreamException) { throw; }
             catch (JsonException) { }
+            finally { eventName = ""; }
         }
         return builder.Length == 0 ? null : builder.ToString();
     }
 
-    private async Task<string> CreateSanitizedImageDataUrlAsync(string path, CancellationToken cancellationToken)
+    private static string TryGetSafeErrorCode(JsonElement root)
     {
-        await using var source = File.OpenRead(path);
-        using var image = await RasterImage.LoadAsync(source, cancellationToken).ConfigureAwait(false);
-        if (Math.Max(image.Width, image.Height) > _options.MaximumImageEdge)
+        if (root.TryGetProperty("error", out var error) && error.ValueKind == JsonValueKind.Object &&
+            error.TryGetProperty("code", out var code) && code.ValueKind == JsonValueKind.String)
         {
-            var scale = (double)_options.MaximumImageEdge / Math.Max(image.Width, image.Height);
-            image.Resize(Math.Max(1, (int)(image.Width * scale)),
-                Math.Max(1, (int)(image.Height * scale)));
+            var value = code.GetString();
+            if (!string.IsNullOrWhiteSpace(value) && value.Length <= 64 && value.All(character => char.IsAsciiLetterOrDigit(character) || character is '_' or '-'))
+                return value;
         }
-        image.StripMetadata();
-        await using var output = new MemoryStream();
-        await image.SaveAsJpegAsync(output, 82, cancellationToken).ConfigureAwait(false);
-        return "data:image/jpeg;base64," + Convert.ToBase64String(output.ToArray());
+        return "ai_proxy_failed";
+    }
+
+    private async Task<string> CreateSanitizedImageDataUrlAsync(ImageRecord imageRecord, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await using var source = _imageStreamFactory is null
+                ? File.OpenRead(imageRecord.Path)
+                : await _imageStreamFactory(imageRecord, cancellationToken).ConfigureAwait(false)
+                  ?? throw new IOException("photo_analysis_input_unavailable");
+            // HTTP response streams are deliberately non-seekable. ImageMagick's
+            // stream decoder may seek while probing formats, so materialize bounded
+            // remote inputs before decoding. The gateway caps them at 8 MiB.
+            using var buffered = source.CanSeek ? null : new MemoryStream();
+            Stream decodeSource = source;
+            if (buffered is not null)
+            {
+                await source.CopyToAsync(buffered, cancellationToken).ConfigureAwait(false);
+                AppLogger.Info($"Photo analysis input buffered; imageId={imageRecord.Id}; bytes={buffered.Length}");
+                buffered.Position = 0;
+                decodeSource = buffered;
+            }
+            using var image = await RasterImage.LoadAsync(decodeSource, cancellationToken).ConfigureAwait(false);
+            if (Math.Max(image.Width, image.Height) > _options.MaximumImageEdge)
+            {
+                var scale = (double)_options.MaximumImageEdge / Math.Max(image.Width, image.Height);
+                image.Resize(Math.Max(1, (int)(image.Width * scale)),
+                    Math.Max(1, (int)(image.Height * scale)));
+            }
+            image.StripMetadata();
+            await using var output = new MemoryStream();
+            await image.SaveAsJpegAsync(output, 82, cancellationToken).ConfigureAwait(false);
+            return "data:image/jpeg;base64," + Convert.ToBase64String(output.ToArray());
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            AppLogger.Warn($"Photo analysis preprocessing failed; imageId={imageRecord.Id}; type={exception.GetType().Name}; inner={exception.InnerException?.GetType().Name ?? "none"}; hresult=0x{exception.HResult:X8}");
+            throw;
+        }
     }
 
     private static string StripMarkdownFence(string value)

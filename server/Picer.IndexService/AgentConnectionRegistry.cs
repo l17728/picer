@@ -141,6 +141,16 @@ internal sealed partial class AgentConnectionRegistry
         Func<ReadOnlyMemory<byte>, Task> onChunk, CancellationToken cancellationToken)
     {
         var session = await WaitForSessionAsync(agentId, cancellationToken);
+        if (session is null && _strictRouting && string.IsNullOrWhiteSpace(agentId))
+        {
+            // Each account space owns an isolated registry. A remote GUI often
+            // has no source-agent id, but may safely use the sole connected
+            // model proxy inside its own space. Preserve explicit routing when
+            // several eligible agents are online rather than guessing.
+            var eligible = _sessions.Values.Where(candidate => candidate.Capabilities.Contains("ai.proxy")).Take(2).ToArray();
+            if (eligible.Length == 1) session = eligible[0];
+            else if (eligible.Length > 1) throw new InvalidOperationException("ai_agent_selection_required");
+        }
         if (session is null) throw new InvalidOperationException("media_agent_offline");
         await session.StreamAiAsync(payload, onChunk, cancellationToken);
     }

@@ -419,6 +419,97 @@ public sealed class CloudVisionTests : IDisposable
         Assert.DoesNotContain(_image.Path, handler.RequestBody);
     }
 
+    [Fact]
+    public async Task CompatibleAnalyzer_UsesAuthorizedImageStreamWhenConfigured()
+    {
+        var fixturePath = Path.Combine(_root, "remote-source.png");
+        using (var fixture = new RasterImage(32, 32, new RgbPixel(100, 149, 237))) fixture.SaveAsPng(fixturePath);
+        await using var input = new MemoryStream(await File.ReadAllBytesAsync(fixturePath));
+        var handler = new ApiHandler();
+        using var client = new HttpClient(handler);
+        var openedId = 0L;
+        _image.Id = 987;
+        _image.Path = Path.Combine(_root, "remote-file-not-on-this-computer.jpg");
+        using var analyzer = new OpenAiCompatibleCloudVisionAnalyzer(new CloudVisionApiOptions(
+            new Uri("https://example.test/v1/chat/completions"), "secret-key", "qwen-vl-test", "bailian"), client,
+            imageStreamFactory: (record, _) =>
+            {
+                openedId = record.Id;
+                return Task.FromResult<Stream?>(new NonSeekableReadStream(input));
+            });
+
+        await analyzer.AnalyzeAsync(new CloudVisionRequest(_image, null, [], "{}"), CancellationToken.None);
+
+        Assert.Equal(987, openedId);
+        Assert.Contains("data:image/jpeg;base64,", handler.RequestBody);
+        Assert.DoesNotContain(_image.Path, handler.RequestBody);
+    }
+
+    private sealed class NonSeekableReadStream(Stream inner) : Stream
+    {
+        public override bool CanRead => inner.CanRead;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+        public override int Read(byte[] buffer, int offset, int count) => inner.Read(buffer, offset, count);
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default) => inner.ReadAsync(buffer, cancellationToken);
+        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) => inner.ReadAsync(buffer, offset, count, cancellationToken);
+        public override void Flush() { }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        protected override void Dispose(bool disposing) { if (disposing) inner.Dispose(); base.Dispose(disposing); }
+    }
+
+    [Theory]
+    [InlineData("event: error\ndata: {\"error\":\"proxy failed\"}\n\n", "ai_proxy_failed")]
+    [InlineData("event: error\ndata: {\"error\":{\"code\":\"media_agent_offline\",\"message\":\"private detail\"}}\n\n", "media_agent_offline")]
+    public async Task CompatibleAnalyzer_ReportsSafeSseErrorCode(string stream, string expectedCode)
+    {
+        var path = Path.Combine(_root, "stream-error.png");
+        using (var image = new RasterImage(32, 32, new RgbPixel(30, 40, 50))) image.SaveAsPng(path);
+        _image.Path = path;
+        using var client = new HttpClient(new FixedResponseHandler(stream, "text/event-stream"));
+        using var analyzer = new OpenAiCompatibleCloudVisionAnalyzer(new CloudVisionApiOptions(
+            new Uri("https://example.test/v1/chat/completions"), "secret-key", "qwen-vl-test", "local"), client);
+
+        var error = await Assert.ThrowsAsync<VisionStreamException>(() => analyzer.AnalyzeAsync(
+            new CloudVisionRequest(_image, null, [], "{}"), CancellationToken.None));
+
+        Assert.Equal(expectedCode, error.ErrorCode);
+        Assert.DoesNotContain("private detail", error.Message);
+        var failure = AnalysisStageException.Wrap(AnalysisStage.Model, error);
+        Assert.Equal(expectedCode, failure.ErrorCode);
+    }
+
+    [Fact]
+    public async Task CompatibleAnalyzer_UsesDeviceAuthenticationFromHttpClient()
+    {
+        var path = Path.Combine(_root, "device-auth.png");
+        using (var image = new RasterImage(32, 32, new RgbPixel(30, 40, 50))) image.SaveAsPng(path);
+        _image.Path = path;
+        var handler = new ApiHandler();
+        using var client = new HttpClient(handler);
+        client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("DPoP", "device-proof");
+        using var analyzer = new OpenAiCompatibleCloudVisionAnalyzer(new CloudVisionApiOptions(
+            new Uri("https://example.test/v1/chat/completions"), "", "qwen-vl-test", "index-service",
+            UseClientAuthentication: true), client);
+
+        await analyzer.AnalyzeAsync(new CloudVisionRequest(_image, null, [], "{}"), CancellationToken.None);
+
+        Assert.Equal("DPoP device-proof", handler.Authorization);
+    }
+
+    private sealed class FixedResponseHandler(string body, string mediaType) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(body, Encoding.UTF8, mediaType)
+            });
+    }
+
     public void Dispose()
     {
         _database.Dispose();

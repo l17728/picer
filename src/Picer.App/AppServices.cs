@@ -628,7 +628,30 @@ public static partial class AppServices
             && Uri.TryCreate(configuredService.TrimEnd('/') + "/api/ai/v1/chat/stream", UriKind.Absolute, out var configuredEndpoint))
         {
             var routedClient = CreatePinnedServiceClient(serviceBackend, TimeSpan.FromMinutes(5));
-            var routed = new OpenAiCompatibleCloudVisionAnalyzer(new CloudVisionApiOptions(configuredEndpoint, serviceBackend.Token ?? "", model.Id, "index-service", PromptVersion: "picer-photo-v2-concise"), routedClient, disposeClient: true);
+            var routed = new OpenAiCompatibleCloudVisionAnalyzer(new CloudVisionApiOptions(configuredEndpoint, serviceBackend.Token ?? "", model.Id, "index-service",
+                PromptVersion: "picer-photo-v2-concise", UseClientAuthentication: serviceBackend.DeviceAuthentication), routedClient, disposeClient: true,
+                imageStreamFactory: async (image, cancellationToken) =>
+                {
+                    if (Gateway is not IMediaAssetGateway mediaGateway)
+                        throw new IOException("photo_analysis_input_unavailable");
+                    AppLogger.Info($"Remote photo analysis input requested; imageId={image.Id}");
+                    try
+                    {
+                        var stream = await mediaGateway.OpenPhotoAnalysisInputAsync(image, cancellationToken).ConfigureAwait(false);
+                        if (stream is null)
+                        {
+                            AppLogger.Warn($"Remote photo analysis input endpoint unavailable; using authorized original-media read; imageId={image.Id}");
+                            stream = await mediaGateway.OpenOriginalImageAsync(image.Id, cancellationToken: cancellationToken).ConfigureAwait(false);
+                        }
+                        AppLogger.Info($"Remote photo analysis input opened; imageId={image.Id}; available={stream is not null}; seekable={stream?.CanSeek.ToString() ?? "null"}");
+                        return stream;
+                    }
+                    catch (Exception exception)
+                    {
+                        AppLogger.Warn($"Remote photo analysis input failed; imageId={image.Id}; type={exception.GetType().Name}; inner={exception.InnerException?.GetType().Name ?? "none"}; status={(exception as HttpRequestException)?.StatusCode?.ToString() ?? "none"}");
+                        throw;
+                    }
+                });
             return (new CloudVisionAnalysisService(CloudVisionRepository, routed, Geocoder, People,
                 databaseWork: (work, ct) => UiWork.RunDatabaseAsync(work, ct)), routed,
                 new CloudVisionRunPolicy(true, settings.MaximumImagesPerRun, settings.IncludePreciseGps,
