@@ -1,6 +1,6 @@
 # Picer 用户指南
 
-当前维护版为 [v1.5.5](https://github.com/l17728/picer/releases/tag/v1.5.5)，schema 47；私有仓库下载需要访问权限。GUI、Agent、IndexService、ModelServer 的安装器和组件包由 Release 流水线生成。账号门户/多租户模式已启用；跨电脑登录和设备授权见[远程 GUI 登录指南](LOCAL_ACCOUNT_REMOTE_GUI_GUIDE.md)。照片/视频源端功能应配套升级驻留程序和 IndexService；正式发布不等于生产服务已自动部署。
+当前维护版为 [v1.5.6](https://github.com/l17728/picer/releases/tag/v1.5.6)，schema 47；私有仓库下载需要访问权限。GUI、Agent、IndexService、ModelServer 的安装器和组件包由 Release 流水线生成。账号门户/多租户模式已启用；跨电脑登录和设备授权见[远程 GUI 登录指南](LOCAL_ACCOUNT_REMOTE_GUI_GUIDE.md)。照片/视频源端功能应配套升级驻留程序和 IndexService；正式发布不等于生产服务已自动部署。
 
 下载 [v1.5.1 正式 Release](https://github.com/l17728/picer/releases/tag/v1.5.1) 的 GUI 或独立驻留程序一键安装器，详见[安装说明](RELEASE_GUIDE.md)。GUI 安装器为 326,183,841 字节（约 326.2 MB）；发布包含 15 项资产和 SHA256SUMS。断网部署可使用 `Picer-v1.5.1-win-x64-full.zip` 与同版本 runtime 包，见[离线安装说明](OFFLINE_INSTALL.md)。
 

@@ -6,7 +6,7 @@
 
 IndexService 新增独立后台一致性检查：启动后 45 秒开始，每轮间隔 10 秒，照片与视频交替，每批 32 条并轮转内容审计。仅在单个支持 `directory.verify.v1` 的来源代理在线时执行，遇到前台工作让路；不扫描新文件，不自动清除索引。设置 `PICER_BACKGROUND_INDEX_CHECK=0` 并重启服务可关闭。检查点位于服务数据目录的 `consistency-checkpoint.json`，只有数字游标。更多协议、兼容和发布证据见[七项性能与后台维护改造](../docs/PERFORMANCE_FOLLOWUP_IMPLEMENTATION_2026-10-10.md)。
 
-最新维护版为 [v1.5.5](https://github.com/l17728/picer/releases/tag/v1.5.5)，包含 GUI/驻留安装器以及 IndexService、ModelServer 的 Windows/Linux x64 自包含包。账号空间路由允许在空间内只有一个合格代理时自动选择，多个合格代理时明确要求选择；照片分析输入、视频探测/关键帧/转录均按设备权限校验。空间运行时创建请求等待同一有界门闩，容量确实耗尽才返回失败。仓库为私有，下载需要访问权限。组件职责、首次安装和本版验证见[安装指南](../docs/RELEASE_GUIDE.md)及[v1.5.5 发布记录](../docs/RELEASE_1_5_5_2026-10-20.md)。
+最新维护版为 [v1.5.6](https://github.com/l17728/picer/releases/tag/v1.5.6)，包含 GUI/驻留安装器以及 IndexService、ModelServer 的 Windows/Linux x64 自包含包。账号空间路由允许在空间内只有一个合格代理时自动选择，多个合格代理时明确要求选择；照片分析输入、视频探测/关键帧/转录均按设备权限校验。空间运行时创建请求等待同一有界门闩，容量确实耗尽才返回失败。仓库为私有，下载需要访问权限。组件职责、首次安装和本版验证见[安装指南](../docs/RELEASE_GUIDE.md)及[v1.5.6 发布记录](../docs/RELEASE_1_5_6_2026-10-20.md)。
 
 IndexService 当前数据库 schema 为 45，须与客户端配套升级。Linux 升级必须先停所有数据库写入者，备份 DB/WAL/SHM；失败时数据库和程序一起恢复，不能只降级二进制。具体命令、额外写入服务配置、关闭快照和失败停机行为见 [自动升级说明](../docs/INDEX_SERVICE_AUTOMATED_UPGRADE_2026-09-30.md)。
 

@@ -29,7 +29,7 @@
     <Resource Include="Assets\Picer.png" />
   </ItemGroup>
 
-  <ItemGroup>
+  <ItemGroup Condition="'$(IncludeRuntimeAssets)' != 'false'">
     <Content Include="..\..\third_party\runtime\**\*">
       <Link>runtime\%(RecursiveDir)%(Filename)%(Extension)</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>

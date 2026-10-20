@@ -21,7 +21,7 @@ $packages = @(
     @{ Name='Picer.ModelServer'; Project='server/Picer.ModelServer/Picer.ModelServer.csproj'; Rid='linux-x64'; Executable='Picer.ModelServer' }
 )
 function Publish-Binary($project, $rid, $destination) {
-    dotnet publish (Join-Path $repoRoot $project) -c Release -r $rid --self-contained true -o $destination --warnaserror
+    dotnet publish (Join-Path $repoRoot $project) -c Release -r $rid --self-contained true -o $destination --warnaserror -p:IncludeRuntimeAssets=false
     if ($LASTEXITCODE -ne 0) { throw "Publish failed: $project ($rid)" }
     if ($rid -eq 'win-x64') {
         & (Join-Path $PSScriptRoot 'copy-native-prerequisites.ps1') -Destination $destination
@@ -57,7 +57,26 @@ function Publish-Binary($project, $rid, $destination) {
     if (-not $runtime.StartsWith($stage + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
         throw 'Runtime removal escaped new staging directory.'
     }
-    if (Test-Path -LiteralPath $runtime) { Remove-Item -LiteralPath $runtime -Recurse -Force }
+    if (Test-Path -LiteralPath $runtime) {
+        $removed = $false
+        for ($attempt = 1; $attempt -le 10; $attempt++) {
+            try {
+                Remove-Item -LiteralPath $runtime -Recurse -Force -ErrorAction Stop
+                $removed = $true
+                break
+            } catch [System.UnauthorizedAccessException] {
+                if ($attempt -eq 10) { throw }
+                # dotnet publish or malware scanning may briefly retain a native
+                # tool handle after publication. Wait without weakening the
+                # checked staging-directory boundary above.
+                Start-Sleep -Seconds 1
+            } catch [System.IO.IOException] {
+                if ($attempt -eq 10) { throw }
+                Start-Sleep -Seconds 1
+            }
+        }
+        if (-not $removed) { throw "Unable to remove external runtime overlay: $runtime" }
+    }
 }
 foreach ($package in $packages) {
     $name = "$($package.Name)-$Version-$($package.Rid)-binary"

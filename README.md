@@ -4,9 +4,9 @@ Picer 提供照片和视频索引、目录描述、人物管理、文字检索�
 
 ## 当前版本
 
-[v1.5.5](https://github.com/l17728/picer/releases/tag/v1.5.5) 是本轮维护版。它修复账号空间中的远程照片/视频描述授权与代理选择，降低空间运行时竞争和镜像同步瞬时失败，并把目录描述改为发现、处理和远程同步解耦的有界异步流水线。数据库 schema 47 增加机器分类建议、用户确认和拒绝的来源隔离；完整分类审核 UI、后台分类调度和 BM25 + Chinese-CLIP RRF 多路召回尚未交付。仓库为私有，Release 下载需要访问权限。
+[v1.5.6](https://github.com/l17728/picer/releases/tag/v1.5.6) 是本轮维护版。它修复账号空间中的远程照片/视频描述授权与代理选择，降低空间运行时竞争和镜像同步瞬时失败，并把目录描述改为发现、处理和远程同步解耦的有界异步流水线。数据库 schema 47 增加机器分类建议、用户确认和拒绝的来源隔离；完整分类审核 UI、后台分类调度和 BM25 + Chinese-CLIP RRF 多路召回尚未交付。仓库为私有，Release 下载需要访问权限。
 
-普通 Windows 用户下载 `Picer-v1.5.5-win-x64-setup.exe`。安装器包含 GUI、驻留程序、自包含 .NET/Kestrel 和媒体工具；纯远程客户端不需要 Python、CUDA 或模型包。新装 GUI 默认不启动本机驻留代理；保存原始媒体的电脑按授权配置运行代理。完整安装与验证见[安装指南](docs/RELEASE_GUIDE.md)、[离线安装说明](docs/OFFLINE_INSTALL.md)和[v1.5.5 发布记录](docs/RELEASE_1_5_5_2026-10-20.md)。
+普通 Windows 用户下载 `Picer-v1.5.6-win-x64-setup.exe`。安装器包含 GUI、驻留程序、自包含 .NET/Kestrel 和媒体工具；纯远程客户端不需要 Python、CUDA 或模型包。新装 GUI 默认不启动本机驻留代理；保存原始媒体的电脑按授权配置运行代理。完整安装与验证见[安装指南](docs/RELEASE_GUIDE.md)、[离线安装说明](docs/OFFLINE_INSTALL.md)和[v1.5.6 发布记录](docs/RELEASE_1_5_6_2026-10-20.md)。
 
 ## 从哪里开始
 
