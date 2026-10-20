@@ -13,7 +13,12 @@ public sealed class SpaceRuntimePool(AccountStore accounts, int capacity = 32, R
 
     public async Task<Lease> AcquireAsync(string spaceId, CancellationToken cancellationToken)
     {
-        if (!await _gate.WaitAsync(TimeSpan.FromSeconds(2), cancellationToken)) throw new SpaceCapacityException();
+        // Runtime creation and eviction can legitimately take longer than two
+        // seconds (large spaces open SQLite and start an isolated host). Queue
+        // callers behind that bounded work instead of turning normal startup
+        // contention into a burst of HTTP 503 responses and client circuit
+        // breaker trips. The request cancellation token remains the bound.
+        await _gate.WaitAsync(cancellationToken);
         try
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
