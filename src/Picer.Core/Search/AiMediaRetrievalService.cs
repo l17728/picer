@@ -34,7 +34,8 @@ public sealed class AiMediaRetrievalService(PicerDatabase database, PeopleServic
     private static readonly TimeSpan ModelProgressInterval = TimeSpan.FromSeconds(3);
 
     public async Task<AiMediaAnswer> AskAsync(string question, bool includeVideos, DateTime today,
-        IProgress<(string Stage, int Percent)>? progress = null, CancellationToken cancellationToken = default)
+        IProgress<(string Stage, int Percent)>? progress = null, CancellationToken cancellationToken = default,
+        bool includeSuggestedClassifications = false)
     {
         var stopwatch = Stopwatch.StartNew();
         progress?.Report(("准备查询", 2));
@@ -77,7 +78,8 @@ public sealed class AiMediaRetrievalService(PicerDatabase database, PeopleServic
         DateTime? end = DateTime.TryParse(plan.EndDate, out var endValue) ? endValue.Date.AddDays(1).AddTicks(-1).ToUniversalTime() : null;
         var dayPart = ResolveDayPart(question, plan.Keywords);
         var baseFilter = new SearchFilters { PersonId = mention?.Id, GeoBounds = bounds, TakenAfter = start,
-            TakenBefore = end, IncludeMissing = false, SortBy = SortField.TakenDate, SortDir = SortDirection.Descending };
+            TakenBefore = end, IncludeMissing = false, SortBy = SortField.TakenDate, SortDir = SortDirection.Descending,
+            IncludeSuggestedClassifications = includeSuggestedClassifications };
         var photoCandidates = new Dictionary<long, ImageRecord>();
         // Time-of-day words are structured constraints, not text that must occur
         // in a description. Searching for "白天" literally used to discard all
@@ -85,6 +87,7 @@ public sealed class AiMediaRetrievalService(PicerDatabase database, PeopleServic
         // time (or no time phrase at all).
         baseFilter.TimeOfDay = dayPart switch { DayPart.Day => TimeOfDayFilter.Day, DayPart.Night => TimeOfDayFilter.Night, _ => TimeOfDayFilter.Any };
         var visualTerms = QueryRewrite.Expand(plan.Keywords.Where(term => !IsDayPartToken(term))).ToArray();
+        var visualConcepts = VisualConceptCatalog.Parse(string.Join(" ", visualTerms)).ConceptIds;
         var searchTerms = visualTerms
             // Keep the literal location as a text fallback even when geocoding
             // returned bounds; older analyses may have place names but no GPS.
@@ -93,7 +96,8 @@ public sealed class AiMediaRetrievalService(PicerDatabase database, PeopleServic
         var toolResult = new MediaSearchTool(database, videos).Execute(new MediaSearchRequest(
             MediaTypeFilter.Photo, requiredPeople.Select(value => value.Id).ToArray(), bounds, start, end,
             baseFilter.TimeOfDay, Terms: bounds is null ? searchTerms : visualTerms, AutoRelax: false, IncludeMissing: false, Limit: 200,
-            SortDirection: SortDirection.Descending));
+            SortDirection: SortDirection.Descending, VisualConceptIds: visualConcepts,
+            IncludeSuggestedClassifications: includeSuggestedClassifications));
         foreach (var hit in toolResult.Items)
         {
             var image = database.GetImage(hit.Id);
@@ -108,7 +112,8 @@ public sealed class AiMediaRetrievalService(PicerDatabase database, PeopleServic
             var textFallback = new MediaSearchTool(database).Execute(new MediaSearchRequest(
                 MediaTypeFilter.Photo, requiredPeople.Select(value => value.Id).ToArray(), null, start, end,
                 baseFilter.TimeOfDay, Terms: searchTerms, IncludeMissing: false, Limit: 200,
-                SortDirection: SortDirection.Descending));
+                SortDirection: SortDirection.Descending, VisualConceptIds: visualConcepts,
+                IncludeSuggestedClassifications: includeSuggestedClassifications));
             foreach (var hit in textFallback.Items)
             {
                 var image = database.GetImage(hit.Id);
@@ -123,7 +128,7 @@ public sealed class AiMediaRetrievalService(PicerDatabase database, PeopleServic
         {
             progress?.Report(("完成", 100));
             AppLogger.Info($"AiQuestion completed without evidence; photos=0; videos=0; elapsedMs={stopwatch.ElapsedMilliseconds}");
-            return CreateAnswer([], [], requiredPeople, plan, null);
+            return CreateAnswer([], [], requiredPeople, plan, null, includeSuggestedClassifications);
         }
         progress?.Report(("AI复核候选", 65));
         var evidence = new
@@ -167,13 +172,16 @@ public sealed class AiMediaRetrievalService(PicerDatabase database, PeopleServic
             AppLogger.Info($"AiQuestion reviewer fallback applied for confirmed person; photos={rankedPhotos.Length}; videos={rankedVideos.Length}");
         }
         progress?.Report(("完成", 100));
-        return CreateAnswer(rankedPhotos, rankedVideos, requiredPeople, plan, review.Markdown);
+        return CreateAnswer(rankedPhotos, rankedVideos, requiredPeople, plan, review.Markdown, includeSuggestedClassifications);
     }
 
     private static AiMediaAnswer CreateAnswer(IReadOnlyList<ImageRecord> photos, IReadOnlyList<VideoRecord> videos,
-        IReadOnlyList<PersonSummary> requiredPeople, AiQueryPlan plan, string? explanation)
+        IReadOnlyList<PersonSummary> requiredPeople, AiQueryPlan plan, string? explanation,
+        bool includeSuggestedClassifications)
     {
         var text = new System.Text.StringBuilder("## 程序确认结果\n\n");
+        if (includeSuggestedClassifications)
+            text.Append("已允许待确认的 AI 分类建议参与照片检索；相关命中不代表该分类已由你确认。\n\n");
         text.Append($"返回照片 **{photos.Count} 张**、视频 **{videos.Count} 个**；下方媒体列表与这些数量一致。\n\n");
         if (requiredPeople.Count > 0)
             text.Append("人物条件：所有返回项均包含人工确认人物“")

@@ -13,6 +13,8 @@ public sealed class AnalysisStageException(AnalysisStage stage, string errorCode
     public static AnalysisStageException Wrap(AnalysisStage stage, Exception exception)
     {
         if (exception is AnalysisStageException known) return known;
+        if (exception is VisionStreamException streamFailure)
+            return new(stage, streamFailure.ErrorCode, true, exception);
         var code = exception switch
         {
             System.Net.Http.HttpRequestException { StatusCode: { } status } => "HTTP_" + (int)status,

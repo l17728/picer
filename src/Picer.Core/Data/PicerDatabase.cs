@@ -8,7 +8,7 @@ namespace Picer.Core.Data;
 
 public sealed partial class PicerDatabase : IDisposable
 {
-    public const int CurrentSchemaVersion = 46;
+    public const int CurrentSchemaVersion = 47;
     private readonly SqliteConnection _conn;
     private readonly string _connectionString;
     private readonly FileStream? _lifetimeLease;
@@ -1164,6 +1164,83 @@ public sealed partial class PicerDatabase : IDisposable
         }
         if (schemaVersion < 45) VideoMetadataIdentityMigration.Apply(_conn);
         if (schemaVersion < 46) SpaceSyncIdentityMigration.Apply(_conn);
+        if (schemaVersion < 47)
+        {
+            using var classificationMigration = _conn.BeginTransaction();
+            using var migration = Command("""
+                CREATE TABLE IF NOT EXISTS image_classification_assertions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    image_id INTEGER NOT NULL REFERENCES images(id) ON DELETE CASCADE,
+                    content_sha256 TEXT,
+                    concept_id TEXT NOT NULL,
+                    source_kind TEXT NOT NULL CHECK(source_kind IN ('metadata_rule','vision_model','user','legacy')),
+                    source_version TEXT NOT NULL,
+                    assertion_state TEXT NOT NULL CHECK(assertion_state IN ('suggested','automatic','user_confirmed','legacy_effective')),
+                    review_state TEXT NOT NULL CHECK(review_state IN ('pending','accepted','rejected','retracted')),
+                    confidence REAL,
+                    evidence_ref TEXT,
+                    evidence_fingerprint TEXT,
+                    created_utc TEXT NOT NULL,
+                    updated_utc TEXT NOT NULL,
+                    reviewed_utc TEXT,
+                    UNIQUE(image_id, concept_id, source_kind, source_version)
+                );
+                CREATE INDEX IF NOT EXISTS idx_classification_assertions_image
+                    ON image_classification_assertions(image_id, assertion_state, review_state);
+                CREATE INDEX IF NOT EXISTS idx_classification_assertions_content
+                    ON image_classification_assertions(content_sha256, concept_id, assertion_state);
+                CREATE TABLE IF NOT EXISTS image_classification_rejections (
+                    image_id INTEGER REFERENCES images(id) ON DELETE CASCADE,
+                    content_sha256 TEXT,
+                    concept_id TEXT NOT NULL,
+                    source_scope TEXT NOT NULL,
+                    rejected_utc TEXT NOT NULL,
+                    CHECK((image_id IS NOT NULL AND content_sha256 IS NULL) OR
+                          (image_id IS NULL AND content_sha256 IS NOT NULL))
+                );
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_classification_rejections_image
+                    ON image_classification_rejections(image_id, concept_id, source_scope)
+                    WHERE image_id IS NOT NULL;
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_classification_rejections_content
+                    ON image_classification_rejections(content_sha256, concept_id, source_scope)
+                    WHERE content_sha256 IS NOT NULL;
+                CREATE INDEX IF NOT EXISTS idx_classification_rejections_concept
+                    ON image_classification_rejections(concept_id, source_scope);
+                CREATE TABLE IF NOT EXISTS classification_runs (
+                    run_id TEXT PRIMARY KEY,
+                    status TEXT NOT NULL CHECK(status IN ('running','paused','cancelled','interrupted','completed','partial_failed')),
+                    scope_root TEXT,
+                    cursor_image_id INTEGER NOT NULL DEFAULT 0,
+                    discovered_count INTEGER NOT NULL DEFAULT 0,
+                    processed_count INTEGER NOT NULL DEFAULT 0,
+                    failed_count INTEGER NOT NULL DEFAULT 0,
+                    last_error_code TEXT,
+                    started_utc TEXT NOT NULL,
+                    updated_utc TEXT NOT NULL,
+                    finished_utc TEXT
+                );
+                CREATE INDEX IF NOT EXISTS idx_classification_runs_status
+                    ON classification_runs(status, updated_utc DESC);
+                INSERT OR IGNORE INTO image_classification_assertions(
+                    image_id,content_sha256,concept_id,source_kind,source_version,assertion_state,review_state,
+                    confidence,evidence_fingerprint,created_utc,updated_utc)
+                SELECT vc.image_id,
+                    CASE WHEN length(i.sha256)=64 AND i.sha256 NOT GLOB '*[^0-9A-Fa-f]*' THEN lower(i.sha256) END,
+                    vc.concept_id,
+                    CASE WHEN vc.state='accepted' THEN 'legacy' ELSE 'vision_model' END,
+                    vc.model_version,
+                    CASE WHEN vc.state='accepted' THEN 'legacy_effective' ELSE 'suggested' END,
+                    CASE WHEN vc.state='accepted' THEN 'accepted' ELSE 'pending' END,
+                    vc.confidence, vc.model_version, vc.created_utc, vc.created_utc
+                FROM image_visual_concepts vc JOIN images i ON i.id=vc.image_id;
+                INSERT OR IGNORE INTO image_classification_rejections(image_id,content_sha256,concept_id,source_scope,rejected_utc)
+                SELECT image_id,NULL,concept_id,'vision_model',rejected_utc FROM visual_concept_rejections;
+                PRAGMA user_version=47;
+                """);
+            migration.Transaction = classificationMigration;
+            migration.ExecuteNonQuery();
+            classificationMigration.Commit();
+        }
         }
         catch
         {

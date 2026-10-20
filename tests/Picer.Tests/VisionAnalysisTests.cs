@@ -1076,7 +1076,8 @@ public sealed class VisionAnalysisTests : IDisposable
         var filters = new SearchFilters
         {
             IncludeMissing = false,
-            VisualConceptIds = ["season.summer", "apparel.dress", "scene.mountain"]
+            VisualConceptIds = ["season.summer", "apparel.dress", "scene.mountain"],
+            IncludeSuggestedClassifications = true
         };
 
         Assert.Equal(1, first.Analyzed);

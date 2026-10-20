@@ -50,6 +50,7 @@ public sealed class SearchFilters
     public GeoBounds? GeoBounds { get; set; } = null;
     public long? PersonId { get; set; } = null;
     public IReadOnlyList<string> VisualConceptIds { get; set; } = [];
+    public bool IncludeSuggestedClassifications { get; set; }
 
     public SortField SortBy { get; set; } = SortField.TakenDate;
     public SortDirection SortDir { get; set; } = SortDirection.Ascending;

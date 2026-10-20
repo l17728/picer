@@ -20,7 +20,8 @@ public sealed record MediaSearchRequest(
     bool AutoRelax = true,
     bool IncludeMissing = false,
     int Limit = 200,
-    SortDirection SortDirection = SortDirection.Descending);
+    SortDirection SortDirection = SortDirection.Descending,
+    bool IncludeSuggestedClassifications = false);
 
 public sealed record MediaSearchHit(long Id, string Path, MediaTypeFilter MediaType,
     DateTime? TakenUtc, double? TextScore = null, IReadOnlyList<string>? MatchedFields = null);
@@ -58,7 +59,8 @@ public sealed class MediaSearchTool(PicerDatabase database, VideoRepository? vid
             IncludeMissing = request.IncludeMissing,
             SortBy = SortField.TakenDate,
             SortDir = request.SortDirection,
-            VisualConceptIds = request.VisualConceptIds ?? []
+            VisualConceptIds = request.VisualConceptIds ?? [],
+            IncludeSuggestedClassifications = request.IncludeSuggestedClassifications
         };
         var people = request.PersonIds?.Where(id => id > 0).Distinct().ToArray() ?? [];
         // SearchFilters currently accepts one person ID; intersect additional
@@ -168,7 +170,8 @@ public sealed class MediaSearchTool(PicerDatabase database, VideoRepository? vid
             MinWidth = source.MinWidth, MaxWidth = source.MaxWidth, MinHeight = source.MinHeight, MaxHeight = source.MaxHeight,
             MinFileSize = source.MinFileSize, MaxFileSize = source.MaxFileSize, CameraBrand = source.CameraBrand,
             TagId = source.TagId, GeoBounds = source.GeoBounds, PersonId = personId ?? source.PersonId,
-            VisualConceptIds = source.VisualConceptIds, SortBy = source.SortBy, SortDir = source.SortDir
+            VisualConceptIds = source.VisualConceptIds, IncludeSuggestedClassifications = source.IncludeSuggestedClassifications,
+            SortBy = source.SortBy, SortDir = source.SortDir
         };
     }
 

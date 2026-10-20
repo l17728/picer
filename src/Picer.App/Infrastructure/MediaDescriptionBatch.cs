@@ -1,4 +1,5 @@
 using System.IO;
+using System.Threading.Channels;
 using Picer.Core.Gateway;
 using Picer.Core.Models;
 using Picer.Core.Video;
@@ -7,7 +8,8 @@ using Picer.Core.Vision;
 namespace Picer.App.Infrastructure;
 
 internal sealed class DescriptionBudgetExceededException() : InvalidOperationException("已达到描述费用预算，已完成结果保留。请调整预算或稍后继续。");
-internal sealed class DescriptionServiceUnavailableException() : InvalidOperationException("服务连续不可用，任务已暂停，未处理项保持待描述。请检查来源设备、索引服务和模型服务后重新开始；已完成结果会自动跳过。");
+internal sealed class DescriptionServiceUnavailableException() : InvalidOperationException(
+    "服务连续不可用，任务已暂停。当前显示的“已发现”只是暂停前的流式进度，不是目录总量；未发现和未处理项目仍保持待描述。请检查来源设备、索引服务和模型服务后重新开始，已有结果会自动跳过。");
 internal sealed record MediaDescriptionFailure(bool IsVideo, long Id, string Path, string Error,
     AnalysisStage Stage = AnalysisStage.Model, bool Retryable = true)
 {
@@ -70,20 +72,62 @@ internal sealed class MediaDescriptionBatch(
         }
         using var photos = new SemaphoreSlim(Math.Clamp(photoConcurrency, 1, 4));
         using var videos = new SemaphoreSlim(Math.Clamp(videoConcurrency, 1, 4));
-        await Parallel.ForEachAsync(items, new ParallelOptions { MaxDegreeOfParallelism = Math.Clamp(Math.Max(photoConcurrency, videoConcurrency), 1, 4), CancellationToken = token },
-            async (item, workerToken) =>
+        using var workersCancellation = CancellationTokenSource.CreateLinkedTokenSource(token);
+        var workerToken = workersCancellation.Token;
+        var queue = Channel.CreateBounded<DirectoryDescriptionItem>(new BoundedChannelOptions(8192)
+        {
+            SingleWriter = true,
+            SingleReader = false,
+            FullMode = BoundedChannelFullMode.Wait
+        });
+        var workerCount = Math.Clamp(Math.Max(photoConcurrency, videoConcurrency), 1, 4);
+        async Task WorkerAsync()
+        {
+            try
             {
-                if (item.Described) { Interlocked.Increment(ref skipped); if (skipped % 32 == 0) Report(); return; }
-                Interlocked.Increment(ref discovered); Report();
-                var gate = item.IsVideo ? videos : photos;
-                await gate.WaitAsync(workerToken);
-                try
+                await foreach (var item in queue.Reader.ReadAllAsync(workerToken).ConfigureAwait(false))
                 {
-                    await RunOne(() => item.IsVideo ? describeVideo(item.Video!, workerToken) : describePhoto(item.Photo!, workerToken),
-                        item.IsVideo ? "video" : "photo", item.Id, item.Path, workerToken);
+                    var gate = item.IsVideo ? videos : photos;
+                    await gate.WaitAsync(workerToken).ConfigureAwait(false);
+                    try
+                    {
+                        await RunOne(() => item.IsVideo ? describeVideo(item.Video!, workerToken) : describePhoto(item.Photo!, workerToken),
+                            item.IsVideo ? "video" : "photo", item.Id, item.Path, workerToken).ConfigureAwait(false);
+                    }
+                    finally { gate.Release(); }
                 }
-                finally { gate.Release(); }
-            });
+            }
+            catch { await workersCancellation.CancelAsync().ConfigureAwait(false); throw; }
+        }
+        var workers = Enumerable.Range(0, workerCount).Select(_ => Task.Run(WorkerAsync, workerToken)).ToArray();
+        try
+        {
+            await foreach (var item in items.WithCancellation(workerToken).ConfigureAwait(false))
+            {
+                if (item.Described)
+                {
+                    Interlocked.Increment(ref skipped);
+                    if (skipped % 32 == 0) Report();
+                    continue;
+                }
+                var found = Interlocked.Increment(ref discovered);
+                if (found == 1 || found % 16 == 0) Report();
+                await queue.Writer.WriteAsync(item, workerToken).ConfigureAwait(false);
+            }
+            queue.Writer.TryComplete();
+            await Task.WhenAll(workers).ConfigureAwait(false);
+        }
+        catch
+        {
+            queue.Writer.TryComplete();
+            await workersCancellation.CancelAsync().ConfigureAwait(false);
+            Exception? workerFailure = null;
+            try { await Task.WhenAll(workers).ConfigureAwait(false); }
+            catch (Exception exception) when (!token.IsCancellationRequested) { workerFailure = exception; }
+            if (workerFailure is not null)
+                System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(workerFailure).Throw();
+            throw;
+        }
         progress.Report($"发现完成；已处理 {count}/{discovered}：成功或复用 {completed}，失败 {failed}；原有描述跳过 {skipped}");
     }
 
@@ -146,19 +190,9 @@ internal sealed class MediaDescriptionBatch(
                     if (!actual.Equals(expected, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("原图内容已变化，请先更新索引。");
                 }
                 var image = request.Image;
-                var local = new ImageRecord
-                {
-                    Id = image.Id,
-                    Path = path,
-                    FileSize = inputSize,
-                    ModifiedUtc = image.ModifiedUtc,
-                    TakenUtc = image.TakenUtc,
-                    CreatedUtc = image.CreatedUtc,
-                    Width = image.Width,
-                    Height = image.Height,
-                    Gps = image.Gps,
-                    Camera = image.Camera
-                };
+                var local = new ImageRecord { Id = image.Id, Path = path, FileSize = inputSize,
+                    ModifiedUtc = image.ModifiedUtc, TakenUtc = image.TakenUtc, CreatedUtc = image.CreatedUtc,
+                    Width = image.Width, Height = image.Height, Gps = image.Gps, Camera = image.Camera };
                 stage = AnalysisStage.Model;
                 return await inner.AnalyzeAsync(request with { Image = local }, token);
             }

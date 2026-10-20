@@ -90,6 +90,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private string _searchQuery = "";
 
     [ObservableProperty]
+    private bool _includeSuggestedClassifications;
+
+    [ObservableProperty]
     private bool _isQuestionMode;
 
     [ObservableProperty]
@@ -368,6 +371,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _searchDebounce.Stop();
         if (string.IsNullOrWhiteSpace(value))
         {
+            if (IncludeSuggestedClassifications) IncludeSuggestedClassifications = false;
             _ = ApplySearchAndFilterAsync();
         }
         else
@@ -375,6 +379,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
             StatusText = $"准备搜索“{value.Trim()}”…";
             _searchDebounce.Start();
         }
+    }
+    partial void OnIncludeSuggestedClassificationsChanged(bool value) => _ = ApplySearchAndFilterAsync();
+    partial void OnAiQuestionInputChanged(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value) && IncludeSuggestedClassifications)
+            IncludeSuggestedClassifications = false;
     }
     partial void OnIsQuestionModeChanged(bool value)
     {
@@ -626,6 +636,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             return;
         }
         var includeVideos = IncludeVideosInAiQuestion;
+        var includeSuggestedClassifications = IncludeSuggestedClassifications;
         try
         {
             StatusText = "AI 问答：正在理解问题…";
@@ -642,7 +653,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 using var queryDatabase = _db.OpenIndependentConnection();
                 var service = new AiMediaRetrievalService(queryDatabase, new Picer.Core.People.PeopleService(queryDatabase),
                     new VideoRepository(queryDatabase), new CloudVisionRepository(queryDatabase), chat);
-                return await service.AskAsync(question, includeVideos, DateTime.Today, progress, token);
+                return await service.AskAsync(question, includeVideos, DateTime.Today, progress, token,
+                    includeSuggestedClassifications);
             }, token);
             if (version != _searchVersion || token.IsCancellationRequested) return;
             QuestionAnswerText = answer.Markdown;
@@ -704,6 +716,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         GeoBounds = geoBounds,
         PersonId = person?.Id,
         VisualConceptIds = visual.ConceptIds,
+            IncludeSuggestedClassifications = IncludeSuggestedClassifications,
         SourceId = sourceId ?? (SelectedSource is null || SelectedSource.IsAll ? null : SelectedSource.SourceId),
         IncludeMissing = IncludeMissing,
         TakenAfter = FilterTakenAfter,
@@ -865,9 +878,17 @@ public partial class MainViewModel : ObservableObject, IDisposable
         foreach (var tag in SemanticEngine.GetTags(_db)) Tags.Add(new TagItemViewModel(tag));
     }
 
-    [RelayCommand]
+    private static bool CanRunLocalIndex() => !AppServices.ServiceMode;
+
+    [RelayCommand(CanExecute = nameof(CanRunLocalIndex))]
     private async Task AddFolderAsync()
     {
+        if (!CanRunLocalIndex())
+        {
+            StatusText = "远程模式不能扫描本机缓存路径；请在来源设备上更新索引。";
+            return;
+        }
+
         string sourcePath;
         if (string.Equals(_services.Storage.Scheme, "webdav", StringComparison.OrdinalIgnoreCase))
         {
@@ -916,11 +937,16 @@ public partial class MainViewModel : ObservableObject, IDisposable
         LoadImages();
     }
 
-    [RelayCommand]
+    [RelayCommand(CanExecute = nameof(CanRunLocalIndex))]
     private async Task StartIndexAsync() => await RunIndexAsync(await UiWork.RunDatabaseAsync(() => _db.GetSources()));
 
     private async Task RunIndexAsync(IReadOnlyList<SourceFolder> sources)
     {
+        if (!CanRunLocalIndex())
+        {
+            StatusText = "远程模式不能扫描本机缓存路径；请在来源设备上更新索引。";
+            return;
+        }
         if (IsIndexing) return;
         using var operation = AppLogger.BeginOperation("index.run", ("sourceCount", sources.Count));
         IsIndexing = true;
@@ -1162,12 +1188,17 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     partial void OnIsIndexingChanged(bool value) => CancelIndexCommand.NotifyCanExecuteChanged();
 
-    [RelayCommand]
+    [RelayCommand(CanExecute = nameof(CanRunLocalIndex))]
     private async Task IndexAllAsync() => await StartIndexAsync();
 
-    [RelayCommand]
+    [RelayCommand(CanExecute = nameof(CanRunLocalIndex))]
     private async Task VerifyAsync()
     {
+        if (!CanRunLocalIndex())
+        {
+            StatusText = "远程模式不能检查本机缓存路径；请在来源设备上检查缺失文件。";
+            return;
+        }
         if (IsBusy || IsIndexing) return;
         IsBusy = true;
         try
@@ -1190,6 +1221,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private void ClearSearch()
     {
         SearchQuery = "";
+        IncludeSuggestedClassifications = false;
         _searchDebounce.Stop();
         _ = ApplySearchAndFilterAsync();
     }

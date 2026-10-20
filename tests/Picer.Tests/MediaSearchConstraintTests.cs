@@ -1,4 +1,4 @@
-﻿using Picer.Core.Data;
+using Picer.Core.Data;
 using Picer.Core.Models;
 using Picer.Core.Search;
 using Picer.Core.Video;
@@ -22,7 +22,11 @@ public sealed class MediaSearchConstraintTests : IDisposable
             SourceId = source.Id, Path = Path.Combine(_root, "mountain.jpg"), FileSize = 10,
             ModifiedUtc = DateTime.UtcNow, IndexedUtc = DateTime.UtcNow, Status = ImageStatus.Active
         }).Id;
-        using var insert = _db.Command("INSERT INTO image_visual_concepts VALUES($image,'landscape.mountain','test',0.9,'suggested',$utc)");
+        using var insert = _db.Command("""
+            INSERT INTO image_classification_assertions(
+                image_id,concept_id,source_kind,source_version,assertion_state,review_state,confidence,created_utc,updated_utc)
+            VALUES($image,'landscape.mountain','vision_model','test','suggested','pending',0.9,$utc,$utc)
+            """);
         insert.Parameters.AddWithValue("$image", _imageId);
         insert.Parameters.AddWithValue("$utc", DateTime.UtcNow.ToString("o"));
         insert.ExecuteNonQuery();
@@ -33,7 +37,7 @@ public sealed class MediaSearchConstraintTests : IDisposable
     {
         var tool = new MediaSearchTool(_db);
         var request = new MediaSearchRequest(VisualConceptIds: ["landscape.mountain"],
-            Terms: ["mountain"], Location: GeoPlaceResolver.Resolve("西安"));
+            Terms: ["mountain"], Location: GeoPlaceResolver.Resolve("西安"), IncludeSuggestedClassifications: true);
         Assert.Equal(_imageId, Assert.Single(tool.Execute(request).Items).Id);
         Assert.Empty(tool.Execute(request with { AutoRelax = false }).Items);
         Assert.Empty(tool.Execute(request with { VisualConceptIds = ["landscape.sea"] }).Items);

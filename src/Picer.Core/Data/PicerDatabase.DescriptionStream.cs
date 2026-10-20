@@ -8,7 +8,7 @@ public sealed partial class PicerDatabase
 {
     /// <summary>Keyset pagination follows the existing directory expression index; no OFFSET or full-library sort.</summary>
     public IReadOnlyList<DirectoryDescriptionItem> ReadDescriptionPage(string directory, bool video, string afterPath,
-        long afterId, long throughId, int pageSize = 32, CancellationToken token = default)
+        long afterId, long throughId, int pageSize = 128, CancellationToken token = default)
     {
         if (string.IsNullOrWhiteSpace(directory) || pageSize is < 1 or > 128) throw new ArgumentException("invalid_description_page");
         token.ThrowIfCancellationRequested();
@@ -48,11 +48,12 @@ public sealed partial class PicerDatabase
             return images.Select(image => new DirectoryDescriptionItem(image, null, described.Contains(image.Id))).ToArray();
         }
         var repository = new VideoRepository(this);
+        var describedVideos = repository.GetCurrentSummaryIds(videos, token);
         var result = new List<DirectoryDescriptionItem>();
         foreach (var item in videos)
         {
             token.ThrowIfCancellationRequested();
-            result.Add(new(null, item, repository.HasCurrentSummary(item)));
+            result.Add(new(null, item, describedVideos.Contains(item.Id)));
         }
         return result;
     }

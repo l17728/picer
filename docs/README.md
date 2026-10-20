@@ -22,8 +22,8 @@
 
 ## 账户系统设计与当前开发
 
-- [账号、空间与设备授权设计](ACCOUNT_SPACE_DEVICE_AUTH_SDD_2026-10-12.md)：方案与专家评审基线；候选代码实现已进入工作树，但尚未发布。
-- 当前正式版仍是 v1.4.0/schema 45；本轮候选代码使用 schema 46，完整构建和测试、发布及部署完成前不得把它视为已交付能力。
+- [账号、空间与设备授权设计](ACCOUNT_SPACE_DEVICE_AUTH_SDD_2026-10-12.md)：方案与专家评审基线；账号门户、多租户空间与逐设备授权已经启用。
+- 本轮维护发布目标为 v1.5.5/schema 47；发布与生产部署分别记录，Release 完成不表示生产服务已自动替换。
 - [账号、空间与设备授权实现记录](ACCOUNT_SPACE_DEVICE_AUTH_IMPLEMENTATION_2026-10-13.md)：记录候选实现范围、已验证项及发布门禁。
 
 - [跨电脑接入建议方案](ACCOUNT_SPACE_DEVICE_AUTH_PROPOSAL_2026-10-12.md)：登录、照片空间、设备授权与产品流程。
@@ -48,4 +48,4 @@
 
 人脸质量、人工 ASR 对照、真人 AEC3、低显存四项旧 P2 验收仍暂停；代码完成、包可启动和真实模型质量达标是不同结论。发布必须另外记录来源提交、部署位置、备份、数据库版本及健康检查。
 
-最新维护变更：[目录描述流式发现与媒体通道可靠性修复](DESCRIPTION_STREAMING_RELIABILITY_2026-10-13.md)（开发回归中，尚未发布）；此前记录见[目录描述解耦与性能复查](DIRECTORY_DESCRIPTION_SEPARATION_2026-10-10.md)。源码与安装版本分别记录。
+最新维护变更：[v1.5.5 发布记录](RELEASE_1_5_5_2026-10-20.md)及[目录描述流式发现与媒体通道可靠性修复](DESCRIPTION_STREAMING_RELIABILITY_2026-10-13.md)；此前记录见[目录描述解耦与性能复查](DIRECTORY_DESCRIPTION_SEPARATION_2026-10-10.md)。源码、Release 和生产安装版本分别记录。

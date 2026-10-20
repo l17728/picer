@@ -1,6 +1,6 @@
 # Picer 软件设计说明（SDD）
 
-版本：1.9；更新：2026-10-14；最新正式版 v1.5.1，SQLite schema 46。账号/空间/设备授权、索引镜像、描述流式处理及可靠性增强已发布；生产 IndexService 已升级 schema46，但仍运行旧令牌兼容模式，账号门户和多租户空间尚未启用。发布、部署及启用边界见[v1.5.1 部署记录](DEPLOYMENT_V1_5_1_2026-10-14.md)。
+版本：2.0；更新：2026-10-20；本轮维护版为 v1.5.5，SQLite schema 47。账号/空间/设备授权已在生产启用；目录描述使用发现、处理、持久化和远程同步解耦的有界异步流水线。发布边界见[v1.5.5 发布记录](RELEASE_1_5_5_2026-10-20.md)，生产部署状态仍以独立部署记录和 `/version` 证据为准。
 
 本文描述已发布架构和当前生产部署边界。产品交互见 [产品设计](PRODUCT_DESIGN.md)，操作见 [用户指南](USER_GUIDE.md)，当前验证与尚待启用事项见 [开发计划](DEVELOPMENT_PLAN.md)。早期方案和历史验收保存在带日期的实施报告中，不作为当前生产状态。
 
@@ -74,6 +74,10 @@ AI 菜单提供目录树选择，范围包含节点及其所有子目录。树�
 结果逐项保存。失败包含阶段、可重试性及安全错误码；取消单独统计。“仅重试失败项”不重跑成功项。模型错误、预处理失败和保存失败应能区分，日志不保存凭据或模型原文。
 
 ## 6. 文字检索与 AI 问答
+
+检索与自动分类的设计定稿（包括现有 FTS5/BM25、Chinese-CLIP 边界、机器建议与用户确认状态）见[检索与自动分类 SDD](SEARCH_AND_AUTO_CLASSIFICATION_SDD_2026-10-16.md)。该设计不代表尚未实现的 RRF 混合召回或高精度自动分类已经交付。
+
+开发规格、UI 用户流程、技术结构和依赖阶段分别见[产品 SPEC](SEARCH_AND_AUTO_CLASSIFICATION_SPEC_2026-10-16.md)、[UX 规范](SEARCH_AND_AUTO_CLASSIFICATION_UX_2026-10-16.md)、[技术 SDD](SEARCH_AND_AUTO_CLASSIFICATION_TECH_SDD_2026-10-16.md)及[实现计划](SEARCH_AND_AUTO_CLASSIFICATION_IMPLEMENTATION_2026-10-16.md)。实现计划状态以专家 review 共识为前置条件。
 
 已实现的组件为 `MediaTextIndexRepository`、`MediaTextRanking`、`MediaSearchTool`、`AiMediaRetrievalService` 和 `PeopleService`。原早期方案中的独立 ai_text_documents、facets、完整证据取回服务不是当前数据库契约。
 

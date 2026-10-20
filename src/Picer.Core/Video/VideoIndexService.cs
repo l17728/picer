@@ -48,6 +48,25 @@ public sealed class VideoRepository(PicerDatabase database)
     }
     public VideoContentRepository Contents { get; } = new(database);
     public long GetContentId(long videoId) => Contents.GetContentId(videoId);
+
+    public IReadOnlySet<long> GetCurrentSummaryIds(IReadOnlyList<VideoRecord> videos, CancellationToken token = default)
+    {
+        token.ThrowIfCancellationRequested();
+        if (videos.Count == 0) return new HashSet<long>();
+        using var command = database.Command("""
+            SELECT v.id FROM videos v JOIN json_each($ids) requested ON requested.value=v.id
+            WHERE EXISTS(SELECT 1 FROM video_summaries s
+                WHERE s.video_id=v.content_id AND length(trim(s.summary))>0
+                  AND s.source_file_size=v.file_size
+                  AND (s.source_modified_utc=v.modified_utc OR EXISTS(
+                      SELECT 1 FROM video_contents c WHERE c.id=v.content_id AND length(c.sha256)=64)))
+            """);
+        command.Parameters.AddWithValue("$ids", System.Text.Json.JsonSerializer.Serialize(videos.Select(video => video.Id)));
+        var result = new HashSet<long>();
+        using var reader = command.ExecuteReader();
+        while (reader.Read()) { token.ThrowIfCancellationRequested(); result.Add(reader.GetInt64(0)); }
+        return result;
+    }
     private const string MirroredVideoUpsertSql = """
         INSERT INTO videos(id,source_id,path,file_size,modified_utc,duration_seconds,width,height,taken_utc,gps,status,indexed_utc,person_analysis_status,person_analyzed_utc,sha256)
         VALUES($id,$source,$path,$size,$modified,$duration,$width,$height,$taken,$gps,$status,$now,$analysis,$analyzed,$sha)

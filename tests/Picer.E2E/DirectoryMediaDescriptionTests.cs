@@ -13,7 +13,7 @@ namespace Picer.E2E;
 public sealed class DirectoryMediaDescriptionTests
 {
     [Fact]
-    public async Task RemoteAnalyzerReusesOnlyPrivateDirectoryDescriptionInput()
+    public async Task RemoteAnalyzerReusesOnlyPrivateAnalysisInputs()
     {
         var dataRoot = Path.Combine(Path.GetTempPath(), "picer-analyzer-input-" + Guid.NewGuid().ToString("N"));
         var cache = Path.Combine(dataRoot, "description-input");
@@ -24,14 +24,22 @@ public sealed class DirectoryMediaDescriptionTests
         {
             await File.WriteAllBytesAsync(local, [1, 2, 3]);
             await File.WriteAllBytesAsync(outside, [4, 5, 6]);
-            await using var accepted = AppServices.OpenDirectoryDescriptionInput(dataRoot, local);
+            await using var accepted = AppServices.OpenPrivateAnalysisInput(dataRoot, local);
             Assert.NotNull(accepted);
             using var output = new MemoryStream();
             await accepted!.CopyToAsync(output);
             Assert.Equal(new byte[] { 1, 2, 3 }, output.ToArray());
             await accepted.DisposeAsync();
-            Assert.Null(AppServices.OpenDirectoryDescriptionInput(dataRoot, outside));
-            Assert.Null(AppServices.OpenDirectoryDescriptionInput(dataRoot, Path.Combine(cache, "missing.jpg")));
+            Assert.Null(AppServices.OpenPrivateAnalysisInput(dataRoot, outside));
+            Assert.Null(AppServices.OpenPrivateAnalysisInput(dataRoot, Path.Combine(cache, "missing.jpg")));
+
+            var montageDirectory = Path.Combine(dataRoot, "spaces", "account", "remote-video-summary-cache");
+            Directory.CreateDirectory(montageDirectory);
+            var montage = Path.Combine(montageDirectory, "video-1.jpg");
+            await File.WriteAllBytesAsync(montage, [7, 8, 9]);
+            await using var acceptedMontage = AppServices.OpenPrivateAnalysisInput(
+                Path.Combine(dataRoot, "spaces", "account"), montage);
+            Assert.NotNull(acceptedMontage);
         }
         finally { Directory.Delete(dataRoot, true); }
     }
@@ -55,6 +63,34 @@ public sealed class DirectoryMediaDescriptionTests
         Assert.Equal(2, calls);
         Assert.Contains("原有描述跳过 1", messages[^1]);
         Assert.Contains("2/2", messages[^1]);
+    }
+
+    [Fact]
+    public async Task DiscoveryRunsAheadOfSlowModelWorkers()
+    {
+        const int itemCount = 200;
+        var discoveryCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseModels = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var modelCalls = 0;
+        async IAsyncEnumerable<DirectoryDescriptionItem> Discover()
+        {
+            for (var id = 1; id <= itemCount; id++)
+                yield return new(new ImageRecord { Id = id, Path = $"{id}.jpg" }, null, false);
+            discoveryCompleted.TrySetResult();
+            await Task.CompletedTask;
+        }
+        var runner = new MediaDescriptionBatch(async (_, token) =>
+        {
+            Interlocked.Increment(ref modelCalls);
+            await releaseModels.Task.WaitAsync(token);
+            return true;
+        }, (_, _) => Task.FromResult(true));
+        var run = runner.RunStreamingAsync(Discover(), new Capture([]), CancellationToken.None, photoConcurrency: 2);
+        await discoveryCompleted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.InRange(modelCalls, 0, 2);
+        releaseModels.TrySetResult();
+        await run;
+        Assert.Equal(itemCount, modelCalls);
     }
 
     [Theory]
@@ -291,6 +327,51 @@ public sealed class DirectoryMediaDescriptionTests
                 var media = drive.Items.Cast<TreeViewItem>().Single(item => (string)item.Tag == "D:/media");
                 media.RaiseEvent(new RoutedEventArgs(TreeViewItem.ExpandedEvent, media));
                 Assert.Contains(media.Items.Cast<TreeViewItem>(), item => (string)item.Tag == "D:/media/videos");
+                window.Close();
+            }
+            catch (Exception exception) { failure = exception; }
+        });
+        thread.SetApartmentState(ApartmentState.STA); thread.Start();
+        Assert.True(thread.Join(TimeSpan.FromSeconds(15)));
+        if (failure is not null) throw failure;
+    }
+
+    [Fact]
+    public void StartButtonExplainsDirectorySelectionAndEnablesAfterSelection()
+    {
+        Exception? failure = null;
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                var window = new DirectoryMediaDescriptionWindow(loadOnShow: false);
+                window.PopulateDirectories(["D:/media/photos/one.jpg"]);
+                Assert.True(window.StartButton.IsEnabled);
+                Assert.Contains("单击目录树中的目录名称", window.StatusMessage);
+                var root = Assert.IsType<TreeViewItem>(Assert.Single(window.DirectoryTree.Items.Cast<object>()));
+                root.IsSelected = true;
+                Assert.Contains("已选择目录", window.StatusMessage);
+                window.Close();
+            }
+            catch (Exception exception) { failure = exception; }
+        });
+        thread.SetApartmentState(ApartmentState.STA); thread.Start();
+        Assert.True(thread.Join(TimeSpan.FromSeconds(15)));
+        if (failure is not null) throw failure;
+    }
+
+    [Fact]
+    public void EmptyDirectoryTreeExplainsWhyDescriptionCannotStart()
+    {
+        Exception? failure = null;
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                var window = new DirectoryMediaDescriptionWindow(loadOnShow: false);
+                window.PopulateDirectories([]);
+                Assert.False(window.StartButton.IsEnabled);
+                Assert.Contains("当前索引没有可选择", window.StatusMessage);
                 window.Close();
             }
             catch (Exception exception) { failure = exception; }

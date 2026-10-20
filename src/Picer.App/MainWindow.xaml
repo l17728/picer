@@ -69,6 +69,10 @@
                               VerticalAlignment="Center" Margin="8,0,6,0" Padding="10,3" Cursor="Hand"
                               AutomationProperties.Name="AI 问答按钮"
                               ToolTip="展开独立问答面板；输入后按 Enter 或点击提交才会调用模型"/>
+                <CheckBox Content="包含待确认建议" IsChecked="{Binding IncludeSuggestedClassifications}"
+                          VerticalAlignment="Center" Margin="4,0,8,0" Cursor="Hand"
+                          AutomationProperties.Name="包含待确认的 AI 建议，普通搜索和 AI 问答共用"
+                          ToolTip="默认关闭；开启后普通搜索与 AI 问答会纳入未确认的模型建议，并明确标为待确认"/>
                 <CheckBox IsChecked="{Binding IsChronologicalAscending}" VerticalAlignment="Center" Margin="6,0"
                           Cursor="Hand" Content="{Binding ChronologicalOrderLabel}"
                           AutomationProperties.Name="全局照片时间顺序开关"

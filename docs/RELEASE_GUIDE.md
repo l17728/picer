@@ -1,6 +1,6 @@
 # Picer 安装指南
 
-更新：2026-10-15。从[最新正式 Release](https://github.com/l17728/picer/releases/latest) 下载，当前版本为 [v1.5.4](https://github.com/l17728/picer/releases/tag/v1.5.4)，版本以资产名和包内清单为准。本指南适用于当前安装器；v1.5.4 发布与验证见[发布记录](RELEASE_1_5_4_2026-10-15.md)，较早性能改造见[实施记录](PERFORMANCE_FOLLOWUP_IMPLEMENTATION_2026-10-10.md)。仓库为私有，下载需要访问权限。当前用户安装无需管理员权限，目标系统为 Windows 10/11 x64。
+更新：2026-10-20。从[最新正式 Release](https://github.com/l17728/picer/releases/latest) 下载，当前版本为 [v1.5.5](https://github.com/l17728/picer/releases/tag/v1.5.5)，版本以资产名和包内清单为准。本指南适用于当前安装器；v1.5.5 发布与验证见[发布记录](RELEASE_1_5_5_2026-10-20.md)，较早性能改造见[实施记录](PERFORMANCE_FOLLOWUP_IMPLEMENTATION_2026-10-10.md)。仓库为私有，下载需要访问权限。当前用户安装无需管理员权限，目标系统为 Windows 10/11 x64。
 
 ## 普通 Windows 用户选择哪个安装器
 
@@ -86,7 +86,7 @@ python3 setup-modelserver.py --model sface --model-path /srv/models/sface.onnx -
 
 ## 验证与发布边界
 
-v1.5.4 已正式发布，schema 46；tag CI 通过严格构建、真实服务探测、721 项单元/集成测试及 94 项桌面 E2E。Release 验证覆盖 GUI/MediaAgent 安装、重复升级、卸载与数据保留；离线资产门禁及真实视频解码/跳转通过。GUI 一键安装器为 326,184,661 字节，SHA-256 与发布页清单一致。全部资产和准确校验值见[v1.5.4 发布记录](RELEASE_1_5_4_2026-10-15.md)。这些结果不等同于全部 RuntimeComponent 或真实硬件验收。
+v1.5.5 使用 schema 47；最终 CI、安装器生命周期、真实服务探针、资产大小和 SHA-256 以[v1.5.5 发布记录](RELEASE_1_5_5_2026-10-20.md)及 GitHub Release 为准。v1.5.4 的 721 项单元/集成、94 项桌面 E2E 和安装器结果只属于历史版本，不能代替本版证据。这些结果也不等同于全部 RuntimeComponent 或真实硬件验收。
 
 首次配对与允许目录由隔离 UI/协议测试验证；安装后程序、视频工具及自包含运行环境另有实际运行证据。它们不等同于真实用户注销登录或所有硬件环境验收。构建和外部 CLI 失败须停止；每个上传资产小于 2 GB，完整离线资产仍保留固定哈希及许可证门禁。模型质量、真实场景和硬件验收按各自范围记录。
 

@@ -23,12 +23,20 @@ namespace Picer.App;
 
 public static partial class AppServices
 {
-    internal static Stream? OpenDirectoryDescriptionInput(string dataRoot, string imagePath)
+    internal static Stream? OpenPrivateAnalysisInput(string dataRoot, string imagePath)
     {
-        var root = Path.GetFullPath(Path.Combine(dataRoot, "description-input"))
-            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
         var candidate = Path.GetFullPath(imagePath);
-        return candidate.StartsWith(root, StringComparison.OrdinalIgnoreCase) && File.Exists(candidate)
+        var allowed = new[]
+        {
+            Path.Combine(dataRoot, "description-input"),
+            Path.Combine(dataRoot, "video-summary-cache"),
+            Path.Combine(dataRoot, "remote-video-summary-cache")
+        };
+        var contained = allowed.Any(directory => candidate.StartsWith(
+            Path.GetFullPath(directory).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                + Path.DirectorySeparatorChar,
+            StringComparison.OrdinalIgnoreCase));
+        return contained && File.Exists(candidate)
             ? new FileStream(candidate, FileMode.Open, FileAccess.Read, FileShare.Read, 81920,
                 FileOptions.Asynchronous | FileOptions.SequentialScan)
             : null;
@@ -643,7 +651,12 @@ public static partial class AppServices
                 PromptVersion: "picer-photo-v2-concise", UseClientAuthentication: serviceBackend.DeviceAuthentication), routedClient, disposeClient: true,
                 imageStreamFactory: async (image, cancellationToken) =>
                 {
-                    if (OpenDirectoryDescriptionInput(AppPaths.DataRoot, image.Path) is { } descriptionInput)
+                    // Directory descriptions first materialize a verified, metadata-stripped
+                    // input under this private cache. Reusing that file avoids a second remote
+                    // prepared-input request (which can be rejected independently of the safe
+                    // original-media fallback).
+                    if ((OpenPrivateAnalysisInput(RemoteDataRoot, image.Path)
+                        ?? OpenPrivateAnalysisInput(AppPaths.DataRoot, image.Path)) is { } descriptionInput)
                         return descriptionInput;
                     if (Gateway is not IMediaAssetGateway mediaGateway)
                         throw new IOException("photo_analysis_input_unavailable");
