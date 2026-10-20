@@ -251,5 +251,17 @@ if (( verified != 1 )); then
 fi
 
 success=1
+
+# Keep enough rollback history for recovery without allowing successful
+# deployments to fill the system disk indefinitely. Only directories matching
+# the deployment backup prefix at /opt's top level are eligible.
+mapfile -t retained_backups < <(find /opt -maxdepth 1 -mindepth 1 -type d -name 'picer-index.backup-*' -printf '%T@ %p\n' | sort -nr | cut -d' ' -f2-)
+if (( ${#retained_backups[@]} > 3 )); then
+    for old_backup in "${retained_backups[@]:3}"; do
+        [[ "$(dirname -- "$old_backup")" == /opt && "$(basename -- "$old_backup")" == picer-index.backup-* ]] || continue
+        rm -rf -- "$old_backup"
+    done
+fi
+
 echo "Upgrade successful: deploymentId=$deployment_id sha256=$expected_hash"
 echo "Version endpoint: $probe_origin/version"
