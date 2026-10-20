@@ -77,7 +77,8 @@ public sealed partial class HttpIndexGateway : IIndexGateway, IMediaAssetGateway
 
     public async Task<GatewayChangePage> GetChangesAsync(GatewayChangeRequest request, CancellationToken cancellationToken = default)
     {
-        using var response = await _client.PostAsJsonAsync("api/gateway/v1/changes", request, Json, cancellationToken).ConfigureAwait(false);
+        using var response = await SendWithRetryAsync(
+            token => _client.PostAsJsonAsync("api/gateway/v1/changes", request, Json, token), cancellationToken).ConfigureAwait(false);
         if (response.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.MethodNotAllowed)
             throw new NotSupportedException("mirror_change_feed_unavailable");
         response.EnsureSuccessStatusCode();

@@ -170,6 +170,12 @@ internal sealed partial class AgentConnectionRegistry
         CancellationToken cancellationToken)
     {
         var session = await WaitForSessionAsync(agentId, cancellationToken);
+        if (session is null && _strictRouting && string.IsNullOrWhiteSpace(agentId))
+        {
+            var eligible = _sessions.Values.Where(candidate => candidate.Capabilities.Contains(task)).Take(2).ToArray();
+            if (eligible.Length == 1) session = eligible[0];
+            else if (eligible.Length > 1) throw new InvalidOperationException("agent_selection_required");
+        }
         if (session is null) return null;
         var requestId = Guid.NewGuid().ToString("N");
         _journal.Append(requestId, task, "queued");
@@ -195,6 +201,12 @@ internal sealed partial class AgentConnectionRegistry
     public async Task StreamTaskAsync(string? agentId, string task, string payload, Func<ReadOnlyMemory<byte>, Task> onChunk, CancellationToken cancellationToken)
     {
         var session = await WaitForSessionAsync(agentId, cancellationToken);
+        if (session is null && _strictRouting && string.IsNullOrWhiteSpace(agentId))
+        {
+            var eligible = _sessions.Values.Where(candidate => candidate.Capabilities.Contains(task)).Take(2).ToArray();
+            if (eligible.Length == 1) session = eligible[0];
+            else if (eligible.Length > 1) throw new InvalidOperationException("agent_selection_required");
+        }
         if (session is null) throw new InvalidOperationException("media_agent_offline");
         await session.StreamTaskAsync(task, payload, onChunk, cancellationToken);
     }

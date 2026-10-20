@@ -12,6 +12,44 @@ namespace Picer.Tests;
 public sealed class AgentConnectionRegistryTests
 {
     [Fact]
+    public async Task StrictSpaceRoutesUnspecifiedTaskToItsOnlyCapableAgent()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "picer-agent-task-" + Guid.NewGuid().ToString("N"));
+        var registry = new AgentConnectionRegistry(new TaskJournal(root), strictRouting: true);
+        var app = WebApplication.CreateBuilder().Build();
+        app.Urls.Add("http://127.0.0.1:0");
+        app.UseWebSockets();
+        app.Map("/agent", registry.HandleAsync);
+        using var agent = new ClientWebSocket();
+        try
+        {
+            await app.StartAsync();
+            var address = app.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>()!.Addresses.Single();
+            agent.Options.SetRequestHeader("X-Picer-Agent-Grant", "space-agent-1");
+            await agent.ConnectAsync(new Uri(address.Replace("http://", "ws://", StringComparison.Ordinal) + "/agent"), CancellationToken.None);
+            await SendAsync(agent, """{"type":"agent.register","agentId":"ignored","capabilities":["ffmpeg.keyframes"]}""");
+            using (var registered = await ReceiveJsonAsync(agent))
+                Assert.Equal("agent.registered", registered.RootElement.GetProperty("type").GetString());
+
+            var task = registry.RequestTaskAsync(null, "ffmpeg.keyframes", "video-payload", CancellationToken.None);
+            using var request = await ReceiveJsonAsync(agent);
+            Assert.Equal("task.open", request.RootElement.GetProperty("type").GetString());
+            Assert.Equal("ffmpeg.keyframes", request.RootElement.GetProperty("task").GetString());
+            var requestId = request.RootElement.GetProperty("requestId").GetString();
+            await SendAsync(agent, JsonSerializer.Serialize(new { type = "task.result", requestId, payload = "frames-json" }));
+
+            Assert.Equal("frames-json", await task.WaitAsync(TimeSpan.FromSeconds(5)));
+        }
+        finally
+        {
+            agent.Abort();
+            await app.StopAsync();
+            await app.DisposeAsync();
+            try { Directory.Delete(root, recursive: true); } catch (IOException) { }
+        }
+    }
+
+    [Fact]
     public async Task StrictSpaceRoutesAiToItsOnlyEligibleProxyWhenClientHasNoAgentId()
     {
         var root = Path.Combine(Path.GetTempPath(), "picer-agent-registry-" + Guid.NewGuid().ToString("N"));

@@ -112,7 +112,20 @@ internal sealed class MediaDescriptionBatch(
             var stage = AnalysisStage.Preprocess;
             try
             {
-                var prepared = assets is not null ? await assets.OpenPhotoAnalysisInputAsync(request.Image, token) : null;
+                Stream? prepared = null;
+                if (assets is not null)
+                {
+                    try { prepared = await assets.OpenPhotoAnalysisInputAsync(request.Image, token); }
+                    catch (InvalidDataException exception)
+                    {
+                        // A remote prepared derivative can be rejected when a
+                        // mirror fingerprint is stale or a proxy strips its
+                        // verification metadata. Fall back to the authorized
+                        // original stream; length/hash checks below still gate
+                        // model access and the analyzer still strips metadata.
+                        Core.Logging.AppLogger.Warn($"Prepared remote photo input rejected; imageId={request.Image.Id}; reason={SafeCode(exception.Message)}; fallback=authorized-original");
+                    }
+                }
                 var sourcePrepared = prepared is not null;
                 await using (var stream = prepared ?? (assets is not null
                     ? await assets.OpenOriginalImageAsync(request.Image.Id, cancellationToken: token) ?? throw new IOException("原图不可用")
@@ -133,9 +146,19 @@ internal sealed class MediaDescriptionBatch(
                     if (!actual.Equals(expected, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("原图内容已变化，请先更新索引。");
                 }
                 var image = request.Image;
-                var local = new ImageRecord { Id = image.Id, Path = path, FileSize = inputSize,
-                    ModifiedUtc = image.ModifiedUtc, TakenUtc = image.TakenUtc, CreatedUtc = image.CreatedUtc,
-                    Width = image.Width, Height = image.Height, Gps = image.Gps, Camera = image.Camera };
+                var local = new ImageRecord
+                {
+                    Id = image.Id,
+                    Path = path,
+                    FileSize = inputSize,
+                    ModifiedUtc = image.ModifiedUtc,
+                    TakenUtc = image.TakenUtc,
+                    CreatedUtc = image.CreatedUtc,
+                    Width = image.Width,
+                    Height = image.Height,
+                    Gps = image.Gps,
+                    Camera = image.Camera
+                };
                 stage = AnalysisStage.Model;
                 return await inner.AnalyzeAsync(request with { Image = local }, token);
             }
@@ -143,5 +166,8 @@ internal sealed class MediaDescriptionBatch(
             catch (Exception exception) { throw AnalysisStageException.Wrap(stage, exception); }
             finally { if (File.Exists(path)) File.Delete(path); }
         }
+
+        private static string SafeCode(string value) => value.Length <= 64 && value.All(character => char.IsAsciiLetterOrDigit(character) || character == '_')
+            ? value : "prepared_input_rejected";
     }
 }

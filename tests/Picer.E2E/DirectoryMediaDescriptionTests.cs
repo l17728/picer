@@ -2,6 +2,7 @@ using System.Windows;
 using System.IO;
 using System.Windows.Controls;
 using Picer.App.Infrastructure;
+using Picer.App;
 using Picer.App.Views;
 using Picer.Core.Models;
 using Picer.Core.Video;
@@ -11,6 +12,30 @@ namespace Picer.E2E;
 
 public sealed class DirectoryMediaDescriptionTests
 {
+    [Fact]
+    public async Task RemoteAnalyzerReusesOnlyPrivateDirectoryDescriptionInput()
+    {
+        var dataRoot = Path.Combine(Path.GetTempPath(), "picer-analyzer-input-" + Guid.NewGuid().ToString("N"));
+        var cache = Path.Combine(dataRoot, "description-input");
+        Directory.CreateDirectory(cache);
+        var local = Path.Combine(cache, "prepared.jpg");
+        var outside = Path.Combine(dataRoot, "original.jpg");
+        try
+        {
+            await File.WriteAllBytesAsync(local, [1, 2, 3]);
+            await File.WriteAllBytesAsync(outside, [4, 5, 6]);
+            await using var accepted = AppServices.OpenDirectoryDescriptionInput(dataRoot, local);
+            Assert.NotNull(accepted);
+            using var output = new MemoryStream();
+            await accepted!.CopyToAsync(output);
+            Assert.Equal(new byte[] { 1, 2, 3 }, output.ToArray());
+            await accepted.DisposeAsync();
+            Assert.Null(AppServices.OpenDirectoryDescriptionInput(dataRoot, outside));
+            Assert.Null(AppServices.OpenDirectoryDescriptionInput(dataRoot, Path.Combine(cache, "missing.jpg")));
+        }
+        finally { Directory.Delete(dataRoot, true); }
+    }
+
     [Fact]
     public async Task FirstDescriptionStartsBeforeDiscoveryFinishes()
     {
@@ -53,11 +78,33 @@ public sealed class DirectoryMediaDescriptionTests
         }
         finally { Directory.Delete(root, true); }
     }
-    private sealed class PreparedAssets(bool supported, byte[] original, byte[] prepared) : Picer.Core.Gateway.IMediaAssetGateway
+
+    [Fact]
+    public async Task RemotePhotoFallsBackToVerifiedOriginalWhenPreparedInputIsRejected()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "picer-prepared-rejected-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            byte[] original = [1, 2, 3, 4];
+            var record = new ImageRecord { Id = 1, Path = "remote/photo.jpg", FileSize = original.Length,
+                Sha256 = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(original)) };
+            var assets = new PreparedAssets(false, original, [], rejectPrepared: true);
+            var inner = new SnapshotAnalyzer(record.Path, original);
+            await new MediaDescriptionBatch.PhotoInputAnalyzer(inner, root, assets).AnalyzeAsync(new(record, null, []), default);
+            Assert.Equal(1, inner.Calls);
+            Assert.Equal(1, assets.OriginalReads);
+            Assert.Empty(Directory.EnumerateFiles(root));
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    private sealed class PreparedAssets(bool supported, byte[] original, byte[] prepared, bool rejectPrepared = false) : Picer.Core.Gateway.IMediaAssetGateway
     {
         public int OriginalReads;
         public Task<Stream?> OpenPhotoAnalysisInputAsync(ImageRecord image, CancellationToken cancellationToken = default)
-            => Task.FromResult<Stream?>(supported ? new MemoryStream(prepared) : null);
+            => rejectPrepared ? throw new InvalidDataException("photo_analysis_source_conflict")
+                : Task.FromResult<Stream?>(supported ? new MemoryStream(prepared) : null);
         public Task<Stream?> OpenOriginalImageAsync(long id, string? agentId = null, CancellationToken cancellationToken = default)
         { OriginalReads++; return Task.FromResult<Stream?>(new MemoryStream(original)); }
         public Task<Stream?> OpenOriginalVideoAsync(long id, string? agentId = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();
