@@ -9,6 +9,7 @@ public sealed class SpaceRuntimePool(AccountStore accounts, int capacity = 32, R
 {
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly Dictionary<string, Runtime> _spaces = new(StringComparer.Ordinal);
+    private readonly int _capacity = capacity > 0 ? capacity : 32;
     private bool _disposed;
 
     public async Task<Lease> AcquireAsync(string spaceId, CancellationToken cancellationToken)
@@ -24,10 +25,14 @@ public sealed class SpaceRuntimePool(AccountStore accounts, int capacity = 32, R
             ObjectDisposedException.ThrowIf(_disposed, this);
             if (!_spaces.TryGetValue(spaceId, out var runtime))
             {
-                if (_spaces.Count >= capacity)
+                if (_spaces.Count >= _capacity)
                 {
                     var idle = _spaces.Values.Where(item => item.Leases == 0).OrderBy(item => item.LastUse).FirstOrDefault();
-                    if (idle is null) throw new SpaceCapacityException();
+                    if (idle is null)
+                    {
+                        Picer.Core.Logging.AppLogger.Warn($"Space runtime capacity exhausted; active={_spaces.Count}; capacity={_capacity}");
+                        throw new SpaceCapacityException();
+                    }
                     _spaces.Remove(idle.SpaceId);
                     await idle.DisposeAsync();
                 }
