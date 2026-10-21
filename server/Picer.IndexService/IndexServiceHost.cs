@@ -413,17 +413,23 @@ internal static class ClipContentClassifier
     {
         try
         {
-            var result = new Dictionary<string, (float[], float[])>(StringComparer.Ordinal);
-            foreach (var definition in VisualConceptCatalog.ContentConcepts)
+            var result = new System.Collections.Concurrent.ConcurrentDictionary<string, (float[], float[])>(StringComparer.Ordinal);
+            using var gate = new SemaphoreSlim(2, 2);
+            await Task.WhenAll(VisualConceptCatalog.ContentConcepts.Select(async definition =>
             {
-                var positive = Parse(await agents.RequestTaskAsync(agentId, "clip.text",
-                    JsonSerializer.Serialize(new { text = definition.Prompt }), cancellationToken));
-                var negative = Parse(await agents.RequestTaskAsync(agentId, "clip.text",
-                    JsonSerializer.Serialize(new { text = definition.NegativePrompt }), cancellationToken));
-                if (positive is null || negative is null || positive.Embedding.Length != negative.Embedding.Length)
-                    throw new InvalidOperationException("clip_prompt_embedding_invalid");
-                result[definition.ConceptId] = (positive.Embedding, negative.Embedding);
-            }
+                await gate.WaitAsync(cancellationToken);
+                try
+                {
+                    var pair = await Task.WhenAll(
+                        agents.RequestTaskAsync(agentId, "clip.text", JsonSerializer.Serialize(new { text = definition.Prompt }), cancellationToken),
+                        agents.RequestTaskAsync(agentId, "clip.text", JsonSerializer.Serialize(new { text = definition.NegativePrompt }), cancellationToken));
+                    var positive = Parse(pair[0]); var negative = Parse(pair[1]);
+                    if (positive is null || negative is null || positive.Embedding.Length != negative.Embedding.Length)
+                        throw new InvalidOperationException("clip_prompt_embedding_invalid:" + definition.ConceptId);
+                    result[definition.ConceptId] = (positive.Embedding, negative.Embedding);
+                }
+                finally { gate.Release(); }
+            }));
             return result;
         }
         catch
