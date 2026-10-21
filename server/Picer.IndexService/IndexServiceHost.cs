@@ -347,6 +347,132 @@ public sealed class IndexApiHandlers(PicerDatabase db, ThumbnailService thumbnai
     }
 }
 
+internal static class ClipContentClassifier
+{
+    private sealed record ClipVector(string ModelVersion, float[] Embedding);
+    private static readonly object PromptLock = new();
+    private static Task<IReadOnlyDictionary<string, (float[] Positive, float[] Negative)>>? promptTask;
+
+    public static async Task<IReadOnlyDictionary<long, SemanticAnalysisResult>> ClassifyAsync(
+        IReadOnlyList<ImageRecord> images, AgentConnectionRegistry agents, string? agentId,
+        CancellationToken cancellationToken)
+    {
+        if (images.Count == 0) return new Dictionary<long, SemanticAnalysisResult>();
+        var prompts = await GetPromptsAsync(agents, agentId, cancellationToken);
+        var output = new System.Collections.Concurrent.ConcurrentDictionary<long, SemanticAnalysisResult>();
+        var concurrency = int.TryParse(Environment.GetEnvironmentVariable("PICER_CLASSIFICATION_CONCURRENCY"), out var configured)
+            ? Math.Clamp(configured, 1, 4) : 2;
+        using var gate = new SemaphoreSlim(concurrency, concurrency);
+        var succeeded = 0;
+        await Task.WhenAll(images.Select(async image =>
+        {
+            await gate.WaitAsync(cancellationToken);
+            try
+            {
+                var payload = JsonSerializer.Serialize(new { path = IndexApiHandlers.NormalizeAgentPath(image.Path) });
+                var raw = await agents.RequestTaskAsync(agentId, "clip.image", payload, cancellationToken);
+                var vector = Parse(raw);
+                if (vector is null) return;
+                Interlocked.Increment(ref succeeded);
+                var concepts = new List<VisualConceptScore>();
+                foreach (var definition in VisualConceptCatalog.ContentConcepts)
+                {
+                    var pair = prompts[definition.ConceptId];
+                    var positive = Cosine(vector.Embedding, pair.Positive);
+                    var negative = Cosine(vector.Embedding, pair.Negative);
+                    var probability = 1f / (1f + MathF.Exp(-12f * (positive - negative)));
+                    if (probability >= definition.Threshold)
+                        concepts.Add(new VisualConceptScore(definition.ConceptId, probability));
+                }
+                ResolveExclusive(concepts, "scene.indoor", "scene.outdoor");
+                output[image.Id] = new SemanticAnalysisResult(
+                    concepts.OrderByDescending(item => item.Confidence).ToArray(),
+                    Embedding: vector.Embedding, EmbeddingModelVersion: vector.ModelVersion);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+            catch (Exception exception)
+            {
+                AppLogger.Warn($"内容分类跳过 imageId={image.Id} error={SafeError(exception)}");
+            }
+            finally { gate.Release(); }
+        }));
+        if (succeeded == 0) throw new InvalidOperationException("content_classifier_unavailable");
+        return output;
+    }
+
+    private static Task<IReadOnlyDictionary<string, (float[] Positive, float[] Negative)>> GetPromptsAsync(
+        AgentConnectionRegistry agents, string? agentId, CancellationToken cancellationToken)
+    {
+        lock (PromptLock)
+            return promptTask ??= LoadPromptsAsync(agents, agentId, cancellationToken);
+    }
+
+    private static async Task<IReadOnlyDictionary<string, (float[] Positive, float[] Negative)>> LoadPromptsAsync(
+        AgentConnectionRegistry agents, string? agentId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var result = new Dictionary<string, (float[], float[])>(StringComparer.Ordinal);
+            foreach (var definition in VisualConceptCatalog.ContentConcepts)
+            {
+                var positive = Parse(await agents.RequestTaskAsync(agentId, "clip.text",
+                    JsonSerializer.Serialize(new { text = definition.Prompt }), cancellationToken));
+                var negative = Parse(await agents.RequestTaskAsync(agentId, "clip.text",
+                    JsonSerializer.Serialize(new { text = definition.NegativePrompt }), cancellationToken));
+                if (positive is null || negative is null || positive.Embedding.Length != negative.Embedding.Length)
+                    throw new InvalidOperationException("clip_prompt_embedding_invalid");
+                result[definition.ConceptId] = (positive.Embedding, negative.Embedding);
+            }
+            return result;
+        }
+        catch
+        {
+            lock (PromptLock) promptTask = null;
+            throw;
+        }
+    }
+
+    private static ClipVector? Parse(string? payload)
+    {
+        if (string.IsNullOrWhiteSpace(payload)) return null;
+        using var document = JsonDocument.Parse(payload);
+        var root = document.RootElement;
+        if (!root.TryGetProperty("embedding", out var embedding) || embedding.ValueKind != JsonValueKind.Array) return null;
+        var values = embedding.EnumerateArray().Select(item => item.GetSingle()).ToArray();
+        if (values.Length == 0 || values.Any(value => !float.IsFinite(value))) return null;
+        var version = root.TryGetProperty("modelVersion", out var model) ? model.GetString() ?? "unknown" : "unknown";
+        return new ClipVector(version, values);
+    }
+
+    private static float Cosine(float[] left, float[] right)
+    {
+        if (left.Length == 0 || left.Length != right.Length) return -1;
+        double dot = 0, a = 0, b = 0;
+        for (var index = 0; index < left.Length; index++)
+        {
+            dot += left[index] * right[index]; a += left[index] * left[index]; b += right[index] * right[index];
+        }
+        return a <= 0 || b <= 0 ? -1 : (float)(dot / Math.Sqrt(a * b));
+    }
+
+    private static void ResolveExclusive(List<VisualConceptScore> values, string first, string second)
+    {
+        var left = values.FirstOrDefault(item => item.ConceptId == first);
+        var right = values.FirstOrDefault(item => item.ConceptId == second);
+        if (left is null || right is null) return;
+        values.Remove(left.Confidence >= right.Confidence ? right : left);
+    }
+
+    private static string SafeError(Exception exception) => exception switch
+    {
+        TimeoutException => "timeout",
+        IOException => "io_error",
+        InvalidOperationException => "service_error",
+        JsonException => "invalid_response",
+        _ => "classification_error"
+    };
+}
+
 public sealed record IndexServiceInstance(WebApplication App, X509Certificate2 Certificate, IndexApiHandlers Handlers, IndexEngine Engine, ScanJobManager Jobs)
 {
     public Func<string, long, string?, CancellationToken, Task>? PrepareIndexPurgeAsync { get; init; }
@@ -1094,6 +1220,7 @@ async function load(){const [c,g]=await Promise.all([fetch('/api/service/v1/capa
         app.MapGet("/api/service/v1/classification/items", (string? view, int? limit) =>
         {
             var projection = new ClassificationProjectionService(db);
+            new ContentSemanticClusterService(db).RefreshLabelsIncremental();
             var bounded = Math.Clamp(limit ?? 500, 1, 5000);
             if (string.Equals(view, "unclassified", StringComparison.Ordinal))
                 return Results.Ok(projection.ListUnclassified(bounded).Select(image => new ClassificationReviewItem(
@@ -1103,9 +1230,18 @@ async function load(){const [c,g]=await Promise.all([fetch('/api/service/v1/capa
         });
         app.MapPost("/api/service/v1/classification/begin", () =>
             Results.Ok(new ClassificationProjectionService(db).BeginOrResume()));
-        app.MapPost("/api/service/v1/classification/process/{runId}", (string runId, int? batchSize, CancellationToken token) =>
-            Results.Ok(new ClassificationProjectionService(db).ProcessNextBatch(runId,
-                Math.Clamp(batchSize ?? 100, 1, 500), token)));
+        app.MapPost("/api/service/v1/classification/process/{runId}", async (string runId, int? batchSize,
+            string? agentId, CancellationToken token) =>
+        {
+            var projection = new ClassificationProjectionService(db);
+            var bounded = Math.Clamp(batchSize ?? 20, 1, 50);
+            var images = projection.GetNextBatch(runId, bounded);
+            var semantic = await ClipContentClassifier.ClassifyAsync(images, agents, agentId, token);
+            var progress = projection.ProcessNextBatch(runId, bounded, token, semantic);
+            if (progress.Status == "completed")
+                new ContentSemanticClusterService(db).RebuildLatest();
+            return Results.Ok(progress);
+        });
         app.MapPost("/api/service/v1/classification/pause/{runId}", (string runId) =>
         {
             new ClassificationProjectionService(db).Pause(runId);

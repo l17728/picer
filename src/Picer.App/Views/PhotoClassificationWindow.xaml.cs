@@ -72,7 +72,7 @@ public partial class PhotoClassificationWindow : Window
                 while (progress.Status == "running")
                 {
                     ShowProgress(progress);
-                    progress = await PostAsync<ClassificationRunProgress>($"process/{progress.RunId}?batchSize=200",
+                    progress = await PostAsync<ClassificationRunProgress>($"process/{progress.RunId}?batchSize=20",
                         null, _remoteRunCancellation.Token);
                     await LoadItemsAsync();
                 }
@@ -117,6 +117,7 @@ public partial class PhotoClassificationWindow : Window
         }
         else rows = await UiWork.RunDatabaseAsync("classification-list", () =>
         {
+            AppServices.ContentSemanticClusters.RefreshLabelsIncremental();
             if (view == "unclassified")
                 return AppServices.ClassificationProjection.ListUnclassified().Select(image =>
                     new ReviewRow(image.Id, image.Path, image.ThumbPath, "—", "无分类", "处理完成，无有效分类", 1)).ToArray();
@@ -152,6 +153,8 @@ public partial class PhotoClassificationWindow : Window
     {
         var selected = Items.SelectedItems.Cast<ReviewRow>().Where(row => row.ConceptId != "—").ToArray();
         if (selected.Length == 0) { FeedbackText.Text = "请先选择分类项。"; return; }
+        if (selected.Any(row => row.ConceptId.StartsWith("person.", StringComparison.Ordinal)))
+        { FeedbackText.Text = "人物标签请在“人物”页面中修改。"; return; }
         if (sameConcept && selected.Select(row => row.ConceptId).Distinct(StringComparer.Ordinal).Count() != 1)
         { FeedbackText.Text = "批量操作只能选择同一个类别。"; return; }
         if (AppServices.ServiceMode)
@@ -192,6 +195,7 @@ public partial class PhotoClassificationWindow : Window
     {
         ("metadata_rule", _, _) => "自动归类（可核验元数据）",
         ("user", _, _) => "用户已确认",
+        ("person_metadata", _, _) => "照片人物标签（已确认）",
         ("legacy", _, _) => "旧版已生效（来源未记录）",
         (_, _, "rejected") => "已忽略（机器建议）",
         (_, "suggested", _) => "建议/待确认",

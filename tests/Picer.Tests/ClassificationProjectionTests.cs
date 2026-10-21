@@ -18,7 +18,7 @@ public sealed class ClassificationProjectionTests : IDisposable
     }
 
     [Fact]
-    public void ProjectionIsIncrementalAndMetadataFactsAreAutomatic()
+    public void ProjectionIsIncrementalAndMetadataFactsStayOutOfContentClassification()
     {
         var source = _database.AddSource(_root);
         AddImage(source.Id, "landscape.jpg", 800, 400, "camera");
@@ -35,9 +35,51 @@ public sealed class ClassificationProjectionTests : IDisposable
 
         Assert.Equal(2, second.Processed);
         Assert.Equal("completed", completed.Status);
-        Assert.Contains(service.List("automatic"), item => item.ConceptId == "metadata.orientation.landscape");
-        Assert.Contains(service.List("automatic"), item => item.ConceptId == "metadata.orientation.portrait");
+        Assert.DoesNotContain(service.List("automatic"), item => item.ConceptId.StartsWith("metadata.", StringComparison.Ordinal));
         Assert.Equal(2L, Scalar("SELECT COUNT(DISTINCT image_id) FROM image_classification_assertions WHERE source_kind='metadata_rule' AND review_state='accepted'"));
+    }
+
+    [Fact]
+    public void ContentProjectionStoresMultipleSemanticLabelsForOnePhoto()
+    {
+        var source = _database.AddSource(_root);
+        var imageId = AddImage(source.Id, "family-car.jpg", 800, 600, null);
+        var service = new ClassificationProjectionService(_database);
+        var run = service.BeginOrResume();
+
+        service.ProcessNextBatch(run.RunId, 10, semanticResults: new Dictionary<long, SemanticAnalysisResult>
+        {
+            [imageId] = new([
+                new VisualConceptScore("subject.people", 0.91f),
+                new VisualConceptScore("object.vehicle", 0.83f),
+                new VisualConceptScore("scene.outdoor", 0.78f)])
+        });
+
+        var labels = service.List("automatic").Where(item => item.ImageId == imageId).ToArray();
+        Assert.Equal(3, labels.Length);
+        Assert.Contains(labels, item => item.ConceptId == "subject.people");
+        Assert.Contains(labels, item => item.ConceptId == "object.vehicle");
+        Assert.Contains(labels, item => item.ConceptId == "scene.outdoor");
+    }
+
+    [Fact]
+    public void SemanticClusteringCreatesAStableMultiPhotoCategory()
+    {
+        var source = _database.AddSource(_root);
+        var ids = Enumerable.Range(1, 3).Select(index => AddImage(source.Id, $"trip-{index}.jpg", 800, 600, null)).ToArray();
+        var projection = new ClassificationProjectionService(_database);
+        var run = projection.BeginOrResume();
+        var results = ids.ToDictionary(id => id, id => new SemanticAnalysisResult(
+            [new VisualConceptScore("scene.landscape", 0.9f), new VisualConceptScore("scene.outdoor", 0.85f)],
+            Embedding: [1f, 0.01f * id], EmbeddingModelVersion: "clip-test"));
+        projection.ProcessNextBatch(run.RunId, 10, semanticResults: results);
+
+        var clustered = new ContentSemanticClusterService(_database).RebuildLatest(similarityThreshold: 0.9f);
+
+        Assert.Equal(1, clustered.ClusterCount);
+        Assert.Equal(3, clustered.ClusteredImages);
+        Assert.Equal(3L, Scalar("SELECT COUNT(*) FROM semantic_content_cluster_members"));
+        Assert.Contains(projection.List("automatic"), item => item.ConceptId.StartsWith("cluster.semantic.", StringComparison.Ordinal));
     }
 
     [Fact]

@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using Picer.Core.Data;
 using Picer.Core.Models;
+using Picer.Core.SemanticSearch;
 
 namespace Picer.Core.Vision;
 
@@ -58,7 +59,8 @@ public sealed class ClassificationProjectionService(PicerDatabase database)
     }
 
     public ClassificationRunProgress ProcessNextBatch(string runId, int batchSize = 40,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        IReadOnlyDictionary<long, SemanticAnalysisResult>? semanticResults = null)
     {
         if (batchSize is < 1 or > 500) throw new ArgumentOutOfRangeException(nameof(batchSize));
         var current = GetRun(runId) ?? throw new InvalidOperationException("classification_run_not_found");
@@ -82,6 +84,8 @@ public sealed class ClassificationProjectionService(PicerDatabase database)
             {
                 ProjectMetadata(input.Image, transaction);
                 ProjectSuggestions(input.Image, input.Suggestions, transaction);
+                if (semanticResults?.TryGetValue(input.Image.Id, out var semantic) == true)
+                    ProjectSemanticConcepts(input.Image, semantic, transaction);
                 processed++;
             }
             catch (Exception error) when (error is not OperationCanceledException)
@@ -103,7 +107,22 @@ public sealed class ClassificationProjectionService(PicerDatabase database)
         update.Parameters.AddWithValue("$id", runId);
         update.ExecuteNonQuery();
         transaction.Commit();
+        if (semanticResults is not null)
+        {
+            var embeddings = new ClipSemanticRepository(database);
+            foreach (var image in images)
+                if (semanticResults.TryGetValue(image.Id, out var semantic) && semantic.Embedding is { Length: > 0 } vector &&
+                    !string.IsNullOrWhiteSpace(semantic.EmbeddingModelVersion))
+                    embeddings.Upsert(image, semantic.EmbeddingModelVersion, vector);
+        }
         return GetRun(runId)!;
+    }
+
+    public IReadOnlyList<ImageRecord> GetNextBatch(string runId, int batchSize)
+    {
+        if (batchSize is < 1 or > 500) throw new ArgumentOutOfRangeException(nameof(batchSize));
+        var current = GetRun(runId) ?? throw new InvalidOperationException("classification_run_not_found");
+        return current.Status == "running" ? LoadBatch(current.CursorImageId, batchSize) : [];
     }
 
     public void Pause(string runId) => SetStatus(runId, "paused", finished: false);
@@ -128,9 +147,10 @@ public sealed class ClassificationProjectionService(PicerDatabase database)
 
     public IReadOnlyList<ClassificationReviewItem> List(string view, int limit = 500)
     {
+        if (string.Equals(view, "people", StringComparison.Ordinal)) return ListPeople(limit);
         var predicate = view switch
         {
-            "automatic" => "a.assertion_state='automatic' AND a.review_state IN ('pending','accepted')",
+            "automatic" => "a.source_kind='vision_model' AND a.assertion_state='automatic' AND a.review_state IN ('pending','accepted')",
             "confirmed" => "a.assertion_state='user_confirmed' AND a.review_state='accepted'",
             "ignored" => "a.source_kind='vision_model' AND a.review_state='rejected'",
             _ => "a.assertion_state='suggested' AND a.review_state='pending'"
@@ -139,8 +159,9 @@ public sealed class ClassificationProjectionService(PicerDatabase database)
             SELECT a.image_id,i.path,i.thumb_path,a.concept_id,a.source_kind,a.assertion_state,a.review_state,
                    CASE WHEN a.content_sha256 IS NULL THEN 1 ELSE
                        (SELECT COUNT(*) FROM images r WHERE r.status='active' AND lower(COALESCE(r.content_sha256,r.sha256))=a.content_sha256) END,
-                   a.updated_utc
+                   a.updated_utc,c.display_name
             FROM image_classification_assertions a JOIN images i ON i.id=a.image_id
+            LEFT JOIN semantic_content_clusters c ON a.concept_id='cluster.semantic.' || c.cluster_key
             WHERE i.status='active' AND {predicate}
             ORDER BY a.updated_utc DESC,a.id DESC LIMIT $limit
             """);
@@ -151,10 +172,29 @@ public sealed class ClassificationProjectionService(PicerDatabase database)
         {
             var concept = reader.GetString(3);
             items.Add(new(reader.GetInt64(0), reader.GetString(1), reader.IsDBNull(2) ? null : reader.GetString(2),
-                concept, VisualConceptCatalog.DisplayName(concept), reader.GetString(4), reader.GetString(5),
+                concept, reader.IsDBNull(9) ? VisualConceptCatalog.DisplayName(concept) : reader.GetString(9), reader.GetString(4), reader.GetString(5),
                 reader.GetString(6), reader.GetInt32(7), DateTime.Parse(reader.GetString(8), null,
                     System.Globalization.DateTimeStyles.RoundtripKind)));
         }
+        return items;
+    }
+
+    private IReadOnlyList<ClassificationReviewItem> ListPeople(int limit)
+    {
+        using var command = database.Command("""
+            SELECT DISTINCT i.id,i.path,i.thumb_path,p.id,p.display_name,a.updated_utc
+            FROM detected_faces f
+            JOIN images i ON i.id=f.image_id AND i.status='active'
+            JOIN face_person_assignments a ON a.face_id=f.id AND a.state='confirmed'
+            JOIN people p ON p.id=a.person_id
+            WHERE f.is_archived=0
+            ORDER BY a.updated_utc DESC,i.id DESC LIMIT $limit
+            """);
+        command.Parameters.AddWithValue("$limit", Math.Clamp(limit, 1, 5000));
+        using var reader = command.ExecuteReader(); var items = new List<ClassificationReviewItem>();
+        while (reader.Read()) items.Add(new(reader.GetInt64(0), reader.GetString(1), reader.IsDBNull(2) ? null : reader.GetString(2),
+            "person." + reader.GetInt64(3), reader.GetString(4), "person_metadata", "user_confirmed", "accepted", 1,
+            DateTime.Parse(reader.GetString(5), null, System.Globalization.DateTimeStyles.RoundtripKind)));
         return items;
     }
 
@@ -213,24 +253,43 @@ public sealed class ClassificationProjectionService(PicerDatabase database)
                 suggestion.Evidence, transaction, respectRejection: true);
     }
 
+    private void ProjectSemanticConcepts(ImageRecord image, SemanticAnalysisResult result,
+        Microsoft.Data.Sqlite.SqliteTransaction transaction)
+    {
+        const string version = "chinese-clip-zero-shot-v1";
+        using (var retract = database.Command("UPDATE image_classification_assertions SET review_state='retracted',updated_utc=$now WHERE image_id=$image AND source_kind='vision_model' AND source_version=$version"))
+        {
+            retract.Transaction = transaction;
+            retract.Parameters.AddWithValue("$image", image.Id);
+            retract.Parameters.AddWithValue("$version", version);
+            retract.Parameters.AddWithValue("$now", Format(DateTime.UtcNow));
+            retract.ExecuteNonQuery();
+        }
+        foreach (var item in result.Concepts.DistinctBy(value => value.ConceptId))
+            UpsertAssertion(image, item.ConceptId, "vision_model", version, "automatic", "accepted",
+                $"clip:{item.Confidence:F4}", transaction, confidence: item.Confidence);
+    }
+
     private void UpsertAssertion(ImageRecord image, string concept, string source, string version, string state,
-        string review, string evidence, Microsoft.Data.Sqlite.SqliteTransaction transaction, bool respectRejection = false)
+        string review, string evidence, Microsoft.Data.Sqlite.SqliteTransaction transaction, bool respectRejection = false,
+        float? confidence = null)
     {
         var hash = NormalizeHash(image.ContentSha256) ?? NormalizeHash(image.Sha256);
         using var command = database.Command($"""
             INSERT INTO image_classification_assertions(image_id,content_sha256,concept_id,source_kind,source_version,
-                assertion_state,review_state,evidence_ref,evidence_fingerprint,created_utc,updated_utc)
-            SELECT $image,$sha,$concept,$source,$version,$state,$review,$evidence,$fingerprint,$now,$now
+                assertion_state,review_state,confidence,evidence_ref,evidence_fingerprint,created_utc,updated_utc)
+            SELECT $image,$sha,$concept,$source,$version,$state,$review,$confidence,$evidence,$fingerprint,$now,$now
             {(respectRejection ? "WHERE NOT EXISTS (SELECT 1 FROM image_classification_rejections r WHERE r.concept_id=$concept AND r.source_scope IN ('vision_model','all') AND (r.image_id=$image OR ($sha IS NOT NULL AND r.content_sha256=$sha)))" : "")}
             ON CONFLICT(image_id,concept_id,source_kind,source_version) DO UPDATE SET
                 content_sha256=excluded.content_sha256,assertion_state=excluded.assertion_state,
                 review_state=CASE WHEN image_classification_assertions.review_state IN ('rejected','accepted') THEN image_classification_assertions.review_state ELSE excluded.review_state END,
-                evidence_ref=excluded.evidence_ref,evidence_fingerprint=excluded.evidence_fingerprint,updated_utc=excluded.updated_utc
+                confidence=excluded.confidence,evidence_ref=excluded.evidence_ref,evidence_fingerprint=excluded.evidence_fingerprint,updated_utc=excluded.updated_utc
             """);
         command.Transaction = transaction;
         command.Parameters.AddWithValue("$image", image.Id); command.Parameters.AddWithValue("$sha", (object?)hash ?? DBNull.Value);
         command.Parameters.AddWithValue("$concept", concept); command.Parameters.AddWithValue("$source", source); command.Parameters.AddWithValue("$version", version);
         command.Parameters.AddWithValue("$state", state); command.Parameters.AddWithValue("$review", review); command.Parameters.AddWithValue("$evidence", evidence);
+        command.Parameters.AddWithValue("$confidence", (object?)confidence ?? DBNull.Value);
         command.Parameters.AddWithValue("$fingerprint", Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(evidence))).ToLowerInvariant());
         command.Parameters.AddWithValue("$now", Format(DateTime.UtcNow)); command.ExecuteNonQuery();
     }

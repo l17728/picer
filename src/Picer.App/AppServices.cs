@@ -74,6 +74,7 @@ public static partial class AppServices
     public static MediaSearchTool MediaSearch { get; private set; } = null!;
     public static VisualConceptRepository VisualConceptRepository { get; private set; } = null!;
     public static ClassificationProjectionService ClassificationProjection { get; private set; } = null!;
+    public static ContentSemanticClusterService ContentSemanticClusters { get; private set; } = null!;
     public static VideoRepository Videos { get; private set; } = null!;
     public static VideoIndexService VideoIndex { get; private set; } = null!;
     public static IVideoMediaProcessor? VideoKeyframes { get; private set; }
@@ -132,6 +133,7 @@ public static partial class AppServices
             CloudVisionRepository = new CloudVisionRepository(Db);
             VisualConceptRepository = new VisualConceptRepository(Db);
             ClassificationProjection = new ClassificationProjectionService(Db);
+            ContentSemanticClusters = new ContentSemanticClusterService(Db);
             ClassificationProjection.InterruptAbandonedRuns();
             Videos = new VideoRepository(Db);
             MediaSearch = new MediaSearchTool(Db, Videos);
@@ -224,6 +226,7 @@ public static partial class AppServices
         CloudVisionRepository = new CloudVisionRepository(Db);
         VisualConceptRepository = new VisualConceptRepository(Db);
         ClassificationProjection = new ClassificationProjectionService(Db);
+        ContentSemanticClusters = new ContentSemanticClusterService(Db);
         ClassificationProjection.InterruptAbandonedRuns();
         Videos = new VideoRepository(Db);
         MediaSearch = new MediaSearchTool(Db, Videos);

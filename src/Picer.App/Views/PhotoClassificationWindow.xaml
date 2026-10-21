@@ -29,6 +29,7 @@
       <TabControl Grid.Row="0" x:Name="Tabs" SelectionChanged="Tabs_SelectionChanged">
         <TabItem Header="待确认" Tag="pending"/>
         <TabItem Header="自动归类" Tag="automatic" IsSelected="True"/>
+        <TabItem Header="人物" Tag="people"/>
         <TabItem Header="用户已确认" Tag="confirmed"/>
         <TabItem Header="无分类" Tag="unclassified"/>
         <TabItem Header="已忽略" Tag="ignored"/>
