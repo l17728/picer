@@ -24,6 +24,7 @@ Remote GUI 通过 `HttpIndexGateway` 使用 IndexService 的远程索引。Local
 - `PICER_LOCAL_TTS_ENDPOINT`：本机中文 TTS HTTP 端点。
 - `PICER_LOCAL_FACE_ENDPOINT`：本机人脸检测和向量推理 HTTP 端点；通过 `X-Picer-Face-Operation` 区分操作。
 - `PICER_LOCAL_TRAINING_ENDPOINT`：可选本机 ModelServer 根地址；仅允许 loopback。未配置时，可从 `/api/face-inference` 推理地址推导同源训练服务。
+- `PICER_LOCAL_CLIP_ENDPOINT`：本机 ModelServer 的 CLIP 向量端点，通常为 `http://127.0.0.1:8091/api/clip/embedding`。未配置时，可从训练端点推导。GUI 不加载或持有 CLIP 模型。
 
 视频人物检测可使用现有 ModelServer 的 `http://127.0.0.1:8091/api/face-inference`。通过 IndexService 的 `PUT /api/service/v1/config` 更新 `PICER_LOCAL_FACE_ENDPOINT` 可持久化并广播端点；训练采用独立的 `training.proxy` 白名单通道，不向推理接口发送训练协议。旧开发适配器的 8092 端口只有单独启动时才可用，不能作为常驻服务使用。
 
@@ -36,6 +37,12 @@ AI 问答上游有单独实现：`PICER_LOCAL_MODEL_ENDPOINT` 是 MediaAgent 进
 2026-10-08：GUI 人脸训练、校准、历史与制品统一通过 `/api/service/v1/training/api/face-training/*`，使用配对凭据与固定公钥。代理转发至本机 ModelServer 并在本机注入模型密钥；GUI 不直接访问 ModelServer。训练能力 configured 表示已配置通道，实际模型就绪状态读取 algorithms。
 
 Picer 客户端通过 HTTPS 读取和更新远程 index，不依赖服务端本地文件路径或 SQLite 结构；模型推理同样只通过服务 API 调用。客户端本地缓存不可作为远程事实源，断网时只能显示最近一次缓存并明确标注离线状态。
+
+## Chinese-CLIP 本地部署
+
+自动分类本身只整理已有描述和可核验元数据，不触发新模型推理。可选的“BM25 + CLIP”多路召回走固定链路：GUI → IndexService → 来源 MediaAgent → 来源机 ModelServer。图片在来源机校验授权目录后缩放为 224×224、清除元数据，再发送给回环 ModelServer；原始路径和原图不会发送到 GUI 或 IndexService。
+
+在 ModelServer 进程设置 `PICER_CLIP_MODEL_ROOT`，目录中放置 `models/chinese-clip/model_quantized.onnx` 与 `models/chinese-clip/vocab.txt`；也可分别使用 `PICER_CLIP_MODEL_PATH`、`PICER_CLIP_VOCAB_PATH`。`PICER_CLIP_CONCURRENCY` 可设为 1–8，默认按 CPU 核数选择 1–2。模型缺失时 CLIP 请求明确失败，不影响 ModelServer 健康检查、BM25 搜索或已有分类。MediaAgent 还需设置 `PICER_LOCAL_CLIP_ENDPOINT`，并使用 `PICER_LOCAL_MODEL_API_KEY` 或本机 ModelServer 密钥。模型和 ONNX 推理依赖部署在 ModelServer，不属于 GUI 安装包。
 
 仓库包含常驻 Python 人脸 worker，支持 CPU 或可选 CUDA 的向量校准、图像向量提取及检测。ModelServer 通过子进程协议调用它；配置 Python、脚本和所选模型后才能提供对应能力，未配置时不伪造训练结果。
 

@@ -25,6 +25,7 @@ builder.Services.AddSingleton<ModelCandidateRankingStore>();
 builder.Services.AddSingleton<EvaluationDatasetStore>();
 builder.Services.AddSingleton<GpuEmbeddingService>();
 builder.Services.AddSingleton<GpuTrainingWorkerHost>();
+builder.Services.AddSingleton<ClipEmbeddingService>();
 builder.Services.AddSingleton(_ => new ModelInferenceRelay(new HttpClient(new SocketsHttpHandler
 {
     AllowAutoRedirect = false, UseCookies = false, MaxConnectionsPerServer = 8,
@@ -131,6 +132,16 @@ app.MapGet("/api/ai/capabilities", () => Results.Ok(new
     language = new { enabled = !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("PICER_LANGUAGE_MODEL_API_KEY")), model = DefaultLanguageModel },
     vision = new { enabled = !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("PICER_VL_MODEL_ENDPOINT")), model = "qwen3-vl-8b-instruct", optionalForTraining = true }
 }));
+app.MapPost("/api/clip/embedding", async (ClipEmbeddingRequest request, ClipEmbeddingService clip, CancellationToken cancellationToken) =>
+{
+    try
+    {
+        var embedding = await clip.EncodeAsync(request, cancellationToken);
+        return Results.Json(new { modelVersion = ClipEmbeddingService.Version, embedding });
+    }
+    catch (FormatException) { return Results.BadRequest(new { error = "clip_image_base64_invalid" }); }
+    catch (InvalidDataException error) { return Results.BadRequest(new { error = error.Message }); }
+});
 app.MapPost("/api/ai/chat/completions", async (HttpContext context, ModelInferenceRelay relay) =>
 {
     var endpoint = Environment.GetEnvironmentVariable("PICER_LANGUAGE_MODEL_ENDPOINT") ?? DefaultLanguageModelEndpoint;

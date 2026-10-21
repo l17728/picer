@@ -300,7 +300,17 @@ internal sealed partial class AgentApplication : IDisposable
             if (Uri.TryCreate(Setting("PICER_LOCAL_FACE_ENDPOINT"), UriKind.Absolute, out _))
                 capabilities.AddRange(["face.detect", "face.embed", "video.people"]);
             if (TrainingEndpoint() is not null) capabilities.Add("training.proxy");
+            if (ClipEndpoint() is not null) capabilities.AddRange(["clip.embed", "clip.text", "clip.image"]);
         return capabilities.ToArray();
+    }
+
+    private Uri? ClipEndpoint()
+    {
+        var configured = Setting("PICER_LOCAL_CLIP_ENDPOINT");
+        if (Uri.TryCreate(configured, UriKind.Absolute, out var clip) && clip.IsLoopback &&
+            clip.Scheme is "http" or "https") return clip;
+        var modelServer = TrainingEndpoint();
+        return modelServer is null ? null : new Uri(modelServer, "api/clip/embedding");
     }
 
     private Uri? TrainingEndpoint()
@@ -435,10 +445,56 @@ internal sealed partial class AgentApplication : IDisposable
                 !string.Equals(task, "asr.stream", StringComparison.OrdinalIgnoreCase) &&
                 !string.Equals(task, "tts.synthesize", StringComparison.OrdinalIgnoreCase) &&
                 !string.Equals(task, "vl.analyze", StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(task, "clip.text", StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(task, "clip.image", StringComparison.OrdinalIgnoreCase) &&
                 !task.StartsWith("face.", StringComparison.OrdinalIgnoreCase) &&
                 !string.Equals(task, "training.proxy", StringComparison.OrdinalIgnoreCase) &&
                 !string.Equals(task, "video.people", StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException("task_not_supported");
             if (string.IsNullOrWhiteSpace(payload)) throw new InvalidOperationException("task_payload_required");
+            if (string.Equals(task, "clip.text", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(task, "clip.image", StringComparison.OrdinalIgnoreCase))
+            {
+                var endpoint = ClipEndpoint() ?? throw new InvalidOperationException("clip_endpoint_not_configured");
+                string upstreamPayload;
+                if (string.Equals(task, "clip.text", StringComparison.OrdinalIgnoreCase))
+                {
+                    using var textDocument = JsonDocument.Parse(payload);
+                    var text = textDocument.RootElement.TryGetProperty("text", out var textElement) ? textElement.GetString()?.Trim() : null;
+                    if (string.IsNullOrEmpty(text) || text.Length > 512) throw new InvalidDataException("clip_text_invalid");
+                    upstreamPayload = JsonSerializer.Serialize(new { text });
+                }
+                else
+                {
+                    using var imageDocument = JsonDocument.Parse(payload);
+                    var path = imageDocument.RootElement.TryGetProperty("path", out var pathElement) ? pathElement.GetString() : null;
+                    if (string.IsNullOrWhiteSpace(path)) throw new InvalidDataException("clip_image_path_invalid");
+                    var clipPath = Path.GetFullPath(path);
+                    if (!_roots.Any(root => Picer.Core.Indexing.DirectoryMediaImport.Contains(root, clipPath)))
+                        throw new UnauthorizedAccessException("clip_image_outside_configured_roots");
+                    var info = new FileInfo(clipPath);
+                    if (!info.Exists || info.Length is <= 0 or > 64L * 1024 * 1024)
+                        throw new InvalidDataException("clip_image_size_invalid");
+                    using var image = await Picer.Core.Imaging.RasterImage.LoadAsync(clipPath, cancellationToken);
+                    image.Resize(224, 224);
+                    image.StripMetadata();
+                    await using var encoded = new MemoryStream(96 * 1024);
+                    await image.SaveAsJpegAsync(encoded, 90, cancellationToken);
+                    upstreamPayload = JsonSerializer.Serialize(new
+                    {
+                        imageBase64 = Convert.ToBase64String(encoded.GetBuffer(), 0, checked((int)encoded.Length))
+                    });
+                }
+                using var message = new HttpRequestMessage(HttpMethod.Post, endpoint)
+                {
+                    Content = new StringContent(upstreamPayload, Encoding.UTF8, "application/json")
+                };
+                AddModelAuthorization(message);
+                using var response = await _modelClient.SendAsync(message, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+                var result = await response.Content.ReadAsStringAsync(cancellationToken);
+                if (!response.IsSuccessStatusCode) throw new InvalidOperationException($"clip_http_{(int)response.StatusCode}");
+                await SendAsync(socket, new { type = "task.result", requestId, payload = result }, cancellationToken);
+                return;
+            }
             if (string.Equals(task, "video.purge-cache", StringComparison.OrdinalIgnoreCase))
             {
                 var purge = JsonSerializer.Deserialize<Picer.Core.Data.VideoRecordPurger.SourceCacheRequest>(payload, new JsonSerializerOptions(JsonSerializerDefaults.Web))

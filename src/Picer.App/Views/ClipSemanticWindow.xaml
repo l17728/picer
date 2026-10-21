@@ -4,6 +4,8 @@
     <WrapPanel DockPanel.Dock="Top" Margin="0,0,0,8">
       <Button x:Name="BuildButton" Content="建立/继续语义索引" Click="Build_Click" Padding="12,5"/><Button x:Name="CancelButton" Content="取消" Click="Cancel_Click" Padding="12,5" Margin="6,0" IsEnabled="False"/>
       <TextBox x:Name="QueryBox" Width="320" Height="28" Margin="16,0,4,0" VerticalContentAlignment="Center" ToolTip="例如：海边看日落、孩子在公园玩"/><Button Content="搜索 Top 20" Click="Search_Click" Padding="12,5"/>
+      <CheckBox x:Name="HybridMode" Content="融合 BM25 + CLIP（RRF，可选）" Margin="10,0,0,0" VerticalAlignment="Center"
+                AutomationProperties.AutomationId="HybridRrfSearch"/>
       <TextBlock Text=" 已知相关总数：" VerticalAlignment="Center" Margin="12,0,0,0"/><TextBox x:Name="ExpectedCount" Width="55" Height="28" ToolTip="用于计算 Recall@20；不知道可留空"/><Button Content="保存标注并计算" Click="Save_Click" Padding="12,5" Margin="6,0"/>
     </WrapPanel>
     <TextBlock DockPanel.Dock="Bottom" x:Name="MetricsText" FontWeight="Bold" Margin="0,8,0,0"/>

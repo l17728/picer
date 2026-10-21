@@ -52,6 +52,8 @@ public sealed record SyncFacesRequest(
     IReadOnlyList<GatewayDetectedFace> Faces,
     IReadOnlyList<GatewayFaceAssignment> Assignments);
 public sealed record SyncDirectoryClassificationRequest(IReadOnlyDictionary<string, bool> Overrides);
+public sealed record ClipTextRequest(string Text);
+public sealed record ClipImageRequest(string ContentSha256);
 public sealed record AlbumImageLink(long AlbumId, long ImageId);
 public sealed record ImageTagLink(long ImageId, long TagId);
 
@@ -1047,6 +1049,44 @@ async function load(){const [c,g]=await Promise.all([fetch('/api/service/v1/capa
             {
                 return Results.Json(new { error = "tts_task_failed", detail = exception.Message }, statusCode: StatusCodes.Status502BadGateway);
             }
+        });
+        app.MapPost("/api/service/v1/clip/text", async (ClipTextRequest request, string? agentId, CancellationToken cancellationToken) =>
+        {
+            if (string.IsNullOrWhiteSpace(request.Text) || request.Text.Trim().Length > 512)
+                return Results.BadRequest(new { error = "clip_text_invalid" });
+            try
+            {
+                var payload = await agents.RequestTaskAsync(agentId, "clip.text",
+                    JsonSerializer.Serialize(new { text = request.Text.Trim() }), cancellationToken);
+                return payload is null
+                    ? Results.Json(new { error = "media_agent_offline" }, statusCode: StatusCodes.Status503ServiceUnavailable)
+                    : Results.Content(payload, "application/json");
+            }
+            catch (Exception exception) when (exception is IOException or TimeoutException or InvalidOperationException)
+            { return Results.Json(new { error = "clip_task_failed", detail = exception.Message }, statusCode: 502); }
+        });
+        app.MapPost("/api/service/v1/clip/image", async (ClipImageRequest request, string? agentId, CancellationToken cancellationToken) =>
+        {
+            var hash = request.ContentSha256?.Trim().ToLowerInvariant();
+            if (hash is not { Length: 64 } || hash.Any(value => !Uri.IsHexDigit(value)))
+                return Results.BadRequest(new { error = "clip_content_hash_invalid" });
+            using var lookup = db.Command("""
+                SELECT path FROM images WHERE status='active' AND lower(COALESCE(content_sha256,sha256))=$hash
+                ORDER BY id LIMIT 1
+                """);
+            lookup.Parameters.AddWithValue("$hash", hash);
+            var storedPath = lookup.ExecuteScalar() as string;
+            if (storedPath is null) return Results.NotFound(new { error = "clip_image_not_found" });
+            try
+            {
+                var payload = await agents.RequestTaskAsync(agentId, "clip.image",
+                    JsonSerializer.Serialize(new { path = IndexApiHandlers.NormalizeAgentPath(storedPath) }), cancellationToken);
+                return payload is null
+                    ? Results.Json(new { error = "media_agent_offline" }, statusCode: StatusCodes.Status503ServiceUnavailable)
+                    : Results.Content(payload, "application/json");
+            }
+            catch (Exception exception) when (exception is IOException or TimeoutException or InvalidOperationException)
+            { return Results.Json(new { error = "clip_task_failed", detail = exception.Message }, statusCode: 502); }
         });
         app.MapPost("/api/service/v1/tts/stream", async (HttpRequest request, HttpResponse response, string? agentId, CancellationToken cancellationToken) =>
         {

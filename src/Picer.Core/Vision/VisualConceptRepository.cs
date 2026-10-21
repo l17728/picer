@@ -158,7 +158,7 @@ public sealed class VisualConceptRepository(PicerDatabase database)
         PromoteImageRejections(imageId, hash, transaction);
         using var targets = database.Command(hash is null
             ? "SELECT id FROM images WHERE id=$image AND status='active'"
-            : "SELECT id FROM images WHERE lower(sha256)=$sha AND status='active'");
+            : "SELECT id FROM images WHERE lower(COALESCE(content_sha256,sha256))=$sha AND status='active'");
         targets.Transaction = transaction;
         if (hash is null) targets.Parameters.AddWithValue("$image", imageId);
         else targets.Parameters.AddWithValue("$sha", hash);
@@ -204,6 +204,72 @@ public sealed class VisualConceptRepository(PicerDatabase database)
         command.Parameters.AddWithValue("$concept", conceptId);
         command.Parameters.AddWithValue("$now", Format(DateTime.UtcNow));
         command.ExecuteNonQuery();
+    }
+
+    public void Correct(long imageId, string oldConceptId, string newConceptId)
+    {
+        if (string.Equals(oldConceptId, newConceptId, StringComparison.Ordinal))
+        {
+            Confirm(imageId, newConceptId);
+            return;
+        }
+        using var transaction = database.BeginTransaction();
+        var hash = GetVerifiedHash(imageId, transaction);
+        PromoteImageRejections(imageId, hash, transaction);
+        var now = Format(DateTime.UtcNow);
+        using (var reject = database.Command("""
+            INSERT INTO image_classification_rejections(image_id,content_sha256,concept_id,source_scope,rejected_utc)
+            VALUES($image,$sha,$concept,'vision_model',$now) ON CONFLICT DO NOTHING
+            """))
+        {
+            reject.Transaction = transaction;
+            reject.Parameters.AddWithValue("$image", hash is null ? imageId : DBNull.Value);
+            reject.Parameters.AddWithValue("$sha", (object?)hash ?? DBNull.Value);
+            reject.Parameters.AddWithValue("$concept", oldConceptId);
+            reject.Parameters.AddWithValue("$now", now);
+            reject.ExecuteNonQuery();
+        }
+        using (var retract = database.Command("""
+            UPDATE image_classification_assertions SET review_state='rejected',updated_utc=$now,reviewed_utc=$now
+            WHERE concept_id=$concept AND source_kind='vision_model'
+              AND (image_id=$image OR ($sha IS NOT NULL AND content_sha256=$sha))
+            """))
+        {
+            retract.Transaction = transaction;
+            retract.Parameters.AddWithValue("$image", hash is null ? imageId : -1);
+            retract.Parameters.AddWithValue("$sha", (object?)hash ?? DBNull.Value);
+            retract.Parameters.AddWithValue("$concept", oldConceptId);
+            retract.Parameters.AddWithValue("$now", now);
+            retract.ExecuteNonQuery();
+        }
+        using (var targets = database.Command(hash is null
+                   ? "SELECT id FROM images WHERE id=$image AND status='active'"
+                   : "SELECT id FROM images WHERE lower(COALESCE(content_sha256,sha256))=$sha AND status='active'"))
+        {
+            targets.Transaction = transaction;
+            if (hash is null) targets.Parameters.AddWithValue("$image", imageId);
+            else targets.Parameters.AddWithValue("$sha", hash);
+            var ids = new List<long>();
+            using (var reader = targets.ExecuteReader()) while (reader.Read()) ids.Add(reader.GetInt64(0));
+            foreach (var id in ids)
+            {
+                using var add = database.Command("""
+                    INSERT INTO image_classification_assertions(
+                        image_id,content_sha256,concept_id,source_kind,source_version,assertion_state,review_state,
+                        created_utc,updated_utc,reviewed_utc)
+                    VALUES($image,$sha,$concept,'user','user-v1','user_confirmed','accepted',$now,$now,$now)
+                    ON CONFLICT(image_id,concept_id,source_kind,source_version) DO UPDATE SET
+                        review_state='accepted',assertion_state='user_confirmed',updated_utc=$now,reviewed_utc=$now
+                    """);
+                add.Transaction = transaction;
+                add.Parameters.AddWithValue("$image", id);
+                add.Parameters.AddWithValue("$sha", (object?)hash ?? DBNull.Value);
+                add.Parameters.AddWithValue("$concept", newConceptId);
+                add.Parameters.AddWithValue("$now", now);
+                add.ExecuteNonQuery();
+            }
+        }
+        transaction.Commit();
     }
 
     private string? GetVerifiedHash(long imageId, Microsoft.Data.Sqlite.SqliteTransaction transaction)

@@ -34,6 +34,9 @@
                 <MenuItem Header="任务中心" Click="CloudVisionTasks_Click"/>
                 <Separator/>
                 <MenuItem Header="中文语义检索" Click="ClipSemantic_Click"/>
+                <MenuItem Header="照片分类与审核…" Click="PhotoClassification_Click"
+                          AutomationProperties.AutomationId="PhotoClassificationMenu"
+                          AutomationProperties.Name="照片分类与审核"/>
                 <MenuItem Header="Florence 运行验证" Click="FlorenceValidation_Click"/>
                 <MenuItem Header="继续目录描述任务…" Click="FlorenceBatch_Click"/>
             </MenuItem>

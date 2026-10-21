@@ -4,6 +4,8 @@ using Picer.Core.Models;
 namespace Picer.Core.SemanticSearch;
 
 public sealed record ClipSearchHit(ImageRecord Image, float Score, int Rank);
+public sealed record ClipSearchReport(IReadOnlyList<ClipSearchHit> Hits, int Indexed, int Eligible,
+    int InvalidVectors);
 public sealed record ClipIndexProgress(int Completed, int Total, string CurrentFile);
 
 public sealed class ClipSemanticRepository(PicerDatabase db)
@@ -38,24 +40,38 @@ public sealed class ClipSemanticRepository(PicerDatabase db)
     }
 
     public IReadOnlyList<ClipSearchHit> Search(ReadOnlySpan<float> query, int count = 20, string modelVersion = ChineseClipEncoder.ModelVersion)
+        => SearchStreaming(query, count, modelVersion).Hits;
+
+    public ClipSearchReport SearchStreaming(ReadOnlySpan<float> query, int count = 20,
+        string modelVersion = ChineseClipEncoder.ModelVersion, IReadOnlySet<long>? allowedImageIds = null,
+        int cancellationBatchSize = 256, CancellationToken cancellationToken = default)
     {
-        var candidates = new List<(long Id, float Score)>();
+        if (count < 1) throw new ArgumentOutOfRangeException(nameof(count));
+        if (cancellationBatchSize < 1) throw new ArgumentOutOfRangeException(nameof(cancellationBatchSize));
+        var candidates = new PriorityQueue<(long Id, float Score), (float Score, long Tie)>();
+        var indexed = 0;
+        var eligible = 0;
+        var invalid = 0;
         using var command = db.Command("SELECT image_id,embedding FROM clip_image_embeddings WHERE model_version=$model");
         command.Parameters.AddWithValue("$model", modelVersion);
         using var reader = command.ExecuteReader();
         while (reader.Read())
         {
+            if (indexed++ % cancellationBatchSize == 0) cancellationToken.ThrowIfCancellationRequested();
+            var id = reader.GetInt64(0);
+            if (allowedImageIds is not null && !allowedImageIds.Contains(id)) continue;
+            eligible++;
             var bytes = (byte[])reader[1];
-            if (bytes.Length != query.Length * sizeof(float)) continue;
-            var vector = new float[query.Length];
-            Buffer.BlockCopy(bytes, 0, vector, 0, bytes.Length);
+            if (bytes.Length != query.Length * sizeof(float)) { invalid++; continue; }
             var score = 0f;
-            for (var i = 0; i < vector.Length; i++) score += vector[i] * query[i];
-            candidates.Add((reader.GetInt64(0), score));
+            for (var i = 0; i < query.Length; i++) score += BitConverter.ToSingle(bytes, i * sizeof(float)) * query[i];
+            candidates.Enqueue((id, score), (score, -id));
+            if (candidates.Count > count) candidates.Dequeue();
         }
-        return candidates.OrderByDescending(x => x.Score).Take(count)
+        var hits = candidates.UnorderedItems.Select(item => item.Element).OrderByDescending(x => x.Score).ThenBy(x => x.Id)
             .Select((x, index) => db.GetImage(x.Id) is { } image ? new ClipSearchHit(image, x.Score, index + 1) : null)
             .Where(x => x is not null).Cast<ClipSearchHit>().ToArray();
+        return new ClipSearchReport(hits, indexed, eligible, invalid);
     }
 
     public long SaveEvaluation(string query, string modelVersion, int? expectedRelevantCount,

@@ -209,6 +209,15 @@ public sealed class AccountAuthorizationTests : IDisposable
         Assert.Null(SpaceRoutePermissions.RequiredScope("POST", "/api/service/v1/video-keyframes/not-an-id"));
     }
 
+    [Theory]
+    [InlineData("/api/service/v1/clip/text")]
+    [InlineData("/api/service/v1/clip/image")]
+    public void ClipEmbeddingRoutesRequireExplicitAnalysisGrant(string path)
+    {
+        Assert.Equal("analysis.run", SpaceRoutePermissions.RequiredScope("POST", path));
+        Assert.Null(SpaceRoutePermissions.RequiredScope("GET", path));
+    }
+
     [Fact]
     public void AuthorizationDocumentRejectsDuplicatePropertiesAndExcessiveDepth()
     {

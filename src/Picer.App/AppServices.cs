@@ -73,6 +73,7 @@ public static partial class AppServices
     public static CloudVisionRepository CloudVisionRepository { get; private set; } = null!;
     public static MediaSearchTool MediaSearch { get; private set; } = null!;
     public static VisualConceptRepository VisualConceptRepository { get; private set; } = null!;
+    public static ClassificationProjectionService ClassificationProjection { get; private set; } = null!;
     public static VideoRepository Videos { get; private set; } = null!;
     public static VideoIndexService VideoIndex { get; private set; } = null!;
     public static IVideoMediaProcessor? VideoKeyframes { get; private set; }
@@ -83,7 +84,6 @@ public static partial class AppServices
     public static FlorenceResultRepository FlorenceResults { get; private set; } = null!;
     public static ClipSemanticService? ClipSemantic { get; private set; }
     public static string? ClipUnavailableReason { get; private set; }
-    private static ChineseClipEncoder? ClipEncoder { get; set; }
     private static IImageFaceAnalyzer? FaceAnalyzer { get; set; }
 
     private static string ConfigPath => Path.Combine(AppPaths.DataRoot, "storage.json");
@@ -131,6 +131,8 @@ public static partial class AppServices
             FaceTraining = new FaceTrainingService(VisionRepository, clientFactory: CreateTrainingHttpClient);
             CloudVisionRepository = new CloudVisionRepository(Db);
             VisualConceptRepository = new VisualConceptRepository(Db);
+            ClassificationProjection = new ClassificationProjectionService(Db);
+            ClassificationProjection.InterruptAbandonedRuns();
             Videos = new VideoRepository(Db);
             MediaSearch = new MediaSearchTool(Db, Videos);
             VideoIndex = new VideoIndexService(Db, Videos);
@@ -221,6 +223,8 @@ public static partial class AppServices
         FaceTraining = new FaceTrainingService(VisionRepository, clientFactory: CreateTrainingHttpClient);
         CloudVisionRepository = new CloudVisionRepository(Db);
         VisualConceptRepository = new VisualConceptRepository(Db);
+        ClassificationProjection = new ClassificationProjectionService(Db);
+        ClassificationProjection.InterruptAbandonedRuns();
         Videos = new VideoRepository(Db);
         MediaSearch = new MediaSearchTool(Db, Videos);
         VideoIndex = new VideoIndexService(Db, Videos);
@@ -293,7 +297,11 @@ public static partial class AppServices
         if (ClipSemantic is not null) return ClipSemantic;
         try
         {
-            throw new InvalidOperationException("IndexService CLIP endpoint is not registered");
+            if (!TryGetAiServiceBackend(out var backend)) throw new InvalidOperationException("IndexService 尚未配对");
+            var client = CreatePinnedServiceClient(backend, TimeSpan.FromMinutes(10));
+            client.BaseAddress = new Uri(backend.BaseUrl!.TrimEnd('/') + "/api/service/v1/clip/");
+            ClipSemantic = new ClipSemanticService(Db, ClipRepository, new ServiceClipEmbeddingClient(client));
+            ClipUnavailableReason = null;
         }
         catch (Exception ex) when (ex is FileNotFoundException or OnnxRuntimeException or InvalidOperationException)
         {
@@ -785,7 +793,8 @@ public static partial class AppServices
         (VideoKeyframes as IDisposable)?.Dispose();
         (VideoTranscription as IDisposable)?.Dispose();
         (FaceAnalyzer as IDisposable)?.Dispose();
-        ClipEncoder?.Dispose();
+        ClipSemantic?.Dispose();
+        ClipSemantic = null;
         Db?.Dispose();
         (Geocoder as IDisposable)?.Dispose();
     }

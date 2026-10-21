@@ -8,6 +8,9 @@ $source = if ($SourceDirectory) { [IO.Path]::GetFullPath($SourceDirectory) } els
 $destination = Join-Path $ModelRoot 'services\Picer.ModelServer'
 $launcher = Join-Path $ModelRoot 'start-picer-model-service.ps1'
 $dll = Join-Path $destination 'Picer.ModelServer.dll'
+$clipSource = Join-Path $repo 'third_party\runtime\models\chinese-clip'
+$clipModelSource = Join-Path $clipSource 'model_quantized.onnx'
+$clipVocabularySource = Join-Path $clipSource 'vocab.txt'
 $backup = Join-Path $ModelRoot ('service-backups\modelserver-' + $deploymentId)
 $launcherContent = [IO.File]::ReadAllText($launcher)
 if (-not $TrainingArchiveRoot -and $launcherContent.Contains('PICER_TRAINING_ARCHIVE_ROOT')) { throw 'Pass TrainingArchiveRoot explicitly when the launcher configures an external training archive.' }
@@ -23,6 +26,12 @@ if (-not $SourceDirectory) {
 }
 $files = @('Picer.ModelServer.dll', 'Picer.ModelServer.deps.json', 'Picer.ModelServer.runtimeconfig.json')
 foreach ($file in $files) { if (-not (Test-Path -LiteralPath (Join-Path $source $file))) { throw "Missing build file: $file" } }
+foreach ($asset in @(
+    @{ Path=$clipModelSource; Hash='A2C2849329EAFB24100ACEC5A9421A39F8CB445296444C5C98855B69E5E7A751' },
+    @{ Path=$clipVocabularySource; Hash='45BBAC6B341C319ADC98A532532882E91A9CEFC0329AA57BAC9AE761C27B291C' })) {
+    if (-not (Test-Path -LiteralPath $asset.Path -PathType Leaf)) { throw "Missing pinned Chinese-CLIP asset: $($asset.Path)" }
+    if ((Get-FileHash -LiteralPath $asset.Path -Algorithm SHA256).Hash -ne $asset.Hash) { throw "Chinese-CLIP asset hash mismatch: $($asset.Path)" }
+}
 New-Item -ItemType Directory -Path $backup | Out-Null
 $backupReady = $false
 $stopped = $false
@@ -81,9 +90,16 @@ try {
     $workerDestination = Join-Path $destination 'worker'
     New-Item -ItemType Directory -Path $workerDestination -Force | Out-Null
     Get-ChildItem -LiteralPath (Join-Path $repo 'server\Picer.ModelServer\worker') -File | ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination $workerDestination -Force }
+    $clipDestination = Join-Path $destination 'models\chinese-clip'
+    New-Item -ItemType Directory -Path $clipDestination -Force | Out-Null
+    Copy-Item -LiteralPath $clipModelSource -Destination $clipDestination -Force
+    Copy-Item -LiteralPath $clipVocabularySource -Destination $clipDestination -Force
     $workerSetting = '$env:PICER_GPU_WORKER_SCRIPT = ' + "'" + (Join-Path $workerDestination 'face_worker.py').Replace("'", "''") + "'"
     $content = [regex]::Replace($launcherContent, '(?m)^\s*\$env:PICER_GPU_WORKER_SCRIPT\s*=.*$', '')
     $content = $workerSetting + [Environment]::NewLine + $content
+    $content = [regex]::Replace($content, '(?m)^\s*\$env:PICER_CLIP_MODEL_ROOT\s*=.*$', '')
+    $clipSetting = '$env:PICER_CLIP_MODEL_ROOT = ' + "'" + $destination.Replace("'", "''") + "'"
+    $content = $clipSetting + [Environment]::NewLine + $content
     $setting = '$env:PICER_GPU_WORKER_USE_CUDA = ''1'''
     if ($content -notmatch 'PICER_GPU_WORKER_USE_CUDA') { $content = $setting + [Environment]::NewLine + $content }
     [IO.File]::WriteAllText($launcher, $content, [Text.UTF8Encoding]::new($true))

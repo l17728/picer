@@ -198,6 +198,7 @@ public static class SpaceRoutePermissions
         if (method == "GET" && path == "/api/sync/v1/metadata-edits") return "index.read";
         if (method == "POST" && path == "/api/ai/v1/chat/stream") return "analysis.run";
         if (method == "POST" && path == "/api/gateway/v1/analysis-input") return "analysis.run";
+        if (method == "POST" && path is "/api/service/v1/clip/text" or "/api/service/v1/clip/image") return "analysis.run";
         var serviceParts = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
         if (serviceParts.Length == 5 && serviceParts[0] == "api" && serviceParts[1] == "service" &&
             serviceParts[2] == "v1" && long.TryParse(serviceParts[4], out var serviceMediaId) && serviceMediaId > 0)

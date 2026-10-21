@@ -280,6 +280,11 @@ public partial class MainWindow : Window
             { Owner = this }.Show();
     }
 
+    private void PhotoClassification_Click(object sender, RoutedEventArgs e)
+    {
+        new Views.PhotoClassificationWindow { Owner = this }.Show();
+    }
+
     private void FlorenceValidation_Click(object sender, RoutedEventArgs e)
     {
         MessageBox.Show(this, "Florence 视觉能力必须由 IndexService/MediaAgent 提供，当前客户端不直接加载模型。", "服务能力未接入", MessageBoxButton.OK, MessageBoxImage.Information);

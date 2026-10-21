@@ -19,6 +19,11 @@ public static class VisualConceptCatalog
     public static IReadOnlyDictionary<string, string> DisplayNames => Terms.ToDictionary(pair => pair.Key, pair => pair.Value[0]);
     private static readonly IReadOnlyDictionary<string, string[]> Terms = new Dictionary<string, string[]>
     {
+        ["metadata.orientation.landscape"] = ["横向照片"],
+        ["metadata.orientation.portrait"] = ["纵向照片"],
+        ["metadata.orientation.square"] = ["方形照片"],
+        ["metadata.camera.present"] = ["包含相机信息"],
+        ["metadata.gps.present"] = ["包含 GPS 坐标"],
         ["season.summer"] = ["夏天", "夏季"],
         ["apparel.dress"] = ["连衣裙", "裙子", "长裙", "短裙"],
         ["scene.mountain"] = ["山上", "山里", "山地", "山区", "山景"],
@@ -27,6 +32,28 @@ public static class VisualConceptCatalog
         ["activity.hiking"] = ["徒步", "爬山", "登山"],
         ["activity.dining"] = ["聚餐", "吃饭", "餐桌"]
     };
+
+    public static bool TryResolve(string? value, out string conceptId)
+    {
+        var normalized = value?.Trim();
+        if (!string.IsNullOrEmpty(normalized))
+        {
+            foreach (var pair in Terms)
+            {
+                if (pair.Key.Equals(normalized, StringComparison.OrdinalIgnoreCase) ||
+                    pair.Value.Any(term => term.Equals(normalized, StringComparison.OrdinalIgnoreCase)))
+                {
+                    conceptId = pair.Key;
+                    return true;
+                }
+            }
+        }
+        conceptId = "";
+        return false;
+    }
+
+    public static string DisplayName(string conceptId) =>
+        DisplayNames.TryGetValue(conceptId, out var value) ? value : conceptId;
 
     public static VisualQueryParse Parse(string? query)
     {

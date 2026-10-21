@@ -1,0 +1,65 @@
+<Window x:Class="Picer.App.Views.PhotoClassificationWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="照片分类与审核" Width="1080" Height="740" WindowStartupLocation="CenterOwner"
+        AutomationProperties.Name="照片分类与审核">
+  <DockPanel Margin="12">
+    <Border DockPanel.Dock="Top" Background="#F3F7FC" BorderBrush="#C8D8EA" BorderThickness="1" Padding="10" Margin="0,0,0,8">
+      <StackPanel>
+        <TextBlock Text="使用已有描述和可核验元数据；不会因此自动上传照片或产生新的云端分析费用。" FontWeight="SemiBold" TextWrapping="Wrap"/>
+        <TextBlock x:Name="StatusText" Margin="0,5,0,0" AutomationProperties.AutomationId="ClassificationStatus"
+                   AutomationProperties.LiveSetting="Polite"/>
+        <ProgressBar x:Name="Progress" Height="12" Minimum="0" Maximum="100" Margin="0,6,0,0"/>
+        <WrapPanel Margin="0,8,0,0">
+          <Button x:Name="StartButton" Content="开始后台整理" Click="Start_Click" Padding="12,5"
+                  AutomationProperties.AutomationId="StartClassification"/>
+          <Button Content="暂停" Click="Pause_Click" Padding="12,5" Margin="6,0,0,0"
+                  AutomationProperties.AutomationId="PauseClassification"/>
+          <Button Content="继续未完成分类" Click="Start_Click" Padding="12,5" Margin="6,0,0,0"
+                  AutomationProperties.AutomationId="ResumeClassification"/>
+          <Button Content="取消本次任务" Click="Cancel_Click" Padding="12,5" Margin="6,0,0,0"
+                  AutomationProperties.AutomationId="CancelClassification"/>
+          <Button Content="刷新结果" Click="Refresh_Click" Padding="12,5" Margin="16,0,0,0"/>
+        </WrapPanel>
+      </StackPanel>
+    </Border>
+    <TextBlock DockPanel.Dock="Bottom" x:Name="FeedbackText" Margin="0,8,0,0" TextWrapping="Wrap"/>
+    <Grid>
+      <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+      <TabControl Grid.Row="0" x:Name="Tabs" SelectionChanged="Tabs_SelectionChanged">
+        <TabItem Header="待确认" Tag="pending"/>
+        <TabItem Header="自动归类" Tag="automatic"/>
+        <TabItem Header="用户已确认" Tag="confirmed"/>
+        <TabItem Header="无分类" Tag="unclassified"/>
+        <TabItem Header="已忽略" Tag="ignored"/>
+      </TabControl>
+      <DockPanel Grid.Row="1" Margin="8">
+      <WrapPanel DockPanel.Dock="Bottom" Margin="0,8,0,0">
+        <Button Content="确认分类" Click="Confirm_Click" Padding="12,5"
+                AutomationProperties.AutomationId="ConfirmClassification"/>
+        <Button Content="不是此类" Click="Reject_Click" Padding="12,5" Margin="6,0,0,0"
+                AutomationProperties.AutomationId="RejectClassification"/>
+        <Button Content="移除机器分类" Click="RemoveMachine_Click" Padding="12,5" Margin="6,0,0,0"
+                AutomationProperties.AutomationId="RemoveMachineClassification"/>
+        <Button Content="恢复为待确认" Click="Restore_Click" Padding="12,5" Margin="6,0,0,0"
+                AutomationProperties.AutomationId="RestoreClassification"/>
+        <TextBlock Text="改为：" VerticalAlignment="Center" Margin="16,0,4,0"/>
+        <ComboBox x:Name="CorrectionConcept" Width="160" AutomationProperties.AutomationId="CorrectionConcept"/>
+        <Button Content="应用更正" Click="Correct_Click" Padding="12,5" Margin="6,0,0,0"
+                AutomationProperties.AutomationId="CorrectClassification"/>
+      </WrapPanel>
+      <ListView x:Name="Items" SelectionMode="Extended" AutomationProperties.AutomationId="ClassificationItems">
+        <ListView.View><GridView>
+          <GridViewColumn Header="预览" Width="110"><GridViewColumn.CellTemplate><DataTemplate>
+            <Image Source="{Binding PreviewPath}" Width="92" Height="62" Stretch="UniformToFill"/>
+          </DataTemplate></GridViewColumn.CellTemplate></GridViewColumn>
+          <GridViewColumn Header="分类" Width="150" DisplayMemberBinding="{Binding DisplayName}"/>
+          <GridViewColumn Header="状态/来源" Width="190" DisplayMemberBinding="{Binding SourceText}"/>
+          <GridViewColumn Header="路径引用" Width="90" DisplayMemberBinding="{Binding ReferenceText}"/>
+          <GridViewColumn Header="文件" Width="480" DisplayMemberBinding="{Binding Path}"/>
+        </GridView></ListView.View>
+      </ListView>
+      </DockPanel>
+    </Grid>
+  </DockPanel>
+</Window>
