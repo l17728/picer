@@ -8,7 +8,7 @@ namespace Picer.Core.Data;
 
 public sealed partial class PicerDatabase : IDisposable
 {
-    public const int CurrentSchemaVersion = 48;
+    public const int CurrentSchemaVersion = 50;
     private readonly SqliteConnection _conn;
     private readonly string _connectionString;
     private readonly FileStream? _lifetimeLease;
@@ -1267,6 +1267,29 @@ public sealed partial class PicerDatabase : IDisposable
             migration.Transaction = semanticClusterMigration;
             migration.ExecuteNonQuery();
             semanticClusterMigration.Commit();
+        }
+        if (schemaVersion < 49)
+        {
+            AddColumnIfMissing("semantic_content_cluster_members", "semantic_signature", "TEXT NOT NULL DEFAULT ''");
+            using var version49 = Command("PRAGMA user_version=49");
+            version49.ExecuteNonQuery();
+        }
+        if (schemaVersion < 50)
+        {
+            using var migration = Command("""
+                CREATE TABLE IF NOT EXISTS semantic_cluster_settings (
+                    id INTEGER PRIMARY KEY CHECK(id=1),
+                    automatic INTEGER NOT NULL DEFAULT 1,
+                    manual_threshold REAL NOT NULL DEFAULT 0.82,
+                    recommended_threshold REAL NOT NULL DEFAULT 0.82,
+                    recommendation_fingerprint TEXT NOT NULL DEFAULT '',
+                    updated_utc TEXT NOT NULL
+                );
+                INSERT OR IGNORE INTO semantic_cluster_settings(id,automatic,manual_threshold,recommended_threshold,recommendation_fingerprint,updated_utc)
+                VALUES(1,1,0.82,0.82,'',datetime('now'));
+                PRAGMA user_version=50;
+                """);
+            migration.ExecuteNonQuery();
         }
         }
         catch

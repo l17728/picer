@@ -37,6 +37,7 @@ public partial class PhotoClassificationWindow : Window
                 if (latest is not null) { _remoteRunId = latest.RunId; ShowProgress(latest); }
             }
             else await ClassificationJobCoordinator.RefreshAsync();
+            await LoadClusterSettingsAsync();
             await LoadItemsAsync();
         };
     }
@@ -97,6 +98,58 @@ public partial class PhotoClassificationWindow : Window
         await ClassificationJobCoordinator.CancelAsync();
     }
     private async void Refresh_Click(object sender, RoutedEventArgs e) => await LoadItemsAsync();
+    private void ThresholdMode_Changed(object sender, RoutedEventArgs e)
+    {
+        if (ClusterThreshold is not null) ClusterThreshold.IsEnabled = AutomaticThreshold.IsChecked != true;
+        UpdateThresholdHelp();
+    }
+    private void Threshold_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e) => UpdateThresholdHelp();
+    private async void PreviewThreshold_Click(object sender, RoutedEventArgs e)
+    {
+        var threshold = (float)ClusterThreshold.Value;
+        var preview = AppServices.ServiceMode
+            ? await _remoteClient!.GetFromJsonAsync<ContentClusterPreview>($"clustering/preview?threshold={threshold.ToString(System.Globalization.CultureInfo.InvariantCulture)}")
+            : await UiWork.RunDatabaseAsync("classification-cluster-preview", () => AppServices.ContentSemanticClusters.Preview(threshold));
+        if (preview is not null) ThresholdHelp.Text = $"预览：约 {preview.EstimatedClusters} 个动态分类，涉及 {preview.EstimatedClusteredImages} 张照片。";
+    }
+    private async void ApplyThreshold_Click(object sender, RoutedEventArgs e)
+    {
+        var automatic = AutomaticThreshold.IsChecked == true; var threshold = (float)ClusterThreshold.Value;
+        if (AppServices.ServiceMode)
+        {
+            using var response = await _remoteClient!.PostAsJsonAsync("clustering/settings", new { Automatic = automatic, ManualThreshold = threshold });
+            response.EnsureSuccessStatusCode();
+        }
+        else await UiWork.RunDatabaseAsync("classification-cluster-settings", () =>
+        {
+            var settings = AppServices.ContentSemanticClusters.SaveSettings(automatic, threshold);
+            AppServices.ContentSemanticClusters.RebuildLatest(settings.EffectiveThreshold);
+        });
+        await LoadClusterSettingsAsync(); await LoadItemsAsync();
+        FeedbackText.Text = "动态分类阈值已应用；标签未变化的照片保留原分类。";
+    }
+
+    private async Task LoadClusterSettingsAsync()
+    {
+        var settings = AppServices.ServiceMode
+            ? await _remoteClient!.GetFromJsonAsync<ContentClusterSettings>("clustering/settings")
+            : await UiWork.RunDatabaseAsync("classification-cluster-settings-load", AppServices.ContentSemanticClusters.GetSettings);
+        if (settings is null) return;
+        AutomaticThreshold.IsChecked = settings.Automatic;
+        ClusterThreshold.Value = settings.ManualThreshold;
+        ClusterThreshold.IsEnabled = !settings.Automatic;
+        ThresholdHelp.Tag = settings.RecommendedThreshold;
+        UpdateThresholdHelp();
+    }
+
+    private void UpdateThresholdHelp()
+    {
+        if (ThresholdHelp is null || ClusterThreshold is null) return;
+        var recommended = ThresholdHelp.Tag is float value ? value : 0.82f;
+        ThresholdHelp.Text = AutomaticThreshold?.IsChecked == true
+            ? $"自动模式；当前图库推荐值 {recommended:F2}。"
+            : $"人工值 {ClusterThreshold.Value:F2}；推荐值 {recommended:F2}。数值越高，动态分类越小且更相似。";
+    }
     private async void Tabs_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (IsLoaded) await LoadItemsAsync();

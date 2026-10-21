@@ -55,6 +55,7 @@ public sealed record SyncDirectoryClassificationRequest(IReadOnlyDictionary<stri
 public sealed record ClipTextRequest(string Text);
 public sealed record ClipImageRequest(string ContentSha256);
 public sealed record ClassificationReviewRequest(long ImageId, string ConceptId, string? NewConceptId = null);
+public sealed record ClassificationClusterSettingsRequest(bool Automatic, float ManualThreshold);
 public sealed record AlbumImageLink(long AlbumId, long ImageId);
 public sealed record ImageTagLink(long ImageId, long TagId);
 
@@ -1217,6 +1218,17 @@ async function load(){const [c,g]=await Promise.all([fetch('/api/service/v1/capa
         });
         app.MapGet("/api/service/v1/classification/latest", () =>
             Results.Ok(new ClassificationProjectionService(db).GetLatestRun()));
+        app.MapGet("/api/service/v1/classification/clustering/settings", () =>
+            Results.Ok(new ContentSemanticClusterService(db).GetSettings()));
+        app.MapGet("/api/service/v1/classification/clustering/preview", (float? threshold) =>
+            Results.Ok(new ContentSemanticClusterService(db).Preview(threshold ?? 0.82f)));
+        app.MapPost("/api/service/v1/classification/clustering/settings", (ClassificationClusterSettingsRequest request) =>
+        {
+            var clusters = new ContentSemanticClusterService(db);
+            var settings = clusters.SaveSettings(request.Automatic, request.ManualThreshold);
+            var result = clusters.RebuildLatest(settings.EffectiveThreshold);
+            return Results.Ok(new { settings, result });
+        });
         app.MapGet("/api/service/v1/classification/items", (string? view, int? limit) =>
         {
             var projection = new ClassificationProjectionService(db);

@@ -80,6 +80,22 @@ public sealed class ClassificationProjectionTests : IDisposable
         Assert.Equal(3, clustered.ClusteredImages);
         Assert.Equal(3L, Scalar("SELECT COUNT(*) FROM semantic_content_cluster_members"));
         Assert.Contains(projection.List("automatic"), item => item.ConceptId.StartsWith("cluster.semantic.", StringComparison.Ordinal));
+
+        var originalKey = Text("SELECT cluster_key FROM semantic_content_cluster_members WHERE image_id=$id", ("$id", ids[0]));
+        var added = AddImage(source.Id, "trip-4.jpg", 800, 600, null);
+        AddSuggestion(added, "scene.landscape", new string('c', 64));
+        AddSuggestion(added, "scene.outdoor", new string('c', 64));
+        new ClipSemanticRepository(_database).Upsert(_database.GetImage(added)!, "clip-test", new float[] { 1f, 0.04f });
+        new ContentSemanticClusterService(_database).RebuildLatest(similarityThreshold: 0.9f);
+
+        Assert.Equal(originalKey, Text("SELECT cluster_key FROM semantic_content_cluster_members WHERE image_id=$id", ("$id", ids[0])));
+        Assert.Equal(originalKey, Text("SELECT cluster_key FROM semantic_content_cluster_members WHERE image_id=$id", ("$id", added)));
+
+        var settings = new ContentSemanticClusterService(_database).SaveSettings(automatic: false, manualThreshold: 0.75f);
+        var preview = new ContentSemanticClusterService(_database).Preview(settings.EffectiveThreshold);
+        Assert.False(settings.Automatic);
+        Assert.Equal(0.75f, settings.EffectiveThreshold);
+        Assert.True(preview.EstimatedClusters >= 1);
     }
 
     [Fact]

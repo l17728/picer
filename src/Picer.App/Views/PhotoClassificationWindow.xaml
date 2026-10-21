@@ -23,6 +23,23 @@
         </WrapPanel>
       </StackPanel>
     </Border>
+    <Expander DockPanel.Dock="Top" Header="聚类高级设置" Margin="0,0,0,8">
+      <StackPanel Margin="10,6">
+        <CheckBox x:Name="AutomaticThreshold" Content="自动使用图库推荐阈值" IsChecked="True"
+                  Checked="ThresholdMode_Changed" Unchecked="ThresholdMode_Changed"/>
+        <DockPanel Margin="0,6,0,0">
+          <TextBlock Text="更宽松" VerticalAlignment="Center"/>
+          <TextBlock Text="更严格" DockPanel.Dock="Right" VerticalAlignment="Center"/>
+          <Slider x:Name="ClusterThreshold" Minimum="0.70" Maximum="0.95" Value="0.82"
+                  TickFrequency="0.01" IsSnapToTickEnabled="True" Margin="10,0" ValueChanged="Threshold_ValueChanged"/>
+        </DockPanel>
+        <TextBlock x:Name="ThresholdHelp" TextWrapping="Wrap" Margin="0,4,0,0"/>
+        <WrapPanel Margin="0,6,0,0">
+          <Button Content="预览影响" Click="PreviewThreshold_Click" Padding="12,4"/>
+          <Button Content="应用并重建动态分类" Click="ApplyThreshold_Click" Padding="12,4" Margin="6,0,0,0"/>
+        </WrapPanel>
+      </StackPanel>
+    </Expander>
     <TextBlock DockPanel.Dock="Bottom" x:Name="FeedbackText" Margin="0,8,0,0" TextWrapping="Wrap"/>
     <Grid>
       <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
