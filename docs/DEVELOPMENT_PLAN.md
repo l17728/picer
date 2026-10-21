@@ -1,6 +1,6 @@
 # Picer 开发计划与交付状态
 
-检索和自动分类已有[产品 SPEC](SEARCH_AND_AUTO_CLASSIFICATION_SPEC_2026-10-16.md)、[UX 规范](SEARCH_AND_AUTO_CLASSIFICATION_UX_2026-10-16.md)、[技术 SDD](SEARCH_AND_AUTO_CLASSIFICATION_TECH_SDD_2026-10-16.md)和[实现计划](SEARCH_AND_AUTO_CLASSIFICATION_IMPLEMENTATION_2026-10-16.md)，并以[设计定稿](SEARCH_AND_AUTO_CLASSIFICATION_SDD_2026-10-16.md)为决策基线：不引入 Elasticsearch；维持本地 SQLite FTS5/BM25；视觉分类保留拒识、纠错和用户确认边界。2026-10-21 已交付后台增量分类、本地审核 UI、事务更正和可选 BM25 + CLIP RRF；CLIP 模型只部署于来源机 ModelServer。远程分类写入、逐类质量门禁和默认 AI 问答接入仍需验收，详见[实现记录](CLASSIFICATION_AND_HYBRID_RETRIEVAL_IMPLEMENTATION_2026-10-21.md)。此设计不自动恢复已暂停的 P2。
+检索和自动分类已有[产品 SPEC](SEARCH_AND_AUTO_CLASSIFICATION_SPEC_2026-10-16.md)、[UX 规范](SEARCH_AND_AUTO_CLASSIFICATION_UX_2026-10-16.md)、[技术 SDD](SEARCH_AND_AUTO_CLASSIFICATION_TECH_SDD_2026-10-16.md)和[实现计划](SEARCH_AND_AUTO_CLASSIFICATION_IMPLEMENTATION_2026-10-16.md)，并以[设计定稿](SEARCH_AND_AUTO_CLASSIFICATION_SDD_2026-10-16.md)为决策基线：不引入 Elasticsearch；维持本地 SQLite FTS5/BM25；视觉分类保留拒识、纠错和用户确认边界。2026-10-21 已交付本地及远程后台增量分类、审核 UI、事务更正和可选 BM25 + CLIP RRF；远程操作写入 IndexService 权威数据库，CLIP 模型只部署于来源机 ModelServer。逐类质量门禁和默认 AI 问答接入仍需验收，详见[实现记录](CLASSIFICATION_AND_HYBRID_RETRIEVAL_IMPLEMENTATION_2026-10-21.md)。此设计不自动恢复已暂停的 P2。
 
 更新：2026-10-20。v1.5.6 是本轮维护发布目标，覆盖远程分析授权、服务抗压和目录描述异步流水线；发布状态以[v1.5.6 发布记录](RELEASE_1_5_6_2026-10-20.md)为准。生产 IndexService 已处于账号门户/多租户模式；旧数据迁移、CI 账号凭据切换及真实设备配对/照片视频读取/撤销闭环已完成。四项原先暂停的外部质量/硬件 P2 验收仍暂停，见下文。
 

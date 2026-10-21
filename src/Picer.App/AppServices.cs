@@ -843,6 +843,14 @@ public static partial class AppServices
 
     public static FaceTrainingSubmissionService CreateTrainingSubmissionService() => new(CreateTrainingHttpClient());
 
+    public static HttpClient CreateClassificationHttpClient()
+    {
+        if (!TryGetAiServiceBackend(out var backend)) throw new InvalidOperationException("照片空间尚未配对");
+        var client = CreatePinnedServiceClient(backend, TimeSpan.FromMinutes(10));
+        client.BaseAddress = new Uri(backend.BaseUrl!.TrimEnd('/') + "/api/service/v1/classification/");
+        return client;
+    }
+
     public static HttpClient CreateTrainingHttpClient()
     {
         if (!TryGetAiServiceBackend(out var backend)) throw new InvalidOperationException("训练服务尚未配对");

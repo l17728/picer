@@ -18,7 +18,7 @@
 
 GUI 不加载 Chinese-CLIP ONNX。文本向量和图片向量请求由 IndexService 使用 `analysis.run` 权限转发到来源 MediaAgent，再由 MediaAgent 调用同机 ModelServer。图片必须命中已授权来源根目录；代理在源端缩放为 224×224、删除元数据并压缩后才发往回环模型服务。ModelServer 使用 `PICER_CLIP_MODEL_ROOT` 或两个显式模型路径定位模型，`PICER_CLIP_CONCURRENCY` 控制 1–8 个并发推理。模型未部署时 BM25、普通浏览和分类整理继续工作。
 
-远程模式的分类审核本轮保持只读，避免客户端缓存成为事实源。分类表的远程写 API、质量门槛评估和把 CLIP 纳入 AI 问答默认召回仍需单独验收，不在本轮冒充完成。
+远程模式通过照片空间的受权分类 API 在 IndexService 权威数据库运行任务和提交审核；GUI 镜像不再充当分类事实源。逐类质量门槛评估和把 CLIP 纳入 AI 问答默认召回仍需单独验收，不在本轮冒充完成。
 
 ## 验证
 

@@ -1,6 +1,6 @@
 # 照片检索与自动分类产品规格（2026-10-16）
 
-> 实现状态（2026-10-21）：本地分类整理/审核、可选 BM25+CLIP RRF、流式 Top-K 和 ModelServer 路由已实现；远程分类写入与默认 AI 问答接入仍受质量门槛约束。实现证据见 `CLASSIFICATION_AND_HYBRID_RETRIEVAL_IMPLEMENTATION_2026-10-21.md`。
+> 实现状态（2026-10-21）：本地及远程分类整理/审核、可选 BM25+CLIP RRF、流式 Top-K 和 ModelServer 路由已实现；默认 AI 问答接入仍受质量门槛约束。实现证据见 `CLASSIFICATION_AND_HYBRID_RETRIEVAL_IMPLEMENTATION_2026-10-21.md`。
 
 ## 1. 问题与目标
 

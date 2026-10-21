@@ -54,6 +54,7 @@ public sealed record SyncFacesRequest(
 public sealed record SyncDirectoryClassificationRequest(IReadOnlyDictionary<string, bool> Overrides);
 public sealed record ClipTextRequest(string Text);
 public sealed record ClipImageRequest(string ContentSha256);
+public sealed record ClassificationReviewRequest(long ImageId, string ConceptId, string? NewConceptId = null);
 public sealed record AlbumImageLink(long AlbumId, long ImageId);
 public sealed record ImageTagLink(long ImageId, long TagId);
 
@@ -1087,6 +1088,50 @@ async function load(){const [c,g]=await Promise.all([fetch('/api/service/v1/capa
             }
             catch (Exception exception) when (exception is IOException or TimeoutException or InvalidOperationException)
             { return Results.Json(new { error = "clip_task_failed", detail = exception.Message }, statusCode: 502); }
+        });
+        app.MapGet("/api/service/v1/classification/latest", () =>
+            Results.Ok(new ClassificationProjectionService(db).GetLatestRun()));
+        app.MapGet("/api/service/v1/classification/items", (string? view, int? limit) =>
+        {
+            var projection = new ClassificationProjectionService(db);
+            var bounded = Math.Clamp(limit ?? 500, 1, 5000);
+            if (string.Equals(view, "unclassified", StringComparison.Ordinal))
+                return Results.Ok(projection.ListUnclassified(bounded).Select(image => new ClassificationReviewItem(
+                    image.Id, image.Path, image.ThumbPath, "—", "无分类", "projection", "none", "none", 1,
+                    image.IndexedUtc)).ToArray());
+            return Results.Ok(projection.List(view ?? "pending", bounded));
+        });
+        app.MapPost("/api/service/v1/classification/begin", () =>
+            Results.Ok(new ClassificationProjectionService(db).BeginOrResume()));
+        app.MapPost("/api/service/v1/classification/process/{runId}", (string runId, int? batchSize, CancellationToken token) =>
+            Results.Ok(new ClassificationProjectionService(db).ProcessNextBatch(runId,
+                Math.Clamp(batchSize ?? 100, 1, 500), token)));
+        app.MapPost("/api/service/v1/classification/pause/{runId}", (string runId) =>
+        {
+            new ClassificationProjectionService(db).Pause(runId);
+            return Results.NoContent();
+        });
+        app.MapPost("/api/service/v1/classification/cancel/{runId}", (string runId) =>
+        {
+            new ClassificationProjectionService(db).Cancel(runId);
+            return Results.NoContent();
+        });
+        app.MapPost("/api/service/v1/classification/{operation}", (string operation, ClassificationReviewRequest request) =>
+        {
+            if (request.ImageId <= 0 || string.IsNullOrWhiteSpace(request.ConceptId)) return Results.BadRequest();
+            var repository = new VisualConceptRepository(db);
+            var projection = new ClassificationProjectionService(db);
+            switch (operation)
+            {
+                case "confirm": repository.Confirm(request.ImageId, request.ConceptId); break;
+                case "reject": repository.Reject(request.ImageId, request.ConceptId); break;
+                case "remove": repository.RemoveMachineClassification(request.ImageId, request.ConceptId); break;
+                case "restore": projection.RestoreSuggestion(request.ImageId, request.ConceptId); break;
+                case "correct" when !string.IsNullOrWhiteSpace(request.NewConceptId):
+                    repository.Correct(request.ImageId, request.ConceptId, request.NewConceptId); break;
+                default: return Results.BadRequest(new { error = "classification_operation_invalid" });
+            }
+            return Results.NoContent();
         });
         app.MapPost("/api/service/v1/tts/stream", async (HttpRequest request, HttpResponse response, string? agentId, CancellationToken cancellationToken) =>
         {

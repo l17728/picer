@@ -218,6 +218,14 @@ public sealed class AccountAuthorizationTests : IDisposable
         Assert.Null(SpaceRoutePermissions.RequiredScope("GET", path));
     }
 
+    [Theory]
+    [InlineData("GET", "/api/service/v1/classification/items", "index.read")]
+    [InlineData("GET", "/api/service/v1/classification/latest", "index.read")]
+    [InlineData("POST", "/api/service/v1/classification/begin", "analysis.run")]
+    [InlineData("POST", "/api/service/v1/classification/confirm", "analysis.run")]
+    public void ClassificationRoutesRequireExplicitScopes(string method, string path, string scope) =>
+        Assert.Equal(scope, SpaceRoutePermissions.RequiredScope(method, path));
+
     [Fact]
     public void AuthorizationDocumentRejectsDuplicatePropertiesAndExcessiveDepth()
     {

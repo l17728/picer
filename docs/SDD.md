@@ -75,7 +75,7 @@ AI 菜单提供目录树选择，范围包含节点及其所有子目录。树�
 
 ## 6. 文字检索与 AI 问答
 
-检索与自动分类的设计定稿（包括现有 FTS5/BM25、Chinese-CLIP 边界、机器建议与用户确认状态）见[检索与自动分类 SDD](SEARCH_AND_AUTO_CLASSIFICATION_SDD_2026-10-16.md)。2026-10-21 已交付本地增量分类审核和可选 RRF 混合召回；远程分类写入、逐类质量门禁及默认 AI 问答接入仍未放行。
+检索与自动分类的设计定稿（包括现有 FTS5/BM25、Chinese-CLIP 边界、机器建议与用户确认状态）见[检索与自动分类 SDD](SEARCH_AND_AUTO_CLASSIFICATION_SDD_2026-10-16.md)。2026-10-21 已交付本地及远程增量分类审核和可选 RRF 混合召回；逐类质量门禁及默认 AI 问答接入仍未放行。
 
 开发规格、UI 用户流程、技术结构和依赖阶段分别见[产品 SPEC](SEARCH_AND_AUTO_CLASSIFICATION_SPEC_2026-10-16.md)、[UX 规范](SEARCH_AND_AUTO_CLASSIFICATION_UX_2026-10-16.md)、[技术 SDD](SEARCH_AND_AUTO_CLASSIFICATION_TECH_SDD_2026-10-16.md)及[实现计划](SEARCH_AND_AUTO_CLASSIFICATION_IMPLEMENTATION_2026-10-16.md)。实现计划状态以专家 review 共识为前置条件。
 
