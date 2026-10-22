@@ -44,3 +44,7 @@ VL 描述可以在分类完成后持续增加。刷新时只处理 `updated_utc`
 2026-10-22 起，首次内容分类不再把常用类别的正反提示词逐条发送给 ModelServer。MediaAgent 提供 `clip.text.batch` 能力，ModelServer 的 `/api/clip/text-batch` 在一次 ONNX 推理中返回整批文本向量；IndexService 校验向量数量、维度和有限值后再发布提示词缓存。旧版 MediaAgent 不支持批量任务时仍可回退到单条兼容路径。
 
 本机真实模型验证一次编码 40 条提示词，返回 40 个 512 维向量，耗时约 37 秒。该改动消除了数十次远程往返和逐条推理造成的分钟级首次等待。空响应、JSON 无效、数量不符和维度不符使用不同稳定错误码，避免全部误报为“向量无效”。
+
+真实账户空间验收还发现两个独立配置缺口：多租户代理原先只为缩略图和媒体读取注入来源设备，分类 API 没有 `agentId`；MediaAgent 又依赖远程广播提供本机 CLIP 地址。现已让账户空间在只有一个已绑定来源设备时为分类与 CLIP 请求注入该设备，并让 MediaAgent 在未配置覆盖值时自动使用标准本机端点 `http://127.0.0.1:8091/api/clip/embedding`。多个来源设备绑定到同一空间时不会猜测唯一设备。
+
+生产真实链路验收结果：批量提示词任务成功到达绑定的 MediaAgent，随后以 2 路并发处理图片；首批 20 张返回 HTTP 200，`processed=20`、`failed=0`，暂停返回 HTTP 204。该验收使用 GUI 相同的设备凭据和 `AppServices.CreateClassificationHttpClient()`，覆盖账户代理、IndexService、MediaAgent、本机 ModelServer 与结果持久化。
