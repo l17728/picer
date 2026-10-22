@@ -428,9 +428,12 @@ internal static class ClipContentClassifier
                     })
                     .ToDictionary(item => item.ConceptId, item => (item.Positive, item.Negative), StringComparer.Ordinal);
             }
-            catch (IOException exception) when (exception.Message is "task_not_supported" or "clip_http_404")
+            catch (Exception exception) when (exception is IOException &&
+                                               exception.Message is "task_not_supported" or "clip_http_404" ||
+                                               exception is InvalidOperationException &&
+                                               exception.Message == "clip_text_batch_empty")
             {
-                AppLogger.Warn("CLIP batch text encoding is unavailable; using compatibility mode");
+                AppLogger.Warn("CLIP batch text encoding is unavailable; using compatibility mode; reason=" + exception.Message);
             }
 
             var result = new System.Collections.Concurrent.ConcurrentDictionary<string, (float[], float[])>(StringComparer.Ordinal);
