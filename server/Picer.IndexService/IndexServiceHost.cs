@@ -413,6 +413,26 @@ internal static class ClipContentClassifier
     {
         try
         {
+            var definitions = VisualConceptCatalog.ContentConcepts;
+            var texts = definitions.SelectMany(definition => new[] { definition.Prompt, definition.NegativePrompt }).ToArray();
+            try
+            {
+                var payload = await agents.RequestTaskAsync(agentId, "clip.text.batch",
+                    JsonSerializer.Serialize(new { texts }), cancellationToken);
+                var batch = ParseBatch(payload, texts.Length);
+                return definitions.Select((definition, index) => new
+                    {
+                        definition.ConceptId,
+                        Positive = batch[index * 2],
+                        Negative = batch[index * 2 + 1]
+                    })
+                    .ToDictionary(item => item.ConceptId, item => (item.Positive, item.Negative), StringComparer.Ordinal);
+            }
+            catch (IOException exception) when (exception.Message is "task_not_supported" or "clip_http_404")
+            {
+                AppLogger.Warn("CLIP batch text encoding is unavailable; using compatibility mode");
+            }
+
             var result = new System.Collections.Concurrent.ConcurrentDictionary<string, (float[], float[])>(StringComparer.Ordinal);
             using var gate = new SemaphoreSlim(2, 2);
             await Task.WhenAll(VisualConceptCatalog.ContentConcepts.Select(async definition =>
@@ -423,9 +443,10 @@ internal static class ClipContentClassifier
                     var pair = await Task.WhenAll(
                         agents.RequestTaskAsync(agentId, "clip.text", JsonSerializer.Serialize(new { text = definition.Prompt }), cancellationToken),
                         agents.RequestTaskAsync(agentId, "clip.text", JsonSerializer.Serialize(new { text = definition.NegativePrompt }), cancellationToken));
-                    var positive = Parse(pair[0]); var negative = Parse(pair[1]);
-                    if (positive is null || negative is null || positive.Embedding.Length != negative.Embedding.Length)
-                        throw new InvalidOperationException("clip_prompt_embedding_invalid:" + definition.ConceptId);
+                    var positive = ParseRequired(pair[0], definition.ConceptId + ":positive");
+                    var negative = ParseRequired(pair[1], definition.ConceptId + ":negative");
+                    if (positive.Embedding.Length != negative.Embedding.Length)
+                        throw new InvalidOperationException("clip_prompt_embedding_dimension_mismatch:" + definition.ConceptId);
                     result[definition.ConceptId] = (positive.Embedding, negative.Embedding);
                 }
                 finally { gate.Release(); }
@@ -449,6 +470,32 @@ internal static class ClipContentClassifier
         if (values.Length == 0 || values.Any(value => !float.IsFinite(value))) return null;
         var version = root.TryGetProperty("modelVersion", out var model) ? model.GetString() ?? "unknown" : "unknown";
         return new ClipVector(version, values);
+    }
+
+    private static ClipVector ParseRequired(string? payload, string context)
+    {
+        try { return Parse(payload) ?? throw new InvalidOperationException("clip_embedding_empty:" + context); }
+        catch (JsonException) { throw new InvalidOperationException("clip_embedding_json_invalid:" + context); }
+        catch (FormatException) { throw new InvalidOperationException("clip_embedding_number_invalid:" + context); }
+    }
+
+    private static float[][] ParseBatch(string? payload, int expectedCount)
+    {
+        if (string.IsNullOrWhiteSpace(payload)) throw new InvalidOperationException("clip_text_batch_empty");
+        try
+        {
+            using var document = JsonDocument.Parse(payload);
+            if (!document.RootElement.TryGetProperty("embeddings", out var embeddings) || embeddings.ValueKind != JsonValueKind.Array)
+                throw new InvalidOperationException("clip_text_batch_embeddings_missing");
+            var vectors = embeddings.EnumerateArray()
+                .Select(vector => vector.EnumerateArray().Select(value => value.GetSingle()).ToArray()).ToArray();
+            if (vectors.Length != expectedCount || vectors.Any(vector => vector.Length == 0 ||
+                vector.Length != vectors[0].Length || vector.Any(value => !float.IsFinite(value))))
+                throw new InvalidOperationException("clip_text_batch_shape_invalid");
+            return vectors;
+        }
+        catch (JsonException) { throw new InvalidOperationException("clip_text_batch_json_invalid"); }
+        catch (FormatException) { throw new InvalidOperationException("clip_text_batch_number_invalid"); }
     }
 
     private static float Cosine(float[] left, float[] right)

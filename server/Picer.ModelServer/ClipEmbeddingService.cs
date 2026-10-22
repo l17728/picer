@@ -6,6 +6,7 @@ using Microsoft.ML.OnnxRuntime.Tensors;
 namespace Picer.ModelServer;
 
 public sealed record ClipEmbeddingRequest(string? Text, string? ImageBase64);
+public sealed record ClipTextBatchRequest(string[]? Texts);
 
 public sealed class ClipEmbeddingService : IDisposable
 {
@@ -45,6 +46,40 @@ public sealed class ClipEmbeddingService : IDisposable
         try
         {
             return string.IsNullOrEmpty(text) ? EncodeImage(Convert.FromBase64String(image!)) : EncodeText(text);
+        }
+        finally { _inference.Release(); }
+    }
+
+    public async Task<float[][]> EncodeTextsAsync(IReadOnlyList<string> texts, CancellationToken cancellationToken)
+    {
+        if (texts.Count is < 1 or > 128 || texts.Any(string.IsNullOrWhiteSpace))
+            throw new InvalidDataException("clip_text_batch_invalid");
+        await _inference.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            const int width = 52;
+            var ids = new long[texts.Count * width];
+            var mask = new long[ids.Length];
+            for (var row = 0; row < texts.Count; row++)
+            {
+                var tokens = Tokenize(texts[row].Trim(), width);
+                Array.Copy(tokens, 0, ids, row * width, tokens.Length);
+                Array.Fill(mask, 1L, row * width, tokens.Length);
+            }
+            var input = new DenseTensor<long>(ids, [texts.Count, width]);
+            var attention = new DenseTensor<long>(mask, [texts.Count, width]);
+            var pixels = new DenseTensor<float>(new float[texts.Count * 3 * 224 * 224], [texts.Count, 3, 224, 224]);
+            using var output = _session.Run([
+                NamedOnnxValue.CreateFromTensor("input_ids", input),
+                NamedOnnxValue.CreateFromTensor("attention_mask", attention),
+                NamedOnnxValue.CreateFromTensor("pixel_values", pixels)], ["text_embeds"]);
+            var flat = output.First().AsEnumerable<float>().ToArray();
+            if (flat.Length == 0 || flat.Length % texts.Count != 0)
+                throw new InvalidDataException("clip_text_batch_output_invalid");
+            var dimensions = flat.Length / texts.Count;
+            return Enumerable.Range(0, texts.Count)
+                .Select(row => Normalize(flat.AsSpan(row * dimensions, dimensions).ToArray()))
+                .ToArray();
         }
         finally { _inference.Release(); }
     }

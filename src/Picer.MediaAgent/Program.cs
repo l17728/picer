@@ -300,7 +300,7 @@ internal sealed partial class AgentApplication : IDisposable
             if (Uri.TryCreate(Setting("PICER_LOCAL_FACE_ENDPOINT"), UriKind.Absolute, out _))
                 capabilities.AddRange(["face.detect", "face.embed", "video.people"]);
             if (TrainingEndpoint() is not null) capabilities.Add("training.proxy");
-            if (ClipEndpoint() is not null) capabilities.AddRange(["clip.embed", "clip.text", "clip.image"]);
+            if (ClipEndpoint() is not null) capabilities.AddRange(["clip.embed", "clip.text", "clip.text.batch", "clip.image"]);
         return capabilities.ToArray();
     }
 
@@ -446,17 +446,31 @@ internal sealed partial class AgentApplication : IDisposable
                 !string.Equals(task, "tts.synthesize", StringComparison.OrdinalIgnoreCase) &&
                 !string.Equals(task, "vl.analyze", StringComparison.OrdinalIgnoreCase) &&
                 !string.Equals(task, "clip.text", StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(task, "clip.text.batch", StringComparison.OrdinalIgnoreCase) &&
                 !string.Equals(task, "clip.image", StringComparison.OrdinalIgnoreCase) &&
                 !task.StartsWith("face.", StringComparison.OrdinalIgnoreCase) &&
                 !string.Equals(task, "training.proxy", StringComparison.OrdinalIgnoreCase) &&
                 !string.Equals(task, "video.people", StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException("task_not_supported");
             if (string.IsNullOrWhiteSpace(payload)) throw new InvalidOperationException("task_payload_required");
             if (string.Equals(task, "clip.text", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(task, "clip.text.batch", StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(task, "clip.image", StringComparison.OrdinalIgnoreCase))
             {
                 var endpoint = ClipEndpoint() ?? throw new InvalidOperationException("clip_endpoint_not_configured");
                 string upstreamPayload;
-                if (string.Equals(task, "clip.text", StringComparison.OrdinalIgnoreCase))
+                if (string.Equals(task, "clip.text.batch", StringComparison.OrdinalIgnoreCase))
+                {
+                    using var batchDocument = JsonDocument.Parse(payload);
+                    if (!batchDocument.RootElement.TryGetProperty("texts", out var textsElement) ||
+                        textsElement.ValueKind != JsonValueKind.Array)
+                        throw new InvalidDataException("clip_text_batch_invalid");
+                    var texts = textsElement.EnumerateArray().Select(item => item.GetString()?.Trim() ?? "").ToArray();
+                    if (texts.Length is < 1 or > 128 || texts.Any(text => text.Length is 0 or > 512))
+                        throw new InvalidDataException("clip_text_batch_invalid");
+                    upstreamPayload = JsonSerializer.Serialize(new { texts });
+                    endpoint = new Uri(endpoint.GetLeftPart(UriPartial.Authority) + "/api/clip/text-batch");
+                }
+                else if (string.Equals(task, "clip.text", StringComparison.OrdinalIgnoreCase))
                 {
                     using var textDocument = JsonDocument.Parse(payload);
                     var text = textDocument.RootElement.TryGetProperty("text", out var textElement) ? textElement.GetString()?.Trim() : null;

@@ -142,6 +142,18 @@ app.MapPost("/api/clip/embedding", async (ClipEmbeddingRequest request, ClipEmbe
     catch (FormatException) { return Results.BadRequest(new { error = "clip_image_base64_invalid" }); }
     catch (InvalidDataException error) { return Results.BadRequest(new { error = error.Message }); }
 });
+app.MapPost("/api/clip/text-batch", async (ClipTextBatchRequest request, ClipEmbeddingService clip, CancellationToken cancellationToken) =>
+{
+    try
+    {
+        var texts = request.Texts?.Select(value => value?.Trim() ?? "").ToArray() ?? [];
+        if (texts.Any(value => value.Length > 512))
+            return Results.BadRequest(new { error = "clip_text_invalid" });
+        var embeddings = await clip.EncodeTextsAsync(texts, cancellationToken);
+        return Results.Json(new { modelVersion = ClipEmbeddingService.Version, embeddings });
+    }
+    catch (InvalidDataException error) { return Results.BadRequest(new { error = error.Message }); }
+});
 app.MapPost("/api/ai/chat/completions", async (HttpContext context, ModelInferenceRelay relay) =>
 {
     var endpoint = Environment.GetEnvironmentVariable("PICER_LANGUAGE_MODEL_ENDPOINT") ?? DefaultLanguageModelEndpoint;

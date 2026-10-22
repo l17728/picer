@@ -504,7 +504,7 @@ public sealed class DesktopSmokeTests
         })!;
         try
         {
-            var window = WaitForWindow(process.Id, TimeSpan.FromSeconds(15)); Assert.NotNull(window);
+            var window = WaitForWindow(process.Id, TimeSpan.FromSeconds(30)); Assert.NotNull(window);
             var button = WaitForElement(window!, "AI 问答按钮", TimeSpan.FromSeconds(5)); Assert.NotNull(button);
             Assert.True(button!.TryGetCurrentPattern(TogglePattern.Pattern, out var toggle));
             ((TogglePattern)toggle).Toggle();

@@ -327,7 +327,8 @@
                                         <CheckBox Content="包含视频" IsChecked="{Binding IncludeVideosInAiQuestion}" Margin="0,0,12,0" VerticalAlignment="Center"
                                                   ToolTip="同时检索视频人物、拍摄信息、语音转写和视频摘要"/>
                                         <Button Content="停止" Command="{Binding CancelAiQuestionCommand}" IsEnabled="{Binding IsAiQuestionRunning}" Padding="12,4" Margin="0,0,5,0"/>
-                                        <Button Content="提交问题" Command="{Binding SubmitAiQuestionCommand}" Padding="14,4"/>
+                                        <Button Content="提交问题" Command="{Binding SubmitAiQuestionCommand}" Padding="14,4"
+                                                AutomationProperties.Name="提交问题"/>
                                     </StackPanel>
                                 </DockPanel>
                             </StackPanel>
