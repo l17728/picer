@@ -55,4 +55,22 @@ public static class SpaceSourceRouting
         query.Parameters.AddWithValue("$id", id);
         return query.ExecuteScalar() as string;
     }
+
+    public static string? ResolveUniqueAgent(PicerDatabase database)
+    {
+        using var query = database.Command("""
+            SELECT DISTINCT agent_grant_id
+            FROM sync_source_bindings
+            WHERE agent_grant_id IS NOT NULL AND trim(agent_grant_id)<>''
+            LIMIT 2
+            """);
+        using var reader = query.ExecuteReader();
+        string? agent = null;
+        while (reader.Read())
+        {
+            if (agent is not null) return null;
+            agent = reader.GetString(0);
+        }
+        return agent;
+    }
 }

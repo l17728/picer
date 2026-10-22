@@ -149,6 +149,15 @@ public static class AccountServiceHost
                     query = QueryString.Create(context.Request.Query.Where(item => !item.Key.Equals("agentId", StringComparison.OrdinalIgnoreCase)))
                         .Add("agentId", agent ?? "unbound-source");
                 }
+                else if (relative.StartsWith("/api/service/v1/classification/process/", StringComparison.Ordinal) ||
+                         relative.StartsWith("/api/service/v1/clip/", StringComparison.Ordinal))
+                {
+                    using var database = lease.Runtime.OpenDatabase();
+                    var agent = SpaceSourceRouting.ResolveUniqueAgent(database);
+                    if (agent is not null)
+                        query = QueryString.Create(context.Request.Query.Where(item => !item.Key.Equals("agentId", StringComparison.OrdinalIgnoreCase)))
+                            .Add("agentId", agent);
+                }
                 using var request = new HttpRequestMessage(new HttpMethod(context.Request.Method), relative + query);
                 if (context.Request.ContentLength > 0 || context.Request.Headers.TransferEncoding.Count > 0)
                 {

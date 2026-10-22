@@ -78,6 +78,8 @@ public sealed class AccountMediaRoutingTests
             using (var binding = await gui.SpaceClient.PostAsJsonAsync("api/sync/v2/source-bindings",
                        new SpaceSourceBindingRequest(publisher.PublisherId, first.Connection.Session!.GrantId, [1]), deadline.Token))
                 binding.EnsureSuccessStatusCode();
+            using (var database = new PicerDatabase(Path.Combine(instance.Accounts.SpaceRoot(space.Id), "picer.db")))
+                Assert.Equal(first.Connection.Session!.GrantId, SpaceSourceRouting.ResolveUniqueAgent(database));
             var headServing = ServeOneAsync();
             using (var head = await gui.SpaceClient.SendAsync(new HttpRequestMessage(HttpMethod.Head,
                        $"api/gateway/v1/assets/images/{imageId}"), deadline.Token))
