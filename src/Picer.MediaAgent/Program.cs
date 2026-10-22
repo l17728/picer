@@ -310,7 +310,9 @@ internal sealed partial class AgentApplication : IDisposable
         if (Uri.TryCreate(configured, UriKind.Absolute, out var clip) && clip.IsLoopback &&
             clip.Scheme is "http" or "https") return clip;
         var modelServer = TrainingEndpoint();
-        return modelServer is null ? null : new Uri(modelServer, "api/clip/embedding");
+        return modelServer is null
+            ? new Uri("http://127.0.0.1:8091/api/clip/embedding")
+            : new Uri(modelServer, "api/clip/embedding");
     }
 
     private Uri? TrainingEndpoint()
