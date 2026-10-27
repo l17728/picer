@@ -242,7 +242,9 @@ public partial class App : Application
         try
         {
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            timeout.CancelAfter(TimeSpan.FromMinutes(10));
+            // A cold pass includes network download and several bounded database
+            // phases. Do not spend the whole pass budget on the large metadata body.
+            timeout.CancelAfter(TimeSpan.FromMinutes(30));
             await AppServices.SyncRemoteMirrorAsync(timeout.Token);
             if (_mainViewModel is not null)
             {
@@ -254,6 +256,10 @@ public partial class App : Application
                 await _mainViewModel.RefreshFromRemoteMirrorAsync();
             }
             LogInfo("远程索引镜像同步完成");
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            LogInfo("远程索引镜像同步已取消，保留已同步内容");
         }
         catch (OperationCanceledException)
         {

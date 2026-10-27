@@ -513,16 +513,12 @@ public static partial class AppServices
             await UiWork.RunDatabaseAsync("RemoteMirror.VideoMetadata", () =>
                 Db.UpsertMirroredVideoMetadata(metadata, authoritative: ServiceMode && incremental.Supported), cancellationToken).ConfigureAwait(false);
             AppLogger.Info($"Remote metadata applied: scenes={metadata.SceneGroupDescriptionsOrEmpty.Count}; analyses={metadata.CloudVisionAnalysesOrEmpty.Count}; faces={metadata.Faces.Count}; videoKeyframes={metadata.VideoKeyframes.Count}; videoFaces={metadata.VideoFacesOrEmpty.Count}");
-            foreach (var batch in metadata.AlbumImages.Chunk(50))
+            foreach (var batch in metadata.AlbumImages.Chunk(250))
                 await UiWork.RunDatabaseAsync("RemoteMirror.AlbumLinks", () =>
-                {
-                    foreach (var link in batch) SemanticEngine.AddToAlbum(Db, link.AlbumId, link.ImageId, recordEdit: false);
-                }, cancellationToken).ConfigureAwait(false);
-            foreach (var batch in metadata.ImageTags.Chunk(50))
+                    Db.UpsertMirroredAlbumLinks(batch, cancellationToken), cancellationToken).ConfigureAwait(false);
+            foreach (var batch in metadata.ImageTags.Chunk(250))
                 await UiWork.RunDatabaseAsync("RemoteMirror.TagLinks", () =>
-                {
-                    foreach (var link in batch) Db.UpsertMirroredImageTag(link.ImageId, link.TagId);
-                }, cancellationToken).ConfigureAwait(false);
+                    Db.UpsertMirroredTagLinks(batch, cancellationToken), cancellationToken).ConfigureAwait(false);
             await UiWork.RunDatabaseAsync("RemoteMirror.Locations", () =>
                 Db.UpsertMirroredLocations(metadata.Locations), cancellationToken).ConfigureAwait(false);
             await UiWork.RunDatabaseAsync("RemoteMirror.ManualEdits", Db.ReplayMetadataEdits, cancellationToken).ConfigureAwait(false);
