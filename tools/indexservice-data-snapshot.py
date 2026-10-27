@@ -89,14 +89,15 @@ def execute(mode, root, backup):
     root = Path(root).absolute()
     backup = Path(backup).absolute()
     names = databases(root)
-    if mode == 'preflight':
+    if mode in ('preflight', 'capacity'):
         for name in names:
             if safe(root, name + '.migration.pending.json').exists():
                 raise RuntimeError('unfinished_migration')
-        # Snapshot + staged migration + recoverable migration backup + executable margin.
+        # Keep the read-snapshot service's 2 GiB reserve after upgrade work too.
         size = sum(safe(root, name + suffix).stat().st_size for name in names
                    for suffix in ('', '-wal', '-shm') if safe(root, name + suffix).exists())
-        if shutil.disk_usage(root).free < size * 4 + 512 * 1024 * 1024:
+        required = size * 4 if mode == 'preflight' else max(safe(root, name).stat().st_size for name in names)
+        if shutil.disk_usage(root).free < required + 2 * 1024 * 1024 * 1024:
             raise RuntimeError('insufficient_upgrade_space')
         return len(names)
     assert_closed(root, names)
@@ -172,7 +173,7 @@ def execute(mode, root, backup):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('mode', choices=['preflight', 'backup', 'restore'])
+    parser.add_argument('mode', choices=['preflight', 'capacity', 'backup', 'restore'])
     parser.add_argument('root')
     parser.add_argument('backup')
     arguments = parser.parse_args()

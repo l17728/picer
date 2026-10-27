@@ -351,17 +351,22 @@ public sealed partial class HttpIndexGateway : IIndexGateway, IMediaAssetGateway
 
     public async Task<GatewayMetadata> GetMetadataAsync(CancellationToken cancellationToken, bool includeEmbeddings, bool includeFaceModels)
     {
-        using var response = await GetSnapshotReadAsync($"api/gateway/v1/metadata?includeEmbeddings={includeEmbeddings.ToString().ToLowerInvariant()}&includeFaceModels={includeFaceModels.ToString().ToLowerInvariant()}", cancellationToken);
-        await EnsureSuccessAsync(response, cancellationToken);
-        return await response.Content.ReadFromJsonAsync<GatewayMetadata>(Json, cancellationToken)
+        // Account transports have a short request timeout. Large vector payloads
+        // must not be buffered under that timeout and restarted every two minutes.
+        // Keep a separate bounded body deadline, linked to the caller's cancellation.
+        using var bodyDeadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        bodyDeadline.CancelAfter(TimeSpan.FromMinutes(10));
+        using var response = await GetSnapshotReadAsync($"api/gateway/v1/metadata?includeEmbeddings={includeEmbeddings.ToString().ToLowerInvariant()}&includeFaceModels={includeFaceModels.ToString().ToLowerInvariant()}", bodyDeadline.Token, streamResponse: true);
+        await EnsureSuccessAsync(response, bodyDeadline.Token);
+        return await response.Content.ReadFromJsonAsync<GatewayMetadata>(Json, bodyDeadline.Token)
             ?? new GatewayMetadata([], [], []);
     }
 
-    private Task<HttpResponseMessage> GetSnapshotReadAsync(string path, CancellationToken token) => SendWithRetryAsync(async ct =>
+    private Task<HttpResponseMessage> GetSnapshotReadAsync(string path, CancellationToken token, bool streamResponse = false) => SendWithRetryAsync(async ct =>
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, path);
         if (Volatile.Read(ref _readSnapshot) is { } snapshot) request.Headers.Add("X-Picer-Read-Snapshot", snapshot);
-        return await _client.SendAsync(request, ct).ConfigureAwait(false);
+        return await _client.SendAsync(request, streamResponse ? HttpCompletionOption.ResponseHeadersRead : HttpCompletionOption.ResponseContentRead, ct).ConfigureAwait(false);
     }, token);
 
     public async Task<IReadOnlyList<PersonSummary>> ListPeopleAsync(CancellationToken cancellationToken = default)

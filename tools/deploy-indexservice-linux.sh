@@ -175,6 +175,7 @@ if [[ -z "$service_user" || "$service_user" == root ]]; then
 else
     runuser -u "$service_user" -- env PICER_INDEX_DATA_ROOT="$data_root" timeout 1800 "$install_dir/Picer.IndexService" --prepare-index-upgrade
 fi
+database_copy capacity
 systemctl start "$service"
 
 verified=0

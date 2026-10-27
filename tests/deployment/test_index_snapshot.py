@@ -4,6 +4,8 @@ from pathlib import Path
 import sqlite3
 import tempfile
 import unittest
+from unittest.mock import patch
+from types import SimpleNamespace
 
 spec = importlib.util.spec_from_file_location('snapshot', Path(__file__).resolve().parents[2] / 'tools/indexservice-data-snapshot.py')
 snapshot = importlib.util.module_from_spec(spec)
@@ -79,6 +81,16 @@ class SnapshotTests(unittest.TestCase):
         with (self.root / self.space).open('rb'):
             with self.assertRaisesRegex(RuntimeError, 'database_open'):
                 snapshot.execute('backup', self.root, self.backup)
+
+    def test_upgrade_reserves_space_for_runtime_read_snapshots(self):
+        with patch.object(snapshot.shutil, 'disk_usage', return_value=SimpleNamespace(free=2 * 1024 * 1024 * 1024)):
+            with self.assertRaisesRegex(RuntimeError, 'insufficient_upgrade_space'):
+                snapshot.execute('preflight', self.root, self.backup)
+            with self.assertRaisesRegex(RuntimeError, 'insufficient_upgrade_space'):
+                snapshot.execute('capacity', self.root, self.backup)
+        largest=max((self.root/name).stat().st_size for name in snapshot.databases(self.root))
+        with patch.object(snapshot.shutil, 'disk_usage', return_value=SimpleNamespace(free=2 * 1024 * 1024 * 1024 + largest)):
+            self.assertEqual(3, snapshot.execute('capacity', self.root, self.backup))
 
 
 if __name__ == '__main__':
