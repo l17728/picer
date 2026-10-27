@@ -114,7 +114,8 @@ public sealed class IndexSyncClient(HttpClient client, bool accountMode = false,
         var acknowledged = new HashSet<string>(StringComparer.Ordinal);
         using var independent = database.OpenIndependentConnection();
         if (accountMode && independent.GetMirrorCheckpoint() is null) return;
-        foreach (var batch in independent.GetMetadataEdits().Where(edit => canWrite && (!accountMode || edit.ServerVersion == 0) && (edit.Kind is not ("video-tag-link" or "video-concept")
+        var edits = accountMode ? independent.GetPendingMetadataEdits() : independent.GetMetadataEdits();
+        foreach (var batch in edits.Where(edit => canWrite && (edit.Kind is not ("video-tag-link" or "video-concept")
             || edit.VideoContentIdentity is { Length: 71 } identity && identity.StartsWith("sha256:", StringComparison.Ordinal)
                 && identity[7..].All(Uri.IsHexDigit))).Chunk(500))
         {
@@ -164,6 +165,7 @@ public sealed class IndexSyncClient(HttpClient client, bool accountMode = false,
 
     public async Task<int> PushImagesAsync(PicerDatabase database, IProgress<(int done, int total)>? progress = null, CancellationToken cancellationToken = default)
     {
+        if (accountMode) throw new InvalidOperationException("account_source_publisher_required");
         var sources = database.GetSources();
         var total = sources.Sum(source => database.GetImages(source.Id, includeMissing: true).Count);
         var done = 0;
@@ -184,6 +186,7 @@ public sealed class IndexSyncClient(HttpClient client, bool accountMode = false,
 
     public async Task<int> PushVideosAsync(PicerDatabase database, IProgress<(int done, int total)>? progress = null, CancellationToken cancellationToken = default)
     {
+        if (accountMode) throw new InvalidOperationException("account_source_publisher_required");
         var repository = new VideoRepository(database);
         var sources = database.GetSources();
         var done = 0;
@@ -204,6 +207,12 @@ public sealed class IndexSyncClient(HttpClient client, bool accountMode = false,
     public async Task PushMetadataAsync(PicerDatabase database, CancellationToken cancellationToken = default,
         bool publishSceneLayouts = true)
     {
+        if (accountMode)
+        {
+            await PushMetadataEditsAsync(database, cancellationToken).ConfigureAwait(false);
+            await PushFaceReviewDecisionsAsync(database, cancellationToken).ConfigureAwait(false);
+            return;
+        }
         // Scene ordering is a local index result, not something the remote
         // mirror should recompute. Materialize layouts for every indexed
         // directory before sending metadata; both direct-directory and
@@ -262,6 +271,17 @@ public sealed class IndexSyncClient(HttpClient client, bool accountMode = false,
         IProgress<string>? progress = null, CancellationToken cancellationToken = default,
         bool publishSceneLayouts = true, bool publishMedia = true)
     {
+        // An account GUI owns an aggregate read mirror, never a source snapshot.
+        // Source uploads use SpaceSyncPublisher with explicit source ownership.
+        // Do not even build/fingerprint the legacy full-library payload here.
+        if (accountMode)
+        {
+            string[] pending;
+            using (var independent = database.OpenIndependentConnection())
+                pending = canWrite ? independent.GetPendingMetadataEdits().Select(edit => edit.OperationId).ToArray() : [];
+            await PushMetadataAsync(database, cancellationToken, publishSceneLayouts: false).ConfigureAwait(false);
+            return new IndexSyncResult(pending.Any(AcknowledgedMetadataOperations.Contains), 0, 0, "", "");
+        }
         await PushFaceReviewDecisionsAsync(database, cancellationToken).ConfigureAwait(false);
         await PushMetadataEditsAsync(database, cancellationToken).ConfigureAwait(false);
         var metadata = BuildMetadataRequest(database);
@@ -315,6 +335,9 @@ public sealed class IndexSyncClient(HttpClient client, bool accountMode = false,
     public async Task PushDirectoryClassificationAsync(IReadOnlyDictionary<string, bool> overrides,
         CancellationToken cancellationToken = default)
     {
+        // Directory scene expansion is a client view preference. The account
+        // service intentionally does not expose this legacy configuration write.
+        if (accountMode || !canWrite) return;
         using var response = await client.PostAsJsonAsync("api/sync/v1/directory-classification",
             new { overrides }, Json, cancellationToken).ConfigureAwait(false);
         response.EnsureSuccessStatusCode();

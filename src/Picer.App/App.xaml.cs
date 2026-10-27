@@ -196,7 +196,8 @@ public partial class App : Application
             notificationBaseline=await AppServices.CaptureSpaceNotificationBaselineAsync(cancellationToken).ConfigureAwait(false);
             if (AppServices.ServiceMode)
                 await SyncRemoteMirrorInBackgroundAsync(cancellationToken).ConfigureAwait(false);
-            await SyncReplicationInBackgroundAsync(cancellationToken).ConfigureAwait(false);
+            if (await SyncReplicationInBackgroundAsync(cancellationToken).ConfigureAwait(false))
+                LogInfo("索引冷启动同步 pass 完成");
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -217,7 +218,7 @@ public partial class App : Application
         }
     }
 
-    private async Task SyncReplicationInBackgroundAsync(CancellationToken cancellationToken)
+    private async Task<bool> SyncReplicationInBackgroundAsync(CancellationToken cancellationToken)
     {
         // Publish the local user's committed changes once. The publisher
         // checkpoint makes this idempotent; unchanged media/metadata produces
@@ -226,10 +227,12 @@ public partial class App : Application
         try
         {
             await AppServices.SyncLocalChangesToRemoteAsync(cancellationToken).ConfigureAwait(false);
+            return true;
         }
         catch (Exception exception)
         {
-            LogCrash("本地索引增量发布失败", exception);
+            LogCrash(AppServices.ServiceMode ? "照片空间修改同步失败" : "本地索引增量发布失败", exception);
+            return false;
         }
         // Only the service-mode mirror represents the aggregate photo space.
         // A local database must use its publisher-scoped download channel;
