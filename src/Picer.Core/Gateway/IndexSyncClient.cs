@@ -125,7 +125,12 @@ public sealed class IndexSyncClient(HttpClient client, bool accountMode = false,
             independent.MergeMetadataEdits(winners, applyOnlyChangedFields: true);
             foreach (var winner in winners) acknowledged.Add(winner.OperationId);
         }
-        var remote = await client.GetFromJsonAsync<MetadataEdit[]>("api/sync/v1/metadata-edits", Json, cancellationToken).ConfigureAwait(false);
+        var remote = await ResilientJsonRead.RunAsync(async token =>
+        {
+            using var response = await client.GetAsync("api/sync/v1/metadata-edits", HttpCompletionOption.ResponseHeadersRead, token).ConfigureAwait(false);
+            response.EnsureSuccessStatusCode();
+            return await response.Content.ReadFromJsonAsync<MetadataEdit[]>(Json, token).ConfigureAwait(false);
+        }, cancellationToken).ConfigureAwait(false);
         independent.MergeMetadataEdits(remote ?? [], applyOnlyChangedFields: true);
         foreach (var winner in remote ?? []) acknowledged.Add(winner.OperationId);
         Volatile.Write(ref _acknowledgedMetadataOperations, acknowledged);
