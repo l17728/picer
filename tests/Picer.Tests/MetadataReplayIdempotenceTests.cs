@@ -7,6 +7,25 @@ namespace Picer.Tests;
 public sealed class MetadataReplayIdempotenceTests
 {
     [Fact]
+    public void BoundedAcknowledgmentPreservesUnrelatedPendingEditsForExplicitReplay()
+    {
+        using var db = new PicerDatabase(":memory:");
+        db.UpsertMirroredPerson(new(1, "first", 0, 0));
+        db.UpsertMirroredPerson(new(2, "second", 0, 0));
+        using (var transaction = db.BeginTransaction())
+        {
+            db.RecordMetadataEdit("person", 2, "name", "pending", transaction);
+            transaction.Commit();
+        }
+        db.MergeMetadataEdits([new("person", 1, "name", "acknowledged", DateTime.UtcNow.ToString("O"), Guid.NewGuid().ToString("N"))], applyOnlyChangedFields: true);
+        using var name = db.Command("SELECT display_name FROM people WHERE id=2");
+        Assert.Equal("second", name.ExecuteScalar());
+        Assert.Equal(2, db.GetMetadataEdits().Count);
+        db.ReplayMetadataEdits();
+        Assert.Equal("pending", name.ExecuteScalar());
+    }
+
+    [Fact]
     public void ReplayingDifferentPersonFieldsDoesNotDirtyTheMirrorAgain()
     {
         using var database=new PicerDatabase(":memory:");

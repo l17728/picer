@@ -114,7 +114,7 @@ public sealed class IndexSyncClient(HttpClient client, bool accountMode = false,
         var acknowledged = new HashSet<string>(StringComparer.Ordinal);
         using var independent = database.OpenIndependentConnection();
         if (accountMode && independent.GetMirrorCheckpoint() is null) return;
-        foreach (var batch in independent.GetMetadataEdits().Where(edit => canWrite && (edit.Kind is not ("video-tag-link" or "video-concept")
+        foreach (var batch in independent.GetMetadataEdits().Where(edit => canWrite && (!accountMode || edit.ServerVersion == 0) && (edit.Kind is not ("video-tag-link" or "video-concept")
             || edit.VideoContentIdentity is { Length: 71 } identity && identity.StartsWith("sha256:", StringComparison.Ordinal)
                 && identity[7..].All(Uri.IsHexDigit))).Chunk(500))
         {
@@ -122,11 +122,11 @@ public sealed class IndexSyncClient(HttpClient client, bool accountMode = false,
             response.EnsureSuccessStatusCode();
             var winners = await response.Content.ReadFromJsonAsync<MetadataEdit[]>(Json, cancellationToken).ConfigureAwait(false)
                 ?? throw new InvalidOperationException("metadata_ack_missing");
-            independent.MergeMetadataEdits(winners);
+            independent.MergeMetadataEdits(winners, applyOnlyChangedFields: true);
             foreach (var winner in winners) acknowledged.Add(winner.OperationId);
         }
         var remote = await client.GetFromJsonAsync<MetadataEdit[]>("api/sync/v1/metadata-edits", Json, cancellationToken).ConfigureAwait(false);
-        independent.MergeMetadataEdits(remote ?? []);
+        independent.MergeMetadataEdits(remote ?? [], applyOnlyChangedFields: true);
         foreach (var winner in remote ?? []) acknowledged.Add(winner.OperationId);
         Volatile.Write(ref _acknowledgedMetadataOperations, acknowledged);
     }

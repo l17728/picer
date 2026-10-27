@@ -108,10 +108,10 @@ public sealed partial class PicerDatabase
             ? edit with { Field=System.Text.Json.JsonSerializer.Serialize(System.Text.Json.JsonSerializer.Deserialize<string[]>(edit.Field)) } : NormalizeFaceManualEdit(edit)).ToArray();
     }
 
-    public IReadOnlyList<MetadataEdit> MergeMetadataEdits(IReadOnlyList<MetadataEdit> edits)
+    public IReadOnlyList<MetadataEdit> MergeMetadataEdits(IReadOnlyList<MetadataEdit> edits, bool applyOnlyChangedFields = false)
     {
         using var transaction = BeginTransaction();
-        var result = MergeMetadataEditsInTransaction(edits, transaction);
+        var result = MergeMetadataEditsInTransaction(edits, transaction, applyOnlyChangedFields);
         transaction.Commit();
         return result;
     }

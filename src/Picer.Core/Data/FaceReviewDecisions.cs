@@ -19,6 +19,9 @@ public sealed partial class PicerDatabase
     // and is never replaced by remote projection snapshots. Keep restore events
     // too: absence from an ignored-only snapshot is not a deletion/version.
     public IReadOnlyList<GatewayFaceReviewDecision> GetFaceReviewDecisions(SqliteTransaction? transaction = null)
+        => GetFaceReviewDecisions(transaction, null);
+
+    private IReadOnlyList<GatewayFaceReviewDecision> GetFaceReviewDecisions(SqliteTransaction? transaction, HashSet<long>? requested)
     {
         using var command = Command("""
             WITH decisions AS (
@@ -27,19 +30,21 @@ public sealed partial class PicerDatabase
                 FROM face_corrections
                 WHERE action IN ('ignore','move_to_unassigned','move','create_and_move',
                     'not_this_person','merge_person','review_active','sync_review_ignored','sync_review_active')
+                  AND ($ids IS NULL OR face_id IN (SELECT value FROM json_each($ids)))
             ), ranked AS (
                 SELECT *, ROW_NUMBER() OVER(PARTITION BY face_id ORDER BY created_utc DESC,state DESC) AS rank
                 FROM decisions
             ) SELECT face_id,state,created_utc FROM ranked WHERE rank=1 ORDER BY face_id
             """);
         if (transaction is not null) command.Transaction = transaction;
+        command.Parameters.AddWithValue("$ids", requested is null ? DBNull.Value : System.Text.Json.JsonSerializer.Serialize(requested));
         using var reader = command.ExecuteReader();
         var result = new List<GatewayFaceReviewDecision>();
         while (reader.Read()) result.Add(new(reader.GetInt64(0), reader.GetString(1), reader.GetString(2)));
         reader.Close();
         var effective=result.ToDictionary(item=>item.FaceId);
         foreach(var edit in ReadMetadataEdits(transaction,facesOnly:true))
-            if(GetFaceManualEdit(edit.EntityId,transaction) is not null)
+            if((requested is null || requested.Contains(edit.EntityId)) && GetFaceManualEdit(edit.EntityId,transaction) is not null)
                 effective[edit.EntityId]=new(edit.EntityId,ParseFaceManualState(edit.Value).State=="ignored"?"ignored":"active",edit.UpdatedUtc);
         return effective.Values.OrderBy(item=>item.FaceId).ToArray();
     }
@@ -55,15 +60,15 @@ public sealed partial class PicerDatabase
     public IReadOnlyList<GatewayFaceReviewDecision> MergeFaceReviewDecisionsInTransaction(IReadOnlyList<GatewayFaceReviewDecision> incoming, SqliteTransaction transaction)
     {
         MergeFaceReviewDecisions(incoming, transaction);
-        var decisions = GetFaceReviewDecisions(transaction);
-        ApplyFaceReviewDecisions(decisions, transaction);
         var requested = incoming.Select(item => item.FaceId).ToHashSet();
-        return decisions.Where(item => requested.Contains(item.FaceId)).ToArray();
+        var decisions = GetFaceReviewDecisions(transaction, requested);
+        ApplyFaceReviewDecisions(decisions, transaction);
+        return decisions;
     }
 
     private void MergeFaceReviewDecisions(IReadOnlyList<GatewayFaceReviewDecision> incoming, SqliteTransaction transaction)
     {
-        var current = GetFaceReviewDecisions(transaction).ToDictionary(item => item.FaceId);
+        var current = GetFaceReviewDecisions(transaction, incoming.Select(item => item.FaceId).ToHashSet()).ToDictionary(item => item.FaceId);
         foreach (var item in incoming)
         {
             if (item.FaceId <= 0 || item.State is not ("ignored" or "active") ||

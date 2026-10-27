@@ -139,6 +139,20 @@ public sealed class FaceReviewSyncTests : IDisposable
         Assert.Empty(server.GetAllMirroredFaceReviewStates());
     }
 
+    [Fact]
+    public void AcknowledgmentDoesNotReplayUnrelatedFaceDecisions()
+    {
+        using var db = Open("bounded-ack.db");
+        var face = db.GetAllMirroredFaces().Single();
+        db.UpsertMirroredFaces([face with { Id = 2, Ordinal = 1 }], []);
+        var timestamp = DateTime.UtcNow.ToString("O");
+        db.MergeFaceReviewDecisions([new(1, "ignored", timestamp), new(2, "active", timestamp)]);
+        using (var seed = db.Command("INSERT INTO face_review_states(face_id,state,updated_utc) VALUES(2,'ignored','2026-10-27'); CREATE TRIGGER reject_unrelated_ack BEFORE DELETE ON face_review_states WHEN OLD.face_id=2 BEGIN SELECT RAISE(ABORT,'unrelated_ack_replay'); END;")) seed.ExecuteNonQuery();
+        var acknowledged = db.MergeFaceReviewDecisions([new(1, "ignored", timestamp)]);
+        Assert.Equal(1, Assert.Single(acknowledged).FaceId);
+        Assert.Equal(2, db.GetAllMirroredFaceReviewStates().Count);
+    }
+
     public void Dispose()
     {
         Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
