@@ -1,8 +1,27 @@
 # Picer 开发计划与交付状态
 
-检索和自动分类已有[产品 SPEC](SEARCH_AND_AUTO_CLASSIFICATION_SPEC_2026-10-16.md)、[UX 规范](SEARCH_AND_AUTO_CLASSIFICATION_UX_2026-10-16.md)、[技术 SDD](SEARCH_AND_AUTO_CLASSIFICATION_TECH_SDD_2026-10-16.md)和[实现计划](SEARCH_AND_AUTO_CLASSIFICATION_IMPLEMENTATION_2026-10-16.md)，并以[设计定稿](SEARCH_AND_AUTO_CLASSIFICATION_SDD_2026-10-16.md)为决策基线：不引入 Elasticsearch；维持本地 SQLite FTS5/BM25；视觉分类保留拒识、纠错和用户确认边界。2026-10-21 已交付本地及远程后台增量分类、审核 UI、事务更正和可选 BM25 + CLIP RRF；远程操作写入 IndexService 权威数据库，CLIP 模型只部署于来源机 ModelServer。逐类质量门禁和默认 AI 问答接入仍需验收，详见[实现记录](CLASSIFICATION_AND_HYBRID_RETRIEVAL_IMPLEMENTATION_2026-10-21.md)。此设计不自动恢复已暂停的 P2。
+更新：2026-10-27。当前源码为数据库 schema91、元数据协议 14；尚未 commit、push、发布或部署。已发布版本仍为 v1.5.6，不能将本轮测试结果写成生产已启用。
 
-更新：2026-10-20。v1.5.6 是本轮维护发布目标，覆盖远程分析授权、服务抗压和目录描述异步流水线；发布状态以[v1.5.6 发布记录](RELEASE_1_5_6_2026-10-20.md)为准。生产 IndexService 已处于账号门户/多租户模式；旧数据迁移、CI 账号凭据切换及真实设备配对/照片视频读取/撤销闭环已完成。四项原先暂停的外部质量/硬件 P2 验收仍暂停，见下文。
+## 当前能力
+
+本地来源与账号照片空间按来源身份双向同步。照片空间可以汇总多台电脑的数据，每个本机只接收自己授权来源的更新，不复制其他电脑的图库。冷启动建立基线，之后由操作和服务通知触发；“一键索引巡检和修复”协调整个空间，离线来源保留待办并在重新连接后续办。
+
+本轮已接入分类确认与拒绝、标签/相册/人物及关联、人脸人工决定、视频人工字段、空间分类偏好、照片及视频描述与派生结果、人物候选分组、场景描述。人工并发编辑保留冲突，目录对象删除需要显式事件和审核，模型重算不得删除更新的结果或人工决定。手动索引清除不修改原始媒体；末引用清除相关索引、缓存和同步状态。
+
+实现说明：
+
+- [双向同步设计](LOCAL_REMOTE_METADATA_SYNC_SDD_2026-10-22.md)
+- [全空间巡检与通知](SPACE_INSPECTION_NOTIFICATIONS_IMPLEMENTATION_2026-10-23.md)
+- [目录对象审核、清除恢复与回执压缩](CATALOG_REVIEW_AND_COMPACTION_IMPLEMENTATION_2026-10-26.md)
+- [模型派生删除与候选分组](DERIVED_METADATA_DELETION_IMPLEMENTATION_2026-10-26.md)
+- [场景描述双向编辑](SCENE_DESCRIPTION_SYNC_IMPLEMENTATION_2026-10-26.md)
+
+同步元数据不等于复制运行环境：原始照片/视频、扫描游标、临时文件和设备资源限制不跨来源复制。人物嵌入、训练工件及精确位置沿用独立授权；不能因基本索引同步扩大共享范围。训练工件的发布和应用不构成跨模型版本兼容承诺。
+
+## 验证与剩余任务入口
+
+最新测试阶段、旧库迁移演练、剩余同步边界和发布部署门槛统一维护在[同步交付状态](SYNC_DELIVERY_STATUS_2026-10-26.md)。各阶段测试不相加，不用旧构建结果代替新代码验收。来源训练应用与回执见[实施说明](TRAINING_APPLICATION_SYNC_IMPLEMENTATION_2026-10-27.md)。
+
 
 ## 新需求设计状态（2026-10-12）
 
@@ -32,7 +51,7 @@
 
 ## 2. 当前发布与验证
 
-本轮发布目标为 [v1.5.6](https://github.com/l17728/picer/releases/tag/v1.5.6)，schema 47；私有仓库下载需要访问权限。组件包包含 GUI、MediaAgent、IndexService、ModelServer；GUI 与 MediaAgent 一键安装器及组件包由 Release 工作流生成。安装、哈希与验收状态见[v1.5.6 发布记录](RELEASE_1_5_6_2026-10-20.md)；生产服务部署状态仍以[v1.5.1 部署记录](DEPLOYMENT_V1_5_1_2026-10-14.md)及后续实际部署记录为准，发布不等于生产已升级。
+当前已发布版本为 [v1.5.6](https://github.com/l17728/picer/releases/tag/v1.5.6)，schema 47；私有仓库下载需要访问权限。组件包包含 GUI、MediaAgent、IndexService、ModelServer；GUI 与 MediaAgent 一键安装器及组件包由 Release 工作流生成。安装、哈希与验收状态见[v1.5.6 发布记录](RELEASE_1_5_6_2026-10-20.md)；生产服务部署状态仍以[v1.5.1 部署记录](DEPLOYMENT_V1_5_1_2026-10-14.md)及后续实际部署记录为准，发布不等于生产已升级。
 
 GUI/独立 Agent 中文当前用户一键安装器已实现，包含自包含 .NET、app-local MSVC CRT，代理 tools/ffmpeg 目录同时提供 FFmpeg、FFprobe 及许可证并自动发现。纯远程 GUI 不需要 Python、CUDA 或模型 runtime，也不检查本地 runtime。首次从“文件 → 连接索引服务…”完成无凭据证书发现、指纹确认、固定公钥验证及 DPAPI 保存，无需编辑 JSON。模型端 setup-modelserver.py 默认 CPU 的实际验收已通过；GPU 和授权模型依然按服务端配置。详见[安装实现记录](INSTALLER_IMPLEMENTATION_2026-10-10.md)和[安装指南](RELEASE_GUIDE.md)。
 
@@ -55,6 +74,8 @@ v1.3.5 的部署、安装包校验和真实服务验收证据统一见[媒体实
 已有测试脚本、运行能力和曾经成功启动服务，不等于这些质量或硬件验收已通过。解除暂停须沿用用户后续指令。
 
 ## 4. 部署与发布
+
+当前同步改动尚未发布、部署，按[同步交付状态](SYNC_DELIVERY_STATUS_2026-10-26.md)推进。以下保留历史性能交付记录。
 
 目录描述解耦及七项性能/后台维护改造已通过新标签 v1.4.0 发布。未覆盖旧标签或旧资产，未中断运行中的用户任务。新源端能力需配套升级 GUI、Agent、IndexService。
 

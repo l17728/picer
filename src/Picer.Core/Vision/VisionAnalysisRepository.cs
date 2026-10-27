@@ -113,10 +113,71 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
         return best;
     }
 
-    public void RecordAgentTrainingArtifact(TrainingArtifactData artifact, string modelVersion)
+    public void ApplyAgentTrainingArtifact(TrainingArtifactData artifact, SqliteTransaction? externalTransaction = null,
+        bool preserveStoredDocument = false, IReadOnlyCollection<long>? replacePeople = null)
+    {
+        if (artifact is null || string.IsNullOrWhiteSpace(artifact.ArtifactId) || string.IsNullOrWhiteSpace(artifact.ModelVersion) ||
+            artifact.Prototypes is not { Count: > 0 and <= 10000 } || artifact.Metrics is null ||
+            artifact.Prototypes.Any(value => value is null || value.PersonId <= 0 || value.SampleCount < 0 ||
+                value.Centroid is not { Length: > 0 and <= 4096 } || value.Centroid.Any(number => !float.IsFinite(number)) ||
+                !double.IsFinite(value.Threshold) || value.Threshold is < 0 or > 1) ||
+            artifact.Prototypes.Select(value => value.PersonId).Distinct().Count() != artifact.Prototypes.Count)
+            throw new ArgumentException("invalid_training_artifact");
+        using var ownedTransaction = externalTransaction is null ? database.BeginTransaction() : null;
+        var transaction = externalTransaction ?? ownedTransaction!;
+        ValidateStoredTrainingModel(artifact.ArtifactId, artifact.ModelVersion, transaction);
+        using (var clear = database.Command("DELETE FROM face_person_prototypes WHERE model_version=$model AND ($all=1 OR person_id IN (SELECT value FROM json_each($people)))"))
+        {
+            clear.Transaction = transaction; clear.Parameters.AddWithValue("$model", artifact.ModelVersion);
+            clear.Parameters.AddWithValue("$all", replacePeople is null ? 1 : 0);
+            clear.Parameters.AddWithValue("$people", JsonSerializer.Serialize(replacePeople ?? [])); clear.ExecuteNonQuery();
+        }
+        using var insert = database.Command("""
+            INSERT INTO face_person_prototypes(person_id,centroid,threshold,sample_count,model_version,updated_utc)
+            VALUES($person,$centroid,$threshold,$count,$model,$updated)
+            """);
+        insert.Transaction = transaction;
+        var now = DateTime.UtcNow.ToString("O");
+        foreach (var prototype in artifact.Prototypes)
+        {
+            insert.Parameters.Clear();
+            insert.Parameters.AddWithValue("$person", prototype.PersonId);
+            insert.Parameters.AddWithValue("$centroid", ToBytes(prototype.Centroid));
+            insert.Parameters.AddWithValue("$threshold", prototype.Threshold);
+            insert.Parameters.AddWithValue("$count", prototype.SampleCount);
+            insert.Parameters.AddWithValue("$model", artifact.ModelVersion);
+            insert.Parameters.AddWithValue("$updated", now);
+            insert.ExecuteNonQuery();
+        }
+        if (preserveStoredDocument)
+        {
+            using var state = database.Command("""
+                UPDATE face_training_artifacts SET state='superseded' WHERE model_version=$model AND state='active'
+                    AND ($all=1 OR endpoint=(SELECT endpoint FROM face_training_artifacts WHERE artifact_id=$id));
+                UPDATE face_training_artifacts SET state='active',applied_utc=$now WHERE artifact_id=$id AND model_version=$model;
+                """);
+            state.Transaction = transaction; state.Parameters.AddWithValue("$model", artifact.ModelVersion);
+            state.Parameters.AddWithValue("$all", replacePeople is null ? 1 : 0);
+            state.Parameters.AddWithValue("$now", now); state.Parameters.AddWithValue("$id", artifact.ArtifactId); state.ExecuteNonQuery();
+        }
+        else RecordAgentTrainingArtifact(artifact, artifact.ModelVersion, transaction);
+        ownedTransaction?.Commit();
+    }
+
+    private void ValidateStoredTrainingModel(string artifactId, string modelVersion, SqliteTransaction transaction)
+    {
+        using var stored = database.Command("SELECT model_version FROM face_training_artifacts WHERE artifact_id=$id");
+        stored.Transaction = transaction; stored.Parameters.AddWithValue("$id", artifactId);
+        if (stored.ExecuteScalar() is string existingModel && existingModel != modelVersion)
+            throw new ArgumentException("training_artifact_model_mismatch");
+    }
+
+    public void RecordAgentTrainingArtifact(TrainingArtifactData artifact, string modelVersion, SqliteTransaction? externalTransaction = null)
     {
         var json = JsonSerializer.Serialize(artifact);
-        using var transaction = database.BeginTransaction();
+        using var ownedTransaction = externalTransaction is null ? database.BeginTransaction() : null;
+        var transaction = externalTransaction ?? ownedTransaction!;
+        ValidateStoredTrainingModel(artifact.ArtifactId, modelVersion, transaction);
         using (var supersede = database.Command("UPDATE face_training_artifacts SET state='superseded' WHERE model_version=$model AND state='active'"))
         {
             supersede.Transaction = transaction;
@@ -137,24 +198,32 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
         insert.Parameters.AddWithValue("$created", artifact.CreatedUtc.ToString("O"));
         insert.Parameters.AddWithValue("$applied", DateTime.UtcNow.ToString("O"));
         insert.ExecuteNonQuery();
-        transaction.Commit();
+        ownedTransaction?.Commit();
     }
 
     /// <summary>Returns the most recently superseded Agent artifact for a model.
     /// This is deliberately separate from the active artifact so a rejected
     /// attempt can never become a rollback target.</summary>
-    public TrainingArtifactData? GetPreviousAgentTrainingArtifact(string modelVersion)
+    public TrainingArtifactData? GetPreviousAgentTrainingArtifact(string modelVersion, bool useStoredIdentity = false)
     {
         using var command = database.Command("""
-            SELECT artifact_json FROM face_training_artifacts
-            WHERE model_version=$model AND state='superseded' AND dataset_id='agent'
+            SELECT artifact_json,artifact_id FROM face_training_artifacts
+            WHERE model_version=$model AND state='superseded'
+                AND (dataset_id='agent' OR ($stored=1 AND endpoint LIKE 'source:%' AND dataset_id LIKE '%:agent'))
             ORDER BY COALESCE(applied_utc, created_utc) DESC
             LIMIT 1
             """);
         command.Parameters.AddWithValue("$model", modelVersion);
-        var json = command.ExecuteScalar() as string;
+        command.Parameters.AddWithValue("$stored", useStoredIdentity ? 1 : 0);
+        using var row = command.ExecuteReader();
+        if (!row.Read()) return null;
+        var json = row.GetString(0);
         if (string.IsNullOrWhiteSpace(json)) return null;
-        try { return JsonSerializer.Deserialize<TrainingArtifactData>(json); }
+        try
+        {
+            var artifact = JsonSerializer.Deserialize<TrainingArtifactData>(json);
+            return useStoredIdentity && artifact is not null ? artifact with { ArtifactId = row.GetString(1) } : artifact;
+        }
         catch (JsonException) { return null; }
     }
     public bool IsCurrent(ImageRecord image, string analyzer, string modelVersion)
@@ -623,7 +692,7 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
         return values;
     }
 
-    public IReadOnlyList<FaceEmbeddingRecord> GetEmbeddingsForMatching(string? modelVersion = null)
+    public IReadOnlyList<FaceEmbeddingRecord> GetEmbeddingsForMatching(string? modelVersion = null, string? ownerKey = null)
     {
         using var command = database.Command("""
             WITH shared_confirmed AS (
@@ -637,24 +706,30 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
                    CASE WHEN a.state='confirmed' OR shared.person_id IS NOT NULL THEN 'confirmed' ELSE a.state END AS state,
                    f.embedding,
                    i.sha256, i.ahash, i.width, i.height,
-                   f.box_x, f.box_y, f.box_width, f.box_height, f.confidence
+                   f.box_x, f.box_y, f.box_width, f.box_height, f.confidence,COALESCE(owner.owner_key,'local')
             FROM detected_faces f
             JOIN images i ON i.id=f.image_id AND i.status='active'
+            LEFT JOIN sync_image_owners owner ON owner.image_id=f.image_id
             LEFT JOIN face_person_assignments a ON a.face_id=f.id
             LEFT JOIN shared_confirmed shared ON shared.image_id=f.image_id AND shared.ordinal=f.ordinal
             LEFT JOIN face_review_states r ON r.face_id=f.id
             WHERE f.is_archived=0 AND f.embedding IS NOT NULL AND r.face_id IS NULL
               AND ($model IS NULL OR f.model_version=$model)
+              AND ($owner IS NULL OR owner.owner_key=$owner)
               AND (a.face_id IS NULL OR a.state IN ('suggested','confirmed') OR shared.person_id IS NOT NULL)
             ORDER BY f.id
             """);
         command.Parameters.AddWithValue("$model", (object?)modelVersion ?? DBNull.Value);
         var values = new List<FaceEmbeddingRecord>();
-        var deduplicator = new FaceSourceDeduplicator();
+        command.Parameters.AddWithValue("$owner", (object?)ownerKey ?? DBNull.Value);
+        var deduplicators = new Dictionary<string, FaceSourceDeduplicator>(StringComparer.Ordinal);
         using var reader = command.ExecuteReader();
         while (reader.Read())
         {
             var signature = ReadFaceSourceSignature(reader, 6);
+            var owner = reader.GetString(15);
+            if (!deduplicators.TryGetValue(owner, out var deduplicator))
+                deduplicators.Add(owner, deduplicator = new FaceSourceDeduplicator());
             if (deduplicator.IsDuplicateAndAdd(signature)) continue;
             values.Add(new FaceEmbeddingRecord(
                 reader.GetInt64(0), reader.GetInt64(1), reader.GetString(2),
@@ -683,7 +758,7 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
     public IReadOnlyList<UnassignedFaceRecord> OrderByFeature(IReadOnlyList<UnassignedFaceRecord> faces) =>
         FaceFeatureOrderer.Order(faces, GetFaceEmbeddings(faces.Select(face => face.FaceId)));
 
-    public IReadOnlyList<RejectedFaceEmbeddingRecord> GetRejectedFaceEmbeddings(string? modelVersion = null)
+    public IReadOnlyList<RejectedFaceEmbeddingRecord> GetRejectedFaceEmbeddings(string? modelVersion = null, string? ownerKey = null)
     {
         using var command = database.Command("""
             SELECT f.id, f.image_id, f.model_version, r.person_id, f.embedding,f.confidence,f.box_width*f.box_height
@@ -691,10 +766,12 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
             JOIN detected_faces f ON f.id=r.face_id
             JOIN images i ON i.id=f.image_id AND i.status='active'
             WHERE f.is_archived=0 AND f.embedding IS NOT NULL AND ($model IS NULL OR f.model_version=$model)
+                AND ($owner IS NULL OR EXISTS(SELECT 1 FROM sync_image_owners o WHERE o.image_id=f.image_id AND o.owner_key=$owner))
             ORDER BY r.person_id, r.face_id
             """);
         command.Parameters.AddWithValue("$model", (object?)modelVersion ?? DBNull.Value);
         var values = new List<RejectedFaceEmbeddingRecord>();
+        command.Parameters.AddWithValue("$owner", (object?)ownerKey ?? DBNull.Value);
         using var reader = command.ExecuteReader();
         while (reader.Read()) values.Add(new RejectedFaceEmbeddingRecord(reader.GetInt64(0), reader.GetInt64(1),
             reader.GetString(2), reader.GetInt64(3), FromBytes((byte[])reader[4]), reader.GetFloat(5), reader.GetFloat(6)));
@@ -788,13 +865,18 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
         return values;
     }
 
-    public float[]? GetActiveFaceAdapter(string modelVersion)
+    public float[]? GetActiveFaceAdapter(string modelVersion, string? ownerKey = null)
     {
         using var command = database.Command("""
             SELECT artifact_json FROM face_training_artifacts
-            WHERE state='active' AND model_version=$model ORDER BY applied_utc DESC LIMIT 1
+            WHERE state='active' AND model_version=$model
+                AND ($owner IS NULL OR endpoint NOT LIKE 'source:%' OR endpoint=$source)
+            ORDER BY applied_utc DESC LIMIT 1
             """);
         command.Parameters.AddWithValue("$model", modelVersion);
+        command.Parameters.AddWithValue("$owner", (object?)ownerKey ?? DBNull.Value);
+        command.Parameters.AddWithValue("$source", ownerKey?.StartsWith("publisher:", StringComparison.Ordinal) == true
+            ? "source:" + ownerKey[10..] : DBNull.Value);
         if (command.ExecuteScalar() is not string json) return null;
         try
         {
@@ -816,11 +898,18 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
 
     public void ApplyLearnedFaceArtifact(string artifactId, string datasetId, string endpoint, string modelVersion,
         string artifactJson, double falseAcceptRate, double falseRejectRate,
-        IReadOnlyCollection<FaceLearnedPolicy> policies)
+        IReadOnlyCollection<FaceLearnedPolicy> policies, SqliteTransaction? externalTransaction = null,
+        IReadOnlyCollection<long>? replacePeople = null)
     {
-        using var transaction = database.BeginTransaction();
-        using (var supersede = database.Command("UPDATE face_training_artifacts SET state='superseded' WHERE state='active'"))
-        { supersede.Transaction = transaction; supersede.ExecuteNonQuery(); }
+        using var ownedTransaction = externalTransaction is null ? database.BeginTransaction() : null;
+        var transaction = externalTransaction ?? ownedTransaction!;
+        ValidateStoredTrainingModel(artifactId, modelVersion, transaction);
+        using (var supersede = database.Command("UPDATE face_training_artifacts SET state='superseded' WHERE state='active' AND model_version=$model AND ($all=1 OR endpoint=$endpoint)"))
+        {
+            supersede.Transaction = transaction; supersede.Parameters.AddWithValue("$model", modelVersion);
+            supersede.Parameters.AddWithValue("$all", replacePeople is null ? 1 : 0);
+            supersede.Parameters.AddWithValue("$endpoint", endpoint); supersede.ExecuteNonQuery();
+        }
         using (var artifact = database.Command("""
             INSERT INTO face_training_artifacts(artifact_id,dataset_id,endpoint,model_version,artifact_json,
                 false_accept_rate,false_reject_rate,state,created_utc,applied_utc)
@@ -835,7 +924,18 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
             artifact.Parameters.AddWithValue("$frr", falseRejectRate); artifact.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("o"));
             artifact.ExecuteNonQuery();
         }
-        using (var clear = database.Command("DELETE FROM face_person_policies")) { clear.Transaction = transaction; clear.ExecuteNonQuery(); }
+        using (var clear = database.Command("""
+            DELETE FROM face_person_policies WHERE
+                (model_version=$model AND ($all=1 OR person_id IN (SELECT value FROM json_each($replace))))
+                OR person_id IN (SELECT value FROM json_each($applied))
+            """))
+        {
+            clear.Transaction = transaction; clear.Parameters.AddWithValue("$model", modelVersion);
+            clear.Parameters.AddWithValue("$all", replacePeople is null ? 1 : 0);
+            clear.Parameters.AddWithValue("$replace", JsonSerializer.Serialize(replacePeople ?? []));
+            clear.Parameters.AddWithValue("$applied", JsonSerializer.Serialize(policies.Select(value => value.PersonId)));
+            clear.ExecuteNonQuery();
+        }
         foreach (var policy in policies)
         {
             using var insert = database.Command("""
@@ -848,7 +948,7 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
             insert.Parameters.AddWithValue("$threshold", policy.MatchThreshold); insert.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("o"));
             insert.ExecuteNonQuery();
         }
-        transaction.Commit();
+        ownedTransaction?.Commit();
     }
 
     public (string ArtifactId, string DatasetId, string Endpoint, string ModelVersion, string Json,
@@ -856,7 +956,10 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
     {
         using var command = database.Command("""
             SELECT artifact_id,dataset_id,endpoint,model_version,artifact_json,false_accept_rate,false_reject_rate
-            FROM face_training_artifacts WHERE state='superseded' ORDER BY applied_utc DESC,created_utc DESC LIMIT 1
+            FROM face_training_artifacts WHERE state='superseded'
+                AND CASE WHEN json_valid(artifact_json) THEN
+                    COALESCE(json_type(artifact_json,'$.people'),json_type(artifact_json,'$.People'))='array' ELSE 0 END
+            ORDER BY applied_utc DESC,created_utc DESC LIMIT 1
             """);
         using var reader = command.ExecuteReader();
         return reader.Read()
@@ -883,9 +986,14 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
         command.ExecuteNonQuery();
     }
 
-    public void ReplaceCandidateClusters(string modelVersion, IReadOnlyList<CandidateClusterDraft> clusters)
+    public void ReplaceCandidateClusters(string modelVersion, IReadOnlyList<CandidateClusterDraft> clusters, string? expectedEpoch = null)
     {
         using var transaction = database.BeginTransaction();
+        if (expectedEpoch is not null)
+        {
+            using var epoch = database.Command("SELECT epoch FROM mirror_revision WHERE id=1"); epoch.Transaction = transaction;
+            if (epoch.ExecuteScalar() as string != expectedEpoch) throw new InvalidOperationException("space_epoch_reset_required");
+        }
         using (var clear = database.Command("DELETE FROM face_candidate_clusters WHERE model_version=$version"))
         {
             clear.Transaction = transaction;

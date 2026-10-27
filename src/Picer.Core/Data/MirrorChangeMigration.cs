@@ -54,6 +54,7 @@ internal static class MirrorChangeMigration
     }
 
     private static bool IsMetadataTable(string table) => table is "sources" or "tags" or "albums" or "album_images" or "image_tags" or "people" or "detected_faces" or "face_person_assignments" or "image_locations" or "cloud_vision_analyses" or "scene_group_descriptions"
+        or "image_classification_assertions" or "image_classification_rejections" or "image_visual_concepts" or "visual_concept_rejections" or "semantic_content_clusters" or "semantic_content_cluster_members" or "semantic_cluster_settings"
         || table.StartsWith("face_", StringComparison.Ordinal)
         || table.StartsWith("video_", StringComparison.Ordinal);
 }

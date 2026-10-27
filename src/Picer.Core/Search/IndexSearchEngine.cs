@@ -326,7 +326,7 @@ public static class IndexSearchEngine
             var allowedStates = filters.IncludeSuggestedClassifications
                 ? "('suggested','automatic','user_confirmed','legacy_effective')"
                 : "('automatic','user_confirmed','legacy_effective')";
-            conditions.Add($"EXISTS (SELECT 1 FROM image_classification_assertions a{index} WHERE a{index}.image_id=t.id AND a{index}.concept_id=${parameter} AND a{index}.assertion_state IN {allowedStates} AND a{index}.review_state IN ('pending','accepted') AND NOT EXISTS (SELECT 1 FROM image_classification_rejections r{index} WHERE r{index}.concept_id=a{index}.concept_id AND r{index}.source_scope IN ('vision_model','all') AND ((r{index}.image_id=a{index}.image_id) OR (r{index}.content_sha256 IS NOT NULL AND r{index}.content_sha256=a{index}.content_sha256))))");
+            conditions.Add($"EXISTS (SELECT 1 FROM image_classification_assertions a{index} WHERE a{index}.image_id=t.id AND a{index}.concept_id=${parameter} AND a{index}.assertion_state IN {allowedStates} AND a{index}.review_state IN ('pending','accepted') AND (a{index}.source_kind<>'vision_model' OR NOT EXISTS (SELECT 1 FROM image_classification_rejections r{index} WHERE r{index}.concept_id=a{index}.concept_id AND r{index}.source_scope IN ('vision_model','all') AND ((r{index}.image_id=a{index}.image_id) OR (r{index}.content_sha256 IS NOT NULL AND r{index}.content_sha256=a{index}.content_sha256 AND r{index}.owner_key=(SELECT owner_key FROM sync_image_owners WHERE image_id=a{index}.image_id))))))");
             parameters.Add((parameter, concepts[index]));
         }
     }

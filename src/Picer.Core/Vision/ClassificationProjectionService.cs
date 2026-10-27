@@ -86,6 +86,7 @@ public sealed class ClassificationProjectionService(PicerDatabase database)
                 ProjectSuggestions(input.Image, input.Suggestions, transaction);
                 if (semanticResults?.TryGetValue(input.Image.Id, out var semantic) == true)
                     ProjectSemanticConcepts(input.Image, semantic, transaction);
+                database.ReplayPhotoClassificationFields(input.Image.Id,transaction);
                 processed++;
             }
             catch (Exception error) when (error is not OperationCanceledException)
@@ -135,6 +136,54 @@ public sealed class ClassificationProjectionService(PicerDatabase database)
         command.ExecuteNonQuery();
     }
 
+    /// <summary>Retracts obsolete active screenshot labels and reprojects available metadata and description labels.</summary>
+    public int RepairObsoleteScreenshotClassifications(CancellationToken cancellationToken = default)
+    {
+        using var find = database.Command("""
+            SELECT DISTINCT i.id FROM images i
+            JOIN image_classification_assertions a ON a.image_id=i.id
+            WHERE i.status='active' AND a.concept_id='document.screenshot'
+              AND a.review_state IN ('pending','accepted')
+            ORDER BY i.id
+            """);
+        using var reader = find.ExecuteReader();
+        var ids = new List<long>();
+        while (reader.Read()) ids.Add(reader.GetInt64(0));
+        reader.Close();
+
+        var repaired = 0;
+        foreach (var batch in ids.Chunk(100))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var images = batch.Select(database.GetImage).Where(image => image is not null).Cast<ImageRecord>().ToArray();
+            using var transaction = database.BeginTransaction();
+            foreach (var image in images)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                ProjectMetadata(image, transaction);
+                ProjectSuggestions(image, LoadDescriptionConcepts(image.Id), transaction);
+                using (var removeLegacy = database.Command("DELETE FROM image_visual_concepts WHERE image_id=$image AND concept_id='document.screenshot'"))
+                {
+                    removeLegacy.Transaction = transaction;
+                    removeLegacy.Parameters.AddWithValue("$image", image.Id);
+                    removeLegacy.ExecuteNonQuery();
+                }
+                using var retract = database.Command("""
+                    UPDATE image_classification_assertions SET review_state='retracted',updated_utc=$now
+                    WHERE image_id=$image AND concept_id='document.screenshot'
+                      AND review_state IN ('pending','accepted')
+                    """);
+                retract.Transaction = transaction;
+                retract.Parameters.AddWithValue("$image", image.Id);
+                retract.Parameters.AddWithValue("$now", Format(DateTime.UtcNow));
+                retract.ExecuteNonQuery();
+                repaired++;
+            }
+            transaction.Commit();
+        }
+        return repaired;
+    }
+
     public ClassificationRunProgress? GetLatestRun()
     {
         using var command = database.Command("""
@@ -148,6 +197,7 @@ public sealed class ClassificationProjectionService(PicerDatabase database)
     public IReadOnlyList<ClassificationReviewItem> List(string view, int limit = 500)
     {
         if (string.Equals(view, "people", StringComparison.Ordinal)) return ListPeople(limit);
+        if (string.Equals(view, "ownership", StringComparison.Ordinal)) return ListUnresolvedOwnership(limit);
         var predicate = view switch
         {
             "automatic" => "a.source_kind='vision_model' AND a.assertion_state='automatic' AND a.review_state IN ('pending','accepted')",
@@ -158,11 +208,14 @@ public sealed class ClassificationProjectionService(PicerDatabase database)
         using var command = database.Command($"""
             SELECT a.image_id,i.path,i.thumb_path,a.concept_id,a.source_kind,a.assertion_state,a.review_state,
                    CASE WHEN a.content_sha256 IS NULL THEN 1 ELSE
-                       (SELECT COUNT(*) FROM images r WHERE r.status='active' AND lower(COALESCE(r.content_sha256,r.sha256))=a.content_sha256) END,
+                       (SELECT COUNT(*) FROM images r WHERE r.status='active' AND lower(COALESCE(r.content_sha256,r.sha256))=a.content_sha256
+                           AND (SELECT owner_key FROM sync_image_owners WHERE image_id=r.id)=
+                               (SELECT owner_key FROM sync_image_owners WHERE image_id=i.id)) END,
                    a.updated_utc,c.display_name
             FROM image_classification_assertions a JOIN images i ON i.id=a.image_id
             LEFT JOIN semantic_content_clusters c ON a.concept_id='cluster.semantic.' || c.cluster_key
             WHERE i.status='active' AND {predicate}
+              {(view == "ignored" ? "" : "AND (a.source_kind<>'vision_model' OR NOT EXISTS(SELECT 1 FROM image_classification_rejections r WHERE r.concept_id=a.concept_id AND r.source_scope IN ('vision_model','all') AND (r.image_id=i.id OR (r.content_sha256=a.content_sha256 AND r.owner_key=(SELECT owner_key FROM sync_image_owners WHERE image_id=i.id)))))")}
             ORDER BY a.updated_utc DESC,a.id DESC LIMIT $limit
             """);
         command.Parameters.AddWithValue("$limit", Math.Clamp(limit, 1, 5000));
@@ -212,16 +265,40 @@ public sealed class ClassificationProjectionService(PicerDatabase database)
         return ids.Select(database.GetImage).Where(image => image is not null).Cast<ImageRecord>().ToArray();
     }
 
+    private IReadOnlyList<ClassificationReviewItem> ListUnresolvedOwnership(int limit)
+    {
+        using var command = database.Command("""
+            WITH candidates AS (
+                SELECT MIN(i.id) AS image_id,r.concept_id,MAX(r.rejected_utc) AS rejected_utc,COUNT(DISTINCT i.id) AS references_count
+                FROM image_classification_rejections r
+                JOIN images i ON lower(COALESCE(i.content_sha256,i.sha256))=lower(r.content_sha256)
+                JOIN sync_image_owners o ON o.image_id=i.id
+                WHERE r.owner_key='' AND i.status='active'
+                  AND NOT EXISTS(SELECT 1 FROM image_classification_rejections known
+                      WHERE known.owner_key=o.owner_key AND known.concept_id=r.concept_id
+                        AND lower(known.content_sha256)=lower(r.content_sha256) AND known.source_scope=r.source_scope)
+                  AND NOT EXISTS(SELECT 1 FROM classification_rejection_ownership_reviews v
+                      WHERE v.content_sha256=lower(r.content_sha256) AND v.concept_id=r.concept_id AND v.owner_key=o.owner_key)
+                GROUP BY lower(r.content_sha256),r.concept_id,o.owner_key
+            )
+            SELECT i.id,i.path,i.thumb_path,c.concept_id,c.rejected_utc,c.references_count
+            FROM candidates c JOIN images i ON i.id=c.image_id ORDER BY c.rejected_utc DESC,i.id LIMIT $limit
+            """);
+        command.Parameters.AddWithValue("$limit", Math.Clamp(limit, 1, 5000));
+        using var reader = command.ExecuteReader();
+        var result = new List<ClassificationReviewItem>();
+        while (reader.Read())
+            result.Add(new(reader.GetInt64(0), reader.GetString(1), reader.IsDBNull(2) ? null : reader.GetString(2),
+                reader.GetString(3), VisualConceptCatalog.DisplayName(reader.GetString(3)), "ownership_review", "legacy_effective",
+                "pending", reader.GetInt32(5), DateTime.Parse(reader.GetString(4), null, System.Globalization.DateTimeStyles.RoundtripKind)));
+        return result;
+    }
+
     public void RestoreSuggestion(long imageId, string conceptId)
     {
-        using var transaction = database.BeginTransaction();
-        using var remove = database.Command("""
-            DELETE FROM image_classification_rejections WHERE concept_id=$concept AND source_scope IN ('vision_model','all')
-              AND (image_id=$image OR (content_sha256 IS NOT NULL AND content_sha256=(SELECT lower(COALESCE(content_sha256,sha256)) FROM images WHERE id=$image)))
-            """);
-        remove.Transaction = transaction; remove.Parameters.AddWithValue("$image", imageId); remove.Parameters.AddWithValue("$concept", conceptId); remove.ExecuteNonQuery();
-        using var restore = database.Command("UPDATE image_classification_assertions SET review_state='pending',reviewed_utc=NULL,updated_utc=$now WHERE image_id=$image AND concept_id=$concept AND source_kind='vision_model'");
-        restore.Transaction = transaction; restore.Parameters.AddWithValue("$image", imageId); restore.Parameters.AddWithValue("$concept", conceptId); restore.Parameters.AddWithValue("$now", Format(DateTime.UtcNow)); restore.ExecuteNonQuery();
+        using var transaction=database.BeginTransaction();
+        ClassificationOwnershipReview.Record(database,transaction,imageId,conceptId,"restored");
+        database.RecordPhotoClassificationDecision(imageId,conceptId,"restored",false,transaction);
         transaction.Commit();
     }
 
@@ -267,19 +344,21 @@ public sealed class ClassificationProjectionService(PicerDatabase database)
         }
         foreach (var item in result.Concepts.DistinctBy(value => value.ConceptId))
             UpsertAssertion(image, item.ConceptId, "vision_model", version, "automatic", "accepted",
-                $"clip:{item.Confidence:F4}", transaction, confidence: item.Confidence);
+                $"clip:{item.Confidence:F4}", transaction, respectRejection: true, confidence: item.Confidence);
     }
 
     private void UpsertAssertion(ImageRecord image, string concept, string source, string version, string state,
         string review, string evidence, Microsoft.Data.Sqlite.SqliteTransaction transaction, bool respectRejection = false,
         float? confidence = null)
     {
-        var hash = NormalizeHash(image.ContentSha256) ?? NormalizeHash(image.Sha256);
+        // Only the current verified digest can share decisions across references.
+        // ContentSha256 may still describe the previous bytes during reindexing.
+        var hash = NormalizeHash(image.Sha256);
         using var command = database.Command($"""
             INSERT INTO image_classification_assertions(image_id,content_sha256,concept_id,source_kind,source_version,
                 assertion_state,review_state,confidence,evidence_ref,evidence_fingerprint,created_utc,updated_utc)
             SELECT $image,$sha,$concept,$source,$version,$state,$review,$confidence,$evidence,$fingerprint,$now,$now
-            {(respectRejection ? "WHERE NOT EXISTS (SELECT 1 FROM image_classification_rejections r WHERE r.concept_id=$concept AND r.source_scope IN ('vision_model','all') AND (r.image_id=$image OR ($sha IS NOT NULL AND r.content_sha256=$sha)))" : "")}
+            {(respectRejection ? "WHERE NOT EXISTS (SELECT 1 FROM image_classification_rejections r WHERE r.concept_id=$concept AND r.source_scope IN ('vision_model','all') AND (r.image_id=$image OR ($sha IS NOT NULL AND r.content_sha256=$sha AND r.owner_key=(SELECT owner_key FROM sync_image_owners WHERE image_id=$image))))" : "")}
             ON CONFLICT(image_id,concept_id,source_kind,source_version) DO UPDATE SET
                 content_sha256=excluded.content_sha256,assertion_state=excluded.assertion_state,
                 review_state=CASE WHEN image_classification_assertions.review_state IN ('rejected','accepted') THEN image_classification_assertions.review_state ELSE excluded.review_state END,

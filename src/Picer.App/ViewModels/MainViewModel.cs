@@ -255,6 +255,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         Video.SetIdentityChangedCallback(People.RefreshSharedIdentityAsync);
         Semantic = new SemanticViewModel(db, () =>
         {
+            _services.QueueImmediateRemoteSync("标签与相册提交");
             LoadTags();
             _ = ApplySearchAndFilterAsync();
             _ = LoadDirectoryTreeAsync();
@@ -298,15 +299,15 @@ public partial class MainViewModel : ObservableObject, IDisposable
             BackfillBurstGroupsAsync().Forget();
     }
 
-    public async Task RefreshFromRemoteMirrorAsync()
+    public async Task RefreshFromRemoteMirrorAsync(bool localSourceUpdate = false)
     {
-        if (_services.SyncClient is null) return;
+        if (_services.SyncClient is null && !localSourceUpdate) return;
         if (!Application.Current.Dispatcher.CheckAccess())
         {
             // The remote poller runs on a worker thread. CollectionView-backed
             // ObservableCollections must be refreshed on the WPF dispatcher or
             // switching from a partially loaded tree can throw and stop polling.
-            var operation = Application.Current.Dispatcher.InvokeAsync(RefreshFromRemoteMirrorAsync);
+            var operation = Application.Current.Dispatcher.InvokeAsync(() => RefreshFromRemoteMirrorAsync(localSourceUpdate));
             await operation.Task.Unwrap();
             return;
         }
@@ -315,7 +316,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         await ApplySearchAndFilterAsync();
         await LoadDirectoryTreeAsync();
         _ = Video.LoadAsync();
-        StatusText = "远程索引已同步";
+        StatusText = localSourceUpdate ? "照片空间更新已同步到本机" : "远程索引已同步";
     }
 
     private async Task BackfillBurstGroupsAsync()
@@ -1184,6 +1185,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         Semantic.LoadTags();
         await ApplySearchAndFilterAsync();
         StatusText = $"已更新 {images.Length} 张照片的标签；标签可直接作为搜索关键字";
+        _services.QueueImmediateRemoteSync("照片标签提交");
     }
 
     partial void OnIsIndexingChanged(bool value) => CancelIndexCommand.NotifyCanExecuteChanged();
@@ -1779,6 +1781,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         if (answer != MessageBoxResult.Yes) return;
 
         await UiWork.RunDatabaseAsync(() => SemanticEngine.DeleteAlbum(_db, albumId));
+        _services.QueueImmediateRemoteSync("删除相册提交");
         Semantic.LoadAlbums();
         SelectedDirectory = null;
         DirectoryImages.Clear();
@@ -1800,7 +1803,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             return;
         }
         var images = await UiWork.RunDatabaseAsync(() => node.AnchorImageIds.Select(id => _db.GetImage(id))
-            .Where(image => image is { Status: ImageStatus.Active } && File.Exists(image.Path)).Cast<ImageRecord>().ToArray());
+            .Where(image => image is { Status: ImageStatus.Active } && (_services.ServiceMode || File.Exists(image.Path))).Cast<ImageRecord>().ToArray());
         if (images.Length == 0) { MessageBox.Show("该场景没有当前可读取的照片。", "场景描述"); return; }
         var service = new SceneGroupDescriptionService(_db, _services.CloudVisionRepository);
         var plan = await UiWork.RunDatabaseAsync(() => service.BuildPlan(node.FullPath, images, maximumSubgroups: 5, maximumRepresentatives: 3));
@@ -1840,7 +1843,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
             "审核场景总结", MessageBoxButton.YesNo, MessageBoxImage.Question);
         if (accept != MessageBoxResult.Yes) return;
         var parent = EnumerateDirectoryNodes(DirectoryTree).FirstOrDefault(candidate => candidate.Children.Contains(node));
-        await UiWork.RunDatabaseAsync(() => service.SaveAccepted(plan, summary));
+        if(_services.ServiceMode)await SaveRemoteSceneDescriptionAsync(plan,summary,null);
+        else await UiWork.RunDatabaseAsync(() => service.SaveAccepted(plan, summary));
         _services.QueueImmediateRemoteSync("场景描述写入");
         StatusText = $"已应用场景描述：{summary.SceneName}";
         if (parent is null) return;
@@ -1867,8 +1871,16 @@ public partial class MainViewModel : ObservableObject, IDisposable
         {
             Owner = Application.Current.MainWindow
         };
-        if (window.ShowDialog() != true) return;
-        await UiWork.RunDatabaseAsync(() =>
+        var sceneOperationId=Guid.NewGuid().ToString("N");
+        window.SaveAsync=async()=>
+        {
+        if(_services.ServiceMode)
+        {
+            var description=new SceneGroupDescription(accepted?.Fingerprint??plan.Fingerprint,window.SceneTitle,window.SceneSummary,
+                [window.SceneTitle],"user","manual-edit","manual-edit-v1","accepted");
+            await SaveRemoteSceneDescriptionAsync(plan,description,accepted,sceneOperationId);
+        }
+        else await UiWork.RunDatabaseAsync(() =>
         {
             if (accepted is null)
             {
@@ -1885,6 +1897,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 service.UpdateAcceptedText(accepted.Fingerprint, window.SceneTitle, window.SceneSummary);
             }
         });
+        };
+        if(window.ShowDialog()!=true)return;
         _services.QueueImmediateRemoteSync("场景描述编辑");
         var parent = EnumerateDirectoryNodes(DirectoryTree).FirstOrDefault(candidate => candidate.Children.Contains(node));
         if (parent is not null)
@@ -1897,6 +1911,15 @@ public partial class MainViewModel : ObservableObject, IDisposable
             if (refreshed is not null) refreshed.IsSelected = true;
         }
         StatusText = $"已更新场景“{window.SceneTitle}”的标题和摘要";
+    }
+
+    private async Task SaveRemoteSceneDescriptionAsync(SceneGroupPlan plan,SceneGroupDescription description,SceneGroupDescription? baseline,string? operationId=null)
+    {
+        static SceneDescriptionText Text(SceneGroupDescription value)=>new(value.SceneName,value.Summary,value.SearchTerms,value.Provider,value.ModelVersion,value.PromptVersion);
+        var client=_services.SyncClient??throw new InvalidOperationException("照片空间尚未连接。");
+        await client.SaveSceneDescriptionAsync(_db,new(operationId??Guid.NewGuid().ToString("N"),baseline?.Fingerprint,
+            plan.Images.Select(image=>image.Id).ToArray(),plan.DirectoryPath,Text(description),baseline is null?null:Text(baseline)));
+        await _services.SyncRemoteMirrorAsync(requireMetadataSync:true);
     }
 
     private async Task DescribeUnclassifiedScenesInDirectoryAsync(DirectoryNodeViewModel directory)

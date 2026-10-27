@@ -8,7 +8,7 @@ namespace Picer.Tests.Stubs;
 /// </summary>
 public sealed class DiskBackedStorageProvider : IStorageProvider
 {
-    public string Scheme => "disk";
+    public string Scheme => "local";
 
     public IEnumerable<StorageFileInfo> EnumerateFiles(string root)
     {

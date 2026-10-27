@@ -11,17 +11,17 @@ public sealed class VideoSearchMetadata(PicerDatabase database)
         using var command = database.Command("");
         for (var i = 0; i < people.Count; i++)
         {
-            clauses.Add($"EXISTS(SELECT 1 FROM video_detected_faces f WHERE f.video_id=v.content_id AND f.assigned_person_id=$p{i} AND f.assignment_state='confirmed')");
+            clauses.Add($"EXISTS(SELECT 1 FROM video_effective_faces f WHERE f.reference_id=v.id AND f.assigned_person_id=$p{i} AND f.assignment_state='confirmed')");
             command.Parameters.AddWithValue("$p" + i, people[i]);
         }
         for (var i = 0; i < tags.Count; i++)
         {
-            clauses.Add($"EXISTS(SELECT 1 FROM video_tags t WHERE t.video_id=v.content_id AND t.tag_id=$t{i})");
+            clauses.Add($"EXISTS(SELECT 1 FROM video_effective_tags t WHERE t.video_id=v.id AND t.tag_id=$t{i})");
             command.Parameters.AddWithValue("$t" + i, tags[i]);
         }
         for (var i = 0; i < concepts.Count; i++)
         {
-            clauses.Add($"EXISTS(SELECT 1 FROM video_visual_concepts c WHERE c.video_id=v.content_id AND c.concept_id=$c{i} AND c.state IN ('accepted','suggested')) AND NOT EXISTS(SELECT 1 FROM video_visual_concepts r WHERE r.video_id=v.content_id AND r.concept_id=$c{i} AND r.state='rejected' AND r.model_version='manual')");
+            clauses.Add($"EXISTS(SELECT 1 FROM video_effective_concepts c WHERE c.video_id=v.id AND c.concept_id=$c{i} AND c.state IN ('accepted','suggested')) AND NOT EXISTS(SELECT 1 FROM video_effective_concepts r WHERE r.video_id=v.id AND r.concept_id=$c{i} AND r.state='rejected' AND r.model_version='manual')");
             command.Parameters.AddWithValue("$c" + i, concepts[i]);
         }
         command.CommandText = "SELECT v.id FROM videos v" + (clauses.Count == 0 ? "" : " WHERE " + string.Join(" AND ", clauses));
@@ -40,7 +40,7 @@ public sealed class VideoSearchMetadata(PicerDatabase database)
         command.Parameters.AddWithValue("$video", new VideoContentRepository(database).GetContentId(videoId));
         command.Parameters.AddWithValue("$tag", tagId);
         command.Transaction = transaction;
-        command.ExecuteNonQuery();
+        if (database.CanWriteLegacyVideoMetadata(videoId,transaction)) command.ExecuteNonQuery();
         database.RecordMetadataEdit("video-tag-link", videoId, tagId.ToString(System.Globalization.CultureInfo.InvariantCulture), assigned ? "1" : "0", transaction);
         transaction.Commit();
     }
@@ -60,15 +60,15 @@ public sealed class VideoSearchMetadata(PicerDatabase database)
         command.Parameters.AddWithValue("$model", modelVersion);
         command.Parameters.AddWithValue("$state", state);
         command.Transaction = transaction;
-        command.ExecuteNonQuery();
+        if (database.CanWriteLegacyVideoMetadata(videoId,transaction)) command.ExecuteNonQuery();
         database.RecordMetadataEdit("video-concept", videoId, System.Text.Json.JsonSerializer.Serialize(new[] { conceptId, modelVersion }), state, transaction);
         ownedTransaction?.Commit();
     }
 
     public IReadOnlySet<long> GetTags(long videoId)
     {
-        using var command = database.Command("SELECT tag_id FROM video_tags WHERE video_id=$id");
-        command.Parameters.AddWithValue("$id", new VideoContentRepository(database).GetContentId(videoId));
+        using var command = database.Command("SELECT tag_id FROM video_effective_tags WHERE video_id=$id");
+        command.Parameters.AddWithValue("$id", videoId);
         using var reader = command.ExecuteReader();
         var result = new HashSet<long>();
         while (reader.Read()) result.Add(reader.GetInt64(0));
@@ -77,8 +77,8 @@ public sealed class VideoSearchMetadata(PicerDatabase database)
 
     public IReadOnlySet<string> GetConcepts(long videoId)
     {
-        using var command = database.Command("SELECT DISTINCT concept_id FROM video_visual_concepts c WHERE video_id=$id AND state IN ('accepted','suggested') AND NOT EXISTS(SELECT 1 FROM video_visual_concepts r WHERE r.video_id=c.video_id AND r.concept_id=c.concept_id AND r.model_version='manual' AND r.state='rejected')");
-        command.Parameters.AddWithValue("$id", new VideoContentRepository(database).GetContentId(videoId));
+        using var command = database.Command("SELECT DISTINCT concept_id FROM video_effective_concepts c WHERE video_id=$id AND state IN ('accepted','suggested') AND NOT EXISTS(SELECT 1 FROM video_effective_concepts r WHERE r.video_id=c.video_id AND r.concept_id=c.concept_id AND r.model_version='manual' AND r.state='rejected')");
+        command.Parameters.AddWithValue("$id", videoId);
         using var reader = command.ExecuteReader();
         var result = new HashSet<string>(StringComparer.Ordinal);
         while (reader.Read()) result.Add(reader.GetString(0));

@@ -61,6 +61,7 @@ internal static class ClassificationJobCoordinator
                 progress = await UiWork.RunDatabaseAsync("classification-batch",
                     () => AppServices.ClassificationProjection.ProcessNextBatch(progress.RunId, 40, cancellationToken),
                     cancellationToken);
+                AppServices.QueueImmediateRemoteSync("分类整理批次提交");
                 Publish(progress);
                 await Task.Yield();
             }
@@ -69,6 +70,7 @@ internal static class ClassificationJobCoordinator
                 progress = await UiWork.RunDatabaseAsync("classification-finish",
                     () => AppServices.ClassificationProjection.ProcessNextBatch(progress.RunId, 40, cancellationToken),
                     cancellationToken);
+                AppServices.QueueImmediateRemoteSync("分类整理完成");
                 Publish(progress);
             }
         }

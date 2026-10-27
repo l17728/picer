@@ -6,7 +6,9 @@ if (string.IsNullOrWhiteSpace(dataRoot))
     dataRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Picer", "service-data");
 if (args.Length > 0)
 {
-    if (args[0] is "--migrate-legacy" or "--reset-account-password")
+    if (args.Length == 1 && args[0] == "--prepare-index-upgrade")
+        Environment.ExitCode = IndexUpgradePreparation.Run(dataRoot);
+    else if (args[0] is "--migrate-legacy" or "--reset-account-password")
         Environment.ExitCode = AccountAdministration.RunMigration(args, dataRoot);
     else
     {

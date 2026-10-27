@@ -46,6 +46,7 @@ public partial class IndexServiceWindow
             var publisher = new SpaceSyncPublisher(client, AppServices.Db, Path.Combine(AppPaths.DataRoot, "upload-snapshots"));
             var progress = new Progress<string>(message => HealthText.Text = message);
             await publisher.PublishAsync(progress, cancellation.Token, scope);
+            await AppServices.RefreshLocalSpacePublisherConfigurationAsync(cancellation.Token);
             HealthText.Text = $"索引已上传到“{session.SpaceName}”。其他电脑登录同一账号并选择此空间即可查看。";
             if (selection.ServeMedia)
             {

@@ -15,12 +15,28 @@ public sealed class ImageRecordPurger(PicerDatabase db)
         if (requireMissing && record.Status != ImageStatus.Missing) return false;
         Picer.Core.Gateway.PlayableMediaCache.Purge(Path.GetDirectoryName(db.DatabasePath)!);
         var hash = record.ContentSha256 ?? record.Sha256;
+        // Explicit index purge forgets the last owned human decision cache.
+        // Internal physical-reference deletion may retain it for content recovery.
+        using(var ownedCache=db.Command("""
+            DELETE FROM content_derivatives
+            WHERE content_sha256=$hash
+              AND kind IN ('face_person_assignments','face_person_rejections','face_review_states','face_corrections')
+              AND json_extract(item_key,'$[#-1]')=(SELECT owner_key FROM sync_image_owners WHERE image_id=$id)
+              AND NOT EXISTS(SELECT 1 FROM images i JOIN sync_image_owners o ON o.image_id=i.id
+                  WHERE i.id<>$id AND COALESCE(i.content_sha256,i.sha256)=content_derivatives.content_sha256
+                    AND o.owner_key=json_extract(content_derivatives.item_key,'$[#-1]'));
+            """))
+        {
+            ownedCache.Parameters.AddWithValue("$hash",(object?)hash??DBNull.Value);
+            ownedCache.Parameters.AddWithValue("$id",id);ownedCache.ExecuteNonQuery();
+        }
         var faces = new List<long>();
         using (var command = db.Command("SELECT id FROM detected_faces WHERE image_id=$id"))
         {
             command.Parameters.AddWithValue("$id", id);
             using var reader = command.ExecuteReader(); while (reader.Read()) faces.Add(reader.GetInt64(0));
         }
+        SpaceIdentityPurge.Photo(db, id);
         using (var command = db.Command("""
             DELETE FROM face_person_prototypes WHERE person_id IN (
                 SELECT person_id FROM face_person_assignments WHERE face_id IN (SELECT id FROM detected_faces WHERE image_id=$id));

@@ -34,16 +34,22 @@ public static class SemanticEngine
 
     public static void DeleteTag(PicerDatabase db, long tagId)
     {
+        using var transaction=db.BeginTransaction();
+        var retirements=db.RecordCatalogRetirement("tag",tagId,transaction);
         using (var tx = db.Command("DELETE FROM image_tags WHERE tag_id = $id"))
         {
+            tx.Transaction=transaction;
             tx.Parameters.AddWithValue("$id", tagId);
             tx.ExecuteNonQuery();
         }
         using (var cmd = db.Command("DELETE FROM tags WHERE id = $id"))
         {
+            cmd.Transaction=transaction;
             cmd.Parameters.AddWithValue("$id", tagId);
             cmd.ExecuteNonQuery();
         }
+        db.SealCatalogRetirements(retirements,transaction);
+        transaction.Commit();
     }
 
     public static void AssignTag(PicerDatabase db, long imageId, long tagId)
@@ -115,16 +121,22 @@ public static class SemanticEngine
 
     public static void DeleteAlbum(PicerDatabase db, long albumId)
     {
+        using var transaction=db.BeginTransaction();
+        var retirements=db.RecordCatalogRetirement("album",albumId,transaction);
         using (var cmd = db.Command("DELETE FROM album_images WHERE album_id = $id"))
         {
+            cmd.Transaction=transaction;
             cmd.Parameters.AddWithValue("$id", albumId);
             cmd.ExecuteNonQuery();
         }
         using (var cmd = db.Command("DELETE FROM albums WHERE id = $id"))
         {
+            cmd.Transaction=transaction;
             cmd.Parameters.AddWithValue("$id", albumId);
             cmd.ExecuteNonQuery();
         }
+        db.SealCatalogRetirements(retirements,transaction);
+        transaction.Commit();
     }
 
     public static void AddToAlbum(PicerDatabase db, long albumId, long imageId, bool recordEdit = true)

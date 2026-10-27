@@ -195,6 +195,7 @@ public partial class SemanticViewModel : ObservableObject
         await UiWork.RunDatabaseAsync(() => SemanticEngine.DeleteTag(_db, selected.Tag.Id));
         Tags.Remove(selected);
         StatusText = "标签已删除";
+        _changed?.Invoke();
     }
 
     [RelayCommand]

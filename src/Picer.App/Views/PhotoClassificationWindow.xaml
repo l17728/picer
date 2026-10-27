@@ -50,8 +50,11 @@
         <TabItem Header="用户已确认" Tag="confirmed"/>
         <TabItem Header="无分类" Tag="unclassified"/>
         <TabItem Header="已忽略" Tag="ignored"/>
+        <TabItem Header="历史拒绝待核对" Tag="ownership"/>
       </TabControl>
       <DockPanel Grid.Row="1" Margin="8">
+      <TextBlock x:Name="OwnershipHelp" DockPanel.Dock="Top" Visibility="Collapsed" TextWrapping="Wrap" Margin="0,4,0,8"
+                 Text="这些旧拒绝无法确定属于哪台来源电脑，暂未应用。选择照片后，点击“不是此类”保留该来源的拒绝，或点击“恢复为待确认”允许重新建议；也可明确确认或更正分类。决定只应用于该来源及其相同内容的引用。"/>
       <WrapPanel DockPanel.Dock="Bottom" Margin="0,8,0,0">
         <Button Content="确认分类" Click="Confirm_Click" Padding="12,5"
                 AutomationProperties.AutomationId="ConfirmClassification"/>
@@ -69,7 +72,8 @@
       <ListView x:Name="Items" SelectionMode="Extended" AutomationProperties.AutomationId="ClassificationItems">
         <ListView.View><GridView>
           <GridViewColumn Header="预览" Width="110"><GridViewColumn.CellTemplate><DataTemplate>
-            <Image Source="{Binding PreviewPath}" Width="92" Height="62" Stretch="UniformToFill"/>
+            <Image Source="{Binding PreviewPath}" Width="92" Height="62" Stretch="UniformToFill"
+                   Loaded="Preview_Loaded"/>
           </DataTemplate></GridViewColumn.CellTemplate></GridViewColumn>
           <GridViewColumn Header="分类" Width="150" DisplayMemberBinding="{Binding DisplayName}"/>
           <GridViewColumn Header="状态/来源" Width="190" DisplayMemberBinding="{Binding SourceText}"/>

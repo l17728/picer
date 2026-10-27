@@ -55,7 +55,7 @@ public sealed record SyncDirectoryClassificationRequest(IReadOnlyDictionary<stri
 public sealed record ClipTextRequest(string Text);
 public sealed record ClipImageRequest(string ContentSha256);
 public sealed record ClassificationReviewRequest(long ImageId, string ConceptId, string? NewConceptId = null);
-public sealed record ClassificationClusterSettingsRequest(bool Automatic, float ManualThreshold);
+public sealed record ClassificationClusterSettingsRequest(bool Automatic, float ManualThreshold, long? ExpectedVersion = null,string? ExpectedEpoch=null,string? ModelVersion=null);
 public sealed record AlbumImageLink(long AlbumId, long ImageId);
 public sealed record ImageTagLink(long ImageId, long TagId);
 
@@ -1015,7 +1015,7 @@ async function load(){const [c,g]=await Promise.all([fetch('/api/service/v1/capa
             try
             {
                 using var connection = db.OpenIndependentConnection();
-                return Results.Json(connection.MergeMetadataEdits(edits));
+                return Results.Json(connection.AcceptMetadataEdits(edits));
             }
             catch (ArgumentException) { return Results.BadRequest(new { error = "invalid_metadata_edit" }); }
         });
@@ -1274,16 +1274,104 @@ async function load(){const [c,g]=await Promise.all([fetch('/api/service/v1/capa
         });
         app.MapGet("/api/service/v1/classification/latest", () =>
             Results.Ok(new ClassificationProjectionService(db).GetLatestRun()));
+        app.MapPost("/api/service/v1/scenes/edit", (SceneDescriptionMutation request) =>
+        {
+            using var sceneDatabase=db.OpenIndependentConnection();
+            try { return Results.Ok(new { fingerprint=new SceneDescriptionMutationService(sceneDatabase).Apply(request) }); }
+            catch(ArgumentException) { return Results.BadRequest(new {error="invalid_scene_description"}); }
+            catch(InvalidOperationException exception) when(exception.Message is "scene_description_changed" or "space_epoch_reset_required")
+            { return Results.Conflict(new {error=exception.Message}); }
+        });
+        var faceOrganizationGate = new SemaphoreSlim(1, 1);
+        // No WaitHandle is allocated. Keep the managed gate alive for an in-flight
+        // computation that may finish after the host's shutdown deadline.
+        app.MapPost("/api/service/v1/faces/training/apply-learned", (LearnedTrainingMutation request) =>
+        {
+            if (!faceOrganizationGate.Wait(0)) return Results.Conflict(new { error = "face_organization_busy" });
+            try
+            {
+                using var faceDatabase = db.OpenIndependentConnection();
+                new TrainingArtifactMutationService(faceDatabase).ApplyLearned(request);
+                return Results.Ok();
+            }
+            catch (Exception exception) when (exception is ArgumentException or JsonException || exception is Microsoft.Data.Sqlite.SqliteException { SqliteErrorCode: 19 })
+            { return Results.BadRequest(new { error = "invalid_training_artifact" }); }
+            catch (InvalidOperationException exception) when (exception.Message is "space_epoch_reset_required" or "training_artifact_changed" or "training_artifact_person_mapping_missing")
+            { return Results.Conflict(new { error = exception.Message }); }
+            finally { faceOrganizationGate.Release(); }
+        });
+        app.MapPost("/api/service/v1/faces/training/apply", (TrainingArtifactMutation request) =>
+        {
+            if (!faceOrganizationGate.Wait(0)) return Results.Conflict(new { error = "face_organization_busy" });
+            try
+            {
+                using var faceDatabase = db.OpenIndependentConnection();
+                new TrainingArtifactMutationService(faceDatabase).Apply(request);
+                return Results.Ok();
+            }
+            catch (Exception exception) when (exception is ArgumentException or JsonException || exception is Microsoft.Data.Sqlite.SqliteException { SqliteErrorCode: 19 })
+            { return Results.BadRequest(new { error = "invalid_training_artifact" }); }
+            catch (InvalidOperationException exception) when (exception.Message is "space_epoch_reset_required" or "training_artifact_changed" or "training_artifact_person_mapping_missing")
+            { return Results.Conflict(new { error = exception.Message }); }
+            finally { faceOrganizationGate.Release(); }
+        });
+        app.MapPost("/api/service/v1/faces/candidate/remove", (FaceCandidateRemovalRequest request) =>
+        {
+            if (!faceOrganizationGate.Wait(0)) return Results.Conflict(new { error = "face_organization_busy" });
+            try
+            {
+                using var faceDatabase = db.OpenIndependentConnection();
+                new FaceOrganizationMutationService(faceDatabase).RemoveCandidate(request);
+                return Results.Ok();
+            }
+            catch (ArgumentException) { return Results.BadRequest(new { error = "invalid_face_candidate" }); }
+            catch (InvalidOperationException exception) when (exception.Message is "space_epoch_reset_required" or "face_candidate_changed")
+            { return Results.Conflict(new { error = exception.Message }); }
+            finally { faceOrganizationGate.Release(); }
+        });
+        app.MapPost("/api/service/v1/faces/organize", async (FaceOrganizationRequest request, CancellationToken cancellationToken) =>
+        {
+            if (!await faceOrganizationGate.WaitAsync(0, cancellationToken))
+                return Results.Conflict(new { error = "face_organization_busy" });
+            try
+            {
+                using var faceDatabase = db.OpenIndependentConnection();
+                return Results.Ok(await Task.Run(() => new FaceOrganizationMutationService(faceDatabase).Apply(request, cancellationToken), cancellationToken));
+            }
+            catch (ArgumentException) { return Results.BadRequest(new { error = "invalid_face_organization" }); }
+            catch (InvalidOperationException exception) when (exception.Message == "space_epoch_reset_required")
+            { return Results.Conflict(new { error = exception.Message }); }
+            finally { faceOrganizationGate.Release(); }
+        });
         app.MapGet("/api/service/v1/classification/clustering/settings", () =>
-            Results.Ok(new ContentSemanticClusterService(db).GetSettings()));
+        {
+            using var settingsDatabase=db.OpenIndependentConnection();
+            return Results.Ok(new ContentSemanticClusterService(settingsDatabase).GetAuthoritativeSettings());
+        });
         app.MapGet("/api/service/v1/classification/clustering/preview", (float? threshold) =>
-            Results.Ok(new ContentSemanticClusterService(db).Preview(threshold ?? 0.82f)));
+        {
+            using var settingsDatabase=db.OpenIndependentConnection();
+            return Results.Ok(new ContentSemanticClusterService(settingsDatabase).Preview(threshold ?? 0.82f));
+        });
         app.MapPost("/api/service/v1/classification/clustering/settings", (ClassificationClusterSettingsRequest request) =>
         {
-            var clusters = new ContentSemanticClusterService(db);
-            var settings = clusters.SaveSettings(request.Automatic, request.ManualThreshold);
-            var result = clusters.RebuildLatest(settings.EffectiveThreshold);
-            return Results.Ok(new { settings, result });
+            if (request.ExpectedVersion is null || request.ExpectedEpoch is null) return Results.Json(new { error="cluster_preference_baseline_required" },statusCode:428);
+            if (!float.IsFinite(request.ManualThreshold) || request.ManualThreshold is <0.70f or >0.95f || request.ExpectedVersion<0)
+                return Results.BadRequest(new { error="invalid_cluster_preference" });
+            using var settingsDatabase=db.OpenIndependentConnection();
+            var clusters = new ContentSemanticClusterService(settingsDatabase);
+            try
+            {
+                var settings = clusters.SaveSettings(request.Automatic, request.ManualThreshold,true,request.ExpectedVersion,expectedEpoch:request.ExpectedEpoch,expectedModelVersion:request.ModelVersion);
+                var result = clusters.RebuildConfigured(settings);
+                return Results.Ok(new { settings, result });
+            }
+            catch (InvalidOperationException exception) when (exception.Message=="metadata_conflict_pending")
+            { return Results.Conflict(new { error="metadata_conflict_pending" }); }
+            catch (InvalidOperationException exception) when (exception.Message=="space_epoch_reset_required")
+            { return Results.Conflict(new { error="space_epoch_reset_required" }); }
+            catch (InvalidOperationException exception) when (exception.Message=="cluster_model_changed")
+            { return Results.Conflict(new { error="cluster_model_changed" }); }
         });
         app.MapGet("/api/service/v1/classification/items", (string? view, int? limit) =>
         {
@@ -1298,6 +1386,9 @@ async function load(){const [c,g]=await Promise.all([fetch('/api/service/v1/capa
         });
         app.MapPost("/api/service/v1/classification/begin", () =>
             Results.Ok(new ClassificationProjectionService(db).BeginOrResume()));
+        app.MapPost("/api/service/v1/classification/repair-screenshots", (CancellationToken token) =>
+            Results.Ok(new { repairedImages = new ClassificationProjectionService(db)
+                .RepairObsoleteScreenshotClassifications(token) }));
         app.MapPost("/api/service/v1/classification/process/{runId}", async (string runId, int? batchSize,
             string? agentId, CancellationToken token) =>
         {
@@ -1495,17 +1586,27 @@ async function load(){const [c,g]=await Promise.all([fetch('/api/service/v1/capa
                     // that auto-index.  Update first to preserve manual person
                     // assignments, then insert only when the row is new.
                     var suggestion = matcher.Match(face.Embedding, face.Confidence, face.Width * face.Height);
-                    using var update = db.Command("UPDATE video_detected_faces SET video_id=$video,timestamp_seconds=$time,model_version=$model,box_x=$x,box_y=$y,box_width=$w,box_height=$h,confidence=$confidence,embedding=$embedding,suggested_person_id=CASE WHEN assignment_state IS NULL THEN $person ELSE suggested_person_id END,match_confidence=CASE WHEN assignment_state IS NULL THEN $match ELSE match_confidence END WHERE keyframe_id=$keyframe AND ordinal=$ordinal AND model_version=$model");
-                    update.Transaction = transaction;
+                    using var update = db.Command("UPDATE video_detected_faces SET video_id=$video,timestamp_seconds=$time,model_version=$model,box_x=$x,box_y=$y,box_width=$w,box_height=$h,confidence=$confidence,embedding=$embedding,suggested_person_id=CASE WHEN assignment_state IS NULL THEN $person ELSE suggested_person_id END,match_confidence=CASE WHEN assignment_state IS NULL THEN $match ELSE match_confidence END WHERE keyframe_id=$keyframe AND ordinal=$ordinal AND model_version=$model AND owner_key=$owner");
+                    update.Transaction = transaction; update.Parameters.AddWithValue("$owner",db.GetVideoOwnerKey(id,transaction));
                     update.Parameters.AddWithValue("$video", new VideoContentRepository(db).GetContentId(id)); update.Parameters.AddWithValue("$keyframe", face.KeyframeId!.Value); update.Parameters.AddWithValue("$time", face.TimestampSeconds ?? 0); update.Parameters.AddWithValue("$model", faceResult.ModelVersion); update.Parameters.AddWithValue("$x", face.X); update.Parameters.AddWithValue("$y", face.Y); update.Parameters.AddWithValue("$w", face.Width); update.Parameters.AddWithValue("$h", face.Height); update.Parameters.AddWithValue("$confidence", face.Confidence); update.Parameters.AddWithValue("$embedding", face.Embedding is null ? DBNull.Value : EmbeddingBytes(face.Embedding)); update.Parameters.AddWithValue("$person", suggestion.PersonId is null ? DBNull.Value : suggestion.PersonId.Value); update.Parameters.AddWithValue("$match", suggestion.Score is null ? DBNull.Value : suggestion.Score.Value); update.Parameters.AddWithValue("$ordinal", face.Ordinal);
                     if (update.ExecuteNonQuery() == 0)
                     {
-                        using var insert = db.Command("INSERT INTO video_detected_faces(video_id,keyframe_id,timestamp_seconds,ordinal,model_version,box_x,box_y,box_width,box_height,confidence,embedding,suggested_person_id,match_confidence,created_utc) VALUES($video,$keyframe,$time,$ordinal,$model,$x,$y,$w,$h,$confidence,$embedding,$person,$match,$created)");
-                        insert.Transaction = transaction;
+                        using var insert = db.Command("INSERT INTO video_detected_faces(video_id,keyframe_id,timestamp_seconds,ordinal,owner_key,model_version,box_x,box_y,box_width,box_height,confidence,embedding,suggested_person_id,match_confidence,created_utc) VALUES($video,$keyframe,$time,$ordinal,$owner,$model,$x,$y,$w,$h,$confidence,$embedding,$person,$match,$created)");
+                        insert.Transaction = transaction; insert.Parameters.AddWithValue("$owner",db.GetVideoOwnerKey(id,transaction));
                         insert.Parameters.AddWithValue("$video", new VideoContentRepository(db).GetContentId(id)); insert.Parameters.AddWithValue("$keyframe", face.KeyframeId.Value); insert.Parameters.AddWithValue("$time", face.TimestampSeconds ?? 0); insert.Parameters.AddWithValue("$ordinal", face.Ordinal); insert.Parameters.AddWithValue("$model", faceResult.ModelVersion); insert.Parameters.AddWithValue("$x", face.X); insert.Parameters.AddWithValue("$y", face.Y); insert.Parameters.AddWithValue("$w", face.Width); insert.Parameters.AddWithValue("$h", face.Height); insert.Parameters.AddWithValue("$confidence", face.Confidence); insert.Parameters.AddWithValue("$embedding", face.Embedding is null ? DBNull.Value : EmbeddingBytes(face.Embedding)); insert.Parameters.AddWithValue("$person", suggestion.PersonId is null ? DBNull.Value : suggestion.PersonId.Value); insert.Parameters.AddWithValue("$match", suggestion.Score is null ? DBNull.Value : suggestion.Score.Value); insert.Parameters.AddWithValue("$created", DateTime.UtcNow.ToString("o")); insert.ExecuteNonQuery();
                     }
                 }
-                using (var updateStatus = db.Command("UPDATE videos SET person_analysis_status='completed',person_analyzed_utc=$now WHERE content_id=(SELECT content_id FROM videos WHERE id=$video)"))
+                using(var rejected=db.Command("""
+                    UPDATE video_detected_faces SET suggested_person_id=NULL,match_confidence=NULL
+                    WHERE id IN (SELECT id FROM video_effective_faces WHERE reference_id=$video)
+                        AND suggested_person_id IS NOT NULL AND EXISTS(
+                            SELECT 1 FROM video_face_person_rejections r WHERE r.video_face_id=video_detected_faces.id
+                                AND r.person_id=video_detected_faces.suggested_person_id);
+                    """))
+                {
+                    rejected.Transaction=transaction;rejected.Parameters.AddWithValue("$video",id);rejected.ExecuteNonQuery();
+                }
+                using (var updateStatus = db.Command("UPDATE videos SET person_analysis_status='completed',person_analyzed_utc=$now WHERE id IN (SELECT video_id FROM sync_video_owners WHERE content_id=(SELECT content_id FROM videos WHERE id=$video) AND owner_key=(SELECT owner_key FROM sync_video_owners WHERE video_id=$video))"))
                 {
                     updateStatus.Transaction = transaction;
                     updateStatus.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("o"));

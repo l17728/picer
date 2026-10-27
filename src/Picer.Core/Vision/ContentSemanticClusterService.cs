@@ -6,7 +6,7 @@ namespace Picer.Core.Vision;
 
 public sealed record ContentClusterResult(int Considered, int ClusterCount, int ClusteredImages);
 public sealed record ContentClusterSettings(bool Automatic, float ManualThreshold, float RecommendedThreshold,
-    float EffectiveThreshold);
+    float EffectiveThreshold, long Version = 0, string? OperationId = null, string? Epoch = null, string? ModelVersion = null);
 public sealed record ContentClusterPreview(float Threshold, int EstimatedClusters, int EstimatedClusteredImages);
 
 /// <summary>Builds deterministic, multi-label-aware visual groups from the persisted CLIP index.</summary>
@@ -32,9 +32,9 @@ public sealed class ContentSemanticClusterService(PicerDatabase database)
 
     public ContentClusterResult Rebuild(string modelVersion, float? similarityThreshold = null, int minimumSize = 3)
     {
-        var effectiveThreshold = similarityThreshold ?? GetSettings().EffectiveThreshold;
+        var effectiveThreshold = similarityThreshold ?? GetSettingsForModel(modelVersion).EffectiveThreshold;
         var items = Load(modelVersion);
-        var existing = LoadExistingAssignments();
+        var existing = LoadExistingAssignments(modelVersion);
         var drafts = new List<Draft>();
         foreach (var bucket in items.Where(item => item.Concepts.Length > 0)
                      .GroupBy(item => item.Signature))
@@ -62,9 +62,10 @@ public sealed class ContentSemanticClusterService(PicerDatabase database)
         return new(items.Count, drafts.Count, drafts.Sum(cluster => cluster.Members.Count));
     }
 
-    private Dictionary<long, (string ClusterKey, string Signature)> LoadExistingAssignments()
+    private Dictionary<long, (string ClusterKey, string Signature)> LoadExistingAssignments(string modelVersion)
     {
-        using var command = database.Command("SELECT image_id,cluster_key,semantic_signature FROM semantic_content_cluster_members");
+        using var command = database.Command("SELECT m.image_id,m.cluster_key,m.semantic_signature FROM semantic_content_cluster_members m JOIN semantic_content_clusters c ON c.cluster_key=m.cluster_key WHERE c.model_version=$model");
+        command.Parameters.AddWithValue("$model", modelVersion);
         using var reader = command.ExecuteReader(); var result = new Dictionary<long, (string, string)>();
         while (reader.Read()) result[reader.GetInt64(0)] = (reader.GetString(1), reader.GetString(2));
         return result;
@@ -155,13 +156,15 @@ public sealed class ContentSemanticClusterService(PicerDatabase database)
     private void Save(string modelVersion, IReadOnlyList<Draft> clusters)
     {
         using var transaction = database.BeginTransaction();
-        foreach (var sql in new[] { "DELETE FROM image_classification_assertions WHERE source_kind='vision_model' AND source_version='semantic-cluster-v1'", "DELETE FROM semantic_content_clusters" })
-        { using var clear = database.Command(sql); clear.Transaction = transaction; clear.ExecuteNonQuery(); }
+        foreach (var sql in new[] {
+            "DELETE FROM image_classification_assertions WHERE source_kind='vision_model' AND source_version='semantic-cluster-v1' AND evidence_ref IN (SELECT cluster_key FROM semantic_content_clusters WHERE model_version=$model)",
+            "DELETE FROM semantic_content_clusters WHERE model_version=$model" })
+        { using var clear = database.Command(sql); clear.Transaction = transaction; clear.Parameters.AddWithValue("$model", modelVersion); clear.ExecuteNonQuery(); }
         var now = DateTime.UtcNow.ToString("O");
         foreach (var cluster in clusters)
         {
             var ids = cluster.Members.Select(item => item.ImageId).Order().ToArray();
-            var key = cluster.ExistingKey ?? Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(string.Join(',', ids.Take(8)))))[..16].ToLowerInvariant();
+            var key = cluster.ExistingKey ?? Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(modelVersion + "\n" + string.Join(',', ids.Take(8)))))[..16].ToLowerInvariant();
             var common = cluster.Members.SelectMany(item => item.Concepts).GroupBy(value => value)
                 .OrderByDescending(group => group.Count()).ThenBy(group => group.Key).Take(2)
                 .Select(group => VisualConceptCatalog.DisplayName(group.Key)).ToArray();
@@ -190,15 +193,30 @@ public sealed class ContentSemanticClusterService(PicerDatabase database)
         return string.IsNullOrWhiteSpace(model) ? new(0, 0, 0) : Rebuild(model, similarityThreshold, minimumSize);
     }
 
+    public ContentClusterResult RebuildConfigured(ContentClusterSettings settings)
+    {
+        if (settings.ModelVersion is null) return new(0,0,0);
+        using var query=database.Command("SELECT 1 FROM clip_image_embeddings WHERE model_version=$model LIMIT 1");
+        query.Parameters.AddWithValue("$model",settings.ModelVersion);
+        return query.ExecuteScalar() is null ? new(0,0,0) : Rebuild(settings.ModelVersion,settings.EffectiveThreshold);
+    }
+
     private string? LatestModel()
     {
-        using var command = database.Command("SELECT model_version FROM clip_image_embeddings GROUP BY model_version ORDER BY COUNT(*) DESC LIMIT 1");
+        using var command = database.Command("SELECT model_version FROM clip_image_embeddings GROUP BY model_version ORDER BY COUNT(*) DESC,model_version LIMIT 1");
         return command.ExecuteScalar() as string;
     }
 
-    private float RecommendThreshold()
+    private string? SettingsModel()
     {
-        var model = LatestModel(); if (model is null) return 0.82f;
+        if (LatestModel() is { } model) return model;
+        using var command=database.Command("SELECT model_version FROM semantic_content_clusters GROUP BY model_version ORDER BY SUM(member_count) DESC,model_version LIMIT 1");
+        return command.ExecuteScalar() as string;
+    }
+
+    private float RecommendThreshold(string? model)
+    {
+        if (model is null) return 0.82f;
         var nearest = new List<float>();
         foreach (var bucket in Load(model).Where(item => item.Concepts.Length > 0).GroupBy(item => item.Signature))
         {
@@ -215,30 +233,66 @@ public sealed class ContentSemanticClusterService(PicerDatabase database)
         var percentile = nearest[(int)Math.Floor((nearest.Count - 1) * 0.60)];
         return Math.Clamp(MathF.Round((percentile - 0.02f) * 100) / 100, 0.76f, 0.90f);
     }
-    public ContentClusterSettings GetSettings()
+    public ContentClusterSettings GetSettings() => GetSettingsForModel(SettingsModel());
+
+    public ContentClusterSettings GetSettingsForModel(string? model)
     {
-        using var command = database.Command("SELECT automatic,manual_threshold,recommended_threshold,recommendation_fingerprint FROM semantic_cluster_settings WHERE id=1");
-        using var reader = command.ExecuteReader();
-        var automatic = true; var manual = 0.82f; var recommended = 0.82f; var storedFingerprint = "";
-        if (reader.Read()) { automatic = reader.GetBoolean(0); manual = reader.GetFloat(1); recommended = reader.GetFloat(2); storedFingerprint = reader.GetString(3); }
-        reader.Close();
-        var fingerprint = EmbeddingFingerprint();
-        if (!string.Equals(fingerprint, storedFingerprint, StringComparison.Ordinal))
+        var fingerprint=EmbeddingFingerprint(model);
+        using var cached=database.Command("SELECT fingerprint FROM semantic_cluster_model_recommendations WHERE model_version=$model");
+        cached.Parameters.AddWithValue("$model",model??"");
+        if (cached.ExecuteScalar() as string != fingerprint)
         {
-            recommended = RecommendThreshold();
-            using var update = database.Command("UPDATE semantic_cluster_settings SET recommended_threshold=$recommended,recommendation_fingerprint=$fingerprint WHERE id=1");
-            update.Parameters.AddWithValue("$recommended", recommended); update.Parameters.AddWithValue("$fingerprint", fingerprint); update.ExecuteNonQuery();
+            var recommended=RecommendThreshold(model);
+            using var update=database.Command("""
+                INSERT INTO semantic_cluster_model_recommendations(model_version,recommended_threshold,fingerprint) VALUES($model,$threshold,$fingerprint)
+                ON CONFLICT(model_version) DO UPDATE SET recommended_threshold=excluded.recommended_threshold,fingerprint=excluded.fingerprint
+                """);
+            update.Parameters.AddWithValue("$model",model??"");update.Parameters.AddWithValue("$threshold",recommended);
+            update.Parameters.AddWithValue("$fingerprint",fingerprint);update.ExecuteNonQuery();
         }
-        return new(automatic, manual, recommended, automatic ? recommended : manual);
+        using var transaction=database.BeginReadTransaction();
+        return GetSettings(transaction,model);
     }
 
-    public ContentClusterSettings SaveSettings(bool automatic, float manualThreshold)
+    private ContentClusterSettings GetSettings(Microsoft.Data.Sqlite.SqliteTransaction transaction,string? model)
     {
+        var automatic=true;var manual=0.82f;
+        if (model is null)
+        {
+            using var legacy=database.Command("SELECT automatic,manual_threshold FROM semantic_cluster_settings WHERE id=1");
+            legacy.Transaction=transaction;using var row=legacy.ExecuteReader();
+            if(row.Read()) { automatic=row.GetBoolean(0);manual=row.GetFloat(1); }
+        }
+        using var command=database.Command("SELECT recommended_threshold FROM semantic_cluster_model_recommendations WHERE model_version=$model");
+        command.Transaction=transaction;
+        command.Parameters.AddWithValue("$model",model??"");
+        var recommended=command.ExecuteScalar() is double value?(float)value:0.82f;
+        var edit=database.GetClusterPreferenceEdit(transaction,model);
+        if(edit is not null && PicerDatabase.TryReadClusterPreference(edit.Value,out var preference))
+        { automatic=preference!.Automatic;manual=preference.ManualThreshold; }
+        return new(automatic,manual,recommended,automatic?recommended:manual,edit is null?0:Math.Max(edit.ServerVersion,edit.BaseVersion),edit?.OperationId,ModelVersion:model);
+    }
+
+    public ContentClusterSettings GetAuthoritativeSettings()
+    {
+        var model=SettingsModel();
+        database.PromoteClusterPreference(model);
+        _=GetSettingsForModel(model);
+        using var transaction=database.BeginReadTransaction();
+        using var epoch=database.Command("SELECT epoch FROM sync_space_state WHERE id=1 AND state='active'"); epoch.Transaction=transaction;
+        var current=epoch.ExecuteScalar() as string ?? throw new InvalidOperationException("space_fenced");
+        return GetSettings(transaction,model) with { Epoch=current };
+    }
+
+    public ContentClusterSettings SaveSettings(bool automatic, float manualThreshold,bool authoritative=false,long? expectedVersion=null,string? expectedOperationId=null,string? expectedEpoch=null,string? expectedModelVersion=null)
+    {
+        if (!float.IsFinite(manualThreshold)) throw new ArgumentException("invalid_cluster_preference");
         var bounded = Math.Clamp(manualThreshold, 0.70f, 0.95f);
-        using var command = database.Command("UPDATE semantic_cluster_settings SET automatic=$automatic,manual_threshold=$threshold,updated_utc=$now WHERE id=1");
-        command.Parameters.AddWithValue("$automatic", automatic); command.Parameters.AddWithValue("$threshold", bounded);
-        command.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("O")); command.ExecuteNonQuery();
-        return GetSettings();
+        var model=SettingsModel();
+        if (expectedVersion is not null && model!=expectedModelVersion) throw new InvalidOperationException("cluster_model_changed");
+        if (!database.SaveClusterPreference(automatic,bounded,authoritative,expectedVersion,expectedOperationId,expectedEpoch,model))
+            throw new InvalidOperationException("metadata_conflict_pending");
+        return GetSettingsForModel(model);
     }
 
     public ContentClusterPreview Preview(float threshold)
@@ -259,9 +313,10 @@ public sealed class ContentSemanticClusterService(PicerDatabase database)
         return new(bounded, clusters, members);
     }
 
-    private string EmbeddingFingerprint()
+    private string EmbeddingFingerprint(string? model)
     {
-        using var command = database.Command("SELECT COUNT(*) || ':' || COALESCE(MAX(indexed_utc),'') FROM clip_image_embeddings");
+        using var command = database.Command("SELECT COUNT(*) || ':' || COALESCE(MAX(indexed_utc),'') FROM clip_image_embeddings WHERE model_version=$model");
+        command.Parameters.AddWithValue("$model",(object?)model??DBNull.Value);
         return command.ExecuteScalar()?.ToString() ?? "0:";
     }
 

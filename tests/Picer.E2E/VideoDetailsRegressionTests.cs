@@ -10,6 +10,59 @@ namespace Picer.E2E;
 public sealed class VideoDetailsRegressionTests
 {
     [Fact]
+    public void ClearVideoAssignmentReturnsTheSelectedFaceToUnassignedAndQueuesSync()
+    {
+        var root=Path.Combine(Path.GetTempPath(),"picer-video-unassign-"+Guid.NewGuid().ToString("N"));
+        Exception? failure=null;
+        var thread=new Thread(()=>
+        {
+            var dispatcher=Dispatcher.CurrentDispatcher;
+            dispatcher.BeginInvoke(new Action(async ()=>
+            {
+                try
+                {
+                    using var database=new PicerDatabase(Path.Combine(root,"picer.db"));
+                    var source=database.AddSource(root);var repository=new VideoRepository(database);
+                    repository.UpsertMirrored(new(1,source.Id,Path.Combine(root,"video.mp4"),10,DateTime.UnixEpoch,10,100,100,null,null,"active"),source.Id);
+                    database.UpsertMirroredPerson(new(1,"视频命令测试人物",0,0));
+                    var now=DateTime.UtcNow.ToString("O");
+                    database.UpsertMirroredVideoMetadata(new Picer.Core.Gateway.GatewayMetadata([],[],[]) with
+                    {
+                        VideoKeyframes=[new(10,1,0,"",0)],
+                        VideoFaces=[new(11,1,10,0,0,0,0,10,10,0.9,null,null,null,1,"confirmed",now,now) { ModelVersion="test-model" }]
+                    });
+                    var timeline=new VideoFaceTimelineService(database,new ExistingVideoFacesAnalyzer(),new Picer.Core.Vision.VisionAnalysisRepository(database));
+                    var queued=0;
+                    var services=new Picer.App.ClientServices { Db=database,Videos=repository,PublishChanges=_=>queued++ };
+                    var model=new VideoViewModel(repository,new VideoIndexService(database,repository),null,
+                        faceTimeline:timeline,peopleService:new PeopleService(database),services:services);
+                    await model.LoadAsync();model.SelectedVideo=Assert.Single(model.Videos);
+                    await WaitUntilAsync(()=>model.VideoFaces.Count==1);
+                    model.SelectedVideoFace=Assert.Single(model.VideoFaces);
+                    await model.ClearVideoFaceAssignmentCommand.ExecuteAsync(null);
+                    Assert.Null(Assert.Single(database.GetAllMirroredVideoFaces()).AssignedPersonId);
+                    Assert.Equal("unassigned",PicerDatabase.ParseFaceManualState(database.GetMetadataEdits().Single(edit=>edit.Kind=="video-face-state").Value).State);
+                    Assert.Contains("移回待分类",model.StatusText);Assert.True(queued>0);
+                }
+                catch(Exception exception) { failure=exception; }
+                finally { dispatcher.BeginInvokeShutdown(DispatcherPriority.Background); }
+            }));
+            Dispatcher.Run();
+        }) { IsBackground=true };
+        thread.SetApartmentState(ApartmentState.STA);thread.Start();
+        Assert.True(thread.Join(TimeSpan.FromSeconds(30)),"视频人物撤回命令测试超时");
+        try { Assert.Null(failure); } finally { if(Directory.Exists(root)) Directory.Delete(root,true); }
+    }
+
+    private sealed class ExistingVideoFacesAnalyzer : Picer.Core.Vision.IImageFaceAnalyzer
+    {
+        public string AnalyzerName=>"test";
+        public string ModelVersion=>"test-model";
+        public Task<Picer.Core.Vision.FaceAnalysisResult> AnalyzeAsync(Picer.Core.Models.ImageRecord image,CancellationToken cancellationToken)
+            =>throw new InvalidOperationException("This test must not start model analysis.");
+    }
+
+    [Fact]
     public void PartialVideoPurgeRefreshesCatalogAndRetryOnlyProcessesRemainingSelection()
     {
         var root = Path.Combine(Path.GetTempPath(), "picer-video-purge-retry-" + Guid.NewGuid().ToString("N"));

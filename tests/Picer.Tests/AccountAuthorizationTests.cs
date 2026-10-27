@@ -222,7 +222,12 @@ public sealed class AccountAuthorizationTests : IDisposable
     [InlineData("GET", "/api/service/v1/classification/items", "index.read")]
     [InlineData("GET", "/api/service/v1/classification/latest", "index.read")]
     [InlineData("POST", "/api/service/v1/classification/begin", "analysis.run")]
-    [InlineData("POST", "/api/service/v1/classification/confirm", "analysis.run")]
+    [InlineData("POST", "/api/service/v1/classification/confirm", "index.write")]
+    [InlineData("POST", "/api/service/v1/classification/reject", "index.write")]
+    [InlineData("POST", "/api/service/v1/classification/remove", "index.write")]
+    [InlineData("POST", "/api/service/v1/classification/restore", "index.write")]
+    [InlineData("POST", "/api/service/v1/classification/correct", "index.write")]
+    [InlineData("POST", "/api/service/v1/classification/clustering/settings", "index.write")]
     public void ClassificationRoutesRequireExplicitScopes(string method, string path, string scope) =>
         Assert.Equal(scope, SpaceRoutePermissions.RequiredScope(method, path));
 

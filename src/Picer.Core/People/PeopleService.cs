@@ -61,12 +61,12 @@ public sealed class PeopleService(PicerDatabase database)
     {
         using var command = database.Command("""
             SELECT DISTINCT p.display_name
-            FROM video_detected_faces f
+            FROM video_effective_faces f
             JOIN people p ON p.id=f.assigned_person_id
-            WHERE f.video_id=$video AND f.assignment_state='confirmed'
+            WHERE f.reference_id=$video AND f.assignment_state='confirmed'
             ORDER BY p.display_name COLLATE NOCASE
             """);
-        command.Parameters.AddWithValue("$video", new VideoContentRepository(database).GetContentId(videoId));
+        command.Parameters.AddWithValue("$video", videoId);
         using var reader = command.ExecuteReader();
         var names = new List<string>();
         while (reader.Read()) names.Add(reader.GetString(0));
@@ -160,6 +160,16 @@ public sealed class PeopleService(PicerDatabase database)
         transaction.Commit();
     }
 
+    public void RemoveAlias(long personId, string alias)
+    {
+        alias = NormalizeName(alias);
+        using var transaction = database.BeginTransaction();
+        EnsurePersonExists(personId, transaction);
+        database.RecordMetadataEdit("person", personId, PicerDatabase.AliasField(alias), string.Empty, transaction);
+        database.RemovePersonAliasProjection(personId, PicerDatabase.AliasField(alias), transaction);
+        transaction.Commit();
+    }
+
     public void SetDescription(long personId, string? description)
     {
         using var transaction = database.BeginTransaction();
@@ -179,6 +189,18 @@ public sealed class PeopleService(PicerDatabase database)
         using var transaction = database.BeginTransaction();
         EnsurePersonExists(sourcePersonId, transaction);
         EnsurePersonExists(targetPersonId, transaction);
+        var retirements=database.RecordCatalogRetirement("person",sourcePersonId,transaction);
+        var movedFaces=new List<long>();var movedAliases=new List<string>();
+        using(var faces=database.Command("SELECT face_id FROM face_person_assignments WHERE person_id=$id AND state='confirmed'"))
+        {
+            faces.Transaction=transaction;faces.Parameters.AddWithValue("$id",sourcePersonId);
+            using var rows=faces.ExecuteReader();while(rows.Read()) movedFaces.Add(rows.GetInt64(0));
+        }
+        using(var aliases=database.Command("SELECT alias FROM person_aliases WHERE person_id=$id"))
+        {
+            aliases.Transaction=transaction;aliases.Parameters.AddWithValue("$id",sourcePersonId);
+            using var rows=aliases.ExecuteReader();while(rows.Read()) movedAliases.Add(rows.GetString(0));
+        }
         using (var description = database.Command("""
             UPDATE people SET description=(
                 SELECT description FROM people WHERE id=$source
@@ -192,7 +214,12 @@ public sealed class PeopleService(PicerDatabase database)
             description.Parameters.AddWithValue("$source", sourcePersonId);
             description.Parameters.AddWithValue("$target", targetPersonId);
             description.Parameters.AddWithValue("$now", Format(DateTime.UtcNow));
-            description.ExecuteNonQuery();
+            if(description.ExecuteNonQuery()>0)
+            {
+                using var copied=database.Command("SELECT description FROM people WHERE id=$id");copied.Transaction=transaction;
+                copied.Parameters.AddWithValue("$id",targetPersonId);
+                database.RecordMetadataEdit("person",targetPersonId,"description",(string)copied.ExecuteScalar()!,transaction);
+            }
         }
         using (var corrections = database.Command("""
             INSERT INTO face_corrections(face_id,old_person_id,new_person_id,action,created_utc)
@@ -213,6 +240,12 @@ public sealed class PeopleService(PicerDatabase database)
             assignments.Parameters.AddWithValue("$now", Format(DateTime.UtcNow));
             assignments.ExecuteNonQuery();
         }
+        var movedVideoFaces=new List<long>();
+        using(var affected=database.Command("SELECT DISTINCT id FROM video_effective_faces WHERE assigned_person_id=$source AND assignment_state='confirmed'"))
+        {
+            affected.Transaction=transaction;affected.Parameters.AddWithValue("$source",sourcePersonId);
+            using var rows=affected.ExecuteReader();while(rows.Read()) movedVideoFaces.Add(rows.GetInt64(0));
+        }
         using (var videoAssignments = database.Command("""
             UPDATE video_detected_faces SET
                 assigned_person_id=CASE WHEN assigned_person_id=$source THEN $target ELSE assigned_person_id END,
@@ -227,8 +260,37 @@ public sealed class PeopleService(PicerDatabase database)
             videoAssignments.Parameters.AddWithValue("$now", Format(DateTime.UtcNow));
             videoAssignments.ExecuteNonQuery();
         }
+        foreach(var face in movedFaces) database.RecordFaceManualState(face,transaction);
+        foreach(var face in movedVideoFaces) database.RecordVideoFaceManualState(face,transaction);
         MergeRejections("face_person_rejections", "face_id", sourcePersonId, targetPersonId, transaction);
+        var rejectedFaces=new List<long>();
+        using(var rejections=database.Command("SELECT face_id FROM face_person_rejections WHERE person_id=$id"))
+        {
+            rejections.Transaction=transaction;rejections.Parameters.AddWithValue("$id",targetPersonId);
+            using var rows=rejections.ExecuteReader();while(rows.Read()) rejectedFaces.Add(rows.GetInt64(0));
+        }
+        foreach(var face in rejectedFaces)
+        {
+            using var clear=database.Command("""
+                DELETE FROM face_person_rejections WHERE face_id=$face AND person_id=$person
+                    AND EXISTS(SELECT 1 FROM face_person_assignments WHERE face_id=$face AND person_id=$person AND state='confirmed')
+                """);
+            clear.Transaction=transaction;clear.Parameters.AddWithValue("$face",face);clear.Parameters.AddWithValue("$person",targetPersonId);
+            database.RecordFacePersonRejection(face,targetPersonId,clear.ExecuteNonQuery()==0,transaction);
+        }
         MergeRejections("video_face_person_rejections", "video_face_id", sourcePersonId, targetPersonId, transaction);
+        var rejectedVideoFaces=new List<long>();
+        using(var rejections=database.Command("SELECT DISTINCT r.video_face_id FROM video_face_person_rejections r JOIN video_effective_faces f ON f.id=r.video_face_id WHERE r.person_id=$person"))
+        {
+            rejections.Transaction=transaction;rejections.Parameters.AddWithValue("$person",targetPersonId);
+            using var rows=rejections.ExecuteReader();while(rows.Read()) rejectedVideoFaces.Add(rows.GetInt64(0));
+        }
+        foreach(var face in rejectedVideoFaces)
+        {
+            using var clear=database.Command("DELETE FROM video_face_person_rejections WHERE video_face_id=$face AND person_id=$person AND EXISTS(SELECT 1 FROM video_detected_faces WHERE id=$face AND assigned_person_id=$person AND assignment_state='confirmed')");
+            clear.Transaction=transaction;clear.Parameters.AddWithValue("$face",face);clear.Parameters.AddWithValue("$person",targetPersonId);
+            database.RecordVideoFacePersonRejection(face,targetPersonId,clear.ExecuteNonQuery()==0,transaction);
+        }
         using (var duplicateAliases = database.Command("""
             DELETE FROM person_aliases AS source_alias
             WHERE source_alias.person_id=$source AND EXISTS(
@@ -248,12 +310,15 @@ public sealed class PeopleService(PicerDatabase database)
             aliases.Parameters.AddWithValue("$target", targetPersonId);
             aliases.ExecuteNonQuery();
         }
+        foreach(var alias in movedAliases)
+            database.RecordMetadataEdit("person",targetPersonId,PicerDatabase.AliasField(alias),alias,transaction);
         using (var remove = database.Command("DELETE FROM people WHERE id=$source"))
         {
             remove.Transaction = transaction;
             remove.Parameters.AddWithValue("$source", sourcePersonId);
             remove.ExecuteNonQuery();
         }
+        database.SealCatalogRetirements(retirements,transaction);
         transaction.Commit();
     }
 
@@ -291,8 +356,10 @@ public sealed class PeopleService(PicerDatabase database)
 
     public void ConfirmFace(long faceId, long personId) => Assign(faceId, personId, "confirmed", "user", null);
 
-    public bool SuggestFace(long faceId, long personId, double confidence)
+    public bool SuggestFace(long faceId, long personId, double confidence, string? expectedEpoch = null)
     {
+        using var transaction = database.BeginTransaction();
+        VerifyFaceMutationEpoch(expectedEpoch, transaction);
         using var rejected = database.Command("SELECT 1 FROM face_person_rejections WHERE face_id=$face AND person_id=$person");
         rejected.Parameters.AddWithValue("$face", faceId);
         rejected.Parameters.AddWithValue("$person", personId);
@@ -314,15 +381,19 @@ public sealed class PeopleService(PicerDatabase database)
         samePhoto.Parameters.AddWithValue("$person", personId);
         if (samePhoto.ExecuteScalar() is not null) return false;
 
-        Assign(faceId, personId, "suggested", "cluster", confidence);
+        EnsureFaceExists(faceId, transaction);
+        EnsurePersonExists(personId, transaction);
+        AssignCore(faceId, personId, "suggested", "cluster", confidence, transaction);
+        transaction.Commit();
         return true;
     }
 
-    public int ClearAutomaticSuggestions(IEnumerable<long> faceIds)
+    public int ClearAutomaticSuggestions(IEnumerable<long> faceIds, string? expectedEpoch = null)
     {
         var ids = faceIds.Distinct().ToArray();
         if (ids.Length == 0) return 0;
         using var transaction = database.BeginTransaction();
+        VerifyFaceMutationEpoch(expectedEpoch, transaction);
         var changed = 0;
         foreach (var faceId in ids)
         {
@@ -334,6 +405,14 @@ public sealed class PeopleService(PicerDatabase database)
         }
         transaction.Commit();
         return changed;
+    }
+
+    private void VerifyFaceMutationEpoch(string? expectedEpoch, Microsoft.Data.Sqlite.SqliteTransaction transaction)
+    {
+        if (expectedEpoch is null) return;
+        using var query = database.Command("SELECT epoch FROM mirror_revision WHERE id=1");
+        query.Transaction = transaction;
+        if (query.ExecuteScalar() as string != expectedEpoch) throw new InvalidOperationException("space_epoch_reset_required");
     }
 
     public void MarkNotThisPerson(long faceId, long personId)
@@ -597,7 +676,7 @@ public sealed class PeopleService(PicerDatabase database)
             FROM people p
             LEFT JOIN face_person_assignments a ON a.person_id=p.id
             LEFT JOIN detected_faces f ON f.id=a.face_id
-            LEFT JOIN video_detected_faces vf ON vf.assigned_person_id=p.id
+            LEFT JOIN video_detected_faces vf ON vf.assigned_person_id=p.id AND EXISTS(SELECT 1 FROM video_effective_faces owned WHERE owned.id=vf.id)
             GROUP BY p.id, p.display_name
             ORDER BY p.display_name COLLATE NOCASE
             """);
@@ -608,14 +687,17 @@ public sealed class PeopleService(PicerDatabase database)
         return people;
     }
 
-    public IReadOnlyList<ConfirmedVideoFaceEmbedding> GetConfirmedVideoFaceEmbeddings(string? modelVersion = null)
+    public IReadOnlyList<ConfirmedVideoFaceEmbedding> GetConfirmedVideoFaceEmbeddings(string? modelVersion = null, string? ownerKey = null)
     {
         using var command = database.Command("""
             SELECT id,assigned_person_id,model_version,embedding FROM video_detected_faces
             WHERE assignment_state='confirmed' AND assigned_person_id IS NOT NULL AND embedding IS NOT NULL
+              AND EXISTS(SELECT 1 FROM video_effective_faces owned WHERE owned.id=video_detected_faces.id)
               AND ($model IS NULL OR model_version=$model)
+              AND ($owner IS NULL OR owner_key=$owner)
             """);
         command.Parameters.AddWithValue("$model", (object?)modelVersion ?? DBNull.Value);
+        command.Parameters.AddWithValue("$owner", (object?)ownerKey ?? DBNull.Value);
         using var reader = command.ExecuteReader();
         var values = new List<ConfirmedVideoFaceEmbedding>();
         while (reader.Read())
@@ -659,7 +741,12 @@ public sealed class PeopleService(PicerDatabase database)
         review.Parameters.AddWithValue("$face", faceId);
         review.ExecuteNonQuery();
         if (state == "confirmed" && assignedBy == "user")
+        {
+            using var clearRejection=database.Command("DELETE FROM face_person_rejections WHERE face_id=$face AND person_id=$person");
+            clearRejection.Transaction=transaction;clearRejection.Parameters.AddWithValue("$face",faceId);clearRejection.Parameters.AddWithValue("$person",personId);
+            if(clearRejection.ExecuteNonQuery()>0) database.RecordFacePersonRejection(faceId,personId,false,transaction);
             InsertCorrection(faceId, null, personId, "review_active", transaction);
+        }
     }
 
     private void AddAliasCore(long personId, string alias, Microsoft.Data.Sqlite.SqliteTransaction transaction)
@@ -687,6 +774,13 @@ public sealed class PeopleService(PicerDatabase database)
         command.Parameters.AddWithValue("$action", action);
         command.Parameters.AddWithValue("$now", Format(DateTime.UtcNow));
         command.ExecuteNonQuery();
+        database.RecordFaceManualState(faceId,transaction);
+        if(oldPersonId is { } rejectedPerson && oldPersonId!=newPersonId)
+        {
+            using var rejected=database.Command("SELECT 1 FROM face_person_rejections WHERE face_id=$face AND person_id=$person");
+            rejected.Transaction=transaction;rejected.Parameters.AddWithValue("$face",faceId);rejected.Parameters.AddWithValue("$person",rejectedPerson);
+            if(rejected.ExecuteScalar() is not null) database.RecordFacePersonRejection(faceId,rejectedPerson,true,transaction);
+        }
     }
 
     private void EnsurePersonExists(long personId, Microsoft.Data.Sqlite.SqliteTransaction transaction) =>

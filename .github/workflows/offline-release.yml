@@ -119,7 +119,7 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $gui = Join-Path $env:RUNNER_TEMP 'offline-gui'
           $service = Join-Path $env:RUNNER_TEMP 'offline-service'
-          ./tools/publish-self-contained.ps1 -OutputDirectory $gui -ServiceOutputDirectory $service -SkipArchive
+          ./tools/publish-self-contained.ps1 -OutputDirectory $gui -ServiceOutputDirectory $service -Version $env:RELEASE_TAG -SkipArchive
           # The tagged script checks each native CLI exit code and every pinned runtime asset.
       - name: Decode and seek tail-indexed video through playback proxy
         shell: pwsh

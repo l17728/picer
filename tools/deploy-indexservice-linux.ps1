@@ -5,6 +5,7 @@ param(
     [ValidatePattern('^[A-Za-z0-9._-]+$')]
     [string]$User = 'root',
     [string]$IdentityFile,
+    [string]$Version = '',
     [ValidatePattern('^[A-Za-z0-9_.@-]+\.service$')]
     [string[]]$AdditionalWriterServices = @(),
     [string]$OutputRoot = (Join-Path (Split-Path -Parent $PSScriptRoot) 'artifacts\indexservice-deploy'),
@@ -13,6 +14,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+if ($Version -and $Version -notmatch '^v?\d+\.\d+\.\d+([-.][0-9A-Za-z.-]+)?$') { throw 'Invalid deployment version.' }
 
 function Invoke-Native {
     param([string]$File, [string[]]$Arguments)
@@ -41,8 +43,10 @@ $publishArgs = @(
     'publish', (Join-Path $repoRoot 'server\Picer.IndexService\Picer.IndexService.csproj'),
     '-c', 'Release', '-r', 'linux-x64', '--self-contained', 'true',
     '-p:PublishSingleFile=true', '-p:IncludeNativeLibrariesForSelfExtract=true',
+    '-p:IncludeRuntimeAssets=false',
     '-o', $publishDir
 )
+if ($Version) { $publishArgs += '-p:Version=' + $Version.TrimStart('v') }
 Invoke-Native $dotnet $publishArgs
 
 $executable = Join-Path $publishDir 'Picer.IndexService'
@@ -57,6 +61,7 @@ $manifest = [ordered]@{
     deploymentId = $deploymentId
     binarySha256 = $executableHash
     sourceCommit = ([string]$commit).Trim()
+    version = $Version
     builtUtc = [DateTime]::UtcNow.ToString('O', [Globalization.CultureInfo]::InvariantCulture)
 }
 $manifestPath = Join-Path $publishDir 'deployment.json'
@@ -71,6 +76,7 @@ $zip = [System.IO.Compression.ZipFile]::Open($packagePath, [System.IO.Compressio
 try {
     [void][System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, $executable, 'Picer.IndexService', [System.IO.Compression.CompressionLevel]::Optimal)
     [void][System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, $manifestPath, 'deployment.json', [System.IO.Compression.CompressionLevel]::Optimal)
+    [void][System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, (Join-Path $PSScriptRoot 'indexservice-data-snapshot.py'), 'indexservice-data-snapshot.py', [System.IO.Compression.CompressionLevel]::Optimal)
     [void][System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, (Join-Path $publishDir 'licenses\Magick.NET-Notice.txt'), 'licenses/Magick.NET-Notice.txt', [System.IO.Compression.CompressionLevel]::Optimal)
 } finally { $zip.Dispose() }
 $archiveHash = (Get-FileHash -LiteralPath $packagePath -Algorithm SHA256).Hash.ToLowerInvariant()

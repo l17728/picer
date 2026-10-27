@@ -152,9 +152,15 @@ public sealed class DeviceAccountClient : IDisposable
     private DeviceConnection Reload()
     {
         if (_reload is null) return Connection;
-        var value = _reload();
+        var loaded = _reload();
+        var value = loaded with { Origin=DeviceAuthorization.NormalizeOrigin(loaded.Origin) };
         var current = Connection;
-        if (value.Origin != current.Origin || value.ServiceId != current.ServiceId || value.KeyName != current.KeyName || value.RequestId != current.RequestId)
+        if (value.Origin != current.Origin || value.ServiceId != current.ServiceId || value.KeyName != current.KeyName || value.RequestId != current.RequestId ||
+            value.SpkiPin!=current.SpkiPin || value.SigningKey!=current.SigningKey)
+            throw new InvalidOperationException("device_connection_replaced");
+        if (current.Session is { } previous && value.Session is { } updated &&
+            (previous.AccountId!=updated.AccountId || previous.SpaceId!=updated.SpaceId ||
+             previous.GrantId!=updated.GrantId || previous.DeviceId!=updated.DeviceId))
             throw new InvalidOperationException("device_connection_replaced");
         Volatile.Write(ref _connection, value);
         return value;
@@ -168,18 +174,24 @@ public sealed class DeviceAccountClient : IDisposable
             throw new InvalidDataException("invalid_device_session");
     }
 
-    private async Task<DeviceSession> SessionAsync(CancellationToken cancellationToken)
+    public Task<DeviceSession> RefreshRejectedAccessAsync(string rejectedAccessToken,CancellationToken cancellationToken=default)
     {
-        var current = Connection;
+        ArgumentException.ThrowIfNullOrWhiteSpace(rejectedAccessToken);
+        return SessionAsync(cancellationToken,rejectedAccessToken);
+    }
+
+    private async Task<DeviceSession> SessionAsync(CancellationToken cancellationToken,string? rejectedAccessToken=null)
+    {
+        var current = Reload();
         var session = current.Session ?? throw new InvalidOperationException("device_login_required");
-        if (session.ExpiresUtc > DateTimeOffset.UtcNow.AddSeconds(30) && current.RefreshAttempt is null) return session;
+        if ((rejectedAccessToken is null || session.AccessToken!=rejectedAccessToken) && session.ExpiresUtc > DateTimeOffset.UtcNow.AddSeconds(30) && current.RefreshAttempt is null) return session;
         await _refreshGate.WaitAsync(cancellationToken);
         try
         {
             using var processLease = _acquireRefreshLease is null ? null : await _acquireRefreshLease(cancellationToken);
             current = Reload();
             session = current.Session ?? throw new InvalidOperationException("device_login_required");
-            if (session.ExpiresUtc > DateTimeOffset.UtcNow.AddSeconds(30) && current.RefreshAttempt is null) return session;
+            if ((rejectedAccessToken is null || session.AccessToken!=rejectedAccessToken) && session.ExpiresUtc > DateTimeOffset.UtcNow.AddSeconds(30) && current.RefreshAttempt is null) return session;
             var attempt = current.RefreshAttempt ?? Guid.NewGuid().ToString("N");
             Save(current with { RefreshAttempt = attempt });
             var refreshed = await SendIdentityAsync<DeviceSession>("/identity/refresh", new { refreshToken = session.RefreshToken, attemptId = attempt }, null, cancellationToken);

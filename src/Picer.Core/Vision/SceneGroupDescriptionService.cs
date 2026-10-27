@@ -153,6 +153,7 @@ public sealed class SceneGroupDescriptionService(PicerDatabase database, CloudVi
 
     public void SaveAccepted(SceneGroupPlan plan, SceneGroupDescription description)
     {
+        using var transaction=database.BeginTransaction();
         using var command = database.Command("""
             INSERT INTO scene_group_descriptions(fingerprint,directory_path,start_utc,end_utc,image_ids_json,
               representative_image_ids_json,provider,model_version,prompt_version,scene_name,summary,search_terms_json,
@@ -171,6 +172,7 @@ public sealed class SceneGroupDescriptionService(PicerDatabase database, CloudVi
         command.Parameters.AddWithValue("$prompt", description.PromptVersion); command.Parameters.AddWithValue("$scene", description.SceneName);
         command.Parameters.AddWithValue("$summary", description.Summary); command.Parameters.AddWithValue("$terms", JsonSerializer.Serialize(description.SearchTerms));
         command.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("O")); command.ExecuteNonQuery();
+        database.RecordSceneDescriptionEdit(plan.Fingerprint,transaction);transaction.Commit();
     }
 
     public SceneGroupDescription? GetAccepted(string fingerprint)
@@ -236,6 +238,7 @@ public sealed class SceneGroupDescriptionService(PicerDatabase database, CloudVi
     public void UpdateAcceptedText(string fingerprint, string sceneName, string summary)
     {
         if (string.IsNullOrWhiteSpace(sceneName)) throw new ArgumentException("场景标题不能为空。", nameof(sceneName));
+        using var transaction=database.BeginTransaction();
         using var command = database.Command("""
             UPDATE scene_group_descriptions
             SET scene_name=$scene, summary=$summary, provider='user', model_version='manual-edit',
@@ -247,6 +250,7 @@ public sealed class SceneGroupDescriptionService(PicerDatabase database, CloudVi
         command.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("O"));
         command.Parameters.AddWithValue("$fingerprint", fingerprint);
         if (command.ExecuteNonQuery() == 0) throw new InvalidOperationException("场景描述不存在或已经失效。");
+        database.RecordSceneDescriptionEdit(fingerprint,transaction);transaction.Commit();
     }
 
     public static string CreateFingerprint(IEnumerable<ImageRecord> images)

@@ -1,10 +1,8 @@
 # Picer 软件设计说明（SDD）
 
-版本：2.1；更新：2026-10-21；当前开发版 SQLite schema 50。账号/空间/设备授权已在生产启用；目录描述使用发现、处理、持久化和远程同步解耦的有界异步流水线。图片分类使用 CLIP 多标签投影、图库内容聚类与已有 VL 描述共同生成，详见[图片内容多标签分类实现记录](CONTENT_CLASSIFICATION_IMPLEMENTATION_2026-10-21.md)。发布边界见[v1.5.6 发布记录](RELEASE_1_5_6_2026-10-20.md)，生产部署状态仍以独立部署记录和 `/version` 证据为准。
+更新：2026-10-27。当前源码为数据库 schema91、元数据协议 14；尚未 commit、push、发布或部署。已发布版本仍为 v1.5.6，不能将本轮测试结果写成生产已启用。
 
-本文描述已发布架构和当前生产部署边界。产品交互见 [产品设计](PRODUCT_DESIGN.md)，操作见 [用户指南](USER_GUIDE.md)，当前验证与尚待启用事项见 [开发计划](DEVELOPMENT_PLAN.md)。早期方案和历史验收保存在带日期的实施报告中，不作为当前生产状态。
-
-远程媒体新通道采用独立认证 WebSocket、1 MiB 二进制拉取、源端 256/1600 预览、读取租约和端到端 Range。GUI 通过只监听 loopback 的 Kestrel 代理向所选播放器提供临时单视频地址，服务令牌不进入播放器。原图读取槽与预览槽独立有界；缓存、租约、取消及旧协议边界见[媒体实施记录](MEDIA_STREAMING_IMPLEMENTATION_2026-10-10.md)。
+本轮架构与验证边界见[双向同步交付状态](SYNC_DELIVERY_STATUS_2026-10-26.md)及[同步 SDD](LOCAL_REMOTE_METADATA_SYNC_SDD_2026-10-22.md)。带日期的报告保存历史证据，不作为当前生产状态。
 
 ## 1. 系统边界与组件
 
@@ -77,6 +75,8 @@ AI 菜单提供目录树选择，范围包含节点及其所有子目录。树�
 
 检索与自动分类的设计定稿（包括现有 FTS5/BM25、Chinese-CLIP 边界、机器建议与用户确认状态）见[检索与自动分类 SDD](SEARCH_AND_AUTO_CLASSIFICATION_SDD_2026-10-16.md)。2026-10-21 已交付本地及远程增量分类审核和可选 RRF 混合召回；逐类质量门禁及默认 AI 问答接入仍未放行。
 
+本地来源与远程照片空间的元数据必须按来源归属双向同步：远程汇总多个设备，但每个本地端只接收其已绑定来源的元数据。开发已移除周期轮询，改为 cold-start 与用户操作触发，publisher 上行已包含分类断言、拒绝和来源内聚类；publisher-scoped 下行、冲突处理和隔离验收仍未完成。设计、评审和当前实现状态见[双向元数据同步 SDD](LOCAL_REMOTE_METADATA_SYNC_SDD_2026-10-22.md)、[设计评审](LOCAL_REMOTE_METADATA_SYNC_REVIEW_2026-10-22.md)与[实现进度](LOCAL_REMOTE_METADATA_SYNC_IMPLEMENTATION_2026-10-22.md)。完整验收前不得描述为本地与远程完全一致。
+
 开发规格、UI 用户流程、技术结构和依赖阶段分别见[产品 SPEC](SEARCH_AND_AUTO_CLASSIFICATION_SPEC_2026-10-16.md)、[UX 规范](SEARCH_AND_AUTO_CLASSIFICATION_UX_2026-10-16.md)、[技术 SDD](SEARCH_AND_AUTO_CLASSIFICATION_TECH_SDD_2026-10-16.md)及[实现计划](SEARCH_AND_AUTO_CLASSIFICATION_IMPLEMENTATION_2026-10-16.md)。实现计划状态以专家 review 共识为前置条件。
 
 已实现的组件为 `MediaTextIndexRepository`、`MediaTextRanking`、`MediaSearchTool`、`AiMediaRetrievalService` 和 `PeopleService`。原早期方案中的独立 ai_text_documents、facets、完整证据取回服务不是当前数据库契约。
@@ -146,7 +146,11 @@ UI 先显示骨架，后台加载可取消，过时结果不得覆盖新选择�
 
 ## 12. 数据库迁移、备份和回滚
 
-所有模块共用 `PicerDatabase` 的连续 `PRAGMA user_version` 迁移，不存在人物模块另起的 schema 版本。v1.5.1 与当前生产 IndexService 均为 schema46。v42 补视频哈希，v43 补费用/预算等表及查询索引，v44 引入视频内容和镜像变更，v45 修复内容绑定人工编辑；v46 加入本地空间同步身份、发布者/实体映射与出站队列结构，见 `SpaceSyncIdentityMigration`。生产数据库已通过受控迁移升级；账户数据库导入是另一个尚未执行的运维步骤。
+所有模块共用 `PicerDatabase` 的连续 `PRAGMA user_version` 迁移，不存在人物模块另起的 schema 版本。当前开发源码为 schema91；生产数据库的实际版本必须依据部署记录核验，不从源码版本推断。
+
+schema46 是 v1.5.1 的历史空间同步身份基线。v47–76 逐步接入分类、语义聚类、来源归属、分页与通知、人工字段因果编辑、照片及视频人物隔离；v77–86 完成目录对象退役、代际、持久化回执、审核和压缩；v87 接入派生删除，v88 接入候选组成员同步，v89 接入场景描述，v90 补齐远程候选组身份发现失效；v91 增加训练应用已确认状态指纹，避免依赖设备时钟判断新旧。准确迁移顺序以 `src/Picer.Core/Data/PicerDatabase.cs` 的连续分支为准，各阶段验证见[同步交付状态](SYNC_DELIVERY_STATUS_2026-10-26.md)。
+
+迁移前关闭全部写入者，整体备份数据库、WAL 与 SHM，再在暂存副本迁移和验证后发布；恢复演练不能只核对表数量。schema41→90 的真实封存副本迁移、恢复和冷同步已有[演练证据](LEGACY_INDEX_SYNC_REHEARSAL_2026-10-27.md)，不替代新版本实际部署检查。
 
 升级要求关闭所有同库写入者，完整备份 DB/WAL/SHM，在暂存副本迁移、校验后可恢复地发布。发现活动写入者拒绝升级。不能通过 DROP 业务表或手动降低 user_version 来回滚；恢复使用经过验证的旧备份及相容程序。实际部署前单独核验运行库版本。
 
@@ -156,7 +160,9 @@ UI 先显示骨架，后台加载可取消，过时结果不得覆盖新选择�
 
 v1.5.1（标签提交 `3f9f4e9`）已正式发布，schema46；CI 严格构建通过，715 项单元与 94 项桌面测试全过。安装器生命周期、组件依赖、离线资源哈希与视频流解码/seek 均通过。部署证据见[v1.5.1 记录](DEPLOYMENT_V1_5_1_2026-10-14.md)；测试通过不等同于全部 RuntimeComponent 或真实硬件模型质量验收。
 
-v1.5.1 已发布，目录描述、远程媒体与视频流能力已进入程序。生产账号门户尚未启用，用户当前继续使用旧令牌连接；其它真实质量和硬件验收仍独立管理，四项旧 P2 按[开发计划](DEVELOPMENT_PLAN.md)暂停。旧架构方案、schema 和测试数字按报告日期阅读，见[历史文档索引](ARCHIVE_INDEX.md)。
+2026-10-22 的 schema57 同步开发源码已通过整仓严格构建、757 项非 RuntimeComponent 单测和 100 项桌面 E2E；这是未发布源码的回归证据。完整同步协议与上线门槛仍见[实现进度](LOCAL_REMOTE_METADATA_SYNC_IMPLEMENTATION_2026-10-22.md)及[剩余协议细化](LOCAL_REMOTE_METADATA_SYNC_PROTOCOL_DETAILS_2026-10-22.md)，不能用回归测试通过替代尚未实现的业务验收。
+
+当前已发布版本为 v1.5.6，生产账号门户已启用；旧令牌仅用于明确保留的兼容配置，不是新用户的默认登录流程。未发布的同步改动、测试阶段和上线门槛统一见[同步交付状态](SYNC_DELIVERY_STATUS_2026-10-26.md)。真实质量和硬件验收仍独立管理，四项旧 P2 按[开发计划](DEVELOPMENT_PLAN.md)暂停。旧架构方案、schema 和测试数字按报告日期阅读，见[历史文档索引](ARCHIVE_INDEX.md)。
 
 ## 14. 安装与启动职责
 
@@ -166,11 +172,11 @@ GUI 安装器不为同包代理注册登录自启，默认代理配置为禁用�
 
 本地模式的浏览和索引仍可走 LocalGateway，AI 请求通过配对服务中继；远程模式以服务权威索引和本地镜像工作。不因 GUI 和代理同包而在客户端运行 Python/CUDA，也不因处于远程模式而假定源媒体可以脱离代理在线读取。
 
-## 15. 账号、空间与设备授权（v1.5.1；生产切换进行中）
+## 15. 账号、空间与设备授权
 
 系统实现 Web 注册/登录、账号空间、多设备配对、一次性凭据、设备撤销、来源绑定、按空间隔离的数据镜像、索引清除及受控旧库迁移。照片和视频引用均纳入同一空间；原始媒体仍留在用户授权的来源设备上。旧库迁入后来源保持未绑定，必须由所有者明确配对设备并授权目录。
 
-生产 IndexService 已于 2026-10-14 切换到账号门户模式，公网注册开放，Let's Encrypt 证书由 Certbot deploy hook 更新。旧数据库已迁入 `legacy-owner` 空间并保留迁移备份。公网健康、身份发现及注册页已通过验证；真实注册、第二设备配对、媒体访问和 CI 账号凭据切换仍是剩余的全链路验收门槛。当前实现边界及运维步骤见[账号切换执行记录](INCIDENT_ANALYSIS_AND_ACCOUNT_CUTOVER_2026-10-14.md)、[账户系统实施记录](ACCOUNT_SPACE_DEVICE_AUTH_IMPLEMENTATION_2026-10-13.md)和[v1.5.1 部署记录](DEPLOYMENT_V1_5_1_2026-10-14.md)。
+生产 IndexService 已于 2026-10-14 切换到账号门户模式，公网注册开放，Let's Encrypt 证书由 Certbot deploy hook 更新。旧数据库已迁入 `legacy-owner` 空间并保留迁移备份；账号凭据切换、真实设备配对、读取和撤销已有验收记录。尚需在新版本部署后完成生产一次性新用户的首次注册及配对验收，不将注册页面可访问等同于流程成功。当前实现边界及运维步骤见[开发计划](DEVELOPMENT_PLAN.md)、[账号切换执行记录](INCIDENT_ANALYSIS_AND_ACCOUNT_CUTOVER_2026-10-14.md)和[v1.5.1 部署记录](DEPLOYMENT_V1_5_1_2026-10-14.md)。
 
 目录描述失败按阶段归类并写入脱敏的结构化日志：运行/尝试关联 ID、媒体记录 ID、阶段、稳定错误码、重试性、耗时和内层异常类型；不得记录原路径、图片内容、提示词、异常原文或凭据。旧日志不具备该字段时只能说明失败规模，不能反推具体根因。
 

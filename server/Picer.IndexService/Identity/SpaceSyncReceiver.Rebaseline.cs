@@ -18,7 +18,7 @@ public sealed partial class SpaceSyncReceiver
         using (var row = query.ExecuteReader())
         {
             if (!row.Read()) throw new UnauthorizedAccessException();
-            publisher = new(row.GetString(0), request.LibraryId, request.IncarnationId, epoch, row.GetInt64(1));
+            publisher = new(row.GetString(0), request.LibraryId, request.IncarnationId, epoch, row.GetInt64(1),SpaceSyncProtocol.MetadataVersion);
             state = row.GetString(2);
         }
         if (request.Complete)

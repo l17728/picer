@@ -94,11 +94,35 @@ public static class AccountServiceHost
             using var admission = app.Services.GetRequiredService<SpaceRequestAdmission>().TryEnter(device, relative);
             if (admission is null) { context.Response.Headers.RetryAfter = "2"; return Results.StatusCode(429); }
             const string snapshotPrefix = "/api/sync/v2/read-snapshots/";
+            if (context.Request.Method == "POST" && relative == "/api/sync/v2/notifications")
+            {
+                if (!device.Allows("index.read") || device.Kind != "gui") return Results.StatusCode(403);
+                await using var notificationLease = await pool.AcquireAsync(spaceId, context.RequestAborted);
+                return await app.Services.GetRequiredService<SpaceSyncApi>().WaitForNotificationAsync(context,notificationLease.Runtime,device,accessToken);
+            }
             if (context.Request.Method == "DELETE" && relative.StartsWith(snapshotPrefix, StringComparison.Ordinal))
             {
                 if (!device.Allows("index.read")) return Results.StatusCode(403);
                 app.Services.GetRequiredService<SpaceReadSnapshots>().Release(device, relative[snapshotPrefix.Length..]);
                 return Results.NoContent();
+            }
+            if (context.Request.Method == "GET" && relative == "/api/sync/v2/metadata-changes")
+            {
+                if (!device.Allows("index.read")) return Results.StatusCode(403);
+                await using var readLease = await pool.AcquireAsync(spaceId, context.RequestAborted);
+                return await app.Services.GetRequiredService<SpaceSyncApi>().ReadMetadataChangesAsync(context, readLease.Runtime, device,accessToken);
+            }
+            if (context.Request.Method == "GET" && relative == "/api/sync/v2/metadata-edits")
+            {
+                if (!device.Allows("index.read")) return Results.StatusCode(403);
+                await using var readLease = await pool.AcquireAsync(spaceId, context.RequestAborted);
+                return await app.Services.GetRequiredService<SpaceSyncApi>().ReadMetadataEditsAsync(context, readLease.Runtime, device,accessToken);
+            }
+            if (context.Request.Method=="GET" && relative=="/api/sync/v2/metadata-edit-page")
+            {
+                if (!device.Allows("index.read")) return Results.StatusCode(403);
+                await using var readLease=await pool.AcquireAsync(spaceId,context.RequestAborted);
+                return await app.Services.GetRequiredService<SpaceSyncApi>().ReadMetadataEditPageAsync(context,readLease.Runtime,device,accessToken);
             }
             if (SpacePurgeApi.Target(context.Request.Method, relative) is { } purge)
             {
@@ -106,7 +130,13 @@ public static class AccountServiceHost
                 await using var purgeLease = await pool.AcquireAsync(spaceId, context.RequestAborted);
                 return await app.Services.GetRequiredService<SpacePurgeApi>().InvokeAsync(context, purgeLease.Runtime, device, accessToken, purge.Kind, purge.Id);
             }
-            if (context.Request.Method == "POST" && relative is "/api/sync/v2/publishers" or "/api/sync/v2/rebaseline" or "/api/sync/v2/batches" or "/api/sync/v2/source-bindings" or "/api/sync/v1/metadata-edits" or "/api/sync/v1/face-review-decisions")
+            if (context.Request.Method == "POST" && relative is "/api/sync/v2/publishers" or "/api/sync/v2/rebaseline" or "/api/sync/v2/batches" or "/api/sync/v2/source-bindings" or "/api/sync/v2/identity-offers" or "/api/sync/v2/identity-adoptions" or "/api/sync/v2/inspections" or "/api/sync/v2/inspections/read" or "/api/sync/v2/inspections/cancel" or "/api/sync/v2/inspections/receipt" or "/api/sync/v2/metadata-conflicts" or "/api/sync/v2/metadata-conflicts/resolve" or "/api/sync/v2/archived-operations" or "/api/sync/v2/conflict-resolutions" or "/api/sync/v2/metadata-operation-states" or "/api/sync/v2/video-ownership-reviews" or "/api/sync/v2/video-ownership-reviews/resolve" or "/api/sync/v1/metadata-edits" or "/api/sync/v1/face-review-decisions"
+                or "/api/sync/v2/catalog-retirements/apply" or "/api/sync/v2/catalog-retirements/read"
+                or "/api/sync/v2/catalog-conflicts" or "/api/sync/v2/catalog-conflicts/resolve"
+                or "/api/sync/v2/catalog-retirements/compact"
+                or "/api/sync/v2/media-reference"
+                or "/api/sync/v2/training-applications"
+                or "/api/sync/v2/catalog-retirements/acknowledge" or "/api/sync/v2/catalog-retirements/completions" or "/api/sync/v2/catalog-retirements/complete")
             {
                 if (!device.Allows("index.write")) return Results.StatusCode(403);
                 await using var writeLease = await pool.AcquireAsync(spaceId, context.RequestAborted);
@@ -208,6 +238,15 @@ public static class SpaceRoutePermissions
         if (method == "POST" && path == "/api/ai/v1/chat/stream") return "analysis.run";
         if (method == "POST" && path == "/api/gateway/v1/analysis-input") return "analysis.run";
         if (method == "POST" && path is "/api/service/v1/clip/text" or "/api/service/v1/clip/image") return "analysis.run";
+        if (method == "POST" && path == "/api/service/v1/classification/clustering/settings") return "index.write";
+        if (method == "POST" && path == "/api/service/v1/scenes/edit") return "index.write";
+        if (method == "POST" && path == "/api/service/v1/faces/organize") return "index.write";
+        if (method == "POST" && path == "/api/service/v1/faces/candidate/remove") return "index.write";
+        if (method == "POST" && path == "/api/service/v1/faces/training/apply") return "index.write";
+        if (method == "POST" && path == "/api/service/v1/faces/training/apply-learned") return "index.write";
+        if (method == "POST" && path is "/api/service/v1/classification/confirm" or "/api/service/v1/classification/reject"
+            or "/api/service/v1/classification/remove" or "/api/service/v1/classification/restore" or "/api/service/v1/classification/correct")
+            return "index.write";
         if (path.StartsWith("/api/service/v1/classification/", StringComparison.Ordinal))
             return method == "GET" ? "index.read" : method == "POST" ? "analysis.run" : null;
         var serviceParts = path.Split('/', StringSplitOptions.RemoveEmptyEntries);

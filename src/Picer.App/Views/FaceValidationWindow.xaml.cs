@@ -29,6 +29,7 @@ public partial class FaceValidationWindow : Window
     private (string ModelVersion, double Threshold, double Far, double Frr)? _lastCalculatedCalibration;
     private int _operationRunning;
     private CancellationTokenSource? _trainingCancellation;
+    private TrainingApplicationBaseline? _pendingTrainingBaseline;
 
     public FaceValidationWindow(FaceValidationService validation, FaceTrainingService training, VisionAnalysisService? analysis, string? unavailableReason, VisionAnalysisRepository repository)
     {
@@ -268,9 +269,14 @@ public partial class FaceValidationWindow : Window
         try
         {
             var serviceEndpoint = AppServices.TrainingServiceEndpoint ?? throw new InvalidOperationException("请先配对索引服务。");
+            _pendingTrainingBaseline = null;
+            var trainingEpoch = AppServices.ServiceMode ? AppServices.Db.GetMirrorCheckpoint()?.Epoch : null;
             var endpoint = new Uri(serviceEndpoint.TrimEnd('/') + "/api/service/v1/training/api/face-training/");
             Status.Text = "正在冻结训练数据快照…";
             var plan = await UiWork.RunDatabaseAsync(_training.Prepare);
+            if (AppServices.ServiceMode)
+                _pendingTrainingBaseline = new(trainingEpoch ?? throw new InvalidOperationException("请先刷新照片空间索引。"),
+                    _repository.GetActiveFaceAdapterVersion(plan.ModelVersion));
             var warning = plan.Warnings.Count == 0 ? "数据检查通过" : string.Join("；", plan.Warnings);
             var location = endpoint.IsLoopback ? "本机统一模型平台" : endpoint.GetLeftPart(UriPartial.Authority);
             var confirmation = $"已生成不可变训练快照：{plan.SnapshotId}\n\n" +
@@ -345,7 +351,17 @@ public partial class FaceValidationWindow : Window
         if (MessageBox.Show("确认应用训练制品？当前人物原型将被替换，人工分类不会改变。", "应用制品", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
         try
         {
-            var artifactId = await UiWork.RunDatabaseAsync(_training.ApplyPendingArtifact);
+            string? appliedModel = null;
+            var artifactId = AppServices.ServiceMode
+                ? await _training.ApplyPendingArtifactRemotelyAsync(async application =>
+                {
+                    var client = AppServices.SyncClient ?? throw new InvalidOperationException("照片空间连接尚未就绪。");
+                    await client.ApplyLearnedTrainingArtifactAsync(AppServices.Db, application,
+                        baseline: _pendingTrainingBaseline ?? throw new InvalidOperationException("训练快照已失效，请重新执行校准。"));
+                    appliedModel = application.ModelVersion;
+                    await AppServices.SyncRemoteMirrorAsync(requireMetadataSync: true);
+                })
+                : await UiWork.RunDatabaseAsync(_training.ApplyPendingArtifact);
             ApplyArtifactButton.IsEnabled = false;
             Status.Text = $"制品 {artifactId} 已应用，正在使用新标准更新候选人物…";
             var progress = new Progress<(int Completed, int Total)>(value =>
@@ -354,7 +370,11 @@ public partial class FaceValidationWindow : Window
                 WorkProgress.Value = value.Total == 0 ? 100 : value.Completed * 100d / value.Total;
                 Status.Text = $"正在使用新标准更新候选人物：{value.Completed}/{value.Total}";
             });
-            var suggestions = await UiWork.RunDatabaseAsync(() => AppServices.FaceSuggestions.Suggest(progress: progress));
+            var suggestions = AppServices.ServiceMode
+                ? (await AppServices.SyncClient!.OrganizeFacesAsync(AppServices.Db, appliedModel!, "suggest")).Suggestions
+                : await UiWork.RunDatabaseAsync(() => AppServices.FaceSuggestions.Suggest(progress: progress));
+            if (AppServices.ServiceMode) await AppServices.SyncRemoteMirrorAsync(requireMetadataSync: true);
+            else AppServices.QueueImmediateRemoteSync("人物训练制品应用");
             if (Owner?.DataContext is MainViewModel main) await main.People.RefreshSharedIdentityAsync();
             Status.Text = $"制品 {artifactId} 已应用；候选人物已更新 {suggestions.Suggested} 张，人物界面已刷新。";
         }
@@ -372,7 +392,18 @@ public partial class FaceValidationWindow : Window
         if (!TryBeginOperation("正在回滚上一版人脸增强策略…")) return;
         try
         {
-            var artifact = await UiWork.RunDatabaseAsync(_training.Rollback);
+            var rollbackEpoch = AppServices.ServiceMode ? AppServices.Db.GetMirrorCheckpoint()?.Epoch : null;
+            var artifact = AppServices.ServiceMode
+                ? await _training.RollbackRemotelyAsync(async application =>
+                {
+                    var client = AppServices.SyncClient ?? throw new InvalidOperationException("照片空间连接尚未就绪。");
+                    await client.ApplyLearnedTrainingArtifactAsync(AppServices.Db, application,
+                        baseline: new(rollbackEpoch ?? throw new InvalidOperationException("请先刷新照片空间索引。"),
+                            _repository.GetActiveFaceAdapterVersion(application.ModelVersion)));
+                    await AppServices.SyncRemoteMirrorAsync(requireMetadataSync: true);
+                })
+                : await UiWork.RunDatabaseAsync(_training.Rollback);
+            if (!AppServices.ServiceMode) AppServices.QueueImmediateRemoteSync("人物训练制品回退");
             Status.Text = $"已回滚并应用上一版制品 {artifact}；人工分类未改变。";
             AppLogger.Info($"FaceTraining rollback applied; artifact={artifact}");
         }

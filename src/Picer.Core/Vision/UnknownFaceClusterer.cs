@@ -6,7 +6,8 @@ public sealed record CandidateClusteringResult(int Considered, int ClusterCount,
 public sealed class UnknownFaceClusterer(VisionAnalysisRepository repository)
 {
     public CandidateClusteringResult Rebuild(double cosineThreshold = 0.62, int maximumFaces = int.MaxValue,
-        IProgress<(string Stage, int Completed, int Total)>? progress = null, string? modelVersion = null)
+        IProgress<(string Stage, int Completed, int Total)>? progress = null, string? modelVersion = null,
+        string? expectedEpoch = null, CancellationToken cancellationToken = default)
     {
         if (cosineThreshold is < 0 or > 1) throw new ArgumentOutOfRangeException(nameof(cosineThreshold));
         if (maximumFaces <= 0) throw new ArgumentOutOfRangeException(nameof(maximumFaces));
@@ -17,10 +18,23 @@ public sealed class UnknownFaceClusterer(VisionAnalysisRepository repository)
             .OrderByDescending(group => group.Count()).Select(group => group.Key).FirstOrDefault();
         if (selectedVersion is null)
         {
-            repository.ReplaceCandidateClusters("none", []);
+            cancellationToken.ThrowIfCancellationRequested();
+            repository.ReplaceCandidateClusters("none", [], expectedEpoch);
             return new CandidateClusteringResult(0, 0, 0, 0);
         }
         var faces = all.Where(face => face.ModelVersion == selectedVersion).Take(maximumFaces).ToArray();
+        var owners = new Dictionary<long, string>();
+        using (var ownership = repository.Database.Command("""
+            SELECT DISTINCT f.image_id,COALESCE(o.owner_key,'local') FROM detected_faces f
+            LEFT JOIN sync_image_owners o ON o.image_id=f.image_id WHERE f.model_version=$model
+            """))
+        {
+            ownership.Parameters.AddWithValue("$model", selectedVersion);
+            using var rows = ownership.ExecuteReader();
+            while (rows.Read()) owners[rows.GetInt64(0)] = rows.GetString(1);
+        }
+        faces = faces.Where(face => owners.TryGetValue(face.ImageId, out var owner) &&
+            !owner.StartsWith("ambiguous-source:", StringComparison.Ordinal)).ToArray();
         var deferred = all.Length - faces.Length;
         var sets = Enumerable.Range(0, faces.Length).Select(index => new ClusterSet(index, faces[index].ImageId)).ToArray();
 
@@ -30,10 +44,12 @@ public sealed class UnknownFaceClusterer(VisionAnalysisRepository repository)
         var edges = new List<(int Left, int Right, double Score)>();
         for (var left = 0; left < faces.Length; left++)
         {
+        cancellationToken.ThrowIfCancellationRequested();
         foreach (var right in index.FindWithin(left, cosineThreshold))
         {
             if (right <= left) continue;
             if (faces[left].ImageId == faces[right].ImageId) continue;
+            if (owners.GetValueOrDefault(faces[left].ImageId) != owners.GetValueOrDefault(faces[right].ImageId)) continue;
             var score = Cosine(faces[left].Embedding, faces[right].Embedding);
             if (score >= cosineThreshold) edges.Add((left, right, score));
         }
@@ -44,6 +60,7 @@ public sealed class UnknownFaceClusterer(VisionAnalysisRepository repository)
         var merged = 0;
         foreach (var edge in edges.OrderByDescending(value => value.Score))
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var leftRoot = Find(sets, edge.Left);
             var rightRoot = Find(sets, edge.Right);
             if (leftRoot == rightRoot || sets[leftRoot].ImageIds.Overlaps(sets[rightRoot].ImageIds)) continue;
@@ -63,7 +80,8 @@ public sealed class UnknownFaceClusterer(VisionAnalysisRepository repository)
                     .OrderByDescending(value => value.Item2).ToArray());
             }).ToArray();
         progress?.Report(("保存候选组", 0, Math.Max(1, drafts.Length)));
-        repository.ReplaceCandidateClusters(selectedVersion, drafts);
+        cancellationToken.ThrowIfCancellationRequested();
+        repository.ReplaceCandidateClusters(selectedVersion, drafts, expectedEpoch);
         progress?.Report(("保存候选组", drafts.Length, Math.Max(1, drafts.Length)));
         return new CandidateClusteringResult(faces.Length, drafts.Length,
             drafts.Sum(cluster => cluster.Members.Count), deferred);

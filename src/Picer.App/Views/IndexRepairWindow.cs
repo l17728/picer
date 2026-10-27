@@ -2,16 +2,18 @@
 using System.Net.Http.Json;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Automation;
 using Microsoft.Win32;
 using Picer.App.Infrastructure;
 using Picer.Core.Indexing;
 
 namespace Picer.App.Views;
 
-public sealed class IndexRepairWindow : Window
+public sealed partial class IndexRepairWindow : Window
 {
     private readonly ListBox _roots = new() { MinHeight = 130 };
     private readonly TextBlock _status = new() { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 12, 0, 12) };
+    private readonly Button _inspectSync = new() { Content = "巡检并同步用户空间", Padding = new Thickness(12, 5, 12, 5), Margin = new Thickness(0, 0, 12, 0) };
     private readonly Button _start = new() { Content = "开始修复索引", Padding = new Thickness(12, 5, 12, 5) };
     private readonly Button _add = new() { Content = "添加根目录…", Margin = new Thickness(0, 0, 12, 0) };
     private readonly Button _remove = new() { Content = "移除选中目录", Margin = new Thickness(0, 0, 12, 0) };
@@ -20,15 +22,28 @@ public sealed class IndexRepairWindow : Window
 
     public IndexRepairWindow()
     {
-        Title = "修复移动后的照片和视频索引"; Width = 720; Height = 440; WindowStartupLocation = WindowStartupLocation.CenterOwner;
+        Title = "索引巡检、同步与修复"; Width = 760; Height = 470; WindowStartupLocation = WindowStartupLocation.CenterOwner;
         var layout = new DockPanel { Margin = new Thickness(16) };
-        var help = new TextBlock { Text = "添加照片或视频移动后的根目录，程序扫描子目录，以 SHA-256 恢复关联并保留描述和人物标记。未找到的原位置标注“已删除或移动”，原文件不会被修改。旧视频若未记录内容哈希且原文件已丢失，将保留为未找到，不按文件名猜测。", TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0,0,0,12) };
+        var help = new TextBlock { Text = "空间巡检按各来源保存的授权范围执行，并显示逐来源回执；离线来源等待上线，不会替其他电脑增加目录或扩大权限。“开始修复索引”用于照片/视频移动后的重新关联：添加新位置根目录，程序扫描子目录，以 SHA-256 恢复关联并保留描述和人物标记。未找到的原位置标注“已删除或移动”。", TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0,0,0,12) };
         DockPanel.SetDock(help, Dock.Top); layout.Children.Add(help);
         var bottom = new StackPanel(); DockPanel.SetDock(bottom, Dock.Bottom);
         bottom.Children.Add(_status);
+        var conflicts = new Button { Content = "处理同步冲突…", HorizontalAlignment = HorizontalAlignment.Left, Margin = new Thickness(0,0,0,8) };
+        AutomationProperties.SetAutomationId(conflicts,"OpenMetadataConflicts");
+        conflicts.Click += async (_,_) =>
+        {
+            new MetadataConflictsWindow { Owner = this }.ShowDialog();
+            await RefreshSpaceInspectionAsync();
+        };
+        bottom.Children.Add(conflicts);
         var buttons = new StackPanel { Orientation = Orientation.Horizontal };
-        foreach (var button in new[] { _add, _remove, _start, _cancel }) buttons.Children.Add(button);
+        foreach (var button in new[] { _inspectSync, _add, _remove, _start, _cancel }) buttons.Children.Add(button);
         bottom.Children.Add(buttons); layout.Children.Add(bottom); layout.Children.Add(_roots); Content = layout;
+        InitializeSpaceInspectionUi(layout);
+        AutomationProperties.SetAutomationId(_inspectSync,"InspectSpaceIndex");
+        AutomationProperties.SetAutomationId(_status,"IndexInspectionStatus");
+        AutomationProperties.SetAutomationId(_cancel,"CancelIndexWork");
+        if (AppServices.SpaceSynchronizationClient is null) _inspectSync.Content="巡检当前索引";
         _add.Click += (_, _) =>
         {
             var picker = new OpenFolderDialog { Title = "选择照片和视频的新位置（可多选，也可分次添加）", Multiselect = true };
@@ -37,16 +52,79 @@ public sealed class IndexRepairWindow : Window
                     if (!_roots.Items.Cast<string>().Contains(path, StringComparer.OrdinalIgnoreCase)) _roots.Items.Add(path);
         };
         _remove.Click += (_, _) => { if (_roots.SelectedItem is { } selected) _roots.Items.Remove(selected); };
+        _inspectSync.Click += async (_, _) => await InspectAndSyncAsync();
         _start.Click += async (_, _) => await RunAsync();
-        _cancel.Click += (_, _) => _cancellation?.Cancel();
+        _cancel.Click += async (_, _) => { _cancellation?.Cancel(); await CancelSpaceInspectionAsync(); };
         Closing += (_, _) => _cancellation?.Cancel();
+    }
+
+    private async Task InspectAndSyncAsync()
+    {
+        if (_cancellation is not null) return;
+        _cancellation = new();
+        var token = _cancellation.Token;
+        SetBusy(true);
+        try
+        {
+            _status.Text = "正在同步用户空间索引…";
+            if (AppServices.ServiceMode)
+                await AppServices.SyncRemoteMirrorAsync(token, requireMetadataSync: true);
+            var newlyMissing = 0;
+            if (!AppServices.ServiceMode && AppServices.SpaceSynchronizationClient is null)
+            {
+                _status.Text = "正在检查本机授权来源中的索引文件…";
+                var inspection=await AppServices.Index.InspectReferencesAsync(cancellationToken:token);
+                newlyMissing=checked((int)(inspection.MissingPhotos+inspection.MissingVideos));
+                if (!inspection.Complete) throw new IOException("部分来源不可访问；其原有状态已保留，请检查磁盘、权限或网络连接。");
+            }
+            var pushed = await AppServices.SyncLocalChangesToRemoteAsync(token);
+            // A remote mirror pull after publishing ensures the inspection uses
+            // the latest committed cut, including changes from other clients.
+            if (AppServices.ServiceMode)
+                await AppServices.SyncRemoteMirrorAsync(token, requireMetadataSync: true);
+
+            var integrity = await UiWork.RunDatabaseAsync(() =>
+            {
+                using var check = AppServices.Db.Command("PRAGMA quick_check");
+                return Convert.ToString(check.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture) ?? "unknown";
+            }, token);
+            var counts = await UiWork.RunDatabaseAsync(() =>
+            {
+                var images = AppServices.Db.GetImages(includeMissing: true);
+                var videos = new Picer.Core.Video.VideoRepository(AppServices.Db).GetAll();
+                return (Images: images.Count, MissingImages: images.Count(item => item.Status != Picer.Core.Models.ImageStatus.Active),
+                    Videos: videos.Count, MissingVideos: videos.Count(item => item.Status != "active"));
+            }, token);
+            var syncSummary = pushed is null
+                ? AppServices.LocalSpaceSyncConfigured ? "已按用户选择的来源范围执行照片空间增量发布" : "当前没有配置可写的同步服务"
+                : $"本次提交 {pushed.Images} 张照片、{pushed.Videos} 个视频的变更";
+            var fileCheck = AppServices.SpaceSynchronizationClient is not null ? "各来源按已授权范围检查文件引用" : $"本机核查发现 {newlyMissing} 个新缺失文件";
+            await StartSpaceInspectionAsync(token);
+            var spaceSummary=AppServices.SpaceSynchronizationClient is null ? "当前未连接账号空间，本次仅巡检当前索引。" : "空间其他来源结果见来源状态列表；离线来源继续等待。";
+            _status.Text = AppServices.SpaceSynchronizationClient is null
+                ? $"当前索引巡检完成；{syncSummary}。{fileCheck}。数据库完整性：{integrity}。照片 {counts.Images}（缺失/移动 {counts.MissingImages}），视频 {counts.Videos}（缺失/移动 {counts.MissingVideos}）。{spaceSummary}缺失项不会自动删除。"
+                : $"空间巡检已提交；本机数据库完整性：{integrity}。当前缓存有照片 {counts.Images}、视频 {counts.Videos}。{fileCheck}；请以逐来源回执为准。{spaceSummary}缺失项不会自动删除。";
+        }
+        catch (OperationCanceledException) { _status.Text = "巡检已取消；已提交的同步页仍保留，下一次可继续。"; }
+        catch (Exception exception) { _status.Text = "巡检或同步未完成；已完成的页面保留，可重试：" + exception.Message; }
+        finally
+        {
+            _cancellation.Dispose(); _cancellation = null;
+            SetBusy(false);
+        }
+    }
+
+    private void SetBusy(bool busy)
+    {
+        _inspectSync.IsEnabled = _add.IsEnabled = _remove.IsEnabled = _start.IsEnabled = !busy;
+        _cancel.IsEnabled = busy || _spaceInspectionActive;
     }
 
     private async Task RunAsync()
     {
         if (_cancellation is not null || _roots.Items.Count == 0) return;
         _cancellation = new(); var token = _cancellation.Token;
-        _start.IsEnabled = _add.IsEnabled = _remove.IsEnabled = false; _cancel.IsEnabled = true;
+        SetBusy(true);
         var restored = 0; var added = 0; var missing = 0; var failed = 0;
         try
         {
@@ -111,7 +189,7 @@ public sealed class IndexRepairWindow : Window
         finally
         {
             _cancellation.Dispose(); _cancellation = null;
-            _start.IsEnabled = _add.IsEnabled = _remove.IsEnabled = true; _cancel.IsEnabled = false;
+            SetBusy(false);
         }
     }
 }

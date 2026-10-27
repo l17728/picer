@@ -21,7 +21,7 @@
                 <ComboBoxItem Content="图片"/><ComboBoxItem Content="视频"/><ComboBoxItem Content="全部"/>
             </ComboBox>
             <Button Content="加载更多" Command="{Binding LoadMoreCommand}" Padding="14,4"/>
-            <Button Content="修复照片和视频索引…" Click="RepairIndex_Click" Padding="10,4" Margin="8,0"/>
+            <Button Content="索引巡检、同步与修复…" Click="RepairIndex_Click" Padding="10,4" Margin="8,0"/>
             <TextBlock Text="{Binding StatusText}" VerticalAlignment="Center" Margin="12,0,0,0" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite"/>
         </WrapPanel>
         <Grid>

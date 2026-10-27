@@ -15,9 +15,15 @@ public sealed record GatewayDetectedFace(
 public sealed record GatewayFaceAssignment(
     long FaceId, long PersonId, string State, double? Confidence, string AssignedBy, string UpdatedUtc);
 public sealed record GatewayVideoKeyframe(long Id, long VideoId, double TimestampSeconds, string Path, long DifferenceHash);
-public sealed record GatewayVideoTranscript(long VideoId, string ModelVersion, string TranscriptJson);
+public sealed record GatewayVideoTranscript(long VideoId, string ModelVersion, string TranscriptJson)
+{
+    public string? UpdatedUtc { get; init; }
+}
 public sealed record GatewayVideoSummary(long VideoId, string Provider, string ModelVersion, string PromptVersion, string Summary, string ResultJson,
-    long? SourceFileSize = null, string? SourceModifiedUtc = null);
+    long? SourceFileSize = null, string? SourceModifiedUtc = null)
+{
+    public string? UpdatedUtc { get; init; }
+}
 public sealed record GatewayVideoFace(long Id, long VideoId, long KeyframeId, double TimestampSeconds, int Ordinal,
     double BoxX, double BoxY, double BoxWidth, double BoxHeight, double Confidence, byte[]? Embedding,
     long? SuggestedPersonId, double? MatchConfidence, long? AssignedPersonId, string? AssignmentState,
@@ -42,6 +48,13 @@ public sealed record GatewayFacePersonPolicy(long PersonId, string ArtifactId, s
     double MatchThreshold, string UpdatedUtc);
 public sealed record GatewayFaceModelSetting(string ModelVersion, double MatchThreshold, int CalibratedSamePairs,
     int CalibratedDifferentPairs, string UpdatedUtc);
+public sealed record GatewayClassificationAssertion(long ImageId, string? ContentSha256, string ConceptId,
+    string SourceKind, string SourceVersion, string AssertionState, string ReviewState, float? Confidence,
+    string? EvidenceFingerprint, string CreatedUtc, string UpdatedUtc, string? ReviewedUtc);
+public sealed record GatewayClassificationRejection(long ImageId, string ConceptId, string SourceScope, string RejectedUtc);
+public sealed record GatewaySemanticContentCluster(string ClusterKey, string ModelVersion, string DisplayName,
+    float Confidence, int MemberCount, string CreatedUtc, string UpdatedUtc);
+public sealed record GatewaySemanticContentClusterMember(string ClusterKey, long ImageId, float Similarity);
 [method: JsonConstructor]
 public sealed record GatewayMetadata(
     IReadOnlyList<GatewayAlbumImageLink> AlbumImages,
@@ -62,7 +75,11 @@ public sealed record GatewayMetadata(
     IReadOnlyList<GatewayFacePersonPrototype>? FacePersonPrototypes = null,
     IReadOnlyList<GatewayFacePersonPolicy>? FacePersonPolicies = null,
     IReadOnlyList<GatewayFaceModelSetting>? FaceModelSettings = null,
-    IReadOnlyList<GatewayFaceReviewDecision>? FaceReviewDecisions = null)
+    IReadOnlyList<GatewayFaceReviewDecision>? FaceReviewDecisions = null,
+    IReadOnlyList<GatewayClassificationAssertion>? ClassificationAssertions = null,
+    IReadOnlyList<GatewayClassificationRejection>? ClassificationRejections = null,
+    IReadOnlyList<GatewaySemanticContentCluster>? SemanticContentClusters = null,
+    IReadOnlyList<GatewaySemanticContentClusterMember>? SemanticContentClusterMembers = null)
 {
     public GatewayMetadata(
         IReadOnlyList<GatewayAlbumImageLink> albumImages,
@@ -80,4 +97,8 @@ public sealed record GatewayMetadata(
     [JsonIgnore] public IReadOnlyList<GatewayFacePersonPrototype> FacePersonPrototypesOrEmpty => FacePersonPrototypes ?? [];
     [JsonIgnore] public IReadOnlyList<GatewayFacePersonPolicy> FacePersonPoliciesOrEmpty => FacePersonPolicies ?? [];
     [JsonIgnore] public IReadOnlyList<GatewayFaceModelSetting> FaceModelSettingsOrEmpty => FaceModelSettings ?? [];
+    [JsonIgnore] public IReadOnlyList<GatewayClassificationAssertion> ClassificationAssertionsOrEmpty => ClassificationAssertions ?? [];
+    [JsonIgnore] public IReadOnlyList<GatewayClassificationRejection> ClassificationRejectionsOrEmpty => ClassificationRejections ?? [];
+    [JsonIgnore] public IReadOnlyList<GatewaySemanticContentCluster> SemanticContentClustersOrEmpty => SemanticContentClusters ?? [];
+    [JsonIgnore] public IReadOnlyList<GatewaySemanticContentClusterMember> SemanticContentClusterMembersOrEmpty => SemanticContentClusterMembers ?? [];
 }

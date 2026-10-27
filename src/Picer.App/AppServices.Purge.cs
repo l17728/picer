@@ -41,7 +41,9 @@ public static partial class AppServices
         await RemoteMirrorGate.WaitAsync();
         try
         {
-            if (!ServiceMode && SyncGateway is not null)
+            if(!ServiceMode && _localSpacePublisher is not null && _localSpaceUploadScope is not null)
+                await _localSpacePublisher.PurgePublishedReferenceAsync("image",record.Id,_localSpaceUploadScope);
+            else if (!ServiceMode && SyncGateway is not null)
             {
                 // Publish the latest missing state first, then remove this exact
                 // reference from the paired service under the same sync gate.

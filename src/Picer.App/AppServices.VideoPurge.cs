@@ -13,7 +13,9 @@ public static partial class AppServices
         await Services.MediaPlayback.StopAllAsync();
         using var removal = await VideoOperationLifetime.BeginPurgeAsync(record.Path, token);
         using var mutation = await AcquireIndexMutationAsync(token);
-        if (!ServiceMode && SyncGateway is not null)
+        if(!ServiceMode && _localSpacePublisher is not null && _localSpaceUploadScope is not null)
+            await _localSpacePublisher.PurgePublishedReferenceAsync("video",record.Id,_localSpaceUploadScope,token);
+        else if (!ServiceMode && SyncGateway is not null)
         {
             await SyncLocalChangesToRemoteCoreAsync(token);
             string? cursor = null;

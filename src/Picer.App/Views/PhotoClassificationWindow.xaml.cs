@@ -3,7 +3,9 @@ using System.Net.Http;
 using System.Net.Http.Json;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Media.Imaging;
 using Picer.App.Infrastructure;
+using Picer.Core.Models;
 using Picer.Core.Vision;
 
 namespace Picer.App.Views;
@@ -13,6 +15,8 @@ public partial class PhotoClassificationWindow : Window
     private readonly HttpClient? _remoteClient;
     private CancellationTokenSource? _remoteRunCancellation;
     private string? _remoteRunId;
+    private ContentClusterSettings? _loadedClusterSettings;
+    private readonly CancellationTokenSource _previewCancellation = new();
 
     public PhotoClassificationWindow()
     {
@@ -27,6 +31,8 @@ public partial class PhotoClassificationWindow : Window
             ClassificationJobCoordinator.ProgressChanged -= OnProgressChanged;
             _remoteRunCancellation?.Cancel();
             _remoteClient?.Dispose();
+            _previewCancellation.Cancel();
+            _previewCancellation.Dispose();
         };
         Loaded += async (_, _) =>
         {
@@ -37,8 +43,21 @@ public partial class PhotoClassificationWindow : Window
                 if (latest is not null) { _remoteRunId = latest.RunId; ShowProgress(latest); }
             }
             else await ClassificationJobCoordinator.RefreshAsync();
+            var repaired = 0;
+            string? repairError = null;
+            try
+            {
+                repaired = await RepairObsoleteScreenshotClassificationsAsync();
+            }
+            catch (OperationCanceledException) { return; }
+            catch (Exception exception)
+            {
+                repairError = exception.Message;
+            }
             await LoadClusterSettingsAsync();
             await LoadItemsAsync();
+            if (repairError is not null) FeedbackText.Text = "旧截图分类修复未完成：" + repairError;
+            else if (repaired > 0) FeedbackText.Text = $"已修复 {repaired} 张照片的旧“屏幕截图”分类，并根据已有描述和元数据重新整理标签。";
         };
     }
 
@@ -114,19 +133,45 @@ public partial class PhotoClassificationWindow : Window
     }
     private async void ApplyThreshold_Click(object sender, RoutedEventArgs e)
     {
+        var baseline=_loadedClusterSettings;
+        if (baseline is null) { FeedbackText.Text="分类设置尚未加载，请稍后重试。"; return; }
+        if (sender is Button apply) apply.IsEnabled=false;
+        try
+        {
         var automatic = AutomaticThreshold.IsChecked == true; var threshold = (float)ClusterThreshold.Value;
         if (AppServices.ServiceMode)
         {
-            using var response = await _remoteClient!.PostAsJsonAsync("clustering/settings", new { Automatic = automatic, ManualThreshold = threshold });
+            using var response = await _remoteClient!.PostAsJsonAsync("clustering/settings", new { Automatic = automatic, ManualThreshold = threshold, ExpectedVersion=baseline.Version,ExpectedEpoch=baseline.Epoch,ModelVersion=baseline.ModelVersion });
+            if (response.StatusCode==System.Net.HttpStatusCode.Conflict)
+            {
+                using var error=System.Text.Json.JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+                var errorCode=error.RootElement.TryGetProperty("error",out var code) ? code.GetString() : null;
+                var retained=errorCode=="metadata_conflict_pending";
+                await LoadClusterSettingsAsync();
+                FeedbackText.Text=errorCode=="cluster_model_changed" ? "分类模型已更新，已重新加载设置；请确认后重新应用。"
+                    : retained ? "另一台电脑已修改分类设置。你的修改已保留，请从“索引巡检、同步与修复 → 处理同步冲突…”选择要采用的版本。"
+                    : "照片空间已重置，已重新加载分类设置；请确认后重新应用。";
+                return;
+            }
             response.EnsureSuccessStatusCode();
         }
         else await UiWork.RunDatabaseAsync("classification-cluster-settings", () =>
         {
-            var settings = AppServices.ContentSemanticClusters.SaveSettings(automatic, threshold);
-            AppServices.ContentSemanticClusters.RebuildLatest(settings.EffectiveThreshold);
+            var settings = AppServices.ContentSemanticClusters.SaveSettings(automatic, threshold,
+                expectedVersion:baseline.Version,expectedOperationId:baseline.OperationId,expectedModelVersion:baseline.ModelVersion);
+            AppServices.ContentSemanticClusters.RebuildConfigured(settings);
         });
         await LoadClusterSettingsAsync(); await LoadItemsAsync();
+        if (!AppServices.ServiceMode) AppServices.QueueImmediateRemoteSync("动态分类阈值更新");
         FeedbackText.Text = "动态分类阈值已应用；标签未变化的照片保留原分类。";
+        }
+        catch (InvalidOperationException exception) when (exception.Message=="metadata_conflict_pending")
+        { FeedbackText.Text="分类设置已被更新。你的修改已保留，请从“索引巡检、同步与修复 → 处理同步冲突…”选择版本。"; }
+        catch (InvalidOperationException exception) when (exception.Message=="cluster_model_changed")
+        { await LoadClusterSettingsAsync(); FeedbackText.Text="分类模型已更新，已重新加载设置；请确认后重新应用。"; }
+        catch (Exception exception) when (exception is HttpRequestException or InvalidOperationException or IOException)
+        { FeedbackText.Text="分类设置未保存，请检查连接后重试。"; }
+        finally { if (sender is Button button) button.IsEnabled=true; }
     }
 
     private async Task LoadClusterSettingsAsync()
@@ -135,6 +180,7 @@ public partial class PhotoClassificationWindow : Window
             ? await _remoteClient!.GetFromJsonAsync<ContentClusterSettings>("clustering/settings")
             : await UiWork.RunDatabaseAsync("classification-cluster-settings-load", AppServices.ContentSemanticClusters.GetSettings);
         if (settings is null) return;
+        _loadedClusterSettings=settings;
         AutomaticThreshold.IsChecked = settings.Automatic;
         ClusterThreshold.Value = settings.ManualThreshold;
         ClusterThreshold.IsEnabled = !settings.Automatic;
@@ -159,6 +205,7 @@ public partial class PhotoClassificationWindow : Window
     {
         if (Tabs.SelectedItem is not TabItem tab) return;
         var view = tab.Tag?.ToString() ?? "pending";
+        OwnershipHelp.Visibility = view == "ownership" ? Visibility.Visible : Visibility.Collapsed;
         ReviewRow[] rows;
         if (AppServices.ServiceMode)
         {
@@ -180,6 +227,53 @@ public partial class PhotoClassificationWindow : Window
         });
         Items.ItemsSource = rows;
         FeedbackText.Text = $"当前页签：分类项 {rows.Length} 条，涉及照片 {rows.Select(row => row.ImageId).Distinct().Count()} 张。";
+    }
+
+    private async Task<int> RepairObsoleteScreenshotClassificationsAsync()
+    {
+        if (AppServices.ServiceMode)
+        {
+            using var response = await _remoteClient!.PostAsync("repair-screenshots", null, _previewCancellation.Token);
+            response.EnsureSuccessStatusCode();
+            return (await response.Content.ReadFromJsonAsync<ScreenshotRepairResult>(cancellationToken: _previewCancellation.Token))?.RepairedImages ?? 0;
+        }
+        return await UiWork.RunDatabaseAsync("classification-repair-screenshots",
+            () => AppServices.ClassificationProjection.RepairObsoleteScreenshotClassifications(_previewCancellation.Token),
+            _previewCancellation.Token);
+    }
+
+    private async void Preview_Loaded(object sender, RoutedEventArgs e)
+    {
+        if (!AppServices.ServiceMode || sender is not Image image || image.DataContext is not ReviewRow row ||
+            row.PreviewPath.Length > 0 || row.PreviewLoading) return;
+        row.PreviewLoading = true;
+        try
+        {
+            var record = new ImageRecord { Id = row.ImageId };
+            var path = AppServices.RemoteThumbnails.TryGet(record) ?? await AppServices.RemoteThumbnails.GetOrDownloadAsync(
+                record, token => AppServices.Gateway.OpenThumbnailAsync(row.ImageId, token), _previewCancellation.Token);
+            if (path is not null && File.Exists(path))
+            {
+                row.PreviewPath = path;
+                image.Source = LoadPreview(path);
+            }
+        }
+        catch (OperationCanceledException) { }
+        catch (HttpRequestException) { }
+        catch (IOException) { }
+        finally { row.PreviewLoading = false; }
+    }
+
+    private static BitmapImage LoadPreview(string path)
+    {
+        var bitmap = new BitmapImage();
+        bitmap.BeginInit();
+        bitmap.CacheOption = BitmapCacheOption.OnLoad;
+        bitmap.DecodePixelWidth = 256;
+        bitmap.UriSource = new Uri(path, UriKind.Absolute);
+        bitmap.EndInit();
+        bitmap.Freeze();
+        return bitmap;
     }
 
     private async void Confirm_Click(object sender, RoutedEventArgs e) =>
@@ -220,6 +314,7 @@ public partial class PhotoClassificationWindow : Window
             }
         }
         else await UiWork.RunDatabaseAsync("classification-review", () => { foreach (var row in selected) action(row); });
+        if (!AppServices.ServiceMode) AppServices.QueueImmediateRemoteSync("分类审核提交");
         FeedbackText.Text = $"已{operation} {selected.Length} 条分类项。";
         await LoadItemsAsync();
     }
@@ -250,15 +345,28 @@ public partial class PhotoClassificationWindow : Window
         ("user", _, _) => "用户已确认",
         ("person_metadata", _, _) => "照片人物标签（已确认）",
         ("legacy", _, _) => "旧版已生效（来源未记录）",
+        ("ownership_review", _, _) => "历史拒绝（待核对来源）",
         (_, _, "rejected") => "已忽略（机器建议）",
         (_, "suggested", _) => "建议/待确认",
         _ => "自动归类（机器结果）"
     };
 
-    private sealed record ReviewRow(long ImageId, string Path, string? ThumbnailPath, string ConceptId,
-        string DisplayName, string SourceText, int ReferenceCount)
+    private sealed class ReviewRow(long imageId, string path, string? thumbnailPath, string conceptId,
+        string displayName, string sourceText, int referenceCount)
     {
-        public string PreviewPath => File.Exists(ThumbnailPath) ? ThumbnailPath! : Path;
+        public long ImageId { get; } = imageId;
+        public string Path { get; } = path;
+        public string? ThumbnailPath { get; } = thumbnailPath;
+        public string ConceptId { get; } = conceptId;
+        public string DisplayName { get; } = displayName;
+        public string SourceText { get; } = sourceText;
+        public int ReferenceCount { get; } = referenceCount;
+        public string PreviewPath { get; set; } = !string.IsNullOrWhiteSpace(thumbnailPath) && File.Exists(thumbnailPath)
+            ? thumbnailPath
+            : AppServices.ServiceMode ? "" : path;
+        public bool PreviewLoading { get; set; }
         public string ReferenceText => $"路径引用 {ReferenceCount} 个";
     }
+
+    private sealed record ScreenshotRepairResult(int RepairedImages);
 }

@@ -52,51 +52,8 @@ command -v flock >/dev/null
 exec 9>/run/lock/picer-index-deploy.lock
 flock -n 9 || { echo 'another deployment is already running' >&2; exit 2; }
 
-assert_database_closed() {
-    local file result
-    for file in "$data_root/picer.db" "$data_root/picer.db-wal" "$data_root/picer.db-shm" "$data_root/picer.db.access"; do
-        [[ -e "$file" ]] || continue
-        result=0
-        fuser "$file" >/dev/null 2>&1 || result=$?
-        (( result == 1 )) || { echo 'database still has an open handle, or holder inspection failed; refusing file copy' >&2; return 1; }
-    done
-}
-
-# SQLite uses POSIX byte locks. Lock all existing DB/WAL/SHM files while
-# copying so a late independent writer cannot change the closed snapshot.
 database_copy() {
-    python3 - "$1" "$data_root" "$backup/database" <<'PYDB'
-import fcntl, os, pathlib, shutil, sys
-mode, root, backup = sys.argv[1], pathlib.Path(sys.argv[2]), pathlib.Path(sys.argv[3])
-handles={}
-try:
-    for suffix in ('', '-wal', '-shm'):
-        path=root/('picer.db'+suffix)
-        if path.exists():
-            handle=open(path,'r+b'); handles[suffix]=handle
-            fcntl.lockf(handle,fcntl.LOCK_EX|fcntl.LOCK_NB)
-    for suffix in ('', '-wal', '-shm'):
-        source=(root if mode=='backup' else backup)/('picer.db'+suffix)
-        target=(backup if mode=='backup' else root)/('picer.db'+suffix)
-        if source.exists():
-            temporary=target.with_name(target.name+'.deploy-tmp')
-            if mode=='backup':
-                # Closing another descriptor for the same inode would release
-                # this process's POSIX locks. Read through the locked handle.
-                handle=handles[suffix]; handle.seek(0)
-                with open(temporary,'wb') as output: shutil.copyfileobj(handle,output)
-                shutil.copystat(source,temporary)
-            else: shutil.copy2(source,temporary)
-            st=source.stat(); os.chown(temporary,st.st_uid,st.st_gid)
-            with open(temporary,'r+b') as output: os.fsync(output.fileno())
-            os.replace(temporary,target)
-        elif mode=='restore' and target.exists(): target.unlink()
-    descriptor=os.open(str(backup if mode=='backup' else root),os.O_RDONLY)
-    try: os.fsync(descriptor)
-    finally: os.close(descriptor)
-finally:
-    for handle in reversed(list(handles.values())): handle.close()
-PYDB
+    python3 "$stage/indexservice-data-snapshot.py" "$1" "$data_root" "$backup/database"
 }
 
 
@@ -108,13 +65,8 @@ cleanup() {
         systemctl stop "$health_unit" >/dev/null 2>&1 || true
         systemctl stop "$service" || rollback_ok=0
         for unit in "${extra_writers[@]}"; do systemctl stop "$unit" || rollback_ok=0; done
-        assert_database_closed || rollback_ok=0
         if (( backup_ready == 1 && rollback_ok == 1 )); then
-            (cd "$backup/database" && sha256sum --check SHA256SUMS >/dev/null) || rollback_ok=0
             if (( rollback_ok == 1 )); then database_copy restore || rollback_ok=0; fi
-            if [[ -f "$data_root/picer.db.migration.pending.json" ]]; then
-                mv "$data_root/picer.db.migration.pending.json" "$backup/failed-migration.pending.json" || rollback_ok=0
-            fi
             if (( rollback_ok == 1 )); then
                 install -m 0755 "$backup/Picer.IndexService" "$install_dir/Picer.IndexService.rollback-$deployment_id" &&
                     mv -f "$install_dir/Picer.IndexService.rollback-$deployment_id" "$install_dir/Picer.IndexService" || rollback_ok=0
@@ -160,7 +112,7 @@ stage_created=1
 python3 - "$archive" <<'PYZIP'
 import stat,sys,zipfile
 with zipfile.ZipFile(sys.argv[1]) as archive:
-    expected={'Picer.IndexService','deployment.json','licenses/Magick.NET-Notice.txt'}
+    expected={'Picer.IndexService','deployment.json','licenses/Magick.NET-Notice.txt','indexservice-data-snapshot.py'}
     entries=archive.infolist()
     if len(entries)!=len(expected) or {item.filename for item in entries}!=expected or any(stat.S_ISLNK(item.external_attr>>16) for item in entries):
         raise SystemExit('unexpected archive entries')
@@ -184,6 +136,8 @@ else
 fi
 echo "Backup created: $backup"
 
+database_copy preflight
+
 # Prevent the periodic health timer from racing the controlled stop/replacement.
 stopped=1
 systemctl stop "$timer"
@@ -201,12 +155,7 @@ done
 if systemctl is-active --quiet "$service"; then echo 'service did not stop; refusing to replace executable' >&2; exit 4; fi
 
 # Schema migrations require a closed-database whole-file backup, including WAL/SHM.
-assert_database_closed
-db_backup="$backup/database"
-mkdir -m 0700 "$db_backup"
 database_copy backup
-[[ -f "$db_backup/picer.db" ]] || { echo 'database backup missing' >&2; exit 4; }
-(cd "$db_backup" && sha256sum picer.db* > SHA256SUMS)
 backup_ready=1
 [[ -f "$backup/Picer.IndexService" ]] || { echo 'previous executable required for rollback' >&2; exit 4; }
 [[ -f "$stage/licenses/Magick.NET-Notice.txt" ]] || { echo 'Magick license notice missing' >&2; exit 4; }
@@ -218,6 +167,14 @@ install -m 0644 "$manifest" "$new_manifest"
 changed=1
 mv -f "$new_binary" "$install_dir/Picer.IndexService"
 mv -f "$new_manifest" "$install_dir/deployment.json"
+# Migrate every existing tenant while the listener and all writers are stopped.
+# The public health endpoint alone would leave lazy-opened spaces unchecked.
+service_user=$(systemctl show "$service" -p User --value)
+if [[ -z "$service_user" || "$service_user" == root ]]; then
+    PICER_INDEX_DATA_ROOT="$data_root" timeout 1800 "$install_dir/Picer.IndexService" --prepare-index-upgrade
+else
+    runuser -u "$service_user" -- env PICER_INDEX_DATA_ROOT="$data_root" timeout 1800 "$install_dir/Picer.IndexService" --prepare-index-upgrade
+fi
 systemctl start "$service"
 
 verified=0

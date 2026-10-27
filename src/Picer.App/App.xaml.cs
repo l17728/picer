@@ -10,8 +10,8 @@ namespace Picer.App;
 public partial class App : Application
 {
     private MainViewModel? _mainViewModel;
-    private readonly CancellationTokenSource _remoteMirrorLoopCts = new();
-    private Task? _remoteMirrorLoop;
+    private readonly CancellationTokenSource _coldStartSyncCts = new();
+    private Task? _coldStartSync;
     private static readonly string LogPath = Path.Combine(AppPaths.DataRoot, "logs", "crash.log");
     private static readonly object CrashLogLock = new();
     private static string? _lastCrashFingerprint;
@@ -117,8 +117,8 @@ public partial class App : Application
             // SyncClient is an optional publisher helper and can be absent when
             // a read-only endpoint was configured, but that must not disable
             // remote metadata refresh (video people/keyframes included).
-            if (AppServices.ServiceMode || AppServices.SyncClient is not null)
-                _remoteMirrorLoop = Task.Run(() => RemoteMirrorLoopAsync(_remoteMirrorLoopCts.Token));
+            if (AppServices.ServiceMode || AppServices.SyncClient is not null || AppServices.LocalSpaceSyncConfigured)
+                _coldStartSync = Task.Run(() => ColdStartSynchronizationAsync(_coldStartSyncCts.Token));
             // A remote client is a read/mirror consumer. Publishing the local
             // evaluation snapshot here needlessly scans thousands of faces and
             // competes with mirror bootstrap, making the remote tree appear
@@ -187,35 +187,42 @@ public partial class App : Application
     /// isolated and retried on the next interval so a temporary network or
     /// SQLite lock never takes down the shell.
     /// </summary>
-    private async Task RemoteMirrorLoopAsync(CancellationToken cancellationToken)
+    private async Task ColdStartSynchronizationAsync(CancellationToken cancellationToken)
     {
-        LogInfo($"索引双向同步后台轮询已启动，间隔 5 秒；mode={(AppServices.ServiceMode ? "remote" : "local")}");
+        Picer.Core.Identity.SpaceNotification? notificationBaseline=null;
+        LogInfo($"索引冷启动同步 pass 开始；mode={(AppServices.ServiceMode ? "remote" : "local")}");
         try
         {
+            notificationBaseline=await AppServices.CaptureSpaceNotificationBaselineAsync(cancellationToken).ConfigureAwait(false);
             if (AppServices.ServiceMode)
                 await SyncRemoteMirrorInBackgroundAsync(cancellationToken).ConfigureAwait(false);
             await SyncReplicationInBackgroundAsync(cancellationToken).ConfigureAwait(false);
-            while (!cancellationToken.IsCancellationRequested)
-            {
-                await Task.Delay(TimeSpan.FromSeconds(5), cancellationToken).ConfigureAwait(false);
-                await SyncReplicationInBackgroundAsync(cancellationToken).ConfigureAwait(false);
-            }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            LogInfo("远程索引镜像后台轮询已停止");
+            LogInfo("索引冷启动同步已取消；checkpoint 已保留");
         }
         catch (Exception exception)
         {
-            LogCrash("远程索引镜像后台轮询失败", exception);
+            LogCrash("索引冷启动同步失败；checkpoint 已保留", exception);
+        }
+        finally
+        {
+            if (!cancellationToken.IsCancellationRequested)
+                AppServices.StartSpaceNotifications(async () =>
+                {
+                    if (_mainViewModel is not null)
+                        await _mainViewModel.RefreshFromRemoteMirrorAsync(localSourceUpdate: !AppServices.ServiceMode);
+                },notificationBaseline);
         }
     }
 
     private async Task SyncReplicationInBackgroundAsync(CancellationToken cancellationToken)
     {
-        // Publish first so a remote client's mutation is not overwritten by an
-        // older mirror pull. The checkpoint makes this incremental and
-        // idempotent; unchanged media/metadata produces no network writes.
+        // Publish the local user's committed changes once. The publisher
+        // checkpoint makes this idempotent; unchanged media/metadata produces
+        // no network writes. Notification reconnect backoff never schedules a
+        // periodic full-library scan.
         try
         {
             await AppServices.SyncLocalChangesToRemoteAsync(cancellationToken).ConfigureAwait(false);
@@ -224,8 +231,10 @@ public partial class App : Application
         {
             LogCrash("本地索引增量发布失败", exception);
         }
-        if (AppServices.SyncClient is not null)
-            await SyncRemoteMirrorInBackgroundAsync(cancellationToken).ConfigureAwait(false);
+        // Only the service-mode mirror represents the aggregate photo space.
+        // A local database must use its publisher-scoped download channel;
+        // pulling the legacy whole-space mirror here could import another
+        // device's private source records.
     }
 
     private async Task SyncRemoteMirrorInBackgroundAsync(CancellationToken cancellationToken = default)
@@ -259,9 +268,9 @@ public partial class App : Application
     protected override void OnExit(ExitEventArgs e)
     {
         LogInfo("=== Picer 退出 ===");
-        _remoteMirrorLoopCts.Cancel();
-        try { _remoteMirrorLoop?.Wait(TimeSpan.FromSeconds(2)); } catch { }
-        _remoteMirrorLoopCts.Dispose();
+        _coldStartSyncCts.Cancel();
+        try { _coldStartSync?.Wait(TimeSpan.FromSeconds(2)); } catch { }
+        _coldStartSyncCts.Dispose();
         _mainViewModel?.Dispose();
         AppServices.Shutdown();
         base.OnExit(e);

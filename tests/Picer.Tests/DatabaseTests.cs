@@ -308,6 +308,22 @@ public sealed class DatabaseTests : IDisposable
                         estimated_cost_yuan REAL NOT NULL DEFAULT 0,
                         PRIMARY KEY(image_id,provider));
                     PRAGMA user_version = 34;
+                    CREATE TABLE clip_image_embeddings(
+                        image_id INTEGER PRIMARY KEY REFERENCES images(id) ON DELETE CASCADE,
+                        model_version TEXT NOT NULL,source_file_size INTEGER NOT NULL,
+                        source_modified_utc TEXT NOT NULL,embedding BLOB NOT NULL,indexed_utc TEXT NOT NULL);
+                    CREATE TABLE face_review_states(
+                        face_id INTEGER PRIMARY KEY REFERENCES detected_faces(id) ON DELETE CASCADE,
+                        state TEXT NOT NULL CHECK(state IN ('ignored')),updated_utc TEXT NOT NULL);
+                    -- Scene descriptions were introduced in v17, before this v34 fixture.
+                    CREATE TABLE scene_group_descriptions(
+                        fingerprint TEXT PRIMARY KEY,directory_path TEXT NOT NULL,
+                        start_utc TEXT NOT NULL,end_utc TEXT NOT NULL,image_ids_json TEXT NOT NULL,
+                        representative_image_ids_json TEXT NOT NULL,provider TEXT NOT NULL,
+                        model_version TEXT NOT NULL,prompt_version TEXT NOT NULL,scene_name TEXT NOT NULL,
+                        summary TEXT NOT NULL,search_terms_json TEXT NOT NULL,
+                        state TEXT NOT NULL CHECK(state IN ('accepted','rejected')),
+                        created_utc TEXT NOT NULL,reviewed_utc TEXT NOT NULL);
                     """;
                 command.ExecuteNonQuery();
             }

@@ -29,7 +29,15 @@
                 <Button Content="合并到所选人物" Click="Merge_Click" Padding="10,4" Margin="4"
                         ToolTip="将当前人物的已确认人脸和别名合并到目标人物；操作前会再次确认"/>
             </StackPanel>
-            <TextBlock x:Name="Aliases" VerticalAlignment="Center" TextWrapping="Wrap"/>
+            <StackPanel>
+                <TextBlock x:Name="Aliases" VerticalAlignment="Center" TextWrapping="Wrap"/>
+                <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+                    <ComboBox x:Name="AliasSelection" Width="150" AutomationProperties.AutomationId="PersonAliasSelection"
+                              ToolTip="选择要移除的别名；人物本名保持不变"/>
+                    <Button Content="移除所选别名" Click="RemoveAlias_Click" Padding="10,4" Margin="6,0,0,0"
+                            AutomationProperties.AutomationId="RemovePersonAlias"/>
+                </StackPanel>
+            </StackPanel>
         </DockPanel>
         <Grid Grid.Row="2">
             <Grid.ColumnDefinitions><ColumnDefinition Width="250"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>

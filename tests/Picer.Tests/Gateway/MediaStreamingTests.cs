@@ -139,9 +139,11 @@ public sealed class MediaStreamingTests
             var bytes = new byte[1]; await stream.ReadExactlyAsync(bytes, deadline.Token);
         }
         Assert.Equal(connections, agent.MediaConnections);
-        Assert.Equal(2, agent.BytesRead);
         await gateway.ManageMediaLeaseAsync(info.ETag, true, deadline.Token);
         await agent.WaitForIdleAsync();
+        // Receiving the last byte can precede the agent's final metrics callback.
+        // Assert accounting after data sessions have drained, for both transports.
+        Assert.Equal(2, agent.BytesRead);
         // Control release and the data connection close are independent network messages.
         while (true)
         {

@@ -10,24 +10,26 @@ public sealed record FaceSuggestionResult(int Considered, int Suggested, int Bel
 public sealed class FaceSuggestionEngine(VisionAnalysisRepository repository, PeopleService people)
 {
     public FaceSuggestionResult Suggest(double? cosineThreshold = null,
-        IProgress<(int Completed, int Total)>? progress = null, string? modelVersion = null)
+        IProgress<(int Completed, int Total)>? progress = null, string? modelVersion = null, string? ownerKey = null,
+        string? expectedEpoch = null, CancellationToken cancellationToken = default)
     {
         if (cosineThreshold is < 0 or > 1) throw new ArgumentOutOfRangeException(nameof(cosineThreshold));
-        var initialEmbeddings = repository.GetEmbeddingsForMatching(modelVersion);
+        var initialEmbeddings = repository.GetEmbeddingsForMatching(modelVersion, ownerKey);
         var selectedVersion = modelVersion ?? initialEmbeddings.Where(face => face.AssignmentState == "confirmed")
             .GroupBy(face => face.ModelVersion).OrderByDescending(group => group.Count())
             .Select(group => group.Key).FirstOrDefault();
         // Once a space is selected, all positives and candidates must come
         // from that exact vector space.  A null model argument selects one
         // dominant space; it must never mean “compare every space together”.
-        var embeddings = selectedVersion is null ? [] : repository.GetEmbeddingsForMatching(selectedVersion);
+        var embeddings = selectedVersion is null ? [] : repository.GetEmbeddingsForMatching(selectedVersion, ownerKey);
         var appliedThreshold = cosineThreshold ?? (selectedVersion is null ? null : repository.GetFaceMatchThreshold(selectedVersion)) ?? 0.55;
-        var adapter = selectedVersion is null ? null : repository.GetActiveFaceAdapter(selectedVersion);
+        var adapter = selectedVersion is null ? null : repository.GetActiveFaceAdapter(selectedVersion, ownerKey);
+        var allowedPeople = ReadAllowedPeople(ownerKey);
         var confirmed = embeddings
             .Where(face => face.AssignmentState == "confirmed" && face.PersonId is not null)
             .Select(face => (PersonId: face.PersonId!.Value, Embedding: ApplyAdapter(face.Embedding, adapter)))
             .Concat(selectedVersion is not null
-                ? people.GetConfirmedVideoFaceEmbeddings(selectedVersion).Select(face =>
+                ? people.GetConfirmedVideoFaceEmbeddings(selectedVersion, ownerKey).Select(face =>
                     (PersonId: face.PersonId, Embedding: ApplyAdapter(face.Embedding, adapter)))
                 : []);
         var prototypes = confirmed
@@ -35,13 +37,14 @@ public sealed class FaceSuggestionEngine(VisionAnalysisRepository repository, Pe
             .ToDictionary(group => group.Key, group => BuildPrototypes(group.Select(face => face.Embedding)));
         var learnedPolicies = selectedVersion is null
             ? new Dictionary<long, FaceLearnedPolicy>()
-            : repository.GetLearnedFacePolicies(selectedVersion).ToDictionary(pair => pair.Key, pair => pair.Value);
+            : repository.GetLearnedFacePolicies(selectedVersion).Where(pair => allowedPeople is null || allowedPeople.Contains(pair.Key)).ToDictionary(pair => pair.Key, pair => pair.Value);
         foreach (var policy in learnedPolicies.Values)
         {
             if (prototypes.TryGetValue(policy.PersonId, out var existing))
                 prototypes[policy.PersonId] = existing.Concat([policy.Prototype]).ToArray();
         }
-        var trainedPolicies = selectedVersion is null ? [] : repository.GetTrainedFacePrototypes(selectedVersion);
+        var trainedPolicies = selectedVersion is null ? [] : repository.GetTrainedFacePrototypes(selectedVersion)
+            .Where(policy => allowedPeople is null || allowedPeople.Contains(policy.PersonId)).ToArray();
         foreach (var policy in trainedPolicies)
         {
             var prototype = ApplyAdapter(policy.Centroid, adapter);
@@ -49,7 +52,7 @@ public sealed class FaceSuggestionEngine(VisionAnalysisRepository repository, Pe
                 prototypes[policy.PersonId] = existing.Concat([prototype]).ToArray();
             else prototypes[policy.PersonId] = [prototype];
         }
-        var negativePrototypes = repository.GetRejectedFaceEmbeddings(selectedVersion)
+        var negativePrototypes = repository.GetRejectedFaceEmbeddings(selectedVersion, ownerKey)
             .GroupBy(face => face.PersonId)
             .ToDictionary(group => group.Key, group => BuildPrototypes(group.Select(face => ApplyAdapter(face.Embedding, adapter)), 12));
         var adaptiveThresholds = BuildAdaptiveThresholds(appliedThreshold, prototypes, negativePrototypes);
@@ -67,6 +70,7 @@ public sealed class FaceSuggestionEngine(VisionAnalysisRepository repository, Pe
 
         for (var index = 0; index < candidates.Length; index++)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var face = candidates[index];
             var candidateEmbedding = ApplyAdapter(face.Embedding, adapter);
             var matches = prototypes
@@ -101,47 +105,70 @@ public sealed class FaceSuggestionEngine(VisionAnalysisRepository repository, Pe
                 if (face.AssignmentState == "suggested") staleSuggestionIds.Add(face.FaceId);
             }
             else if (!(face.AssignmentState == "suggested" && face.PersonId == match.PersonId) &&
-                     people.SuggestFace(face.FaceId, match.PersonId, match.Score)) suggested++;
+                     people.SuggestFace(face.FaceId, match.PersonId, match.Score, expectedEpoch)) suggested++;
             if ((index + 1) % 100 == 0 || index + 1 == candidates.Length)
                 progress?.Report((index + 1, candidates.Length));
         }
-        people.ClearAutomaticSuggestions(staleSuggestionIds);
+        cancellationToken.ThrowIfCancellationRequested();
+        people.ClearAutomaticSuggestions(staleSuggestionIds, expectedEpoch);
         return new FaceSuggestionResult(candidates.Length, suggested, below, appliedThreshold,
             lowQualityDeferred, ambiguousDeferred, negativeConflictDeferred,
             prototypes.Count(pair => pair.Value.Count > 1), negativePrototypes.Sum(pair => pair.Value.Count));
     }
 
     /// <summary>Builds an immutable, model-scoped matcher for video detections.</summary>
-    public Matcher CreateMatcher(string modelVersion)
+    public Matcher CreateMatcher(string modelVersion, string? ownerKey = null)
     {
         if (string.IsNullOrWhiteSpace(modelVersion)) throw new ArgumentException("Model version is required.", nameof(modelVersion));
         var threshold = repository.GetFaceMatchThreshold(modelVersion) ?? 0.55;
-        var adapter = repository.GetActiveFaceAdapter(modelVersion);
-        var positives = repository.GetEmbeddingsForMatching(modelVersion)
+        var adapter = repository.GetActiveFaceAdapter(modelVersion, ownerKey);
+        var allowedPeople = ReadAllowedPeople(ownerKey);
+        var positives = repository.GetEmbeddingsForMatching(modelVersion, ownerKey)
             .Where(face => face.AssignmentState == "confirmed" && face.PersonId is not null)
             .Select(face => (face.PersonId!.Value, Embedding: ApplyAdapter(face.Embedding, adapter)))
-            .Concat(people.GetConfirmedVideoFaceEmbeddings(modelVersion)
+            .Concat(people.GetConfirmedVideoFaceEmbeddings(modelVersion, ownerKey)
                 .Select(face => (face.PersonId, Embedding: ApplyAdapter(face.Embedding, adapter))));
         var prototypes = positives.GroupBy(face => face.Item1)
             .ToDictionary(group => group.Key, group => BuildPrototypes(group.Select(face => face.Embedding)));
         var personThresholds = new Dictionary<long, double>();
         foreach (var policy in repository.GetLearnedFacePolicies(modelVersion).Values)
         {
+            if (allowedPeople is not null && !allowedPeople.Contains(policy.PersonId)) continue;
             if (prototypes.TryGetValue(policy.PersonId, out var existing))
                 prototypes[policy.PersonId] = existing.Concat([ApplyAdapter(policy.Prototype, adapter)]).ToArray();
             personThresholds[policy.PersonId] = Math.Max(threshold, policy.MatchThreshold);
         }
         foreach (var policy in repository.GetTrainedFacePrototypes(modelVersion))
         {
+            if (allowedPeople is not null && !allowedPeople.Contains(policy.PersonId)) continue;
             if (prototypes.TryGetValue(policy.PersonId, out var existing))
                 prototypes[policy.PersonId] = existing.Concat([ApplyAdapter(policy.Centroid, adapter)]).ToArray();
             else prototypes[policy.PersonId] = [ApplyAdapter(policy.Centroid, adapter)];
             personThresholds[policy.PersonId] = Math.Max(personThresholds.GetValueOrDefault(policy.PersonId, threshold), policy.Threshold);
         }
-        var negatives = repository.GetRejectedFaceEmbeddings(modelVersion)
+        var negatives = repository.GetRejectedFaceEmbeddings(modelVersion, ownerKey)
             .GroupBy(face => face.PersonId)
             .ToDictionary(group => group.Key, group => BuildPrototypes(group.Select(face => ApplyAdapter(face.Embedding, adapter)), 12));
         return new Matcher(modelVersion, threshold, adapter, prototypes, negatives, personThresholds);
+    }
+
+    private HashSet<long>? ReadAllowedPeople(string? ownerKey)
+    {
+        if (ownerKey is null) return null;
+        var publisher = ownerKey.StartsWith("publisher:", StringComparison.Ordinal) ? ownerKey[10..] : null;
+        using var query = repository.Database.Command("""
+            SELECT p.id FROM people p WHERE
+                ($publisher IS NOT NULL AND EXISTS(SELECT 1 FROM sync_active_entity_identities e
+                    WHERE e.kind='person' AND e.target_id=p.id AND e.publisher_id=$publisher))
+                OR ($publisher IS NULL AND NOT EXISTS(SELECT 1 FROM sync_active_entity_identities e
+                    JOIN sync_publishers s ON s.publisher_id=e.publisher_id
+                    WHERE e.kind='person' AND e.target_id=p.id AND s.state='receiving'))
+            """);
+        query.Parameters.AddWithValue("$publisher", (object?)publisher ?? DBNull.Value);
+        var result = new HashSet<long>();
+        using var rows = query.ExecuteReader();
+        while (rows.Read()) result.Add(rows.GetInt64(0));
+        return result;
     }
 
     public sealed class Matcher(string modelVersion, double threshold, float[]? adapter,

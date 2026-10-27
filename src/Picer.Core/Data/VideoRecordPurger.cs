@@ -9,7 +9,10 @@ public enum VideoPurgeCacheScope { Local, Remote }
 public sealed class VideoRecordPurger(PicerDatabase db, VideoPurgeCacheScope cacheScope = VideoPurgeCacheScope.Local, bool allowSourceCacheCleanup = true)
 {
     public sealed record SourceCacheRequest(string Path, IReadOnlyList<string> Keyframes, IReadOnlyList<string>? ProtectedKeyframes = null);
-    public sealed record Snapshot(long Id, long ContentId, string Path, bool LastReference, IReadOnlyList<string> Keyframes, IReadOnlyList<long> FaceIds);
+    public sealed record Snapshot(long Id, long ContentId, string Path, bool LastReference, IReadOnlyList<string> Keyframes, IReadOnlyList<long> FaceIds)
+    {
+        public bool LastOwnerReference { get; init; }
+    }
 
     public Snapshot? Inspect(long id)
     {
@@ -27,12 +30,16 @@ public sealed class VideoRecordPurger(PicerDatabase db, VideoPurgeCacheScope cac
             command.Parameters.AddWithValue("$id", content);
             using (var reader = command.ExecuteReader()) while (reader.Read()) frames.Add(reader.GetString(0));
         }
-        if (last)
+        using var ownerCount=db.Command("SELECT COUNT(*) FROM sync_video_owners WHERE content_id=$content AND owner_key=(SELECT owner_key FROM sync_video_owners WHERE video_id=$reference)");
+        ownerCount.Parameters.AddWithValue("$content",content);ownerCount.Parameters.AddWithValue("$reference",id);
+        var lastOwner=last || Convert.ToInt64(ownerCount.ExecuteScalar())==1;
+        if (lastOwner)
         {
-            using var faceCommand = db.Command("SELECT id FROM video_detected_faces WHERE video_id=$id"); faceCommand.Parameters.AddWithValue("$id", content);
+            using var faceCommand = db.Command("SELECT id FROM video_detected_faces WHERE video_id=$id AND ($last=1 OR owner_key=(SELECT owner_key FROM sync_video_owners WHERE video_id=$reference))");
+            faceCommand.Parameters.AddWithValue("$id", content);faceCommand.Parameters.AddWithValue("$last",last);faceCommand.Parameters.AddWithValue("$reference",id);
             using var faceReader = faceCommand.ExecuteReader(); while (faceReader.Read()) faces.Add(faceReader.GetInt64(0));
         }
-        return new(id, content, path, last, frames, faces);
+        return new(id, content, path, last, frames, faces) { LastOwnerReference=lastOwner };
     }
 
     public bool Purge(long id, bool requireMissing = false, bool transactionHeld = false)
@@ -59,11 +66,13 @@ public sealed class VideoRecordPurger(PicerDatabase db, VideoPurgeCacheScope cac
         if (snapshot.LastReference)
         {
             foreach (var frame in snapshot.Keyframes) DeleteRecordedFrame(frameRoot, frame, protectedFrames, remote);
-            foreach (var face in snapshot.FaceIds)
-                DeleteFiles(Path.Combine(root, remote ? "remote-video-face-thumbs" : "video-face-thumbs"), $"{face}.v*.jpg");
         }
+        foreach (var face in snapshot.FaceIds)
+            DeleteFiles(Path.Combine(root, remote ? "remote-video-face-thumbs" : "video-face-thumbs"), $"{face}.v*.jpg");
         if (allowSourceCacheCleanup && !remote && (OperatingSystem.IsWindows() || !snapshot.Path.Contains('\\')))
             PurgeSourceCaches(new(snapshot.Path, snapshot.Keyframes, protectedFrames.ToArray()));
+        SpaceIdentityPurge.Video(db, id, snapshot.ContentId, snapshot.LastReference);
+        db.PurgeVideoFaceRecords(snapshot.FaceIds);
         db.ReassignVideoMetadataEdits(id);
         using var remove = db.Command("""
             DELETE FROM metadata_edits WHERE entity_id=$id AND kind IN ('video-tag-link','video-concept');
@@ -110,6 +119,7 @@ public sealed class VideoRecordPurger(PicerDatabase db, VideoPurgeCacheScope cac
 
     public static string? RecordedSourceCacheDirectory(string frame)
     {
+        if (string.IsNullOrWhiteSpace(frame)) return null;
         for (var parent = Path.GetDirectoryName(Path.GetFullPath(frame)); parent is not null; parent = Path.GetDirectoryName(parent))
             if (string.Equals(Path.GetFileName(Path.GetDirectoryName(parent)), ".picer-keyframes", StringComparison.OrdinalIgnoreCase)
                 && Path.GetFileName(parent) is { Length: 64 } hash && hash.All(Uri.IsHexDigit)) return parent;
@@ -118,7 +128,7 @@ public sealed class VideoRecordPurger(PicerDatabase db, VideoPurgeCacheScope cac
 
     public static void PurgeSourceCaches(SourceCacheRequest request)
     {
-        var protectedFrames = (request.ProtectedKeyframes ?? []).Select(Path.GetFullPath).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var protectedFrames = (request.ProtectedKeyframes ?? []).Where(path => !string.IsNullOrWhiteSpace(path)).Select(Path.GetFullPath).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var caches = request.Keyframes.Select(RecordedSourceCacheDirectory).Where(path => path is not null)
             .Cast<string>().Append(SourceCacheDirectory(request.Path)).Distinct(StringComparer.OrdinalIgnoreCase);
         foreach (var directory in caches)
@@ -141,6 +151,7 @@ public sealed class VideoRecordPurger(PicerDatabase db, VideoPurgeCacheScope cac
 
     public static void PurgeRecordedSourceFrame(string frame)
     {
+        if (string.IsNullOrWhiteSpace(frame)) return;
         var parent = Path.GetDirectoryName(Path.GetFullPath(frame));
         if (parent is not null && string.Equals(Path.GetFileName(Path.GetDirectoryName(parent)), ".picer-keyframes", StringComparison.OrdinalIgnoreCase)
             && Path.GetFileName(parent) is { Length: 64 } hash && hash.All(Uri.IsHexDigit))
@@ -149,6 +160,7 @@ public sealed class VideoRecordPurger(PicerDatabase db, VideoPurgeCacheScope cac
 
     private static void DeleteRecordedFrame(string frameRoot, string frame, HashSet<string> protectedFrames, bool remote)
     {
+        if (string.IsNullOrWhiteSpace(frame)) return;
         if (!OperatingSystem.IsWindows() && (frame.Contains('\\') || (frame.Length > 1 && frame[1] == ':'))) return;
         var full = Path.GetFullPath(frame);
         var cache = Path.GetFullPath(frameRoot);

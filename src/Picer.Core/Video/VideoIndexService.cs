@@ -362,7 +362,7 @@ public sealed class VideoRepository(PicerDatabase database)
                    SUM(CASE WHEN vf.assignment_state='ignored' THEN 1 ELSE 0 END),v.person_analysis_status,
                    EXISTS(SELECT 1 FROM video_transcripts tr WHERE tr.video_id=v.content_id),
                    EXISTS(SELECT 1 FROM video_summaries vs WHERE vs.video_id=v.content_id)
-            FROM videos v LEFT JOIN video_detected_faces vf ON vf.video_id=v.content_id
+            FROM videos v LEFT JOIN video_effective_faces vf ON vf.reference_id=v.id
             WHERE v.status='active' GROUP BY v.id,v.person_analysis_status
             """);
         using var reader = command.ExecuteReader();
@@ -379,7 +379,7 @@ public sealed class VideoRepository(PicerDatabase database)
         using var transaction = database.BeginTransaction();
         if (expected is not null && !IsCurrentContent(videoId, expected)) return;
         if (status is not ("completed" or "failed")) throw new ArgumentOutOfRangeException(nameof(status));
-        using var command = database.Command("UPDATE videos SET person_analysis_status=$status,person_analyzed_utc=$now WHERE content_id=(SELECT content_id FROM videos WHERE id=$id)");
+        using var command = database.Command("UPDATE videos SET person_analysis_status=$status,person_analyzed_utc=$now WHERE id IN (SELECT video_id FROM sync_video_owners WHERE content_id=(SELECT content_id FROM videos WHERE id=$id) AND owner_key=(SELECT owner_key FROM sync_video_owners WHERE video_id=$id))");
         command.Parameters.AddWithValue("$status", status);command.Parameters.AddWithValue("$now",DateTime.UtcNow.ToString("o"));command.Parameters.AddWithValue("$id",videoId);command.ExecuteNonQuery();
         transaction.Commit();
     }

@@ -31,6 +31,22 @@ public sealed class FaceTrainingService(
 
     public bool HasPendingArtifact => _pendingArtifact is not null;
 
+    public async Task<string> ApplyPendingArtifactRemotelyAsync(Func<LearnedTrainingApplication, Task> apply)
+    {
+        var pending = _pendingArtifact ?? throw new InvalidOperationException("No pending training artifact.");
+        await apply(new(pending.Artifact.Id, pending.DatasetId, pending.Endpoint, pending.ModelVersion, pending.Json)).ConfigureAwait(false);
+        if (ReferenceEquals(_pendingArtifact, pending)) _pendingArtifact = null;
+        return pending.Artifact.Id;
+    }
+
+    public async Task<string> RollbackRemotelyAsync(Func<LearnedTrainingApplication, Task> apply)
+    {
+        var previous = repository.GetPreviousLearnedFaceArtifact()
+            ?? throw new InvalidOperationException("没有可回滚的上一版人脸增强策略。");
+        await apply(new(previous.ArtifactId, previous.DatasetId, previous.Endpoint, previous.ModelVersion, previous.Json)).ConfigureAwait(false);
+        return previous.ArtifactId;
+    }
+
     public string ApplyPendingArtifact()
     {
         var pending = _pendingArtifact ?? throw new InvalidOperationException("No pending training artifact.");
@@ -72,6 +88,7 @@ public sealed class FaceTrainingService(
         string? expectedSnapshotId = null, bool applyArtifact = true, int attempt = 1,
         string? recipeFingerprint = null, string? recipeReason = null, int excludedSampleCount = 0)
     {
+        _pendingArtifact = null;
         using var routedClient = clientFactory?.Invoke();
         var activeClient = routedClient ?? _client;
         if (activeClient.DefaultRequestHeaders.Authorization is null)

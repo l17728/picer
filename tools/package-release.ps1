@@ -21,8 +21,14 @@ $packages = @(
     @{ Name='Picer.ModelServer'; Project='server/Picer.ModelServer/Picer.ModelServer.csproj'; Rid='linux-x64'; Executable='Picer.ModelServer' }
 )
 function Publish-Binary($project, $rid, $destination) {
-    dotnet publish (Join-Path $repoRoot $project) -c Release -r $rid --self-contained true -o $destination --warnaserror -p:IncludeRuntimeAssets=false
+    dotnet publish (Join-Path $repoRoot $project) -c Release -r $rid --self-contained true -o $destination --warnaserror -p:IncludeRuntimeAssets=false "-p:Version=$($Version.Substring(1))"
     if ($LASTEXITCODE -ne 0) { throw "Publish failed: $project ($rid)" }
+    $assemblyPath = Join-Path $destination ([IO.Path]::GetFileNameWithoutExtension($project) + '.dll')
+    if (-not (Test-Path -LiteralPath $assemblyPath -PathType Leaf)) { throw "Published assembly missing: $project ($rid)" }
+    $binaryVersion = [Diagnostics.FileVersionInfo]::GetVersionInfo($assemblyPath).ProductVersion
+    if (-not $binaryVersion -or $binaryVersion.Split('+')[0] -ne $Version.Substring(1)) {
+        throw "Published binary version does not match release tag: $project ($rid)"
+    }
     if ($rid -eq 'win-x64') {
         & (Join-Path $PSScriptRoot 'copy-native-prerequisites.ps1') -Destination $destination
     }

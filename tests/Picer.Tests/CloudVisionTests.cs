@@ -301,16 +301,11 @@ public sealed class CloudVisionTests : IDisposable
         });
         var images = new[] { _image, second };
         var descriptions = new SceneGroupDescriptionService(_database, new CloudVisionRepository(_database));
-        var plan = descriptions.BuildPlan(_root, images);
+        // Import the legacy fingerprint before creating its dependent membership
+        // rows; changing a persisted primary key is not an import operation.
+        var plan = descriptions.BuildPlan(_root, images) with { Fingerprint = "legacy-mirror-fingerprint" };
         descriptions.SaveAccepted(plan, new SceneGroupDescription(plan.Fingerprint,
             "远程聚餐", "远程镜像先到的场景摘要", ["聚餐"], "test", "e2e", "scene-v1", "accepted"));
-        // Simulate a legacy/mirror fingerprint whose SQLite ids differ while
-        // the stable directory and time range remain the same.
-        using (var command = _database.Command("UPDATE scene_group_descriptions SET fingerprint='legacy-mirror-fingerprint' WHERE fingerprint=$fingerprint"))
-        {
-            command.Parameters.AddWithValue("$fingerprint", plan.Fingerprint);
-            command.ExecuteNonQuery();
-        }
 
         var cluster = Assert.Single(new SceneTimeClusterService(_database).Build(images));
         Assert.Equal("远程聚餐", cluster.SceneName);

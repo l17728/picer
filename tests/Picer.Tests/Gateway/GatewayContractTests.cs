@@ -26,6 +26,7 @@ public sealed class GatewayServiceFixture : IDisposable
     public PicerDatabase Db { get; }
     public ThumbnailService Thumbnails { get; }
     public long SourceId { get; }
+    public long SeedPersonId { get; }
     public string BaseUrl { get; }
     public string PipeName { get; }
     public byte[] SpkiPin { get; }
@@ -69,6 +70,7 @@ public sealed class GatewayServiceFixture : IDisposable
             });
         }
         var person = new PeopleService(Db).Create("测试人物");
+        SeedPersonId = person.Id;
         var firstImage = Db.GetImages(SourceId).First();
         using (var face = Db.Command("INSERT INTO detected_faces(image_id,model_version,ordinal,box_x,box_y,box_width,box_height,confidence,embedding,created_utc) VALUES($image,'test-model',0,.1,.1,.5,.5,.99,$embedding,$created)"))
         {
@@ -205,7 +207,7 @@ public sealed class GatewayContractTests(GatewayServiceFixture fixture) : IClass
     [Fact]
     public async Task Metadata_MirrorsTheAppliedFaceArtifactAndItsModelScopedPrototype()
     {
-        var personId = new PeopleService(fixture.Db).GetAll().Single().Id;
+        var personId = fixture.SeedPersonId;
         const string modelVersion = "insightface-arcface";
         var created = DateTime.UtcNow.ToString("O");
         using (var artifact = fixture.Db.Command("""
@@ -532,15 +534,30 @@ public sealed class GatewayContractTests(GatewayServiceFixture fixture) : IClass
         await responseTask;
     }
 
-    [Fact]
-    public async Task RemoteVideoPeople_UsesAgentAndWritesDetectionsToServiceIndex()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RemoteVideoPeople_UsesAgentAndWritesDetectionsToServiceIndex(bool rejectAfterFirstAnalysis)
     {
-        var videoPath = Path.Combine(fixture.Root, "remote-face-analysis.mp4");
-        await File.WriteAllBytesAsync(videoPath, [1, 2, 3]);
+        var videoPath = Path.Combine(fixture.Root, "remote-face-analysis-"+Guid.NewGuid().ToString("N")+".mp4");
+        await File.WriteAllBytesAsync(videoPath, Guid.NewGuid().ToByteArray());
         var videoRepository = new VideoRepository(fixture.Db);
         var video = videoRepository.Upsert(fixture.SourceId, videoPath);
         videoRepository.SaveKeyframes(video.Id, [new VideoKeyframe(1.25, videoPath, 0)]);
         var keyframe = videoRepository.GetKeyframes(video.Id, existingOnly: false).Single();
+        long? rejectedPerson=null;
+        if(rejectAfterFirstAnalysis)
+        {
+            rejectedPerson=new PeopleService(fixture.Db).Create("视频拒绝回归测试人物").Id;
+            var vector=new byte[12];BitConverter.TryWriteBytes(vector.AsSpan(0,4),1f);
+            using var seed=fixture.Db.Command("""
+                INSERT INTO video_detected_faces(video_id,keyframe_id,timestamp_seconds,ordinal,model_version,
+                    box_x,box_y,box_width,box_height,confidence,embedding,assigned_person_id,assignment_state,created_utc)
+                VALUES($video,$frame,1.25,1,'insightface-arcface',.2,.2,.3,.3,.99,$embedding,$person,'confirmed',$now);
+                """);
+            seed.Parameters.AddWithValue("$video",new VideoContentRepository(fixture.Db).GetContentId(video.Id));seed.Parameters.AddWithValue("$frame",keyframe.Id);
+            seed.Parameters.AddWithValue("$embedding",vector);seed.Parameters.AddWithValue("$person",rejectedPerson.Value);seed.Parameters.AddWithValue("$now",DateTime.UtcNow.ToString("O"));seed.ExecuteNonQuery();
+        }
         var agentId = "test-video-face-agent-" + Guid.NewGuid().ToString("N");
         using var agent = new ClientWebSocket();
         agent.Options.RemoteCertificateValidationCallback = (_, _, _, _) => true;
@@ -552,6 +569,8 @@ public sealed class GatewayContractTests(GatewayServiceFixture fixture) : IClass
 
         var task = Task.Run(async () =>
         {
+            for(var attempt=0;attempt<(rejectAfterFirstAnalysis?2:1);attempt++)
+            {
             using var request = JsonDocument.Parse(await ReceiveAgentRequestAsync(agent));
             Assert.Equal("task.open", request.RootElement.GetProperty("type").GetString());
             Assert.Equal("video.people", request.RootElement.GetProperty("task").GetString());
@@ -567,6 +586,7 @@ public sealed class GatewayContractTests(GatewayServiceFixture fixture) : IClass
                 requestId = request.RootElement.GetProperty("requestId").GetString(),
                 payload = JsonSerializer.Serialize(result)
             });
+            }
         });
 
         using var handler = new HttpClientHandler { ServerCertificateCustomValidationCallback = (_, _, _, _) => true };
@@ -575,24 +595,41 @@ public sealed class GatewayContractTests(GatewayServiceFixture fixture) : IClass
         using var response = await client.PostAsync($"api/service/v1/video-people/{video.Id}?agentId={Uri.EscapeDataString(agentId)}", content: null);
         var body = await response.Content.ReadAsStringAsync();
         Assert.True(response.IsSuccessStatusCode, $"remote video people analysis failed: {(int)response.StatusCode} {body}");
+        if(rejectAfterFirstAnalysis)
+        {
+            using var detected=fixture.Db.Command("SELECT id,suggested_person_id FROM video_detected_faces WHERE keyframe_id=$frame AND ordinal=0 AND model_version='insightface-arcface'");
+            detected.Parameters.AddWithValue("$frame",keyframe.Id);long faceId;
+            using(var row=detected.ExecuteReader()) { Assert.True(row.Read());faceId=row.GetInt64(0);Assert.Equal(rejectedPerson,row.GetInt64(1)); }
+            using(var reject=fixture.Db.Command("INSERT INTO video_face_person_rejections VALUES($face,$person,$now)"))
+            { reject.Parameters.AddWithValue("$face",faceId);reject.Parameters.AddWithValue("$person",rejectedPerson!.Value);reject.Parameters.AddWithValue("$now",DateTime.UtcNow.ToString("O"));reject.ExecuteNonQuery(); }
+            using var retry=await client.PostAsync($"api/service/v1/video-people/{video.Id}?agentId={Uri.EscapeDataString(agentId)}",null);
+            Assert.Equal(HttpStatusCode.OK,retry.StatusCode);
+            using var current=fixture.Db.Command("SELECT suggested_person_id FROM video_detected_faces WHERE id=$id");current.Parameters.AddWithValue("$id",faceId);
+            Assert.Equal(DBNull.Value,current.ExecuteScalar());
+        }
         await task;
         using var command = fixture.Db.Command("SELECT COUNT(*) FROM video_detected_faces WHERE video_id=$video AND model_version='insightface-arcface'");
         command.Parameters.AddWithValue("$video", new VideoContentRepository(fixture.Db).GetContentId(video.Id));
-        Assert.Equal(1L, Convert.ToInt64(command.ExecuteScalar()));
+        Assert.Equal(rejectAfterFirstAnalysis?2L:1L, Convert.ToInt64(command.ExecuteScalar()));
         using var status = fixture.Db.Command("SELECT person_analysis_status FROM videos WHERE id=$video");
         status.Parameters.AddWithValue("$video", video.Id);
         Assert.Equal("completed", status.ExecuteScalar());
 
-        using var mirrorDb = new PicerDatabase(Path.Combine(fixture.Root, "local-mirror.db"));
+        using var mirrorDb = new PicerDatabase(Path.Combine(fixture.Root, "local-mirror-"+Guid.NewGuid().ToString("N")+".db"));
         var localSource = mirrorDb.AddSource(fixture.Root);
         new VideoRepository(mirrorDb).UpsertMirroredBatch([videoRepository.GetAll().Single(item => item.Id == video.Id)], localSource.Id);
         using var mirrorGateway = (HttpIndexGateway)fixture.CreateHttpGateway();
         var metadata = await mirrorGateway.GetMetadataAsync(CancellationToken.None, includeEmbeddings: false, includeFaceModels: true);
         Assert.Contains(metadata.VideoFacesOrEmpty, face => face.VideoId == video.Id);
-        mirrorDb.UpsertMirroredVideoMetadata(metadata);
+        foreach(var person in new PeopleService(fixture.Db).GetAll()) mirrorDb.UpsertMirroredPerson(person);
+        mirrorDb.UpsertMirroredVideoMetadata(new GatewayMetadata([],[],[]) with
+        {
+            VideoKeyframes=metadata.VideoKeyframes.Where(frame=>frame.VideoId==video.Id).ToArray(),
+            VideoFaces=metadata.VideoFacesOrEmpty.Where(face=>face.VideoId==video.Id).ToArray()
+        });
         using var mirroredFaces = mirrorDb.Command("SELECT COUNT(*) FROM video_detected_faces WHERE video_id=$video AND model_version='insightface-arcface'");
         mirroredFaces.Parameters.AddWithValue("$video", new VideoContentRepository(mirrorDb).GetContentId(video.Id));
-        Assert.Equal(1L, Convert.ToInt64(mirroredFaces.ExecuteScalar()));
+        Assert.Equal(rejectAfterFirstAnalysis?2L:1L, Convert.ToInt64(mirroredFaces.ExecuteScalar()));
     }
 
     [Fact]

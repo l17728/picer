@@ -559,8 +559,9 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
     private async Task ApplySelectedTrainingAsync()
     {
         if (IsAnalyzing || SelectedTrainingHistory is null) return;
+        var selectedHistory = SelectedTrainingHistory;
         var modelVersion = SelectedFaceModelVersion ?? "insightface-arcface";
-        if (!IsSameModelVersion(modelVersion, SelectedTrainingHistory.ModelVersion))
+        if (!IsSameModelVersion(modelVersion, selectedHistory.ModelVersion))
         {
             StatusText = "历史制品的向量模型版本与当前空间不完全一致，已阻止应用";
             return;
@@ -568,16 +569,18 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         IsAnalyzing = true;
         try
         {
-            var artifact = await UiWork.RunDatabaseAsync(() => _repository.GetFaceTrainingArtifact(SelectedTrainingHistory.ArtifactId, modelVersion));
-            if (artifact is null && SelectedTrainingHistory.CanApply)
-                artifact = await TryGetRemoteArtifactAsync(SelectedTrainingHistory.ArtifactId);
-            if (artifact is null && !SelectedTrainingHistory.CanApply)
+            var baseline = CaptureTrainingBaseline(modelVersion);
+            var artifact = await UiWork.RunDatabaseAsync(() => _repository.GetFaceTrainingArtifact(selectedHistory.ArtifactId, modelVersion));
+            if (artifact is null && selectedHistory.CanApply)
+                artifact = await TryGetRemoteArtifactAsync(selectedHistory.ArtifactId);
+            if (artifact is null && !selectedHistory.CanApply)
             {
                 StatusText = "该平台历史记录仅保留了评估指标，训练制品已不在当前平台，无法直接应用；请按该配方重新提交训练";
                 return;
             }
             if (artifact is null) { StatusText = "历史训练制品不存在，无法应用"; return; }
-            await UiWork.RunDatabaseAsync(() => ApplyTrainedPrototypes(artifact));
+            if (_services.ServiceMode) artifact = artifact with { ArtifactId = selectedHistory.ArtifactId };
+            await ApplyTrainedPrototypesAsync(artifact, baseline);
             MarkAppliedArtifactInView(artifact);
             await MarkArtifactAppliedOnPlatformAsync(artifact.ArtifactId);
             _services.QueueImmediateRemoteSync("人物识别制品应用");
@@ -585,6 +588,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             StatusText = $"已应用 {GetFaceModelDisplayName(modelVersion)} 的历史训练版本，分类结果将按该模型空间刷新";
             await RefreshPageAsync();
         }
+        catch (Exception exception) { StatusText = $"应用训练制品失败：{exception.Message}"; }
         finally { IsAnalyzing = false; }
     }
 
@@ -615,6 +619,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
 
     private async Task MarkArtifactAppliedOnPlatformAsync(string artifactId)
     {
+        if (artifactId.Contains(':')) return; // Imported source artifacts retain their own platform provenance.
         var endpoint = ResolveTrainingEndpoint();
         if (string.IsNullOrWhiteSpace(endpoint)) return;
 
@@ -892,6 +897,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         try
         {
             var trainingModelVersion = SelectedFaceModelVersion ?? "sface";
+            var baseline = CaptureTrainingBaseline(trainingModelVersion);
             var snapshot = await UiWork.RunDatabaseAsync(() => FaceTrainingSnapshotService.BuildSnapshot(_database));
             var samples = await UiWork.RunDatabaseAsync(() => ExtractEmbeddings(snapshot.SnapshotId, trainingModelVersion));
             var negativeSamples = await UiWork.RunDatabaseAsync(() => ExtractNegativeEmbeddings(snapshot.SnapshotId, trainingModelVersion));
@@ -938,7 +944,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
                 AppLogger.Warn($"训练制品未采用：model={trainingModelVersion}; artifact={artifact.ArtifactId}; accuracy={artifact.Metrics.ValidationAccuracy:F4}; best={historicalBest?.ToString("F4") ?? "none"}");
                 return;
             }
-            await UiWork.RunDatabaseAsync(() => ApplyTrainedPrototypes(artifact));
+            await ApplyTrainedPrototypesAsync(artifact, baseline);
             MarkAppliedArtifactInView(artifact);
             _services.QueueImmediateRemoteSync("人物识别训练 Agent 制品应用");
             await submission.MarkArtifactAppliedAsync(artifact.ArtifactId);
@@ -967,14 +973,15 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         IsAnalyzing = true;
         try
         {
+            var baseline = CaptureTrainingBaseline(modelVersion);
             var artifact = await UiWork.RunDatabaseAsync(() =>
-                _repository.GetPreviousAgentTrainingArtifact(modelVersion));
+                _repository.GetPreviousAgentTrainingArtifact(modelVersion, useStoredIdentity: _services.ServiceMode));
             if (artifact is null)
             {
                 StatusText = $"{GetFaceModelDisplayName(modelVersion)} 没有可回退的历史训练版本";
                 return;
             }
-            await UiWork.RunDatabaseAsync(() => ApplyTrainedPrototypes(artifact));
+            await ApplyTrainedPrototypesAsync(artifact, baseline);
             MarkAppliedArtifactInView(artifact);
             await MarkArtifactAppliedOnPlatformAsync(artifact.ArtifactId);
             _services.QueueImmediateRemoteSync("人物识别制品回退");
@@ -1104,6 +1111,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         try
         {
             var trainingModelVersion = SelectedFaceModelVersion ?? "insightface-arcface";
+            var baseline = CaptureTrainingBaseline(trainingModelVersion);
             var snapshot = await UiWork.RunDatabaseAsync(() => FaceTrainingSnapshotService.BuildSnapshot(_database));
             var samples = await UiWork.RunDatabaseAsync(() => ExtractEmbeddings(snapshot.SnapshotId, trainingModelVersion));
             var negativeSamples = await UiWork.RunDatabaseAsync(() => ExtractNegativeEmbeddings(snapshot.SnapshotId, trainingModelVersion));
@@ -1152,7 +1160,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
                             AppLogger.Error("训练制品签名校验失败，已阻止应用");
                             break;
                         }
-                        await UiWork.RunDatabaseAsync(() => ApplyTrainedPrototypes(artifact));
+                        await ApplyTrainedPrototypesAsync(artifact, baseline);
                         MarkAppliedArtifactInView(artifact);
                         _services.QueueImmediateRemoteSync("人物识别训练制品应用");
                         // Keep platform adoption and the local model-scoped
@@ -1243,31 +1251,19 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         return results;
     }
 
-    private void ApplyTrainedPrototypes(TrainingArtifactData artifact)
+    private TrainingApplicationBaseline? CaptureTrainingBaseline(string modelVersion) => !_services.ServiceMode ? null
+        : new(_database.GetMirrorCheckpoint()?.Epoch ?? throw new InvalidOperationException("请先刷新照片空间索引。"),
+            _repository.GetActiveFaceAdapterVersion(modelVersion));
+
+    private async Task ApplyTrainedPrototypesAsync(TrainingArtifactData artifact, TrainingApplicationBaseline? baseline)
     {
-        using var clear = _database.Command("DELETE FROM face_person_prototypes WHERE model_version = $mv");
-        clear.Parameters.AddWithValue("$mv", artifact.ModelVersion);
-        clear.ExecuteNonQuery();
-        using var tx = _database.BeginTransaction();
-        foreach (var proto in artifact.Prototypes)
+        if (_services.ServiceMode)
         {
-            using var cmd = _database.Command("""
-                INSERT OR REPLACE INTO face_person_prototypes (person_id, centroid, threshold, sample_count, model_version, updated_utc)
-                VALUES ($p, $c, $t, $n, $mv, $u)
-                """);
-            cmd.Transaction = tx;
-            cmd.Parameters.AddWithValue("$p", proto.PersonId);
-            // SQLite cannot bind float[] directly. Store the float32 vector as
-            // the same little-endian blob format used by the vision repositories.
-            cmd.Parameters.AddWithValue("$c", FloatArrayToBlob(proto.Centroid));
-            cmd.Parameters.AddWithValue("$t", proto.Threshold);
-            cmd.Parameters.AddWithValue("$n", proto.SampleCount);
-            cmd.Parameters.AddWithValue("$mv", artifact.ModelVersion);
-            cmd.Parameters.AddWithValue("$u", DateTime.UtcNow.ToString("o"));
-            cmd.ExecuteNonQuery();
+            var client = _services.SyncClient ?? throw new InvalidOperationException("照片空间连接尚未就绪。");
+            await client.ApplyTrainingArtifactAsync(_database, artifact, baseline: baseline);
+            await _services.SyncRemoteMirrorAsync(requireMetadataSync: true);
         }
-        tx.Commit();
-        _repository.RecordAgentTrainingArtifact(artifact, artifact.ModelVersion);
+        else await UiWork.RunDatabaseAsync(() => _repository.ApplyAgentTrainingArtifact(artifact));
         AppLogger.Info($"已应用 {artifact.Prototypes.Count} 个训练原型（{artifact.ArtifactId}）");
     }
 
@@ -1290,13 +1286,6 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         AppliedTrainingHistory = applied;
         SelectedTrainingHistory = applied;
         TrainingResultText = $"当前已应用制品：{artifact.ArtifactId} · {artifact.ModelVersion} · 准确率 {artifact.Metrics.ValidationAccuracy:P1}";
-    }
-
-    private static byte[] FloatArrayToBlob(float[] values)
-    {
-        var bytes = new byte[values.Length * sizeof(float)];
-        Buffer.BlockCopy(values, 0, bytes, 0, bytes.Length);
-        return bytes;
     }
 
     [RelayCommand]
@@ -1418,13 +1407,19 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
     [RelayCommand]
     private async Task SuggestMatchesAsync()
     {
+        try
+        {
         StatusText = "正在匹配已命名人物…";
-        var result = await UiWork.RunDatabaseAsync(() => _suggestionEngine.Suggest(modelVersion: SelectedFaceModelVersion));
+        var result = _services.ServiceMode
+            ? (await OrganizeRemoteFacesAsync("suggest")).Suggestions
+            : await UiWork.RunDatabaseAsync(() => _suggestionEngine.Suggest(modelVersion: SelectedFaceModelVersion));
         _services.QueueImmediateRemoteSync("人物自动推荐更新");
         await RefreshAsync();
         StatusText = $"候选匹配完成：检查 {result.Considered} 张，新增建议 {result.Suggested}；" +
                      $"暂缓：基础阈值 {result.BelowThreshold}、低质量 {result.LowQualityDeferred}、人物歧义 {result.AmbiguousDeferred}、负样本冲突 {result.NegativeConflictDeferred}；" +
                      $"多原型人物 {result.MultiPrototypePeople} 位，负样本原型 {result.NegativeSamples} 个";
+        }
+        catch (Exception ex) { StatusText = $"人物匹配未完成：{ex.Message}"; }
     }
 
     [RelayCommand(CanExecute = nameof(CanOrganizeFaces))]
@@ -1447,6 +1442,16 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         var organizingModelVersion = SelectedFaceModelVersion;
         try
         {
+            if (_services.ServiceMode)
+            {
+                ProgressValue = 5;
+                StatusText = OrganizeProgressText = "正在照片空间整理人物，完成后同步结果…";
+                var remote = await OrganizeRemoteFacesAsync("organize", cancellationToken);
+                await RefreshAsync();
+                ProgressValue = 100;
+                StatusText = OrganizeProgressText = $"自动归类完成：新增推荐 {remote.Suggestions.Suggested} 张，待命名 {remote.Clusters.ClusterCount} 组。";
+                return;
+            }
             ProgressValue = 5;
             StatusText = "正在使用最新标准更新自动归类（1/3：匹配已命名人物，5%）";
             OrganizeProgressText = StatusText;
@@ -1928,10 +1933,25 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
     [RelayCommand]
     private async Task BuildCandidateClustersAsync()
     {
+        try
+        {
         StatusText = "正在分析陌生人物候选组…";
-        var result = await UiWork.RunDatabaseAsync(() => _unknownFaceClusterer.Rebuild());
+        var result = _services.ServiceMode
+            ? (await OrganizeRemoteFacesAsync("cluster")).Clusters
+            : await UiWork.RunDatabaseAsync(() => _unknownFaceClusterer.Rebuild(modelVersion: SelectedFaceModelVersion));
+        if (!_services.ServiceMode) _services.QueueImmediateRemoteSync("人物候选分组更新");
         await RefreshAsync();
         StatusText = $"候选分组完成：{result.ClusterCount} 组、{result.ClusteredFaces} 张脸，未成组 {result.Considered - result.ClusteredFaces} 张";
+        }
+        catch (Exception ex) { StatusText = $"候选分组未完成：{ex.Message}"; }
+    }
+
+    private async Task<FaceOrganizationResult> OrganizeRemoteFacesAsync(string mode, CancellationToken cancellationToken = default)
+    {
+        var client = _services.SyncClient ?? throw new InvalidOperationException("照片空间连接尚未就绪。");
+        var result = await client.OrganizeFacesAsync(_database, SelectedFaceModelVersion ?? "insightface-arcface", mode, cancellationToken);
+        await _services.SyncRemoteMirrorAsync(cancellationToken, requireMetadataSync: true);
+        return result;
     }
 
     [RelayCommand]
@@ -2069,9 +2089,25 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
     {
         if (SelectedCandidateCluster is null || SelectedClusterFace is null)
         { StatusText = "请先选择候选组中的一张错误人脸"; return; }
-        await UiWork.RunDatabaseAsync(() => _repository.RemoveFaceFromCandidateCluster(SelectedCandidateCluster.Record.Id, SelectedClusterFace.FaceId));
+        var clusterId = SelectedCandidateCluster.Record.Id;
+        var faceId = SelectedClusterFace.FaceId;
+        try
+        {
+        if (_services.ServiceMode)
+        {
+            var client = _services.SyncClient ?? throw new InvalidOperationException("照片空间连接尚未就绪。");
+            await client.RemoveFaceCandidateAsync(_database, clusterId, faceId);
+            await _services.SyncRemoteMirrorAsync(requireMetadataSync: true);
+        }
+        else
+        {
+            await UiWork.RunDatabaseAsync(() => _repository.RemoveFaceFromCandidateCluster(clusterId, faceId));
+            _services.QueueImmediateRemoteSync("拆出候选人脸");
+        }
         StatusText = "已从候选组拆出该人脸；人脸仍保留在未归类列表中";
         await RefreshAsync();
+        }
+        catch (Exception ex) { StatusText = $"拆出候选人脸未完成：{ex.Message}"; }
     }
 
     public void Dispose()

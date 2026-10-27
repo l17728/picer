@@ -47,6 +47,34 @@ public sealed class SpaceReadSnapshotTests : IDisposable
     }
 
     [Fact]
+    public void PurgingAnotherMediaPreservesUnhashedVideoDecisionsAndConflictReceipts()
+    {
+        var source = _database.GetSources().Single().Id;
+        new Picer.Core.Video.VideoRepository(_database).UpsertRemote(
+            new(10, source, @"C:\Photos\clip.mp4", 10, DateTime.UnixEpoch, null, 0, 0, null, null, "active"), source, preserveIdentity: true);
+        var identity = _database.GetLocalVideoContentIdentity(10);
+        var original = new MetadataEdit("video-concept", 10, "[\"landscape\",\"manual\"]", "accepted", DateTime.UtcNow.ToString("O"), Guid.NewGuid().ToString("N"))
+            { VideoContentIdentity=identity };
+        var accepted = Assert.Single(_database.AcceptMetadataEdits([original]));
+        _database.AcceptMetadataEdits([original with { OperationId=Guid.NewGuid().ToString("N"), Value="rejected" }]);
+        Assert.Single(_database.GetMetadataEditConflicts());
+        var guard = new RestoreGuard(Path.Combine(_root, "guard"), _accounts.ServiceId, true);
+        guard.InitializeNewSpace(_device.SpaceId);
+        new SpacePurgeCoordinator(_database, guard, _device.SpaceId).Purge("image", 1);
+        var currentIdentity = _database.GetLocalVideoContentIdentity(10);
+        Assert.NotEqual(identity, currentIdentity);
+        var retained = Assert.Single(_database.GetMetadataEdits());
+        Assert.Equal(accepted.ServerVersion, retained.ServerVersion);
+        Assert.Equal("accepted", retained.Value);
+        Assert.Equal(currentIdentity, retained.VideoContentIdentity);
+        Assert.Contains("landscape", new Picer.Core.Video.VideoSearchMetadata(_database).GetConcepts(10));
+        var conflict = Assert.Single(_database.GetMetadataEditConflicts());
+        Assert.Equal(currentIdentity, conflict.Proposed.VideoContentIdentity);
+        Assert.Equal(currentIdentity, conflict.Current.VideoContentIdentity);
+        Assert.Equal(retained, Assert.Single(_database.AcceptMetadataEdits([original])));
+    }
+
+    [Fact]
     public void PurgeInvalidatesOldCutAndKeepsSurvivorsInNewBaseline()
     {
         var first = _snapshots.ReadChanges(_database, _device, new());

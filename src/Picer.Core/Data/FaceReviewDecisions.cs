@@ -32,11 +32,16 @@ public sealed partial class PicerDatabase
                 FROM decisions
             ) SELECT face_id,state,created_utc FROM ranked WHERE rank=1 ORDER BY face_id
             """);
-        command.Transaction = transaction;
+        if (transaction is not null) command.Transaction = transaction;
         using var reader = command.ExecuteReader();
         var result = new List<GatewayFaceReviewDecision>();
         while (reader.Read()) result.Add(new(reader.GetInt64(0), reader.GetString(1), reader.GetString(2)));
-        return result;
+        reader.Close();
+        var effective=result.ToDictionary(item=>item.FaceId);
+        foreach(var edit in ReadMetadataEdits(transaction,facesOnly:true))
+            if(GetFaceManualEdit(edit.EntityId,transaction) is not null)
+                effective[edit.EntityId]=new(edit.EntityId,ParseFaceManualState(edit.Value).State=="ignored"?"ignored":"active",edit.UpdatedUtc);
+        return effective.Values.OrderBy(item=>item.FaceId).ToArray();
     }
 
     public IReadOnlyList<GatewayFaceReviewDecision> MergeFaceReviewDecisions(IReadOnlyList<GatewayFaceReviewDecision> incoming)
@@ -65,6 +70,7 @@ public sealed partial class PicerDatabase
                 !DateTime.TryParseExact(item.UpdatedUtc, "O", System.Globalization.CultureInfo.InvariantCulture,
                     System.Globalization.DateTimeStyles.RoundtripKind, out var time) || time.Kind != DateTimeKind.Utc)
                 throw new ArgumentException("invalid_face_review_decision");
+            if(HasFaceManualState(item.FaceId,transaction)) continue;
             if (current.TryGetValue(item.FaceId, out var previous) &&
                 (string.CompareOrdinal(previous.UpdatedUtc, item.UpdatedUtc) > 0 ||
                  previous.UpdatedUtc == item.UpdatedUtc && string.CompareOrdinal(previous.State, item.State) >= 0)) continue;
@@ -84,7 +90,8 @@ public sealed partial class PicerDatabase
     {
         using var ignored = Command("""
             INSERT INTO face_review_states(face_id,state,updated_utc) VALUES($face,'ignored',$updated)
-            ON CONFLICT(face_id) DO UPDATE SET state='ignored',updated_utc=excluded.updated_utc;
+            ON CONFLICT(face_id) DO UPDATE SET state='ignored',updated_utc=excluded.updated_utc
+            WHERE face_review_states.state IS NOT 'ignored' OR face_review_states.updated_utc IS NOT excluded.updated_utc;
             DELETE FROM face_person_assignments WHERE face_id=$face;
             DELETE FROM face_candidate_members WHERE face_id=$face;
             """);
@@ -92,6 +99,7 @@ public sealed partial class PicerDatabase
         ignored.Transaction = active.Transaction = transaction;
         foreach (var item in decisions)
         {
+            if(GetFaceManualEdit(item.FaceId,transaction) is { } manual) { ApplyFaceManualState(manual,transaction);continue; }
             var command = item.State == "ignored" ? ignored : active;
             command.Parameters.Clear();
             command.Parameters.AddWithValue("$face", item.FaceId);

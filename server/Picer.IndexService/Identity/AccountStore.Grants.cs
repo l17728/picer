@@ -267,6 +267,24 @@ public sealed partial class AccountStore
         return result;
     }
 
+    internal IReadOnlyDictionary<string,(string Name,bool Active)> ReadSpaceSourceGrants(string spaceId)
+    {
+        using var connection = Open();
+        using var command = Command(connection,null,"""
+            SELECT g.id,g.name,(g.state='active' AND g.kind='gui' AND a.disabled=0 AND s.state='active'
+                AND m.role IN ('owner','editor') AND instr(' '||g.scope||' ',' index.read ')>0
+                AND instr(' '||g.scope||' ',' index.write ')>0)
+            FROM device_grants g JOIN accounts a ON a.id=g.account_id
+            LEFT JOIN memberships m ON m.space_id=g.space_id AND m.account_id=g.account_id
+            JOIN spaces s ON s.id=g.space_id
+            WHERE g.space_id=$space
+            """,("$space",spaceId));
+        using var reader = command.ExecuteReader();
+        var result = new Dictionary<string,(string Name,bool Active)>(StringComparer.Ordinal);
+        while (reader.Read()) result.Add(reader.GetString(0),(reader.GetString(1),!reader.IsDBNull(2) && reader.GetBoolean(2)));
+        return result;
+    }
+
     public void Revoke(string accountId, string grantId)
     {
         using var fence = EnterRevocationFence();

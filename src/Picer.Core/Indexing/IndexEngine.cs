@@ -327,18 +327,22 @@ public sealed class IndexEngine
     }
 
     public Task<List<ImageRecord>> VerifyAsync(CancellationToken ct = default) =>
-        Task.Run(() =>
+        Task.Run(async () =>
         {
             AppLogger.Info("开始验证文件是否存在...");
-            var active = _db.GetImages(includeMissing: false);
-            var missingIds = active
-                .Where(a => !_storage.Exists(a.Path))
-                .Select(a => a.Id)
-                .ToList();
-            _db.MarkMissing(missingIds);
-            AppLogger.Info($"验证完成: {active.Count} 个文件, {missingIds.Count} 个缺失");
-            return _db.GetMissingImages();
+            using var database = _db.OpenIndependentConnection();
+            var result = await new IndexReferenceInspector(database, _storage)
+                .InspectAsync(photos: true, videos: false, cancellationToken: ct).ConfigureAwait(false);
+            AppLogger.Info($"验证完成: {result.CheckedPhotos} 个文件, {result.MissingPhotos} 个缺失, {result.UnavailableSources.Count} 个来源不可用, {result.FailedItems} 项待重试");
+            return database.GetMissingImages();
         }, ct);
+
+    public Task<IndexReferenceInspectionResult> InspectReferencesAsync(IReadOnlyList<long>? sourceIds=null,bool photos=true,bool videos=true,
+        CancellationToken cancellationToken=default) => Task.Run(async () =>
+    {
+        using var database=_db.OpenIndependentConnection();
+        return await new IndexReferenceInspector(database,_storage).InspectAsync(sourceIds,photos,videos,cancellationToken).ConfigureAwait(false);
+    },cancellationToken);
 
     /// <summary>
     /// Removes only Picer's database record and generated thumbnail.

@@ -99,6 +99,62 @@ public sealed class ClassificationProjectionTests : IDisposable
     }
 
     [Fact]
+    public void ClusterRecommendationsAndSavedThresholdsUseOnlyTheirOwnModel()
+    {
+        var source=_database.AddSource(_root);var embeddings=new ClipSemanticRepository(_database);
+        for(var index=0;index<16;index++)
+        {
+            var id=AddImage(source.Id,$"threshold-{index}.jpg",800,600,null);
+            AddSuggestion(id,"scene.landscape",new string('c',64));
+            var angle=(index-8)*MathF.PI/4;
+            embeddings.Upsert(_database.GetImage(id)!,index<8?"model-a":"model-b",
+                index<8?new float[]{1,0}:new float[]{MathF.Cos(angle),MathF.Sin(angle)});
+        }
+        var service=new ContentSemanticClusterService(_database);
+        Assert.Equal(0.90f,service.GetSettingsForModel("model-a").RecommendedThreshold);
+        Assert.Equal(0.76f,service.GetSettingsForModel("model-b").RecommendedThreshold);
+        var first=service.SaveSettings(false,0.75f);
+        Assert.Equal("model-a",first.ModelVersion);
+        var added=AddImage(source.Id,"model-b-majority.jpg",800,600,null);
+        embeddings.Upsert(_database.GetImage(added)!,"model-b",new float[]{1,0});
+        Assert.True(service.GetSettings().Automatic);
+        Assert.Throws<InvalidOperationException>(()=>service.SaveSettings(false,0.95f,expectedVersion:first.Version,
+            expectedOperationId:first.OperationId,expectedModelVersion:first.ModelVersion));
+        Assert.Equal(0.75f,service.GetSettingsForModel("model-a").EffectiveThreshold);
+        Assert.True(service.GetSettingsForModel("model-b").Automatic);
+    }
+
+    [Fact]
+    public void RebuildingOneModelKeepsOtherModelsClustersAndNeverAdoptsTheirKeys()
+    {
+        var source = _database.AddSource(_root);
+        var ids = Enumerable.Range(1, 3).Select(index => AddImage(source.Id, $"model-{index}.jpg", 800, 600, null)).ToArray();
+        var embeddings = new ClipSemanticRepository(_database);
+        foreach (var id in ids)
+        {
+            AddSuggestion(id, "scene.landscape", new string('c', 64));
+            embeddings.Upsert(_database.GetImage(id)!, "model-a", new float[] { 1f, 0.01f });
+        }
+        var clusters = new ContentSemanticClusterService(_database);
+        Assert.Equal(1, clusters.Rebuild("model-a", 0.9f).ClusterCount);
+        var first = Text("SELECT cluster_key FROM semantic_content_clusters WHERE model_version='model-a'");
+        foreach (var id in ids)
+            embeddings.Upsert(_database.GetImage(id)!, "model-b", new float[] { 1f, 0.01f, 0.1f });
+        Assert.Equal(1, clusters.Rebuild("model-b", 0.9f).ClusterCount);
+        var second = Text("SELECT cluster_key FROM semantic_content_clusters WHERE model_version='model-b'");
+        Assert.NotEqual(first, second);
+        Assert.Equal(first, Text("SELECT cluster_key FROM semantic_content_clusters WHERE model_version='model-a'"));
+        Assert.Equal(6L, Scalar("SELECT COUNT(*) FROM semantic_content_cluster_members"));
+        Assert.Equal(6L, Scalar("SELECT COUNT(*) FROM image_classification_assertions WHERE source_version='semantic-cluster-v1'"));
+        clusters.Rebuild("model-b", 0.95f);
+        Assert.Equal(second, Text("SELECT cluster_key FROM semantic_content_clusters WHERE model_version='model-b'"));
+        Assert.Equal(first, Text("SELECT cluster_key FROM semantic_content_clusters WHERE model_version='model-a'"));
+        clusters.Rebuild("model-a", 0.9f);
+        Assert.Equal(1L, Scalar("SELECT COUNT(*) FROM semantic_content_clusters"));
+        Assert.Equal(second, Text("SELECT cluster_key FROM semantic_content_clusters"));
+    }
+
+    [Fact]
     public void CorrectionRejectsOldSuggestionAndConfirmsNewConceptForDuplicateReferences()
     {
         var source = _database.AddSource(_root);

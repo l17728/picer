@@ -36,6 +36,127 @@ public sealed class VideoContentReferenceTests : IDisposable
     { using var command = _db.Command("DELETE FROM videos WHERE id=$id"); command.Parameters.AddWithValue("$id", id); command.ExecuteNonQuery(); }
 
     [Fact]
+    public void ExplicitPurgeClearsInterruptedAdoptionsOnlyAfterLastVideoContentReference()
+    {
+        Add(100); Add(101);
+        _db.UpsertMirroredVideoMetadata(new GatewayMetadata([], [], []) with
+        {
+            VideoKeyframes = [new(500, 100, 0, "", 0)],
+            VideoFaces = [new(600, 100, 500, 0, 0, 0, 0, 1, 1, 0.9, null, null, null, null, null, null, DateTime.UtcNow.ToString("O"))]
+        });
+        using (var register = _db.Command("""
+            INSERT INTO sync_publishers(publisher_id,library_id,incarnation_id,device_grant_id,space_id,state,epoch)
+            VALUES('publisher','library','device','grant','space','publishing','epoch');
+            INSERT INTO sync_entity_identities(publisher_id,kind,local_key,global_id) VALUES
+                ('publisher','video','100','video-one'),('publisher','video','101','video-two'),
+                ('publisher','keyframe','500','frame'),('publisher','video-face','600','face');
+            INSERT INTO sync_pending_identity_adoptions(publisher_id,offer_id,kind,local_id,global_id) VALUES
+                ('publisher','frame-offer','keyframe',500,'frame'),('publisher','face-offer','video-face',600,'face');
+            """)) register.ExecuteNonQuery();
+        var purger = new VideoRecordPurger(_db, allowSourceCacheCleanup: false);
+        Assert.True(purger.Purge(100));
+        Assert.Equal(2, Count("sync_pending_identity_adoptions"));
+        Assert.Equal(3, Count("sync_entity_identities"));
+        Assert.True(purger.Purge(101));
+        Assert.Equal(0, Count("sync_pending_identity_adoptions"));
+        Assert.Equal(0, Count("sync_entity_identities"));
+    }
+
+    [Fact]
+    public void MirroredVideoFaceReparentingDoesNotRetainAnEmbeddingFromAnotherFrame()
+    {
+        Add(100);
+        Add(101, new string('b', 64));
+        var face = new GatewayVideoFace(600, 100, 500, 0, 0, 0, 0, 1, 1, 1,
+            [1, 2, 3], null, null, null, null, null, DateTime.UtcNow.ToString("O")) { ModelVersion = "face-v1" };
+        _db.UpsertMirroredVideoMetadata(new GatewayMetadata([], [], []) with
+        {
+            VideoKeyframes = [new(500, 100, 0, "first.jpg", 0), new(501, 100, 1, "second.jpg", 1),
+                new(502, 101, 0, "other.jpg", 2)],
+            VideoFaces = [face]
+        });
+        void Apply(GatewayVideoFace value) => _db.UpsertMirroredVideoMetadata(
+            new GatewayMetadata([], [], []) with { VideoFaces = [value] });
+        Apply(face with { Embedding = null });
+        Assert.Equal(new byte[] { 1, 2, 3 }, Assert.Single(_db.GetAllMirroredVideoFaces()).Embedding);
+        var moved = face with { KeyframeId = 501, TimestampSeconds = 1, Embedding = null };
+        Apply(moved);
+        Assert.Null(Assert.Single(_db.GetAllMirroredVideoFaces()).Embedding);
+        Apply(moved with { Embedding = [4, 5, 6] });
+        Apply(moved);
+        Assert.Equal(new byte[] { 4, 5, 6 }, Assert.Single(_db.GetAllMirroredVideoFaces()).Embedding);
+        Apply(moved with { VideoId = 101, KeyframeId = 502, TimestampSeconds = 0 });
+        Assert.Null(Assert.Single(_db.GetAllMirroredVideoFaces()).Embedding);
+    }
+
+    [Fact]
+    public void JournalPurgeRetainsSharedVideoEvidenceUntilItsLastReference()
+    {
+        Add(100); Add(101);
+        using (var register = _db.Command("""
+            INSERT INTO sync_publishers(publisher_id,library_id,incarnation_id,device_grant_id,space_id,state,epoch)
+            VALUES('publisher','library','device','grant','space','publishing','epoch');
+            """)) register.ExecuteNonQuery();
+        _db.UpsertMirroredVideoMetadata(new GatewayMetadata([], [], []) with
+        {
+            VideoSummaries = [new(100, "test", "model", "prompt", "summary", "{}")],
+            VideoTranscripts = [new(100, "model", "{}")],
+            VideoKeyframes = [new(500, 100, 0, "frame.jpg", 0)]
+        });
+        using var count = _db.Command("SELECT COUNT(*) FROM sync_metadata_row_journal WHERE table_name IN ('video_summaries','video_transcripts','video_keyframes')");
+        Assert.True(Convert.ToInt64(count.ExecuteScalar()) >= 3);
+        Delete(100);
+        Assert.True(Convert.ToInt64(count.ExecuteScalar()) >= 3);
+        Delete(101);
+        Assert.Equal(0L, count.ExecuteScalar());
+    }
+
+    [Fact]
+    public void MirroredVideoDescriptionsRetainOriginTimestampAndRejectOlderReplay()
+    {
+        Add(100);
+        const string newer = "2099-01-01T00:00:00.0000000Z";
+        const string older = "2026-01-01T00:00:00.0000000Z";
+        const string latest = "2100-01-01T00:00:00.0000000Z";
+        _db.UpsertMirroredPerson(new(1, "test-person", 0, 0));
+        var metadata = new GatewayMetadata([], [], []) with
+        {
+            VideoSummaries = [new(100, "test", "model", "prompt", "new summary", "{}") { UpdatedUtc = newer }],
+            VideoTranscripts = [new(100, "model", "{\"text\":\"new transcript\"}") { UpdatedUtc = newer }],
+            VideoKeyframes = [new(500, 100, 0, "local-frame.jpg", 0)],
+            VideoFaces = [new(600, 100, 500, 0, 0, 0, 0, 1, 1, 1, null, null, null, 1, "confirmed", newer, older) { ModelVersion = "face-v1" }]
+        };
+        _db.UpsertMirroredVideoMetadata(metadata);
+        _db.UpsertMirroredVideoMetadata(metadata with
+        {
+            VideoSummaries = [metadata.VideoSummaries[0] with { Summary = "old summary", UpdatedUtc = older }],
+            VideoTranscripts = [metadata.VideoTranscripts[0] with { TranscriptJson = "{}", UpdatedUtc = older }],
+            VideoKeyframes = [metadata.VideoKeyframes[0] with { Path = "" }],
+            VideoFaces = [metadata.VideoFacesOrEmpty[0] with { AssignedPersonId = null, AssignmentState = "ignored", UpdatedUtc = older }]
+        });
+        var summary = Assert.Single(_db.GetAllMirroredVideoSummaries());
+        Assert.Equal("new summary", summary.Summary);
+        Assert.Equal(newer, summary.UpdatedUtc);
+        var transcript = Assert.Single(_db.GetAllMirroredVideoTranscripts());
+        Assert.Contains("new transcript", transcript.TranscriptJson);
+        Assert.Equal(newer, transcript.UpdatedUtc);
+        Assert.Equal("local-frame.jpg", Assert.Single(_db.GetAllMirroredVideoKeyframes()).Path);
+        Assert.Equal(1L, Assert.Single(_db.GetAllMirroredVideoFaces()).AssignedPersonId);
+        _db.UpsertMirroredVideoMetadata(new GatewayMetadata([], [], []) with
+        {
+            VideoFaces = [metadata.VideoFacesOrEmpty[0] with { AssignedPersonId = null, AssignmentState = null, UpdatedUtc = latest }]
+        });
+        Assert.Equal(1L, Assert.Single(_db.GetAllMirroredVideoFaces()).AssignedPersonId);
+        _db.UpsertMirroredVideoMetadata(new GatewayMetadata([], [], []) with
+        {
+            VideoFaces = [metadata.VideoFacesOrEmpty[0] with { AssignedPersonId = null, AssignmentState = "ignored", UpdatedUtc = latest }]
+        });
+        var ignored = Assert.Single(_db.GetAllMirroredVideoFaces());
+        Assert.Null(ignored.AssignedPersonId);
+        Assert.Equal("ignored", ignored.AssignmentState);
+    }
+
+    [Fact]
     public void CopiesShareEvidenceAndBm25ButReferencesRemainIndependent()
     {
         Add(100); Add(200);

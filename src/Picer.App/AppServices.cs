@@ -1,5 +1,7 @@
 using System.IO;
 using System.Net.Http;
+using System.Security.Cryptography;
+using System.Text.Json;
 using Microsoft.ML.OnnxRuntime;
 using Picer.App.FileOperations;
 using Picer.Core.Security;
@@ -46,9 +48,13 @@ public static partial class AppServices
     private static bool _remoteMediaBootstrapped;
     private static int _remoteSyncRequested;
     private static int _remoteSyncWorkerRunning;
+    private static DeviceAccountClient? _localSpacePublisherClient;
+    private static SpaceSyncPublisher? _localSpacePublisher;
+    private static SpaceUploadScope? _localSpaceUploadScope;
     public static IIndexGateway Gateway { get; private set; } = null!;
     private static IIndexGateway? SyncGateway { get; set; }
     public static IndexSyncClient? SyncClient { get; private set; }
+    public static bool LocalSpaceSyncConfigured => !ServiceMode && _localSpacePublisher is not null && _localSpaceUploadScope is not null;
     public static bool ServiceMode { get; private set; }
     private static DeviceAccountClient? AccountClient { get; set; }
     public static string RemoteDataRoot { get; private set; } = AppPaths.DataRoot;
@@ -170,6 +176,7 @@ public static partial class AppServices
         }
 
         Db = new PicerDatabase(AppPaths.DbPath);
+        InitializeLocalSpacePublisher();
 
         // Local mode remains offline by default. When an IndexService endpoint
         // is explicitly supplied, publish local mutations in the background
@@ -318,18 +325,18 @@ public static partial class AppServices
             ? Path.GetFullPath(configured)
             : Path.Combine(AppPaths.DataRoot, "cache");
 
-    public static async Task SyncRemoteMirrorAsync(CancellationToken cancellationToken = default, bool requireMetadataSync = false, bool refreshMedia = false)
+    public static async Task SyncRemoteMirrorAsync(CancellationToken cancellationToken = default, bool requireMetadataSync = false, bool refreshMedia = false, bool publishPendingEdits = true)
     {
         await RemoteMirrorGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             if (refreshMedia) Volatile.Write(ref _remoteMediaBootstrapped, false);
-            await SyncRemoteMirrorCoreAsync(cancellationToken, requireMetadataSync).ConfigureAwait(false);
+            await SyncRemoteMirrorCoreAsync(cancellationToken, requireMetadataSync, publishPendingEdits).ConfigureAwait(false);
         }
         finally { RemoteMirrorGate.Release(); }
     }
 
-    private static async Task SyncRemoteMirrorCoreAsync(CancellationToken cancellationToken, bool requireMetadataSync)
+    private static async Task SyncRemoteMirrorCoreAsync(CancellationToken cancellationToken, bool requireMetadataSync, bool publishPendingEdits = true)
     {
         var mirrorGateway = ServiceMode ? Gateway : SyncGateway;
         if (mirrorGateway is null)
@@ -337,7 +344,7 @@ public static partial class AppServices
             if (requireMetadataSync) throw new InvalidOperationException("remote_mirror_gateway_unavailable");
             return;
         }
-        if (SyncClient is not null)
+        if (SyncClient is not null && publishPendingEdits)
         {
             try { await SyncClient.PushMetadataEditsAsync(Db, cancellationToken).ConfigureAwait(false); }
             catch (Exception exception) when (exception is HttpRequestException or InvalidOperationException)
@@ -570,13 +577,34 @@ public static partial class AppServices
         CancellationToken cancellationToken = default, IProgress<string>? progress = null)
     {
         await RemoteMirrorGate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try { return await SyncLocalChangesToRemoteCoreAsync(cancellationToken, progress).ConfigureAwait(false); }
+        try
+        {
+            var account=ServiceMode ? AccountClient : _localSpacePublisherClient;
+            var access=account?.Connection.Session?.AccessToken;
+            try { return await SyncLocalChangesToRemoteCoreAsync(cancellationToken,progress).ConfigureAwait(false); }
+            catch (HttpRequestException exception) when (exception.StatusCode==System.Net.HttpStatusCode.Unauthorized && account is not null && access is not null)
+            {
+                await account.RefreshRejectedAccessAsync(access,cancellationToken).ConfigureAwait(false);
+                return await SyncLocalChangesToRemoteCoreAsync(cancellationToken,progress).ConfigureAwait(false);
+            }
+        }
         finally { RemoteMirrorGate.Release(); }
     }
 
     private static async Task<IndexSyncClient.IndexSyncResult?> SyncLocalChangesToRemoteCoreAsync(
         CancellationToken cancellationToken = default, IProgress<string>? progress = null)
     {
+        var localPublisher = _localSpacePublisher;
+        var localScope = _localSpaceUploadScope;
+        var localClient = _localSpacePublisherClient;
+        if (!ServiceMode && localPublisher is not null && localScope is not null)
+        {
+            progress?.Report("正在同步已授权的本机来源到照片空间…");
+            await localPublisher.PublishAsync(progress, cancellationToken, localScope).ConfigureAwait(false);
+            if (localClient?.Connection.Session?.Scope.Split(' ').Contains("index.read", StringComparer.Ordinal) == true)
+                await localPublisher.PullMetadataChangesAsync(progress, cancellationToken, localScope).ConfigureAwait(false);
+            return null;
+        }
         if (SyncClient is null) return null;
         if (ServiceMode && !Volatile.Read(ref _remoteMediaBootstrapped))
             await SyncRemoteMirrorCoreAsync(cancellationToken, requireMetadataSync: true).ConfigureAwait(false);
@@ -594,14 +622,14 @@ public static partial class AppServices
     /// In local mode this is active only when the user paired a remote IndexService.</summary>
     public static void QueueImmediateRemoteSync(string reason)
     {
-        if (SyncClient is null) return;
+        if (SyncClient is null && _localSpacePublisher is null) return;
         // A vector/media upload may already be in flight for minutes. Manual
         // review decisions have their own serialized small request path.
-        _ = Task.Run(async () =>
+        if (SyncClient is not null && _localSpacePublisher is null) _ = Task.Run(async () =>
         {
             try
             {
-                await SyncClient.PushFaceReviewDecisionsAsync(Db).ConfigureAwait(false);
+                await SyncClient!.PushFaceReviewDecisionsAsync(Db).ConfigureAwait(false);
                 AppLogger.Info("人工人脸状态同步完成");
             }
             catch (Exception exception) when (exception is HttpRequestException or InvalidOperationException or Microsoft.Data.Sqlite.SqliteException)
@@ -612,6 +640,48 @@ public static partial class AppServices
         Interlocked.Exchange(ref _remoteSyncRequested, 1);
         if (Interlocked.CompareExchange(ref _remoteSyncWorkerRunning, 1, 0) != 0) return;
         _ = Task.Run(() => RunImmediateRemoteSyncAsync(reason));
+    }
+
+    private static void InitializeLocalSpacePublisher()
+    {
+        StopSpaceNotifications();
+        _localSpacePublisherClient?.Dispose();
+        _localSpacePublisherClient = null;
+        _localSpacePublisher = null;
+        _localSpaceUploadScope = null;
+        if (!File.Exists(AppPaths.AccountCredentialPath)) return;
+        try
+        {
+            var client = new WindowsDeviceCredentialStore(AppPaths.AccountCredentialPath).OpenClient();
+            var session = client.Connection.Session;
+            if (session is null || !session.Scope.Split(' ').Contains("index.write", StringComparer.Ordinal))
+            { client.Dispose(); return; }
+            var preferenceName = DeviceAuthorization.Digest(client.Connection.ServiceId + ":" + session.AccountId + ":" + session.SpaceId) + ".json";
+            var preferencePath = Path.Combine(AppPaths.DataRoot, "upload-preferences", preferenceName);
+            if (!File.Exists(preferencePath)) { client.Dispose(); return; }
+            var scope = JsonSerializer.Deserialize<SpaceUploadScope>(File.ReadAllText(preferencePath));
+            if (scope is null || scope.SourceIds.Count == 0) { client.Dispose(); return; }
+            _localSpacePublisherClient = client;
+            _localSpaceUploadScope = scope;
+            _localSpacePublisher = new SpaceSyncPublisher(client, Db, Path.Combine(AppPaths.DataRoot, "upload-snapshots"));
+            AppLogger.Info($"Source-scoped account sync enabled; sourceCount={scope.SourceIds.Distinct().Count()}");
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or JsonException or InvalidDataException or CryptographicException or InvalidOperationException)
+        {
+            _localSpacePublisherClient?.Dispose();
+            _localSpacePublisherClient = null;
+            _localSpacePublisher = null;
+            _localSpaceUploadScope = null;
+            AppLogger.Warn("Source-scoped account sync is unavailable; local indexing remains enabled: " + exception.GetType().Name);
+        }
+    }
+
+    public static async Task RefreshLocalSpacePublisherConfigurationAsync(CancellationToken cancellationToken = default)
+    {
+        await RemoteMirrorGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try { if (!ServiceMode) InitializeLocalSpacePublisher(); }
+        finally { RemoteMirrorGate.Release(); }
+        StartSpaceNotifications();
     }
 
     private static async Task RunImmediateRemoteSyncAsync(string reason)
@@ -629,7 +699,7 @@ public static partial class AppServices
                 }
                 catch (Exception exception)
                 {
-                    AppLogger.Warn($"远程索引即时同步失败，将由后台重试：reason={reason}; {exception.Message}");
+                    AppLogger.Warn($"远程索引即时同步未完成，队列已保留，将在下次操作或启动时重试：reason={reason}; type={exception.GetType().Name}");
                 }
             } while (Volatile.Read(ref _remoteSyncRequested) != 0);
         }
@@ -778,6 +848,7 @@ public static partial class AppServices
 
     public static void Shutdown()
     {
+        StopSpaceNotifications();
         Services.MediaPlayback.Shutdown();
         AppLogger.Info("AppServices 关闭");
         if (ServiceMode)
@@ -787,6 +858,7 @@ public static partial class AppServices
             (FaceAnalyzer as IDisposable)?.Dispose();
             FaceTraining?.Dispose();
             AccountClient?.Dispose(); AccountClient = null;
+            _localSpacePublisherClient?.Dispose(); _localSpacePublisherClient = null;
             Db?.Dispose();
             (Geocoder as IDisposable)?.Dispose();
             return;
@@ -798,6 +870,8 @@ public static partial class AppServices
         (FaceAnalyzer as IDisposable)?.Dispose();
         ClipSemantic?.Dispose();
         ClipSemantic = null;
+        _localSpacePublisherClient?.Dispose(); _localSpacePublisherClient = null;
+        _localSpacePublisher = null; _localSpaceUploadScope = null;
         Db?.Dispose();
         (Geocoder as IDisposable)?.Dispose();
     }

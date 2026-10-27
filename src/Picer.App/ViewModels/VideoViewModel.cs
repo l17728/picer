@@ -335,6 +335,17 @@ public partial class VideoViewModel(VideoRepository repository, VideoIndexServic
         }, $"已将 {faces.Length} 张视频人脸标记为不分类");
     }
 
+    [RelayCommand]
+    private async Task ClearVideoFaceAssignmentAsync()
+    {
+        var faces=GetSelectedVideoFaces();
+        if(faces.Length==0 || faceTimeline is null) { StatusText="请先选择视频人脸";return; }
+        await SaveVideoFaceIdentitiesAsync(()=>
+        {
+            foreach(var face in faces) faceTimeline.ClearManualAssignment(face.Record.FaceId);
+        },$"已将 {faces.Length} 张视频人脸移回待分类");
+    }
+
     private VideoFaceItemViewModel[] GetSelectedVideoFaces() =>
         _selectedVideoFaces.Length > 0 ? _selectedVideoFaces : SelectedVideoFace is null ? [] : [SelectedVideoFace];
 

@@ -8,7 +8,8 @@ public sealed class SpaceRequestAdmission
 
     public IDisposable? TryEnter(AuthorizedDevice device, string path)
     {
-        var category = path.StartsWith("/api/agent/", StringComparison.Ordinal) ? "agent"
+        var category = path == "/api/sync/v2/notifications" ? "notification"
+            : path.StartsWith("/api/agent/", StringComparison.Ordinal) ? "agent"
             : path.Contains("/assets/", StringComparison.Ordinal) ? "media"
             : path.StartsWith("/api/sync/", StringComparison.Ordinal) ? "write" : "index";
         var limits = category switch
@@ -16,6 +17,7 @@ public sealed class SpaceRequestAdmission
             "agent" => (Node: 128, Space: 32, Device: 10),
             "media" => (Node: 32, Space: 8, Device: 4),
             "write" => (Node: 8, Space: 2, Device: 1),
+            "notification" => (Node: 64, Space: 16, Device: 1),
             _ => (Node: 64, Space: 12, Device: 6)
         };
         var keys = new[] { category, category + ":s:" + device.SpaceId, category + ":d:" + device.GrantId };

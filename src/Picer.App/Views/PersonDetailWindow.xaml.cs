@@ -44,6 +44,7 @@ public partial class PersonDetailWindow : Window
         DescriptionBox.Text = person.Description;
         Summary.Text = $"{images.Length} 张照片；双击照片可逐脸确认或纠错";
         Aliases.Text = "别名/关系：" + (person.Aliases.Count == 0 ? "无" : string.Join("、", person.Aliases));
+        AliasSelection.ItemsSource = person.Aliases.Where(alias => !string.Equals(alias, person.DisplayName, StringComparison.OrdinalIgnoreCase)).ToArray();
         var byId = images.ToDictionary(image => image.Id);
         var groups = new List<PersonSceneGroup>
         {
@@ -64,22 +65,40 @@ public partial class PersonDetailWindow : Window
         if (SceneGroups.SelectedItem is PersonSceneGroup group) Photos.ItemsSource = group.Photos;
     }
 
+    private void QueuePersonChanges()
+    {
+        if (ReferenceEquals(_database, AppServices.Db)) AppServices.QueueImmediateRemoteSync("人物元数据提交");
+    }
+
     private async void Rename_Click(object sender, RoutedEventArgs e)
     {
-        try { var name = NameBox.Text; await UiWork.RunDatabaseAsync(() => _people.Rename(_personId, name)); PeopleChanged = true; Status.Text = "人物名称已更新。"; await RefreshAsync(); }
+        try { var name = NameBox.Text; await UiWork.RunDatabaseAsync(() => _people.Rename(_personId, name)); QueuePersonChanges(); PeopleChanged = true; Status.Text = "人物名称已更新。"; await RefreshAsync(); }
         catch (Exception ex) { Status.Text = ex.Message; }
     }
 
     private async void AddAlias_Click(object sender, RoutedEventArgs e)
     {
-        try { var alias = AliasBox.Text; await UiWork.RunDatabaseAsync(() => _people.AddAlias(_personId, alias)); AliasBox.Clear(); PeopleChanged = true; Status.Text = "别名已加入检索。"; await RefreshAsync(); }
+        try { var alias = AliasBox.Text; await UiWork.RunDatabaseAsync(() => _people.AddAlias(_personId, alias)); QueuePersonChanges(); AliasBox.Clear(); PeopleChanged = true; Status.Text = "别名已加入检索。"; await RefreshAsync(); }
         catch (Exception ex) { Status.Text = ex.Message; }
     }
 
     private async void SaveDescription_Click(object sender, RoutedEventArgs e)
     {
-        try { var description = DescriptionBox.Text; await UiWork.RunDatabaseAsync(() => _people.SetDescription(_personId, description)); PeopleChanged = true; Status.Text = "人物描述已保存。"; }
+        try { var description = DescriptionBox.Text; await UiWork.RunDatabaseAsync(() => _people.SetDescription(_personId, description)); QueuePersonChanges(); PeopleChanged = true; Status.Text = "人物描述已保存。"; }
         catch (Exception ex) { Status.Text = ex.Message; }
+    }
+
+    private async void RemoveAlias_Click(object sender, RoutedEventArgs e)
+    {
+        if (AliasSelection.SelectedItem is not string alias) { Status.Text = "请先选择要移除的别名。"; return; }
+        var personId = _personId;
+        try
+        {
+            await UiWork.RunDatabaseAsync(() => _people.RemoveAlias(personId, alias));
+            QueuePersonChanges(); PeopleChanged = true;
+            await RefreshAsync(); Status.Text = "别名已移除，可通过“添加别名”恢复。";
+        }
+        catch (Exception exception) { Status.Text = exception.Message; }
     }
 
     private async void Merge_Click(object sender, RoutedEventArgs e)
@@ -87,7 +106,7 @@ public partial class PersonDetailWindow : Window
         if (MergeTarget.SelectedItem is not PersonSummary target) { Status.Text = "请选择合并目标。"; return; }
         if (MessageBox.Show($"将“{Heading.Text}”的全部已确认人脸和别名合并到“{target.DisplayName}”。当前人物条目随后移除。是否继续？",
                 "确认合并人物", MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No) != MessageBoxResult.Yes) return;
-        try { await UiWork.RunDatabaseAsync(() => _people.Merge(_personId, target.Id)); _personId = target.Id; PeopleChanged = true; Status.Text = "人物已合并，可在照片中继续逐脸纠错。"; await RefreshAsync(); }
+        try { await UiWork.RunDatabaseAsync(() => _people.Merge(_personId, target.Id)); QueuePersonChanges(); _personId = target.Id; PeopleChanged = true; Status.Text = "人物已合并，可在照片中继续逐脸纠错。"; await RefreshAsync(); }
         catch (Exception ex) { Status.Text = ex.Message; }
     }
 

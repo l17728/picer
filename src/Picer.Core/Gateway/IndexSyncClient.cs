@@ -21,6 +21,66 @@ public sealed class IndexSyncClient(HttpClient client, bool accountMode = false,
     private HashSet<string> _acknowledgedMetadataOperations = new(StringComparer.Ordinal);
     public IReadOnlySet<string> AcknowledgedMetadataOperations => Volatile.Read(ref _acknowledgedMetadataOperations);
 
+    public async Task ApplyLearnedTrainingArtifactAsync(PicerDatabase database, LearnedTrainingApplication application, CancellationToken cancellationToken = default,
+        TrainingApplicationBaseline? baseline = null)
+    {
+        if (!canWrite) throw new UnauthorizedAccessException("此设备没有编辑照片空间的权限。");
+        var epoch = baseline?.Epoch ?? database.GetMirrorCheckpoint()?.Epoch ?? throw new InvalidOperationException("请先刷新照片空间索引。");
+        var active = baseline?.ActiveArtifact ?? new VisionAnalysisRepository(database).GetActiveFaceAdapterVersion(application.ModelVersion);
+        using var response = await PostMirrorEditAsync("api/service/v1/faces/training/apply-learned",
+            new LearnedTrainingMutation(application, epoch, active), database, cancellationToken).ConfigureAwait(false);
+        if (response.StatusCode == System.Net.HttpStatusCode.Conflict)
+            throw new InvalidOperationException("照片空间的训练制品或人物映射已变化，请刷新后重试。");
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task ApplyTrainingArtifactAsync(PicerDatabase database, TrainingArtifactData artifact, CancellationToken cancellationToken = default,
+        TrainingApplicationBaseline? baseline = null)
+    {
+        if (!canWrite) throw new UnauthorizedAccessException("此设备没有编辑照片空间的权限。");
+        var epoch = baseline?.Epoch ?? database.GetMirrorCheckpoint()?.Epoch ?? throw new InvalidOperationException("请先刷新照片空间索引。");
+        var active = baseline?.ActiveArtifact ?? new VisionAnalysisRepository(database).GetActiveFaceAdapterVersion(artifact.ModelVersion);
+        using var response = await PostMirrorEditAsync("api/service/v1/faces/training/apply",
+            new TrainingArtifactMutation(artifact, epoch, active), database, cancellationToken).ConfigureAwait(false);
+        if (response.StatusCode == System.Net.HttpStatusCode.Conflict)
+            throw new InvalidOperationException("照片空间的训练制品或人物映射已变化，请刷新后重试。");
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task RemoveFaceCandidateAsync(PicerDatabase database, long clusterId, long faceId, CancellationToken cancellationToken = default)
+    {
+        if (!canWrite) throw new UnauthorizedAccessException("此设备没有编辑照片空间的权限。");
+        var epoch = database.GetMirrorCheckpoint()?.Epoch ?? throw new InvalidOperationException("请先刷新照片空间索引。");
+        using var response = await PostMirrorEditAsync("api/service/v1/faces/candidate/remove",
+            new FaceCandidateRemovalRequest(clusterId, faceId, epoch), database, cancellationToken).ConfigureAwait(false);
+        if (response.StatusCode == System.Net.HttpStatusCode.Conflict)
+            throw new InvalidOperationException("候选分组已变化或正在整理，请刷新后重试。");
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task<FaceOrganizationResult> OrganizeFacesAsync(PicerDatabase database, string modelVersion, string mode,
+        CancellationToken cancellationToken = default)
+    {
+        if (!canWrite) throw new UnauthorizedAccessException("此设备没有编辑照片空间的权限。");
+        var epoch = database.GetMirrorCheckpoint()?.Epoch ?? throw new InvalidOperationException("请先刷新照片空间索引。");
+        using var response = await PostMirrorEditAsync("api/service/v1/faces/organize",
+            new FaceOrganizationRequest(modelVersion, mode, epoch), database, cancellationToken).ConfigureAwait(false);
+        if (response.StatusCode == System.Net.HttpStatusCode.Conflict)
+            throw new InvalidOperationException("照片空间正在整理人物，或索引版本已变化；请稍后刷新重试。");
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadFromJsonAsync<FaceOrganizationResult>(Json, cancellationToken).ConfigureAwait(false)
+            ?? throw new InvalidDataException("face_organization_result_missing");
+    }
+
+    public async Task SaveSceneDescriptionAsync(PicerDatabase database,SceneDescriptionMutation request,CancellationToken cancellationToken=default)
+    {
+        if(!canWrite)throw new UnauthorizedAccessException("此设备没有编辑照片空间的权限。");
+        request=request with {ExpectedEpoch=database.GetMirrorCheckpoint()?.Epoch??throw new InvalidOperationException("请先刷新照片空间索引，再编辑场景。")};
+        using var response=await PostMirrorEditAsync("api/service/v1/scenes/edit",request,database,cancellationToken).ConfigureAwait(false);
+        if(response.StatusCode==System.Net.HttpStatusCode.Conflict)throw new InvalidOperationException("场景内容已在另一端修改，请刷新后重新编辑。");
+        response.EnsureSuccessStatusCode();
+    }
+
     public async Task PushFaceReviewDecisionsAsync(PicerDatabase database, CancellationToken cancellationToken = default)
     {
         await _reviewSyncGate.WaitAsync(cancellationToken).ConfigureAwait(false);
