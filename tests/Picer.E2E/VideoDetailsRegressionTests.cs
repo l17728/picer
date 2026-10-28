@@ -4,15 +4,26 @@ using Picer.App.ViewModels;
 using Picer.Core.Data;
 using Picer.Core.People;
 using Picer.Core.Video;
+using Xunit.Abstractions;
 
 namespace Picer.E2E;
 
-public sealed class VideoDetailsRegressionTests
+public sealed class VideoDetailsRegressionTests(ITestOutputHelper output)
 {
+    private void PrepareDatabase(string path)
+    {
+        // Schema setup is not part of the UI response deadline. Keep the existing
+        // STA-thread deadlines so a stalled dispatcher still fails promptly.
+        var timer = System.Diagnostics.Stopwatch.StartNew();
+        using (var database = new PicerDatabase(path)) { }
+        output.WriteLine($"数据库准备耗时：{timer.ElapsedMilliseconds} ms");
+    }
+
     [Fact]
     public void ClearVideoAssignmentReturnsTheSelectedFaceToUnassignedAndQueuesSync()
     {
         var root=Path.Combine(Path.GetTempPath(),"picer-video-unassign-"+Guid.NewGuid().ToString("N"));
+        PrepareDatabase(Path.Combine(root, "picer.db"));
         Exception? failure=null;
         var thread=new Thread(()=>
         {
@@ -66,6 +77,7 @@ public sealed class VideoDetailsRegressionTests
     public void PartialVideoPurgeRefreshesCatalogAndRetryOnlyProcessesRemainingSelection()
     {
         var root = Path.Combine(Path.GetTempPath(), "picer-video-purge-retry-" + Guid.NewGuid().ToString("N"));
+        PrepareDatabase(Path.Combine(root, "index.db"));
         Exception? failure = null;
         var thread = new Thread(() =>
         {
@@ -114,6 +126,7 @@ public sealed class VideoDetailsRegressionTests
     public void PurgeCommandRequiresConfirmationRemovesIndexAndKeepsOriginal()
     {
         var root = Path.Combine(Path.GetTempPath(), "picer-video-purge-ui-" + Guid.NewGuid().ToString("N"));
+        PrepareDatabase(Path.Combine(root, "index.db"));
         Exception? failure = null;
         var thread = new Thread(() =>
         {
@@ -193,6 +206,7 @@ public sealed class VideoDetailsRegressionTests
     {
         var root = Path.Combine(Path.GetTempPath(), "picer-video-race-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
+        PrepareDatabase(Path.Combine(root, "index.db"));
         Exception? failure = null;
         var thread = new Thread(() =>
         {
@@ -270,6 +284,7 @@ public sealed class VideoDetailsRegressionTests
     {
         var root = Path.Combine(Path.GetTempPath(), "picer-video-details-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
+        PrepareDatabase(Path.Combine(root, "index.db"));
         Exception? failure = null;
         var thread = new Thread(() =>
         {

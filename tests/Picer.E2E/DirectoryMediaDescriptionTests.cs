@@ -13,6 +13,35 @@ namespace Picer.E2E;
 public sealed class DirectoryMediaDescriptionTests
 {
     [Fact]
+    public void RemoteSceneAnchorKeepsActiveImagesWithoutCheckingClientPaths()
+    {
+        var activeRemote = new ImageRecord { Id = 1, Path = "remote://101APPLE/photo.jpg", Status = ImageStatus.Active };
+        var inactiveRemote = new ImageRecord { Id = 2, Path = "remote://101APPLE/missing.jpg", Status = ImageStatus.Missing };
+        var localChecks = 0;
+
+        var selected = SceneDescriptionImageSelector.SelectReadable(
+            [activeRemote, inactiveRemote, null], serviceMode: true,
+            _ => { localChecks++; return false; });
+
+        Assert.Collection(selected, image => Assert.Same(activeRemote, image));
+        Assert.Equal(0, localChecks);
+    }
+
+    [Fact]
+    public void LocalSceneAnchorRequiresActiveImageFileToExist()
+    {
+        var available = new ImageRecord { Id = 1, Path = "available.jpg", Status = ImageStatus.Active };
+        var missing = new ImageRecord { Id = 2, Path = "missing.jpg", Status = ImageStatus.Active };
+        var inactive = new ImageRecord { Id = 3, Path = "inactive.jpg", Status = ImageStatus.Missing };
+
+        var selected = SceneDescriptionImageSelector.SelectReadable(
+            [available, missing, inactive], serviceMode: false,
+            path => path == "available.jpg");
+
+        Assert.Collection(selected, image => Assert.Same(available, image));
+    }
+
+    [Fact]
     public async Task RemoteAnalyzerReusesOnlyPrivateAnalysisInputs()
     {
         var dataRoot = Path.Combine(Path.GetTempPath(), "picer-analyzer-input-" + Guid.NewGuid().ToString("N"));

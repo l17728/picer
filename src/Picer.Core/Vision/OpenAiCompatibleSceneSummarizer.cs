@@ -25,11 +25,11 @@ public sealed class OpenAiCompatibleSceneSummarizer : ISceneGroupSummarizer, IDi
     private readonly HttpClient _client;
     private readonly bool _ownsClient;
 
-    public OpenAiCompatibleSceneSummarizer(CloudVisionApiOptions options, HttpClient? client = null)
+    public OpenAiCompatibleSceneSummarizer(CloudVisionApiOptions options, HttpClient? client = null, bool disposeClient = false)
     {
         _options = options;
         _client = client ?? new HttpClient { Timeout = TimeSpan.FromMinutes(2) };
-        _ownsClient = client is null;
+        _ownsClient = client is null || disposeClient;
     }
 
     public string Provider => _options.Provider;
@@ -54,13 +54,13 @@ public sealed class OpenAiCompatibleSceneSummarizer : ISceneGroupSummarizer, IDi
             }
         };
         using var request = new HttpRequestMessage(HttpMethod.Post, _options.Endpoint);
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _options.ApiKey);
+        if (!string.IsNullOrWhiteSpace(_options.ApiKey))
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _options.ApiKey);
         request.Content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
         using var response = await _client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
-        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
-        using var envelope = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken).ConfigureAwait(false);
-        var content = envelope.RootElement.GetProperty("choices")[0].GetProperty("message").GetProperty("content").GetString();
+        var responseText = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+        var content = OpenAiCompatibleCloudVisionAnalyzer.ExtractResponseContent(responseText);
         if (string.IsNullOrWhiteSpace(content)) throw new InvalidDataException("场景总结模型返回了空内容。");
         var result = JsonSerializer.Deserialize<SceneSummaryResult>(StripFence(content), new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
         if (result is null || string.IsNullOrWhiteSpace(result.SceneName) || string.IsNullOrWhiteSpace(result.Summary))

@@ -101,6 +101,14 @@ public sealed class OpenAiCompatibleCloudVisionAnalyzer : ICloudVisionAnalyzer, 
         return result with { Usage = DomesticCloudVisionPricing.Calculate(_options.Provider, _options.Model, inputTokens, outputTokens) };
     }
 
+    internal static string? ExtractResponseContent(string text)
+    {
+        using var envelope = TryParseJson(text);
+        return envelope is not null
+            ? envelope.RootElement.GetProperty("choices")[0].GetProperty("message").GetProperty("content").GetString()
+            : ExtractStreamContent(text);
+    }
+
     private static JsonDocument? TryParseJson(string text)
     {
         try { return JsonDocument.Parse(text); } catch (JsonException) { return null; }

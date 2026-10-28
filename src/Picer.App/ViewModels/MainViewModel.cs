@@ -1802,8 +1802,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
             MessageBox.Show("请在目录树中右键选择一个“未分类场景”节点。", "场景描述", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
-        var images = await UiWork.RunDatabaseAsync(() => node.AnchorImageIds.Select(id => _db.GetImage(id))
-            .Where(image => image is { Status: ImageStatus.Active } && (_services.ServiceMode || File.Exists(image.Path))).Cast<ImageRecord>().ToArray());
+        var images = await UiWork.RunDatabaseAsync(() => SceneDescriptionImageSelector.SelectReadable(
+            node.AnchorImageIds.Select(id => _db.GetImage(id)), _services.ServiceMode, File.Exists));
         if (images.Length == 0) { MessageBox.Show("该场景没有当前可读取的照片。", "场景描述"); return; }
         var service = new SceneGroupDescriptionService(_db, _services.CloudVisionRepository);
         var plan = await UiWork.RunDatabaseAsync(() => service.BuildPlan(node.FullPath, images, maximumSubgroups: 5, maximumRepresentatives: 3));
@@ -1939,8 +1939,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
         var plans = new List<SceneGroupPlan>();
         foreach (var anchor in anchors)
         {
-            var images = await UiWork.RunDatabaseAsync(() => anchor.AnchorImageIds.Select(id => _db.GetImage(id))
-                .Where(image => image is { Status: ImageStatus.Active } && File.Exists(image.Path)).Cast<ImageRecord>().ToArray());
+            var images = await UiWork.RunDatabaseAsync(() => SceneDescriptionImageSelector.SelectReadable(
+                anchor.AnchorImageIds.Select(id => _db.GetImage(id)), _services.ServiceMode, File.Exists));
             if (images.Length == 0) continue;
             plans.Add(await UiWork.RunDatabaseAsync(() => service.BuildPlan(anchor.FullPath, images,
                 maximumSubgroups: 5, maximumRepresentatives: 3)));
@@ -1974,14 +1974,22 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
         var completed = 0;
         var failed = 0;
+        var missingPhotoDescriptions = 0;
         foreach (var plan in plans)
         {
             try
             {
                 StatusText = $"正在描述“{directory.Name}”中的未分类场景：{completed + failed + 1}/{plans.Count}";
                 var summary = await service.SummarizeWithAiAsync(plan, summarizer);
-                if (summary is null) { failed++; continue; }
-                await UiWork.RunDatabaseAsync(() => service.SaveAccepted(plan, summary));
+                if (summary is null)
+                {
+                    failed++;
+                    missingPhotoDescriptions++;
+                    AppLogger.Warn($"批量场景描述跳过：代表照片无可用描述；representatives={plan.Representatives.Count}");
+                    continue;
+                }
+                if (_services.ServiceMode) await SaveRemoteSceneDescriptionAsync(plan, summary, null);
+                else await UiWork.RunDatabaseAsync(() => service.SaveAccepted(plan, summary));
                 _services.QueueImmediateRemoteSync("批量场景描述写入");
                 completed++;
             }
@@ -1996,7 +2004,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
         SelectedDirectory = directory;
         directory.IsSelected = true;
         StatusText = $"“{directory.Name}”场景描述完成：成功 {completed}，失败 {failed}，共 {plans.Count} 个";
-        MessageBox.Show(StatusText, "批量场景描述", MessageBoxButton.OK,
+        var failureDetails = missingPhotoDescriptions == 0 ? "" :
+            $"\n\n其中 {missingPhotoDescriptions} 个场景的代表照片尚无可用描述，未执行场景总结。" +
+            "请在“任务中心”查看照片分析错误；若模型服务尚未就绪，请等待就绪后重试。已有成功描述会复用。";
+        MessageBox.Show(StatusText + failureDetails, "批量场景描述", MessageBoxButton.OK,
             failed == 0 ? MessageBoxImage.Information : MessageBoxImage.Warning);
     }
 

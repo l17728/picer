@@ -768,17 +768,23 @@ public static partial class AppServices
 
     public static ISceneGroupSummarizer? CreateSceneGroupSummarizer()
     {
+        var settings = CloudVisionSettings.Load(AppPaths.CloudVisionSettingsPath);
+        var resolved = settings.Enabled ? settings.Resolve(AiFeatureIds.SceneDescription) : null;
+        if (resolved is null) return null;
+        var model = resolved.Value.Model.Id;
         if (TryGetAiServiceBackend(out var configuredBackend)
             && configuredBackend.BaseUrl is { Length: > 0 } configuredService
             && Uri.TryCreate(configuredService.TrimEnd('/') + "/", UriKind.Absolute, out var configuredServiceEndpoint))
-            return new ServiceSceneGroupSummarizer(configuredServiceEndpoint, configuredBackend.Token ?? "", client: CreatePinnedServiceClient(configuredBackend, TimeSpan.FromMinutes(5)));
+            return new ServiceSceneGroupSummarizer(configuredServiceEndpoint, configuredBackend.Token ?? "", model,
+                client: CreatePinnedServiceClient(configuredBackend, TimeSpan.FromMinutes(5)), disposeClient: true);
         if (ServiceMode)
         {
             var backend = AppPaths.LoadIndexBackend();
             if (backend.BaseUrl is { Length: > 0 } remoteUrl && Uri.TryCreate(remoteUrl.TrimEnd('/') + "/", UriKind.Absolute, out var serviceEndpoint))
             {
-                AppLogger.Info("远程场景摘要使用 IndexService VL 路由");
-                return new ServiceSceneGroupSummarizer(serviceEndpoint, backend.Token ?? "", client: CreatePinnedServiceClient(backend, TimeSpan.FromMinutes(5)));
+                AppLogger.Info("远程场景摘要使用 IndexService AI 中转路由");
+                return new ServiceSceneGroupSummarizer(serviceEndpoint, backend.Token ?? "", model,
+                    client: CreatePinnedServiceClient(backend, TimeSpan.FromMinutes(5)), disposeClient: true);
             }
             AppLogger.Warn("远程场景摘要不可用：IndexService 端点未配置");
             return null;
