@@ -19,6 +19,7 @@ internal static class DescriptionSyncMigration
                 PRIMARY KEY(epoch,version_id));
             CREATE INDEX IF NOT EXISTS description_versions_media ON description_versions(kind,media_id);
             CREATE TRIGGER IF NOT EXISTS description_version_revision AFTER INSERT ON description_versions
+                WHEN NOT EXISTS(SELECT 1 FROM sync_suppression WHERE id=1)
                 BEGIN UPDATE mirror_revision SET metadata_revision=metadata_revision+1 WHERE id=1; END;
             CREATE TRIGGER IF NOT EXISTS description_image_removed AFTER DELETE ON images BEGIN
                 DELETE FROM description_versions WHERE kind='image' AND media_id=OLD.id;
