@@ -73,7 +73,20 @@ public sealed partial class PicerDatabase
             using var rows = command.ExecuteReader();
             while (rows.Read()) versions.Add(JsonSerializer.Deserialize<DescriptionVersion>(rows.GetString(0))!);
         }
-        return versions.Where(IsCurrentDescriptionVersion).ToArray();
+        // Databases upgraded from v91 already persist active descriptions, but
+        // have no history rows until the next write. Include those current rows
+        // in the read contract so a new client does not invent a local-only
+        // version merely by receiving an older server's persisted description.
+        foreach (var photo in GetAllMirroredCloudVisionAnalyses())
+        {
+            var image = GetImage(photo.ImageId);
+            versions.Add(CreateDescriptionVersion("image", photo.ImageId, image?.ContentSha256 ?? image?.Sha256, photo, null));
+        }
+        var repository = new VideoRepository(this);
+        foreach (var video in GetAllMirroredVideoSummaries())
+            versions.Add(CreateDescriptionVersion("video", video.VideoId, repository.Get(video.VideoId)?.Sha256, null, video));
+        return versions.Where(IsCurrentDescriptionVersion).DistinctBy(version => version.VersionId)
+            .OrderBy(version => version.VersionId, StringComparer.Ordinal).ToArray();
     }
 
     private void ArchiveDescriptionSnapshot(GatewayMetadata metadata)

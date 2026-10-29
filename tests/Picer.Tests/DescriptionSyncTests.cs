@@ -373,6 +373,47 @@ public sealed class DescriptionSyncTests
         Assert.Equal(server.GetAllMirroredVideoSummaries(), local.GetAllMirroredVideoSummaries());
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task UpgradedLegacyDescriptionsConvergeWithoutWritingDuringSnapshotRead(bool video)
+    {
+        using var files = new FileDatabase();
+        var server = files.Database;
+        using var local = new PicerDatabase(":memory:");
+        if (video)
+        {
+            foreach (var db in new[] { server, local })
+            {
+                var source = db.AddSource("fixture");
+                db.SaveMirrorCheckpoint(new(Epoch(server), 0, 0));
+                new VideoRepository(db).UpsertMirrored(new VideoRecord(12, source.Id, "fixture.mp4", 3,
+                    DateTime.UnixEpoch, 1, 320, 180, null, null, "active"), source.Id);
+            }
+            var repository = new VideoRepository(server);
+            repository.SaveSummary(12, Model, repository.Get(12)!, Result("legacy video"));
+        }
+        else
+        {
+            var image = SeedPhoto(server);
+            SeedPhoto(local, Epoch(server));
+            Save(server, image, "legacy photo");
+        }
+        // A v91 upgrade has persisted current rows and newly empty history tables.
+        using (var legacy = server.Command("DELETE FROM description_versions; DELETE FROM description_outbox"))
+            legacy.ExecuteNonQuery();
+        var snapshot = await new LocalGateway(server, new Picer.Core.Thumbnails.ThumbnailService(Path.GetTempPath())).GetMetadataAsync();
+        Assert.Single(snapshot.DescriptionVersions!);
+        using (var stored = server.Command("SELECT COUNT(*) FROM description_versions"))
+            Assert.Equal(0L, stored.ExecuteScalar());
+        local.UpsertMirroredVideoMetadata(snapshot, true);
+        Assert.Equal(server.GetDescriptionVersions().Select(x => x.VersionId), local.GetDescriptionVersions().Select(x => x.VersionId));
+        Assert.Empty(local.GetDescriptionOutbox());
+        using (var changed = server.Command(video ? "UPDATE videos SET file_size=file_size+1" : "UPDATE images SET file_size=file_size+1"))
+            changed.ExecuteNonQuery();
+        Assert.Empty(server.GetDescriptionVersions());
+    }
+
     [Fact]
     public void LocalResultsAndFailedRetryPreserveCompletedVersionHistory()
     {
