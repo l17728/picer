@@ -14,6 +14,8 @@ internal sealed partial class AgentConnectionRegistry
     }
     private readonly ConcurrentDictionary<string, MediaLease> _media = new();
     private readonly SemaphoreSlim _mediaSlots = new(4, 4);
+    private readonly SemaphoreSlim _keyframeSlots = new(2, 2);
+    private readonly SemaphoreSlim _keyframeAdmission = new(4, 4);
     private readonly SemaphoreSlim _previewSlots = new(2, 2);
     private readonly SemaphoreSlim _analysisSlots = new(2, 2);
     private readonly SemaphoreSlim _mediaAdmission = new(8, 8);
@@ -45,25 +47,25 @@ internal sealed partial class AgentConnectionRegistry
     }
 
     public async Task<SocketMediaStream?> OpenMediaAsync(string? agentId, string path, int previewSize, CancellationToken token, string? expectedETag = null, bool keepLease = false,
-        MediaWire.SourceFingerprint? sourceFingerprint = null)
+        MediaWire.SourceFingerprint? sourceFingerprint = null, bool keyframe = false)
     {
-        var admission = previewSize == 1280 ? _analysisAdmission : previewSize > 0 ? _previewAdmission : _mediaAdmission;
+        var admission = keyframe ? _keyframeAdmission : previewSize == 1280 ? _analysisAdmission : previewSize > 0 ? _previewAdmission : _mediaAdmission;
         if (!await admission.WaitAsync(0, token)) throw new MediaChannelBusyException();
-        try { return await OpenMediaCoreAsync(agentId, path, previewSize, token, expectedETag, keepLease, sourceFingerprint); }
+        try { return await OpenMediaCoreAsync(agentId, path, previewSize, token, expectedETag, keepLease, sourceFingerprint, keyframe); }
         finally { admission.Release(); }
     }
 
     private async Task<SocketMediaStream?> OpenMediaCoreAsync(string? agentId, string path, int previewSize, CancellationToken token, string? expectedETag, bool keepLease,
-        MediaWire.SourceFingerprint? sourceFingerprint)
+        MediaWire.SourceFingerprint? sourceFingerprint, bool keyframe)
     {
         if (string.IsNullOrWhiteSpace(agentId) && _sessions.Count > 1) throw new IOException("media_agent_selection_required");
         var session = await WaitForSessionAsync(agentId, token);
         if (session is null || !session.Capabilities.Contains(MediaWire.Capability)) return null;
         if (previewSize == 1280 && !session.Capabilities.Contains(MediaWire.AnalysisInputCapability)) return null;
-        var slots = previewSize == 1280 ? _analysisSlots : previewSize > 0 ? _previewSlots : _mediaSlots;
+        var slots = keyframe ? _keyframeSlots : previewSize == 1280 ? _analysisSlots : previewSize > 0 ? _previewSlots : _mediaSlots;
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token, session.Disconnected);
         deadline.CancelAfter(TimeSpan.FromMinutes(2));
-        var reusable = previewSize == 0 && session.Capabilities.Contains(MediaWire.ReuseCapability)
+        var reusable = !keyframe && previewSize == 0 && session.Capabilities.Contains(MediaWire.ReuseCapability)
             && (keepLease || expectedETag?.StartsWith("\"lease-", StringComparison.Ordinal) == true);
         long generation;
         lock (_mediaPoolLock)
@@ -85,14 +87,14 @@ internal sealed partial class AgentConnectionRegistry
             catch (Exception exception) when (exception is IOException or WebSocketException or ObjectDisposedException)
             { RetireMedia(pooled); }
         }
-        if (previewSize == 0) Interlocked.Increment(ref _mediaWaiters);
+        if (!keyframe && previewSize == 0) Interlocked.Increment(ref _mediaWaiters);
         try
         {
-            if (previewSize == 0 && slots.CurrentCount == 0) EvictIdleMedia();
+            if (!keyframe && previewSize == 0 && slots.CurrentCount == 0) EvictIdleMedia();
             if (!await slots.WaitAsync(TimeSpan.FromSeconds(15), deadline.Token))
                 throw new MediaChannelBusyException();
         }
-        finally { if (previewSize == 0) Interlocked.Decrement(ref _mediaWaiters); }
+        finally { if (!keyframe && previewSize == 0) Interlocked.Decrement(ref _mediaWaiters); }
         var ticket = Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(32)).ToLowerInvariant();
         var lease = new MediaLease(session.AgentId);
         _media[ticket] = lease;
@@ -100,7 +102,7 @@ internal sealed partial class AgentConnectionRegistry
         WebSocket? socket = null;
         try
         {
-            await session.SendAsync(new { type = "media.open", requestId = ticket, path, previewSize, expectedETag, keepLease, sourceFingerprint }, deadline.Token);
+            await session.SendAsync(new { type = "media.open", requestId = ticket, path, previewSize, expectedETag, keepLease, sourceFingerprint, keyframe }, deadline.Token);
             socket = await lease.Connected.Task.WaitAsync(deadline.Token);
             var metadata = ValidateMediaMetadata(await MediaWire.ReceiveJsonAsync<MediaWire.Metadata>(socket, deadline.Token));
             SocketMediaStream result;

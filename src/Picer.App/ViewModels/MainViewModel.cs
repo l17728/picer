@@ -323,7 +323,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         try
         {
-            var sources = await UiWork.RunDatabaseAsync(() => _db.GetSources().ToArray());
+            var sources = await UiWork.ReadSnapshotAsync("Library.Sources", _db, reader => reader.GetSources().ToArray());
             var rebuilt = 0;
             foreach (var source in sources)
             {
@@ -432,16 +432,16 @@ public partial class MainViewModel : ObservableObject, IDisposable
         if (!ShowSceneContext) return;
         try
         {
-            var text = await UiWork.RunDatabaseAsync(() =>
+            var text = await UiWork.ReadSnapshotAsync("Scene.Context", _db, reader =>
             {
-                var images = node!.AnchorImageIds.Select(id => _db.GetImage(id))
+                var images = reader.GetImagesByIds(node!.AnchorImageIds)
                     .Where(image => image is { Status: ImageStatus.Active }).Cast<ImageRecord>().ToArray();
                 if (images.Length == 0) return $"场景：{node.SceneName}　没有可用照片记录";
-                var service = new SceneGroupDescriptionService(_db, _services.CloudVisionRepository);
+                var service = new SceneGroupDescriptionService(reader, new CloudVisionRepository(reader));
                 var accepted = service.GetAccepted(SceneGroupDescriptionService.CreateFingerprint(images))
                     ?? service.GetAcceptedForGroup(node.FullPath, images);
                 if (accepted is not null) return $"场景：{accepted.SceneName}　摘要：{accepted.Summary}";
-                var descriptions = images.Select(image => _services.CloudVisionRepository.GetLatestCompleted(image.Id)?.Result.Summary)
+                var descriptions = new CloudVisionRepository(reader).GetLatestCompleted(images.Select(image => image.Id)).Values.Select(value => value.Result.Summary)
                     .Where(value => !string.IsNullOrWhiteSpace(value)).Distinct(StringComparer.CurrentCultureIgnoreCase).Take(2).ToArray();
                 return descriptions.Length > 0
                     ? $"场景：{node.SceneName}　照片描述：{string.Join("；", descriptions)}（尚未生成场景级摘要）"
@@ -470,13 +470,18 @@ public partial class MainViewModel : ObservableObject, IDisposable
         if(record is null){SelectedPhotoContext="未选择照片";return;}
         var time=record.TakenUtc is not null?$"拍摄时间：{record.TakenUtc.Value.ToLocalTime():yyyy-MM-dd HH:mm:ss}":
             $"文件创建时间：{(record.CreatedUtc??record.ModifiedUtc).ToLocalTime():yyyy-MM-dd HH:mm:ss}";
-        var description=await UiWork.RunDatabaseAsync(()=>_services.CloudVisionRepository.GetLatestCompleted(record.Id)?.Result.Summary,cancellation.Token);
+        try
+        {
+        var description=await UiWork.ReadSnapshotAsync("Photo.Context", _db, reader => new CloudVisionRepository(reader).GetLatestCompleted(record.Id)?.Result.Summary,cancellation.Token);
         if(cancellation.IsCancellationRequested)return;
         var descriptionText=string.IsNullOrWhiteSpace(description)?"":"    描述："+description;
         SelectedPhotoContext=$"{time}    拍摄地点：无GPS信息{descriptionText}";
         if(!GeoPlaceResolver.TryParseCoordinates(record.Gps,out var latitude,out var longitude))return;
         try{var place=await _geocoder.ReverseAsync(latitude,longitude,cancellation.Token);if(!cancellation.IsCancellationRequested)SelectedPhotoContext=$"{time}    拍摄地点：{place?.DisplayName??$"{latitude:F5}, {longitude:F5}"}{descriptionText}";}
         catch(OperationCanceledException){}catch{if(!cancellation.IsCancellationRequested)SelectedPhotoContext=$"{time}    拍摄地点：{latitude:F5}, {longitude:F5}{descriptionText}";}
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception exception) { AppLogger.Warn($"Photo context read failed: type={exception.GetType().Name}"); }
     }
 
     public void ReloadSources()
@@ -506,7 +511,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private async Task ReloadSourcesAsync()
     {
         var previous = SelectedSource?.SourceId;
-        var snapshot = await UiWork.RunDatabaseAsync(() => (Count: _db.GetImageCount(), Sources: _db.GetSources().ToArray()));
+        var snapshot = await UiWork.ReadSnapshotAsync("Library.Counts", _db, reader => (Count: reader.GetImageCount(), Sources: reader.GetSources().ToArray()));
         Sources.Clear();
         Sources.Add(new SourceNodeViewModel { SourceId = 0, IsAll = true, DisplayName = "所有图片", ImageCount = snapshot.Count });
         foreach (var source in snapshot.Sources)
@@ -519,8 +524,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private async Task LoadLookupValuesAsync()
     {
-        var snapshot = await UiWork.RunDatabaseAsync(() => (
-            Cameras: IndexSearchEngine.GetDistinctValues(_db, "camera").Select(camera => camera.Split(' ')[0])
+        var snapshot = await UiWork.ReadSnapshotAsync("Library.Filters", _db, reader => (
+            Cameras: IndexSearchEngine.GetDistinctValues(reader, "camera").Select(camera => camera.Split(' ')[0])
                 .Distinct(StringComparer.OrdinalIgnoreCase).ToList(),
             Tags: SemanticEngine.GetTags(_db).ToArray()));
         CameraBrands = snapshot.Cameras;
@@ -816,8 +821,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
         IReadOnlyList<ImageRecord> records, CancellationToken cancellationToken)
     {
         if (records.Count == 0) return [];
-        var groups = await UiWork.RunDatabaseAsync("BurstGroups.Load",
-            () => new BurstGroupService(_db).GetGroupsForImages(records.Select(record => record.Id)), cancellationToken);
+        var groups = await UiWork.ReadSnapshotAsync("BurstGroups.Load", _db,
+            reader => new BurstGroupService(reader).GetGroupsForImages(records.Select(record => record.Id)), cancellationToken);
         var recordsById = records.GroupBy(record => record.Id).ToDictionary(group => group.Key, group => group.First());
         var groupByImage = groups.Values.SelectMany(group => group.ImageIds.Select(id => (id, group)))
             .Where(pair => recordsById.ContainsKey(pair.id)).ToDictionary(pair => pair.id, pair => pair.group);
@@ -939,7 +944,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     }
 
     [RelayCommand(CanExecute = nameof(CanRunLocalIndex))]
-    private async Task StartIndexAsync() => await RunIndexAsync(await UiWork.RunDatabaseAsync(() => _db.GetSources()));
+    private async Task StartIndexAsync() => await RunIndexAsync(await UiWork.ReadSnapshotAsync("Index.Sources", _db, reader => reader.GetSources()));
 
     private async Task RunIndexAsync(IReadOnlyList<SourceFolder> sources)
     {
@@ -1123,7 +1128,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             .Where(image => !image.IsVideo)
             .DistinctBy(image => image.Record.Id).ToArray();
         if (images.Length == 0) return;
-        var choices = await UiWork.RunDatabaseAsync(() => _db.GetLocationHierarchyChoices().ToArray());
+        var choices = await UiWork.ReadSnapshotAsync("Library.Locations", _db, reader => reader.GetLocationHierarchyChoices().ToArray());
         if (choices.Length == 0)
         {
             MessageBox.Show("当前还没有可选的地理节点，请先解析位置。", "编辑地点",
@@ -1151,12 +1156,14 @@ public partial class MainViewModel : ObservableObject, IDisposable
             .DistinctBy(image => image.Record.Id).ToArray();
         if (images.Length == 0) return;
         var imageIds = images.Select(image => image.Record.Id).ToArray();
-        var snapshot = await UiWork.RunDatabaseAsync(() =>
+        var snapshot = await UiWork.ReadSnapshotAsync("Photo.TagCounts", _db, reader =>
         {
-            var all = SemanticEngine.GetTags(_db).ToArray();
+            var all = SemanticEngine.GetTags(reader).ToArray();
             var counts = all.ToDictionary(tag => tag.Id, _ => 0);
-            foreach (var imageId in imageIds)
-                foreach (var tag in SemanticEngine.GetImageTags(_db, imageId)) counts[tag.Id]++;
+            using var query = reader.Command("SELECT tag_id,COUNT(*) FROM image_tags WHERE image_id IN (SELECT value FROM json_each($ids)) GROUP BY tag_id");
+            query.Parameters.AddWithValue("$ids", System.Text.Json.JsonSerializer.Serialize(imageIds));
+            using var rows = query.ExecuteReader();
+            while (rows.Read()) counts[rows.GetInt64(0)] = rows.GetInt32(1);
             return all.Select(tag => (Tag: tag, AssignedCount: counts[tag.Id])).ToArray();
         });
         var dialog = new EditPhotoTagsWindow(images.Length, snapshot) { Owner = Application.Current.MainWindow };
@@ -1248,7 +1255,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     public async Task OpenIndexedPhotoAsync(long imageId)
     {
-        var record = await UiWork.RunDatabaseAsync(() => _db.GetImage(imageId));
+        var record = await UiWork.ReadSnapshotAsync("Library.Image", _db, reader => reader.GetImage(imageId));
         if (record is null) { StatusText = "照片索引记录已移除"; return; }
         SelectedImage = new ImageItemViewModel(record, services: _services);
         await OpenSelected();
@@ -1315,38 +1322,28 @@ public partial class MainViewModel : ObservableObject, IDisposable
         var timeText = record.TakenUtc?.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")
             ?? (record.ModifiedUtc == DateTime.MinValue ? "未知" : record.ModifiedUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss") + "（文件修改时间）");
         var locationText = "无 GPS 信息";
-        var attribution = "";
-        var cloud = await UiWork.RunDatabaseAsync(() => _services.CloudVisionRepository.GetLatestCompleted(record.Id));
-        var markedPeople = await UiWork.RunDatabaseAsync(() => _services.People.GetConfirmedPersonNamesForImage(record.Id));
+
+        var detail = await UiWork.ReadSnapshotAsync("Photo.Details", _db, reader => (
+            Cloud: new CloudVisionRepository(reader).GetLatestCompleted(record.Id),
+            People: new Picer.Core.People.PeopleService(reader).GetConfirmedPersonNamesForImage(record.Id)));
+        var cloud = detail.Cloud;
+        var markedPeople = detail.People;
         var peopleText = markedPeople.Count == 0 ? "无已标记人物" : string.Join("、", markedPeople);
         var cloudText = cloud is not null
             ? $"\n\nAI 描述（{cloud.Value.Provider} / {cloud.Value.ModelVersion}）：{cloud.Value.Result.Summary}"
             : "\n\nAI 描述：尚未分析";
 
-        if (GeoPlaceResolver.TryParseCoordinates(record.Gps, out var latitude, out var longitude))
-        {
-            locationText = $"{latitude:F6}, {longitude:F6}";
-            StatusText = "正在查询详细地点…";
-            try
-            {
-                var place = await _geocoder.ReverseAsync(latitude, longitude);
-                if (place is not null)
-                {
-                    locationText = $"{place.DisplayName}\n坐标：{latitude:F6}, {longitude:F6}";
-                    attribution = $"\n\n地点数据：{place.Attribution}";
-                }
-                else locationText += "\n未能取得城市/地区详情";
-            }
-            catch (Exception ex)
-            {
-                locationText += $"\n地点查询失败：{ex.Message}";
-            }
-        }
+        var hasCoordinates = GeoPlaceResolver.TryParseCoordinates(record.Gps, out var latitude, out var longitude);
+        if (hasCoordinates) locationText = $"{latitude:F6}, {longitude:F6}";
 
         StatusText = $"正在查看 {image.FileName} 的信息";
-        MessageBox.Show(
-            $"文件：{image.FileName}\n\n拍摄时间：{timeText}\n文件大小：{FormatFileSize(record.FileSize)}\n尺寸：{record.Width} × {record.Height}\n\n标记人物：{peopleText}\n\n地点：{locationText}{attribution}{cloudText}",
-            "图片信息", MessageBoxButton.OK, MessageBoxImage.Information);
+        var detailsText = $"文件：{image.FileName}\n\n拍摄时间：{timeText}\n文件大小：{FormatFileSize(record.FileSize)}\n尺寸：{record.Width} × {record.Height}\n\n标记人物：{peopleText}\n\n地点：{locationText}{cloudText}";
+        var window = new Picer.App.Views.AsyncDetailsWindow("图片信息", detailsText, hasCoordinates ? async token =>
+            {
+                var place = await _geocoder.ReverseAsync(latitude, longitude, token);
+                return place is null ? null : place.DisplayName + "\n" + place.Attribution;
+            } : null) { Owner = Application.Current?.MainWindow };
+        window.Show();
     }
 
     [RelayCommand]
@@ -1395,9 +1392,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
         IsBusy = true;
         try
         {
-            var candidates = await UiWork.RunDatabaseAsync(() => selected.Take(count).Select(image => (
+            var candidates = await UiWork.ReadSnapshotAsync("Photo.AnalysisInput", _db, reader => selected.Take(count).Select(image => (
                 image,
-                _services.VisualConceptRepository.GetScores(image.Id),
+                new VisualConceptRepository(reader).GetScores(image.Id),
                 "user-requested")).ToArray());
             var progress = new Progress<(int Completed, int Total)>(value =>
                 StatusText = $"云端描述：{value.Completed}/{value.Total}");
@@ -1411,6 +1408,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         catch (OperationCanceledException) { StatusText = "照片分析已取消"; }
         catch (Exception exception)
         {
+            AppLogger.Error("照片分析执行失败", exception);
             StatusText = $"照片分析失败：{exception.Message}";
             MessageBox.Show(StatusText + "\n\n可在“任务中心”查看单张照片的详细错误。", "照片分析",
                 MessageBoxButton.OK, MessageBoxImage.Error);
@@ -1425,8 +1423,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
     public async Task DescribeDirectoryAsync(DirectoryNodeViewModel directory)
     {
         if (IsBusy) return;
-        var plan = await UiWork.RunDatabaseAsync(() => DirectoryDescriptionPlan.Build(_db,
-            _services.CloudVisionRepository, directory.FullPath));
+        var plan = await UiWork.ReadSnapshotAsync("Directory.DescriptionPlan", _db, reader => DirectoryDescriptionPlan.Build(reader,
+            new CloudVisionRepository(reader), directory.FullPath));
         StatusText = $"本目录及所有子目录：共 {plan.Total} 张，已有描述 {plan.AlreadyDescribed} 张，待描述 {plan.Pending.Count} 张";
         if (plan.Pending.Count == 0)
         {
@@ -1435,8 +1433,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
         // The existing execution flow obtains independent cloud authorization and applies budgets.
         await AnalyzeImagesWithCloudAsync(plan.Pending);
-        var remaining = await UiWork.RunDatabaseAsync(() => DirectoryDescriptionPlan.Build(_db,
-            _services.CloudVisionRepository, directory.FullPath));
+        var remaining = await UiWork.ReadSnapshotAsync("Directory.DescriptionRemaining", _db, reader => DirectoryDescriptionPlan.Build(reader,
+            new CloudVisionRepository(reader), directory.FullPath));
         StatusText += $"；目录仍有 {remaining.Pending.Count} 张待描述（达到批次上限时可再次运行，已完成项会跳过）";
     }
 
@@ -1508,18 +1506,28 @@ public partial class MainViewModel : ObservableObject, IDisposable
         return $"{size:0.##} {units[unit]}";
     }
 
+    private long _directoryTreeGeneration;
+
     [RelayCommand]
     private async Task LoadDirectoryTreeAsync()
     {
+        var generation = Interlocked.Increment(ref _directoryTreeGeneration);
         var selectedPath = SelectedDirectory?.FullPath;
         var selectedAlbumId = SelectedDirectory?.AlbumId;
-        var snapshot = await UiWork.RunDatabaseAsync(() => (
-            Sources: _db.GetSources().ToArray(),
-            Albums: SemanticEngine.GetAlbums(_db)
-                .Select(album => (Album: album, Images: SemanticEngine.GetAlbumImages(_db, album.Id).ToArray())).ToArray(),
-            Locations: _db.GetImageLocationHierarchyRows().ToArray()));
+        var snapshot = await UiWork.ReadSnapshotAsync("Library.Tree", _db, reader =>
+        {
+            var albums = SemanticEngine.GetAlbumImageMap(reader);
+            return (
+                Sources: reader.GetSources().ToArray(),
+                Albums: SemanticEngine.GetAlbums(reader).Select(album => (Album: album, Images: albums.GetValueOrDefault(album.Id) ?? [])).ToArray(),
+                Locations: reader.GetImageLocationHierarchyRows().ToArray(),
+                SourceImages: _services.ServiceMode ? reader.GetImages(includeMissing: true).GroupBy(image => image.SourceId)
+                    .ToDictionary(group => group.Key, group => group.ToArray()) : new Dictionary<long, ImageRecord[]>());
+        });
         AppLogger.Info($"Directory tree snapshot: sources={snapshot.Sources.Length}, albums={snapshot.Albums.Length}, albumImages={snapshot.Albums.Sum(item => item.Images.Length)}, locations={snapshot.Locations.Length}, serviceMode={_services.ServiceMode}");
-        DirectoryTree.Clear();
+        var tree = await Task.Run(() =>
+        {
+        var roots = new List<DirectoryNodeViewModel>();
         foreach (var source in snapshot.Sources)
         {
             var node = new DirectoryNodeViewModel
@@ -1531,14 +1539,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 ImageCount = source.ImageCount,
                 IsExpanded = true
             };
-            DirectoryTree.Add(node);
+            roots.Add(node);
             // A service-mode source path is the server's path (often Linux) and
             // is not a valid Windows directory. Remote children are represented
             // by indexed nodes, never enumerated through the local filesystem.
             if (_services.ServiceMode)
-                BuildRemoteDirectoryChildren(node, snapshot.Sources.First(item => item.Id == source.Id));
-            else
-                _ = ExpandDirectoryAsync(node);
+                BuildRemoteDirectoryChildren(node, source, snapshot.SourceImages.GetValueOrDefault(source.Id) ?? []);
+
         }
         var regularAlbums = snapshot.Albums.Where(item => !IsTimelineAlbum(item.Album)).ToArray();
         var timelineAlbums = snapshot.Albums.Where(item => IsTimelineAlbum(item.Album)).ToArray();
@@ -1553,7 +1560,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             {
                 Name = item.Album.Name, Icon = "🖼", AlbumId = item.Album.Id, ImageCount = item.Images.Length
             });
-        DirectoryTree.Add(albumsRoot);
+        roots.Add(albumsRoot);
 
         var lightConeRoot = new DirectoryNodeViewModel
         {
@@ -1567,9 +1574,19 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 Name = item.Album.Name, Icon = "🕰", AlbumId = item.Album.Id, ImageCount = item.Images.Length,
                 IsTimelineAlbum = true
             });
-        DirectoryTree.Add(lightConeRoot);
+        roots.Add(lightConeRoot);
 
-        DirectoryTree.Add(BuildGeographyTree(snapshot.Locations));
+        roots.Add(BuildGeographyTree(snapshot.Locations));
+
+            return (Roots: roots, Albums: albumsRoot, Timeline: lightConeRoot);
+        });
+        if (generation != Volatile.Read(ref _directoryTreeGeneration)) return;
+        DirectoryTree.Clear();
+        foreach (var root in tree.Roots) DirectoryTree.Add(root);
+        if (!_services.ServiceMode)
+            foreach (var root in tree.Roots.Where(node => !node.IsAlbumRoot && !node.IsGeoNode)) _ = ExpandDirectoryAsync(root);
+        var albumsRoot = tree.Albums;
+        var lightConeRoot = tree.Timeline;
 
         SelectedDirectory = selectedAlbumId is not null
             ? albumsRoot.Children.Concat(lightConeRoot.Children).FirstOrDefault(node => node.AlbumId == selectedAlbumId)
@@ -1731,31 +1748,29 @@ public partial class MainViewModel : ObservableObject, IDisposable
         try
         {
             var recursive=_directoryClassification.IncludesDescendants(node.FullPath);node.ClassificationIncludesDescendants=recursive;
-            var clusters=await UiWork.RunDatabaseAsync(() =>
+            var input = await UiWork.ReadSnapshotAsync("Scene.LayoutInput", _db, reader =>
             {
-                if (_services.ServiceMode && node.SourceId is { } remoteSourceId)
-                {
-                    var images = FilterRemoteDirectoryImages(_db.GetImages(remoteSourceId, includeMissing: true), node.RemotePathPrefix, recursive);
-                    var mirroredLayout = new SceneGroupDescriptionService(_db, new CloudVisionRepository(_db))
-                        .GetLayoutSnapshot(node.FullPath, recursive, images);
-                    if (mirroredLayout.Count > 0)
-                    {
-                        AppLogger.Info($"Scene anchors using synced local layout: path={node.FullPath}; clusters={mirroredLayout.Count}");
-                        return mirroredLayout;
-                    }
-                    return new SceneTimeClusterService(_db).Build(images);
-                }
-                var localClusters = new SceneTimeClusterService(_db).Build(node.FullPath, recursive);
-                new SceneGroupDescriptionService(_db, new CloudVisionRepository(_db))
-                    .SaveLayoutSnapshot(node.FullPath, recursive, localClusters);
-                return localClusters;
+                var images = _services.ServiceMode && node.SourceId is { } sourceId
+                    ? reader.GetImagesInPathPrefix(sourceId, node.RemotePathPrefix, includeMissing: true, recursive: recursive)
+                    : reader.GetActiveImagesInDirectory(node.FullPath, recursive);
+                var layout = _services.ServiceMode
+                    ? new SceneGroupDescriptionService(reader, new CloudVisionRepository(reader)).GetLayoutSnapshot(node.FullPath, recursive, images)
+                    : Array.Empty<SceneTimeCluster>();
+                return (Layout: layout, Input: new SceneTimeClusterService(reader).Capture(images));
             });
+            var clusters = input.Layout.Count > 0 ? input.Layout : await Task.Run(() => SceneTimeClusterService.Build(input.Input));
             AppLogger.Info($"Scene anchors loaded: path={node.FullPath}; model={(_services.ServiceMode ? "remote-mirror" : "local")}; recursive={recursive}; clusters={clusters.Count}; images={clusters.Sum(cluster => cluster.ImageIds.Count)}");
             foreach(var anchor in node.Children.Where(child=>child.IsSceneAnchor).ToList())node.Children.Remove(anchor);
             foreach(var cluster in clusters)node.Children.Add(new DirectoryNodeViewModel{Name=cluster.DisplayName,FullPath=node.FullPath,Icon="⚓",ImageCount=cluster.ImageIds.Count,IsSceneAnchor=true,SceneName=cluster.SceneName,AnchorImageIds=cluster.ImageIds});
             node.SceneAnchorsLoaded=true;
             node.IsExpanded=true;
             StatusText = clusters.Count == 0 ? $"{node.Name} 没有可分类的照片" : $"{node.Name} 已生成 {clusters.Count} 个场景";
+            if (!_services.ServiceMode)
+            {
+                // Persist the derived layout only after the read transaction and CPU work have ended.
+                await UiWork.RunDatabaseAsync("Scene.SaveLayout", () => new SceneGroupDescriptionService(_db, new CloudVisionRepository(_db))
+                    .SaveLayoutSnapshot(node.FullPath, recursive, clusters));
+            }
         }
         catch(Exception ex)
         {
@@ -1790,6 +1805,26 @@ public partial class MainViewModel : ObservableObject, IDisposable
         StatusText = $"已删除相册“{node.Name}”；照片和索引未受影响";
     }
 
+    private async Task<ImageRecord[]> ReadableSceneImagesAsync(IEnumerable<long> ids)
+    {
+        var images = await UiWork.ReadSnapshotAsync("Scene.Images", _db, reader => reader.GetImagesByIds(ids));
+        return await Task.Run(() => SceneDescriptionImageSelector.SelectReadable(images, _services.ServiceMode, File.Exists));
+    }
+
+    private Task<ImageRecord[]> FindUndescribedSceneImagesAsync(IReadOnlyList<ImageRecord> images) =>
+        UiWork.ReadSnapshotAsync("Scene.DescriptionState", _db, reader =>
+        {
+            var completed = new CloudVisionRepository(reader).GetLatestCompleted(images.Select(image => image.Id));
+            return images.Where(image => !completed.ContainsKey(image.Id)).ToArray();
+        });
+
+    private async Task<SceneGroupDescription?> SummarizeSceneAsync(SceneGroupPlan plan, ISceneGroupSummarizer summarizer)
+    {
+        var descriptions = await UiWork.ReadSnapshotAsync("Scene.Representatives", _db,
+            reader => new SceneGroupDescriptionService(reader, new CloudVisionRepository(reader)).ReadRepresentatives(plan));
+        return await SceneGroupDescriptionService.SummarizeWithAiAsync(plan, descriptions, summarizer);
+    }
+
     public async Task DescribeUnclassifiedSceneAsync(DirectoryNodeViewModel node)
     {
         if (!node.IsSceneAnchor)
@@ -1802,12 +1837,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
             MessageBox.Show("请在目录树中右键选择一个“未分类场景”节点。", "场景描述", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
-        var images = await UiWork.RunDatabaseAsync(() => SceneDescriptionImageSelector.SelectReadable(
-            node.AnchorImageIds.Select(id => _db.GetImage(id)), _services.ServiceMode, File.Exists));
+        var images = await ReadableSceneImagesAsync(node.AnchorImageIds);
         if (images.Length == 0) { MessageBox.Show("该场景没有当前可读取的照片。", "场景描述"); return; }
         var service = new SceneGroupDescriptionService(_db, _services.CloudVisionRepository);
-        var plan = await UiWork.RunDatabaseAsync(() => service.BuildPlan(node.FullPath, images, maximumSubgroups: 5, maximumRepresentatives: 3));
-        var missing = await UiWork.RunDatabaseAsync(() => plan.Representatives.Where(image => _services.CloudVisionRepository.GetLatestCompleted(image.Id) is null).ToArray());
+        var plan = await Task.Run(() => service.BuildPlan(node.FullPath, images, maximumSubgroups: 5, maximumRepresentatives: 3));
+        var missing = await FindUndescribedSceneImagesAsync(plan.Representatives);
         var preview = $"该时间段共有 {plan.Images.Count} 张照片，已细分为 {plan.Subgroups.Count} 组，" +
             $"并从前、中、后均匀选择 {plan.Representatives.Count} 张代表照片。\n" +
             $"其中 {missing.Length} 张需要调用已配置的照片分析模型，其余将复用已有描述。\n\n是否继续？";
@@ -1825,7 +1859,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         try
         {
             StatusText = $"正在通过 {summarizer.Provider} / {summarizer.ModelVersion} 总结代表照片描述…";
-            summary = await service.SummarizeWithAiAsync(plan, summarizer);
+            summary = await SummarizeSceneAsync(plan, summarizer);
         }
         catch (Exception ex)
         {
@@ -1861,12 +1895,15 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         if (!node.IsSceneAnchor) return;
         var service = new SceneGroupDescriptionService(_db, _services.CloudVisionRepository);
-        var images = await UiWork.RunDatabaseAsync(() => node.AnchorImageIds.Select(id => _db.GetImage(id))
-            .Where(image => image is { Status: ImageStatus.Active }).Cast<ImageRecord>().ToArray());
+        var images = await UiWork.ReadSnapshotAsync("Scene.EditImages", _db, reader => reader.GetImagesByIds(node.AnchorImageIds)
+            .Where(image => image.Status == ImageStatus.Active).ToArray());
         if (images.Length == 0) { StatusText = "该场景没有可编辑的照片记录"; return; }
-        var plan = await UiWork.RunDatabaseAsync(() => service.BuildPlan(node.FullPath, images));
-        var accepted = await UiWork.RunDatabaseAsync(() => service.GetAccepted(plan.Fingerprint)
-            ?? service.GetAcceptedForGroup(node.FullPath, images));
+        var plan = await Task.Run(() => service.BuildPlan(node.FullPath, images));
+        var accepted = await UiWork.ReadSnapshotAsync("Scene.EditDescription", _db, reader =>
+        {
+            var descriptions = new SceneGroupDescriptionService(reader, new CloudVisionRepository(reader));
+            return descriptions.GetAccepted(plan.Fingerprint) ?? descriptions.GetAcceptedForGroup(node.FullPath, images);
+        });
         var window = new EditSceneDescriptionWindow(accepted?.SceneName ?? node.SceneName, accepted?.Summary ?? "")
         {
             Owner = Application.Current.MainWindow
@@ -1939,10 +1976,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
         var plans = new List<SceneGroupPlan>();
         foreach (var anchor in anchors)
         {
-            var images = await UiWork.RunDatabaseAsync(() => SceneDescriptionImageSelector.SelectReadable(
-                anchor.AnchorImageIds.Select(id => _db.GetImage(id)), _services.ServiceMode, File.Exists));
+            var images = await ReadableSceneImagesAsync(anchor.AnchorImageIds);
             if (images.Length == 0) continue;
-            plans.Add(await UiWork.RunDatabaseAsync(() => service.BuildPlan(anchor.FullPath, images,
+            plans.Add(await Task.Run(() => service.BuildPlan(anchor.FullPath, images,
                 maximumSubgroups: 5, maximumRepresentatives: 3)));
         }
         if (plans.Count == 0)
@@ -1952,9 +1988,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             return;
         }
 
-        var missing = await UiWork.RunDatabaseAsync(() => plans.SelectMany(plan => plan.Representatives)
-            .GroupBy(image => image.Id).Select(group => group.First())
-            .Where(image => _services.CloudVisionRepository.GetLatestCompleted(image.Id) is null).ToArray());
+        var missing = await FindUndescribedSceneImagesAsync(plans.SelectMany(plan => plan.Representatives).DistinctBy(image => image.Id).ToArray());
         var preview = $"目录“{directory.Name}”中有 {plans.Count} 个尚未描述的场景，" +
             $"将使用 {plans.Sum(plan => plan.Representatives.Count)} 张代表照片；其中 {missing.Length} 张需要调用已配置的视觉模型。\n\n" +
             "生成成功的场景名称和摘要将直接应用；已有照片描述会增量复用。是否继续？";
@@ -1980,7 +2014,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             try
             {
                 StatusText = $"正在描述“{directory.Name}”中的未分类场景：{completed + failed + 1}/{plans.Count}";
-                var summary = await service.SummarizeWithAiAsync(plan, summarizer);
+                var summary = await SummarizeSceneAsync(plan, summarizer);
                 if (summary is null)
                 {
                     failed++;
@@ -2020,6 +2054,20 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
     }
 
+    private Task<ImageItemViewModel[]> LoadDirectoryVideosAsync(DirectoryNodeViewModel directory, CancellationToken token)
+    {
+        var query = SearchQuery?.Trim();
+        return UiWork.ReadSnapshotAsync("DirectoryVideos.Load", _db, reader =>
+        {
+            var videos = new VideoRepository(reader);
+            var posters = videos.GetFirstKeyframePaths();
+            var records = videos.GetFiltered(_services.ServiceMode ? directory.SourceId : null,
+                _services.ServiceMode ? directory.RemotePathPrefix : directory.FullPath, includeMissing: false);
+            return records.Where(video => string.IsNullOrWhiteSpace(query) || Path.GetFileName(video.Path).Contains(query, StringComparison.CurrentCultureIgnoreCase))
+                .Select(video => new ImageItemViewModel(video, posters.GetValueOrDefault(video.Id), LoadVideoPosterPathAsync, token, _services)).ToArray();
+        }, token);
+    }
+
     private async void LoadImagesForSelectedDirectory()
     {
         if (SelectedDirectory is null) return;
@@ -2043,14 +2091,14 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 StatusText = $"请选择“{selectedDirectory.Name}”下的一个相册";
                 return;
             }
-            var records = await UiWork.RunDatabaseAsync(() => _services.ServiceMode && selectedDirectory.SourceId is { } remoteSourceId
-                ? FilterRemoteDirectoryImages(_db.GetImages(remoteSourceId, includeMissing: false), selectedDirectory.RemotePathPrefix)
+            var records = await UiWork.ReadSnapshotAsync("Directory.Images", _db, reader => _services.ServiceMode && selectedDirectory.SourceId is { } remoteSourceId
+                ? reader.GetImagesInPathPrefix(remoteSourceId, selectedDirectory.RemotePathPrefix)
                 : selectedDirectory.IsSceneAnchor || selectedDirectory.IsGeoNode || selectedDirectory.IsAlbumRoot
-                ? selectedDirectory.AnchorImageIds.Select(id => _db.GetImage(id)).Where(image => image is not null).Cast<ImageRecord>()
+                ? reader.GetImagesByIds(selectedDirectory.AnchorImageIds)
                     .OrderBy(SceneTimeClusterService.EffectiveTime).ThenBy(image => image.Id).ToList()
                 : selectedDirectory.AlbumId is { } albumId
-                    ? SemanticEngine.GetAlbumImages(_db, albumId)
-                : _db.GetActiveImagesUnderDirectory(selectedDirectory.FullPath), cts.Token);
+                    ? SemanticEngine.GetAlbumImages(reader, albumId)
+                : reader.GetActiveImagesUnderDirectory(selectedDirectory.FullPath), cts.Token);
             if (!IsCurrentLoad()) return;
             records = (IsChronologicalAscending
                     ? records.OrderBy(SceneTimeClusterService.EffectiveTime).ThenBy(image => image.Id)
@@ -2064,35 +2112,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                              selectedDirectory.IsSceneAnchor || selectedDirectory.IsGeoNode ||
                              selectedDirectory.IsAlbumRoot || selectedDirectory.AlbumId is not null
                 ? []
-                : await UiWork.RunDatabaseAsync("DirectoryVideos.Load", () =>
-                {
-                    if (_services.ServiceMode && selectedDirectory.SourceId is { } remoteSourceId)
-                    {
-                        var remotePosters = _services.Videos.GetFirstKeyframePaths();
-                        return _services.Videos.GetAll()
-                            .Where(video => video.Status == "active" && video.SourceId == remoteSourceId)
-                            .Where(video => string.IsNullOrWhiteSpace(selectedDirectory.RemotePathPrefix) ||
-                                NormalizeRemotePath(video.Path).StartsWith(NormalizeRemotePath(selectedDirectory.RemotePathPrefix!) + "/", StringComparison.OrdinalIgnoreCase))
-                            .Where(video => string.IsNullOrWhiteSpace(SearchQuery) || Path.GetFileName(video.Path).Contains(SearchQuery.Trim(), StringComparison.CurrentCultureIgnoreCase))
-                            .Select(video => new ImageItemViewModel(video, remotePosters.GetValueOrDefault(video.Id), LoadVideoPosterPathAsync, cts.Token, _services)).ToArray();
-                    }
-                    // Keep the directory view self-healing: videos may have been imported
-                    // before the explicit video scan was introduced. Index files under the
-                    // selected source/child directory before reading the view.
-                    var source = _db.GetSources().FirstOrDefault(candidate =>
-                        string.Equals(Path.GetFullPath(candidate.Path).TrimEnd('\\', '/'),
-                            Path.GetFullPath(selectedDirectory.FullPath).TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase) ||
-                        IsPathUnderDirectory(selectedDirectory.FullPath, candidate.Path));
-                    if (source is not null)
-                        _services.VideoIndex.ScanDirectory(source.Id, selectedDirectory.FullPath, true, cts.Token);
-                    var posters = _services.Videos.GetFirstKeyframePaths();
-                    return _services.Videos.GetAll()
-                        .Where(video => video.Status == "active" && IsPathUnderDirectory(video.Path, selectedDirectory.FullPath))
-                        .Where(video => string.IsNullOrWhiteSpace(SearchQuery) ||
-                                        Path.GetFileName(video.Path).Contains(SearchQuery.Trim(), StringComparison.CurrentCultureIgnoreCase))
-                        .Select(video => new ImageItemViewModel(video, posters.GetValueOrDefault(video.Id),
-                            LoadVideoPosterPathAsync, cts.Token, _services)).ToArray();
-                }, cts.Token);
+                : await LoadDirectoryVideosAsync(selectedDirectory, cts.Token);
             var displayItems = photoItems.Concat(videoItems)
                 .OrderBy(item => IsChronologicalAscending ? item.EffectiveTime.Ticks : -item.EffectiveTime.Ticks)
                 .ThenBy(item => item.Id).ToArray();
@@ -2122,6 +2142,30 @@ public partial class MainViewModel : ObservableObject, IDisposable
             RefreshDirectoryTimelineView(resetPosition: true);
             OnPropertyChanged(nameof(DirectoryImageCount));
             StatusText = $"[{selectedDirectory.Name}] 已显示 {DirectoryImages.Count} 个媒体项";
+
+            if (!_services.ServiceMode && !selectedDirectory.IsSceneAnchor && !selectedDirectory.IsGeoNode &&
+                !selectedDirectory.IsAlbumRoot && selectedDirectory.AlbumId is null && DirectoryMediaFilter != DirectoryMediaFilter.Images)
+            {
+                var source = await UiWork.ReadSnapshotAsync("Directory.ScanSource", _db,
+                    reader => reader.GetSources().FirstOrDefault(candidate =>
+                        string.Equals(Path.GetFullPath(candidate.Path).TrimEnd('\\', '/'), Path.GetFullPath(selectedDirectory.FullPath).TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase) ||
+                        IsPathUnderDirectory(selectedDirectory.FullPath, candidate.Path)), cts.Token);
+                if (source is not null)
+                {
+                    var changed = await _services.VideoIndex.ScanDirectoryIncrementalAsync(source.Id, selectedDirectory.FullPath,
+                        (work, token) => UiWork.RunDatabaseAsync("Directory.ScanCommit", work, token), cts.Token);
+                    if (!IsCurrentLoad()) return;
+                    if (changed > 0)
+                    {
+                        var refreshed = await LoadDirectoryVideosAsync(selectedDirectory, cts.Token);
+                        if (!IsCurrentLoad()) return;
+                        foreach (var old in DirectoryImages.Where(item => item.VideoRecord is not null).ToArray()) DirectoryImages.Remove(old);
+                        foreach (var item in refreshed) DirectoryImages.Add(item);
+                        RefreshDirectoryTimelineView(resetPosition: false);
+                        _services.QueueImmediateRemoteSync("Directory video scan completed");
+                    }
+                }
+            }
 
             // A service-mode source is a logical remote root.  Its stored path is
             // the server's path (for example `/opt/picer-index/G:\\Apple照片`),
@@ -2191,9 +2235,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
         return string.IsNullOrWhiteSpace(name) ? "远程来源" : name;
     }
 
-    private void BuildRemoteDirectoryChildren(DirectoryNodeViewModel root, SourceFolder source)
+    private void BuildRemoteDirectoryChildren(DirectoryNodeViewModel root, SourceFolder source, IReadOnlyList<ImageRecord> records)
     {
-        var records = _db.GetImages(source.Id, includeMissing: true);
         // The index service stores the source's server-side mount prefix
         // (for example `/opt/picer-index/G:\\Apple照片`), while image records
         // retain the authoritative client path (`G:\\Apple照片\\...`).
@@ -2368,7 +2411,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private async Task HandleMissingAsync()
     {
-        var missing = await UiWork.RunDatabaseAsync(() => _db.GetMissingImages());
+        var missing = await UiWork.ReadSnapshotAsync("Library.Missing", _db, reader => reader.GetMissingImages());
         if (missing.Count == 0) return;
         var window = new MissingFilesWindow(_engine, missing) { Owner = Application.Current.MainWindow };
         window.ShowDialog();

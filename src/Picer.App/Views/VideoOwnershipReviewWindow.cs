@@ -65,7 +65,7 @@ public sealed class VideoOwnershipReviewWindow : Window
             if (_client is null)
             {
                 if (AppServices.ServiceMode) throw new InvalidOperationException("请先登录照片空间账号，再审核远程历史决定。");
-                rows=await UiWork.RunDatabaseAsync(()=>AppServices.Db.GetVideoOwnershipReviews(),_token);
+                rows=await UiWork.ReadSnapshotAsync("Video.OwnershipReview", AppServices.Db, reader=>reader.GetVideoOwnershipReviews(),_token);
             }
             else
             {

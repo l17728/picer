@@ -38,10 +38,22 @@ public sealed class FaceValidationService(PicerDatabase database, VisionAnalysis
         int maximumPairsPerClass = 200_000,
         IProgress<(string Stage, int Completed, int Total)>? progress = null)
     {
+        return CaptureCalibration(modelVersion, minimumPhotosPerPerson, maximumPairsPerClass, progress)();
+    }
+
+    public Func<SFaceCalibrationResult> CaptureCalibration(string? modelVersion = null, int minimumPhotosPerPerson = 20,
+        int maximumPairsPerClass = 200_000, IProgress<(string Stage, int Completed, int Total)>? progress = null)
+    {
         progress?.Report(("加载已确认人脸", 0, 1));
         var confirmed = repository.GetEmbeddingsForMatching(modelVersion)
             .Where(face => face.AssignmentState == "confirmed" && face.PersonId is not null)
             .ToArray();
+        return () => CalculateCalibration(confirmed, modelVersion, minimumPhotosPerPerson, maximumPairsPerClass, progress);
+    }
+
+    private static SFaceCalibrationResult CalculateCalibration(FaceEmbeddingRecord[] confirmed, string? modelVersion,
+        int minimumPhotosPerPerson, int maximumPairsPerClass, IProgress<(string Stage, int Completed, int Total)>? progress)
+    {
         var selectedVersion = string.IsNullOrWhiteSpace(modelVersion)
             ? confirmed.GroupBy(face => face.ModelVersion).OrderByDescending(group => group.Count()).Select(group => group.Key).FirstOrDefault()
             : modelVersion;

@@ -10,6 +10,7 @@ public sealed partial class PicerDatabase
     public void ReconcileMirroredPhotoMetadata(GatewayMetadata metadata, bool authoritativeCatalog = false)
     {
         using var transaction = BeginTransaction();
+        metadata = ProtectDescriptionSnapshot(metadata);
         using var staging = Command("CREATE TEMP TABLE IF NOT EXISTS mirror_expected_keys(value TEXT PRIMARY KEY); DELETE FROM mirror_expected_keys;");
         staging.ExecuteNonQuery();
         const string images = "SELECT media_id FROM mirror_owned_media WHERE kind='image'";

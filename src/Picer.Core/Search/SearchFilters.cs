@@ -27,6 +27,7 @@ public sealed class SearchFilters
 {
     public string Query { get; set; } = "";
     public long? SourceId { get; set; } = null;
+    public string? DirectoryPath { get; set; }
     public bool IncludeMissing { get; set; } = true;
 
     // EXIF/date filters

@@ -31,6 +31,7 @@ public partial class ServicePhotoItem : ObservableObject
 
 public sealed class RemoteDirectoryNode
 {
+    public long SourceId { get; init; }
     public string Name { get; init; } = "";
     public string FullPath { get; init; } = "";
     public int ImageCount { get; set; }
@@ -53,8 +54,6 @@ public partial class ServiceBrowseViewModel : ObservableObject
         public void Dispose() => Stop.Dispose();
     }
     private readonly Dictionary<ServicePhotoItem, ThumbnailLoad> _thumbnailLoads = [];
-    private string? _cursor;
-    private CancellationTokenSource? _loadCts;
     private CancellationTokenSource? _thumbnailPageCts = new();
     private Task? _thumbnailWorker;
     private long _thumbnailRequestTicks;
@@ -78,7 +77,6 @@ public partial class ServiceBrowseViewModel : ObservableObject
 
     [ObservableProperty]
     private bool _isBusy;
-    private bool _sourcesLoaded;
 
     [ObservableProperty]
     private int _mediaFilterIndex;
@@ -87,73 +85,6 @@ public partial class ServiceBrowseViewModel : ObservableObject
     private RemoteDirectoryNode? _selectedDirectory;
 
     public ServiceBrowseViewModel(IIndexGateway gateway, ClientServices? services = null) { _gateway = gateway; _services = services ?? new(); }
-
-    [RelayCommand]
-    public async Task SearchAsync()
-    {
-        if (!_sourcesLoaded)
-        {
-            try
-            {
-                Sources.Clear();
-                foreach (var source in await _gateway.ListSourcesAsync()) Sources.Add(source);
-                await BuildDirectoryTreeAsync();
-                _sourcesLoaded = true;
-            }
-            catch (Exception exception) { StatusText = $"目录加载失败：{exception.Message}"; }
-        }
-        Items.Clear();
-        _cursor = null;
-        TotalCount = 0;
-        _thumbnailPageCts?.Cancel();
-        _thumbnailPageCts?.Dispose();
-        _thumbnailPageCts = new CancellationTokenSource();
-        await LoadMoreAsync();
-    }
-
-    [RelayCommand]
-    private async Task LoadMoreAsync()
-    {
-        if (IsBusy) return;
-        IsBusy = true;
-        _loadCts?.Cancel();
-        var cts = _loadCts = new CancellationTokenSource();
-        try
-        {
-            var filters = new SearchFilters { IncludeMissing = true, Query = SearchText, SourceId = SelectedSource?.Id };
-            var page = MediaFilterIndex == 1
-                ? await SearchVideosAsync(filters, cts.Token)
-                : MediaFilterIndex == 2
-                    ? await SearchAllAsync(filters, cts.Token)
-                    : SelectedDirectory is null
-                        ? await _gateway.SearchAsync(filters, 200, _cursor, cts.Token)
-                        : await SearchDirectoryAsync(filters, SelectedDirectory.FullPath, cts.Token);
-            _cursor = page.NextCursor;
-            TotalCount = page.TotalCount;
-            foreach (var record in page.Items)
-            {
-                var isVideo = record.Id < 0;
-                var mediaId = isVideo ? -record.Id : record.Id;
-                var item = new ServicePhotoItem { Id = record.Id, MediaId = mediaId, IsVideo = isVideo, IsMissing = record.Status == ImageStatus.Missing, Path = record.Path, FileSize = record.FileSize, Sha256 = record.ContentSha256 ?? record.Sha256 };
-                Items.Add(item);
-            }
-            ScheduleThumbnailPrefetch();
-            StatusText = Items.Count == 0
-                ? "无结果。"
-                : $"已加载 {Items.Count} / {TotalCount} 张（数据来自索引服务）。";
-        }
-        catch (OperationCanceledException)
-        {
-        }
-        catch (Exception exception)
-        {
-            StatusText = $"加载失败：{exception.Message}";
-        }
-        finally
-        {
-            IsBusy = false;
-        }
-    }
 
     public Task SetMediaFilterAsync(int index)
     {
@@ -227,118 +158,6 @@ public partial class ServiceBrowseViewModel : ObservableObject
         catch (OperationCanceledException) { }
     }
 
-    private async Task<GatewayPage> SearchVideosAsync(SearchFilters filters, CancellationToken cancellationToken)
-    {
-        var videos = new List<Picer.Core.Video.VideoRecord>();
-        string? cursor = null;
-        do
-        {
-            var page = await _gateway.ListVideosAsync(filters.SourceId, 500, cursor, cancellationToken);
-            videos.AddRange(page.Items);
-            cursor = page.NextCursor;
-        } while (cursor is not null);
-        var directory = SelectedDirectory?.FullPath;
-        var selected = videos.Where(video => directory is null || IsUnderDirectory(video.Path, directory))
-            .Where(video => string.IsNullOrWhiteSpace(filters.Query) || video.Path.Contains(filters.Query, StringComparison.CurrentCultureIgnoreCase))
-            .Select(video => new ImageRecord { Id = -video.Id, SourceId = video.SourceId, Path = video.Path, FileSize = video.FileSize, ModifiedUtc = video.ModifiedUtc, TakenUtc = video.TakenUtc, Width = video.Width, Height = video.Height })
-            .ToArray();
-        return new GatewayPage(selected, null, selected.Length);
-    }
-
-    private async Task<GatewayPage> SearchAllAsync(SearchFilters filters, CancellationToken cancellationToken)
-    {
-        var images = SelectedDirectory is null
-            ? await _gateway.SearchAsync(filters, 200, null, cancellationToken)
-            : await SearchDirectoryAsync(filters, SelectedDirectory.FullPath, cancellationToken);
-        var videos = await SearchVideosAsync(filters, cancellationToken);
-        return new GatewayPage(images.Items.Concat(videos.Items).ToArray(), null, images.TotalCount + videos.TotalCount);
-    }
-
-    public Task SelectSourceAsync(SourceFolder? source)
-    {
-        SelectedSource = source;
-        return SearchAsync();
-    }
-
-    public async Task SelectDirectoryAsync(RemoteDirectoryNode? directory)
-    {
-        SelectedDirectory = directory;
-        SelectedSource = directory is null
-            ? null
-            : Sources.FirstOrDefault(source => string.Equals(
-                Path.GetFullPath(directory.FullPath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
-                Path.GetFullPath(source.Path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
-                StringComparison.OrdinalIgnoreCase) ||
-                directory.FullPath.StartsWith(Path.GetFullPath(source.Path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase));
-        await SearchAsync();
-    }
-
-    private async Task BuildDirectoryTreeAsync()
-    {
-        DirectoryTree.Clear();
-        foreach (var source in Sources)
-        {
-            var rootPath = Path.GetFullPath(source.Path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-            var all = new List<ImageRecord>();
-            string? cursor = null;
-            do
-            {
-                var page = await _gateway.ListImagesAsync(source.Id, false, 500, cursor);
-                all.AddRange(page.Items);
-                cursor = page.NextCursor;
-            } while (cursor is not null);
-
-            var root = new RemoteDirectoryNode { Name = Path.GetFileName(rootPath), FullPath = rootPath, ImageCount = all.Count, IsSource = true };
-            var nodes = new Dictionary<string, RemoteDirectoryNode>(StringComparer.OrdinalIgnoreCase) { [rootPath] = root };
-            foreach (var record in all)
-            {
-                var directory = Path.GetDirectoryName(Path.GetFullPath(record.Path));
-                if (string.IsNullOrWhiteSpace(directory) || !directory.StartsWith(rootPath, StringComparison.OrdinalIgnoreCase)) continue;
-                var relative = Path.GetRelativePath(rootPath, directory);
-                if (relative == ".") continue;
-                var current = rootPath;
-                RemoteDirectoryNode? leaf = null;
-                foreach (var part in relative.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries))
-                {
-                    current = Path.Combine(current, part);
-                    if (!nodes.TryGetValue(current, out var node))
-                    {
-                        node = new RemoteDirectoryNode { Name = part, FullPath = current, ImageCount = 0 };
-                        nodes[current] = node;
-                        var parentPath = Path.GetDirectoryName(current) ?? rootPath;
-                        nodes[parentPath].Children.Add(node);
-                    }
-                    leaf = node;
-                }
-                if (leaf is not null) leaf.ImageCount++;
-            }
-            DirectoryTree.Add(root);
-        }
-    }
-
-    private async Task<GatewayPage> SearchDirectoryAsync(SearchFilters filters, string directory, CancellationToken cancellationToken)
-    {
-        var items = new List<ImageRecord>();
-        string? cursor = null;
-        do
-        {
-            var page = await _gateway.SearchAsync(filters, 500, cursor, cancellationToken);
-            items.AddRange(page.Items.Where(record => IsUnderDirectory(record.Path, directory)));
-            cursor = page.NextCursor;
-        } while (cursor is not null);
-        if (!string.IsNullOrWhiteSpace(filters.Query))
-            items = items.Where(record => record.Path.Contains(filters.Query, StringComparison.CurrentCultureIgnoreCase)).ToList();
-        return new GatewayPage(items, null, items.Count);
-    }
-
-    private static bool IsUnderDirectory(string path, string directory)
-    {
-        var normalizedPath = Path.GetFullPath(path);
-        var normalizedDirectory = Path.GetFullPath(directory).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        var prefix = normalizedDirectory + Path.DirectorySeparatorChar;
-        return normalizedPath.StartsWith(prefix, StringComparison.OrdinalIgnoreCase);
-    }
-
     [RelayCommand]
     private async Task PreviewAsync(ServicePhotoItem? item)
     {
@@ -355,7 +174,12 @@ public partial class ServiceBrowseViewModel : ObservableObject
         await Picer.App.Services.MediaPlayback.OpenAsync(media, item.MediaId, item.IsVideo, item.Path, item.Sha256);
     }
 
-    public void CancelThumbnailWork() => _thumbnailPageCts?.Cancel();
+    public void CancelThumbnailWork()
+    {
+        _thumbnailPageCts?.Cancel();
+        _browseSession?.Stop.Cancel();
+        _browseLifetime.Cancel();
+    }
 
     private async Task LoadThumbnailAsync(ServicePhotoItem item, CancellationToken cancellationToken, bool prefetch = false)
     {

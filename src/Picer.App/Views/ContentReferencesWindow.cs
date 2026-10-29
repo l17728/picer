@@ -19,9 +19,9 @@ public sealed class ContentReferencesWindow : Window
         {
             try
             {
-                var data = await UiWork.RunDatabaseAsync(() =>
+                var data = await UiWork.ReadSnapshotAsync("Content.References", AppServices.Db, reader =>
                 {
-                    var repository = new ContentReferenceRepository(AppServices.Db);
+                    var repository = new ContentReferenceRepository(reader);
                     return (Counts: repository.GetCounts(sha256), References: repository.GetReferences(sha256));
                 });
                 status.Text = $"1 份内容索引；可用位置 {data.Counts.Available}，已删除或移动 {data.Counts.Missing}，共 {data.Counts.Total} 个引用。";

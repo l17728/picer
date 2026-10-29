@@ -100,16 +100,26 @@ public sealed class SceneGroupDescriptionService(PicerDatabase database, CloudVi
     }
     public async Task<SceneGroupDescription?> SummarizeWithAiAsync(SceneGroupPlan plan,
         ISceneGroupSummarizer summarizer, CancellationToken cancellationToken = default)
+        => await SummarizeWithAiAsync(plan, ReadRepresentatives(plan), summarizer, cancellationToken).ConfigureAwait(false);
+
+    public IReadOnlyList<SceneRepresentativeDescription> ReadRepresentatives(SceneGroupPlan plan)
     {
+        var completedById = cloud.GetLatestCompleted(plan.Representatives.Select(image => image.Id));
         var descriptions = plan.Representatives.Select((image, index) =>
         {
-            var completed = cloud.GetLatestCompleted(image.Id);
-            return completed is null ? null : new SceneRepresentativeDescription(index + 1,
-                SceneTimeClusterService.EffectiveTime(image), completed.Value.Result.Summary,
-                completed.Value.Result.Scenes ?? [], completed.Value.Result.Activities ?? [],
-                completed.Value.Result.Objects ?? []);
+            return !completedById.TryGetValue(image.Id, out var completed) ? null : new SceneRepresentativeDescription(index + 1,
+                SceneTimeClusterService.EffectiveTime(image), completed.Result.Summary,
+                completed.Result.Scenes ?? [], completed.Result.Activities ?? [],
+                completed.Result.Objects ?? []);
         }).Where(item => item is not null).Cast<SceneRepresentativeDescription>().ToArray();
-        if (descriptions.Length == 0) return null;
+        return descriptions;
+    }
+
+    public static async Task<SceneGroupDescription?> SummarizeWithAiAsync(SceneGroupPlan plan,
+        IReadOnlyList<SceneRepresentativeDescription> descriptions, ISceneGroupSummarizer summarizer,
+        CancellationToken cancellationToken = default)
+    {
+        if (descriptions.Count == 0) return null;
         var result = await summarizer.SummarizeAsync(descriptions, cancellationToken).ConfigureAwait(false);
         return new(plan.Fingerprint, result.SceneName.Trim(), result.Summary.Trim(),
             result.SearchTerms.Where(term => !string.IsNullOrWhiteSpace(term)).Select(term => term.Trim())
@@ -184,6 +194,29 @@ public sealed class SceneGroupDescriptionService(PicerDatabase database, CloudVi
         if (!reader.Read()) return null;
         var terms = JsonSerializer.Deserialize<string[]>(reader.GetString(2)) ?? [];
         return new(fingerprint, reader.GetString(0), reader.GetString(1), terms, reader.GetString(3), reader.GetString(4), reader.GetString(5), reader.GetString(6));
+    }
+
+    public SceneDescriptionLookup ReadAcceptedLookup()
+    {
+        using var command = database.Command("""
+            SELECT fingerprint,directory_path,start_utc,end_utc,image_ids_json,
+                   scene_name,summary,search_terms_json,provider,model_version,prompt_version,state
+            FROM scene_group_descriptions WHERE state='accepted' AND provider<>$layout
+            """);
+        command.Parameters.AddWithValue("$layout", LayoutProvider);
+        using var reader = command.ExecuteReader();
+        var entries = new List<SceneDescriptionEntry>();
+        while (reader.Read())
+        {
+            if (!DateTime.TryParse(reader.GetString(2), null, System.Globalization.DateTimeStyles.RoundtripKind, out var start) ||
+                !DateTime.TryParse(reader.GetString(3), null, System.Globalization.DateTimeStyles.RoundtripKind, out var end)) continue;
+            var count = 0;
+            try { count = JsonSerializer.Deserialize<long[]>(reader.GetString(4))?.Length ?? 0; } catch (JsonException) { }
+            var description = new SceneGroupDescription(reader.GetString(0), reader.GetString(5), reader.GetString(6),
+                JsonSerializer.Deserialize<string[]>(reader.GetString(7)) ?? [], reader.GetString(8), reader.GetString(9), reader.GetString(10), reader.GetString(11));
+            entries.Add(new(reader.GetString(1), start, end, count, description));
+        }
+        return new(entries);
     }
 
     /// <summary>

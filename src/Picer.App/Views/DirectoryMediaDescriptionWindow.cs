@@ -14,6 +14,7 @@ public sealed class DirectoryMediaDescriptionWindow : Window
 {
     private readonly TreeView _tree = new() { MinHeight = 180 };
     private readonly TextBlock _status = new() { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 8, 0, 8) };
+    private readonly TextBlock _syncStatus = new() { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 8) };
     private readonly TextBlock _authorization = new() { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 8, 0, 8) };
     private readonly Button _start = new() { Content = "开始描述照片和视频", IsEnabled = false, Padding = new Thickness(12, 6, 12, 6), ToolTip = "请先在目录树中选择一个目录" };
     private readonly Button _cancel = new() { Content = "取消任务", IsEnabled = false, Margin = new Thickness(12, 0, 0, 0) };
@@ -34,6 +35,8 @@ public sealed class DirectoryMediaDescriptionWindow : Window
         DockPanel.SetDock(header, Dock.Top); layout.Children.Add(header);
         var bottom = new StackPanel(); DockPanel.SetDock(bottom, Dock.Bottom);
         bottom.Children.Add(_authorization); bottom.Children.Add(_status);
+        bottom.Children.Add(_syncStatus);
+        System.Windows.Automation.AutomationProperties.SetAutomationId(_syncStatus, "DirectoryDescriptionSyncStatus");
         System.Windows.Automation.AutomationProperties.SetLiveSetting(_status, System.Windows.Automation.AutomationLiveSetting.Polite);
         System.Windows.Automation.AutomationProperties.SetAutomationId(_status, "DirectoryDescriptionStatus");
         var concurrencyPanel = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 6, 0, 8) };
@@ -77,6 +80,15 @@ public sealed class DirectoryMediaDescriptionWindow : Window
     internal TreeView DirectoryTree => _tree;
     internal Button StartButton => _start;
     internal string StatusMessage => _status.Text;
+
+    private async Task RefreshSyncStatusAsync(CancellationToken token)
+    {
+        if (!AppServices.Db.EnableDescriptionSync) return;
+        var counts = await UiWork.ReadSnapshotAsync("Descriptions.SyncCounts", AppServices.Db, reader => reader.GetDescriptionSyncCounts(), token);
+        await Dispatcher.InvokeAsync(() => _syncStatus.Text =
+            $"本机结果已持久保存；当前照片空间待上传 {counts.Pending} 个描述版本，服务端已确认、待回读核对 {counts.AwaitingSnapshot} 个版本。成功计数不代表全部已同步。",
+            System.Windows.Threading.DispatcherPriority.Background, token);
+    }
 
     internal void PopulateDirectories(IEnumerable<string> paths) => PopulateDirectoryModels(DirectoryTreeModel.Build(paths));
 
@@ -167,11 +179,15 @@ public sealed class DirectoryMediaDescriptionWindow : Window
                 try
                 {
                     while (await timer.WaitForNextTickAsync(descriptionSyncCancellation.Token).ConfigureAwait(false))
+                    {
                         FlushDescriptionSync();
+                        await RefreshSyncStatusAsync(descriptionSyncCancellation.Token).ConfigureAwait(false);
+                    }
                 }
                 catch (OperationCanceledException) when (descriptionSyncCancellation.IsCancellationRequested) { }
             }, descriptionSyncCancellation.Token);
             _status.Text = "准备边发现边描述…";
+            await RefreshSyncStatusAsync(token);
             photo = AppServices.CreateCloudVisionService(AiFeatureIds.PhotoAnalysis);
             video = AppServices.CreateCloudVisionService(AiFeatureIds.VideoSummary);
             if (photo is null && video is null)
@@ -192,13 +208,13 @@ public sealed class DirectoryMediaDescriptionWindow : Window
                 try
                 {
                 if (photoService is null) throw new AnalysisStageException(AnalysisStage.Model, "model_not_configured", false);
-                if (await UiWork.RunDatabaseAsync(() => AppServices.CloudVisionRepository.HasCurrentDescription(image), ct)) return true;
+                if (await UiWork.ReadSnapshotAsync("Descriptions.PhotoState", AppServices.Db, reader => new Picer.Core.Vision.CloudVisionRepository(reader).HasCurrentDescription(image), ct)) return true;
                 var result = await photoService!.AnalyzeAsync([(image, (IReadOnlyList<VisualConceptScore>)[], "directory-requested")],
                     cancellationToken: ct, runPolicy: photo!.Value.Policy with { MaximumImagesPerRun = 1 });
                 if (result.BudgetBlocked > 0) throw new DescriptionBudgetExceededException();
                 if (result.Failed > 0)
                 {
-                    var detail = await UiWork.RunDatabaseAsync(() => AppServices.CloudVisionRepository.GetFailureDetail(image.Id, photo!.Value.Analyzer.Provider), ct);
+                    var detail = await UiWork.ReadSnapshotAsync("Descriptions.PhotoState", AppServices.Db, reader => new Picer.Core.Vision.CloudVisionRepository(reader).GetFailureDetail(image.Id, photo!.Value.Analyzer.Provider), ct);
                     throw AnalysisStageException.FromStored(detail);
                 }
                 if (result.Completed > 0) RecordDescriptionWrite();
@@ -214,8 +230,8 @@ public sealed class DirectoryMediaDescriptionWindow : Window
                 try
                 {
                 if (video is null) throw new AnalysisStageException(AnalysisStage.Model, "model_not_configured", false);
-                if (await UiWork.RunDatabaseAsync(() => AppServices.Videos.HasCurrentSummary(item), ct)) return true;
-                var frames = await UiWork.RunDatabaseAsync(() => AppServices.Videos.GetKeyframes(item.Id, existingOnly: !AppServices.ServiceMode), ct);
+                if (await UiWork.ReadSnapshotAsync("Descriptions.VideoState", AppServices.Db, reader => new Picer.Core.Video.VideoRepository(reader).HasCurrentSummary(item), ct)) return true;
+                var frames = await UiWork.ReadSnapshotAsync("Descriptions.VideoState", AppServices.Db, reader => new Picer.Core.Video.VideoRepository(reader).GetKeyframes(item.Id, existingOnly: !AppServices.ServiceMode), ct);
                 if (frames.Count == 0)
                 {
                     var backend = AppPaths.LoadIndexBackend();
@@ -246,6 +262,7 @@ public sealed class DirectoryMediaDescriptionWindow : Window
                 new Progress<MediaDescriptionFailure>(failure => _failures.Add(failure)));
             FlushDescriptionSync();
             _status.Text += "；处理结束，失败项可再次运行。";
+            await RefreshSyncStatusAsync(token);
         }
         catch (OperationCanceledException) when (_cancellation?.IsCancellationRequested == true) { _status.Text = "已取消；完成的照片和视频描述已保留，再次开始会自动跳过。"; }
         catch (DescriptionBudgetExceededException exception) { _status.Text = exception.Message; }

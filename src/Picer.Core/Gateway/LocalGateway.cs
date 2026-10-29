@@ -12,7 +12,6 @@ namespace Picer.Core.Gateway;
 public sealed class LocalGateway(PicerDatabase db, ThumbnailService thumbnails, IndexEngine? engine = null) : IIndexGateway, IMediaAssetGateway
 {
     private ScanJobManager? _jobs;
-    private readonly VideoRepository _videos = new(db);
 
     public void Dispose() { }
     public Task<GatewayChangePage> GetChangesAsync(GatewayChangeRequest request, CancellationToken cancellationToken = default)
@@ -40,76 +39,83 @@ public sealed class LocalGateway(PicerDatabase db, ThumbnailService thumbnails, 
         return SearchAsync(filters, pageSize, cursor, cancellationToken);
     }
 
+    private Task<T> ReadAsync<T>(Func<PicerDatabase, T> read, CancellationToken token) =>
+        Task.Run(() => db.SupportsIndependentReadSnapshots ? db.ReadSnapshot(read, token) : read(db), token);
+
     public Task<ImageRecord?> GetImageAsync(long id, CancellationToken cancellationToken = default) =>
-        Task.FromResult(db.GetImage(id));
+        ReadAsync(reader => reader.GetImage(id), cancellationToken);
 
-    public Task<Stream?> OpenThumbnailAsync(long imageId, CancellationToken cancellationToken = default)
+    public async Task<Stream?> OpenThumbnailAsync(long imageId, CancellationToken cancellationToken = default)
     {
-        var record = db.GetImage(imageId);
-        if (record is null) return Task.FromResult<Stream?>(null);
-        try
+        var record = await GetImageAsync(imageId, cancellationToken).ConfigureAwait(false);
+        if (record is null) return null;
+        return await Task.Run<Stream?>(() =>
         {
-            var cached = thumbnails.GetOrCreate(record.Path, imageId, record.Sha256);
-            Stream? stream = cached is not null && File.Exists(cached) ? File.OpenRead(cached) : null;
-            return Task.FromResult(stream);
-        }
-        catch (Exception exception) when (exception is IOException or InvalidOperationException or NotSupportedException)
+            try
+            {
+                var cached = thumbnails.GetOrCreate(record.Path, imageId, record.Sha256);
+                return cached is not null && File.Exists(cached) ? File.OpenRead(cached) : null;
+            }
+            catch (Exception exception) when (exception is IOException or InvalidOperationException or NotSupportedException) { return null; }
+        }, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<Stream?> OpenFaceThumbnailAsync(long faceId, string? agentId = null, CancellationToken cancellationToken = default)
+    {
+        var data = await ReadAsync(reader =>
         {
-            return Task.FromResult<Stream?>(null);
-        }
+            using var command = reader.Command("SELECT image_id,box_x,box_y,box_width,box_height FROM detected_faces WHERE id=$id");
+            command.Parameters.AddWithValue("$id", faceId);
+            using var row = command.ExecuteReader();
+            if (!row.Read()) return ((string?)null, new NormalizedFaceBox(0, 0, 0, 0));
+            return (reader.GetImage(row.GetInt64(0))?.Path, new NormalizedFaceBox(row.GetFloat(1), row.GetFloat(2), row.GetFloat(3), row.GetFloat(4)));
+        }, cancellationToken).ConfigureAwait(false);
+        if (data.Item1 is null) return null;
+        return await Task.Run<Stream?>(() =>
+        {
+            if (!File.Exists(data.Item1)) return null;
+            using var source = File.OpenRead(data.Item1);
+            return FaceThumbnailCropper.Crop(source, data.Item2, cancellationToken);
+        }, cancellationToken).ConfigureAwait(false);
     }
 
-    public Task<Stream?> OpenFaceThumbnailAsync(long faceId, string? agentId = null, CancellationToken cancellationToken = default)
+    private static Task<Stream?> OpenFileAsync(string? path, CancellationToken token) =>
+        Task.Run<Stream?>(() => path is not null && File.Exists(path) ? File.OpenRead(path) : null, token);
+
+    public async Task<Stream?> OpenOriginalImageAsync(long imageId, string? agentId = null, CancellationToken cancellationToken = default) =>
+        await OpenFileAsync((await GetImageAsync(imageId, cancellationToken).ConfigureAwait(false))?.Path, cancellationToken).ConfigureAwait(false);
+
+    public async Task<Stream?> OpenVideoThumbnailAsync(long videoId, string? agentId = null, CancellationToken cancellationToken = default)
     {
-        using var command = db.Command("SELECT image_id,box_x,box_y,box_width,box_height FROM detected_faces WHERE id=$id");
-        command.Parameters.AddWithValue("$id", faceId);
-        using var reader = command.ExecuteReader();
-        if (!reader.Read()) return Task.FromResult<Stream?>(null);
-        var image = db.GetImage(reader.GetInt64(0));
-        if (image is null || !File.Exists(image.Path)) return Task.FromResult<Stream?>(null);
-        using var source = File.OpenRead(image.Path);
-        var crop = FaceThumbnailCropper.Crop(source, new NormalizedFaceBox((float)reader.GetDouble(1), (float)reader.GetDouble(2), (float)reader.GetDouble(3), (float)reader.GetDouble(4)), cancellationToken);
-        return Task.FromResult(crop);
+        var path = await ReadAsync(reader => new VideoRepository(reader).GetKeyframes(videoId, existingOnly: false).FirstOrDefault()?.Path, cancellationToken).ConfigureAwait(false);
+        return await OpenFileAsync(path, cancellationToken).ConfigureAwait(false);
     }
 
-    public Task<Stream?> OpenOriginalImageAsync(long imageId, string? agentId = null, CancellationToken cancellationToken = default)
+    public async Task<Stream?> OpenVideoKeyframeAsync(long keyframeId, CancellationToken cancellationToken = default)
     {
-        var path = db.GetImage(imageId)?.Path;
-        return Task.FromResult<Stream?>(path is not null && File.Exists(path) ? File.OpenRead(path) : null);
+        var path = await ReadAsync(reader =>
+        {
+            using var command = reader.Command("SELECT path FROM video_keyframes WHERE id=$id");
+            command.Parameters.AddWithValue("$id", keyframeId);
+            return command.ExecuteScalar() as string;
+        }, cancellationToken).ConfigureAwait(false);
+        return await OpenFileAsync(path, cancellationToken).ConfigureAwait(false);
     }
 
-    public Task<Stream?> OpenVideoThumbnailAsync(long videoId, string? agentId = null, CancellationToken cancellationToken = default)
-    {
-        var path = _videos.GetKeyframes(videoId).FirstOrDefault()?.Path;
-        return Task.FromResult<Stream?>(path is not null && File.Exists(path) ? File.OpenRead(path) : null);
-    }
+    public async Task<Stream?> OpenOriginalVideoAsync(long videoId, string? agentId = null, CancellationToken cancellationToken = default) =>
+        await OpenFileAsync((await GetVideoAsync(videoId, cancellationToken).ConfigureAwait(false))?.Path, cancellationToken).ConfigureAwait(false);
 
-    public Task<Stream?> OpenVideoKeyframeAsync(long keyframeId, CancellationToken cancellationToken = default)
-    {
-        using var command = db.Command("SELECT path FROM video_keyframes WHERE id=$id");
-        command.Parameters.AddWithValue("$id", keyframeId);
-        var path = command.ExecuteScalar() as string;
-        return Task.FromResult<Stream?>(path is not null && File.Exists(path) ? File.OpenRead(path) : null);
-    }
+    public Task<GatewayVideoPage> ListVideosAsync(long? sourceId = null, int pageSize = 200, string? cursor = null, CancellationToken cancellationToken = default) =>
+        SearchVideosAsync(new(SourceId: sourceId), pageSize, cursor, cancellationToken);
 
-    public Task<Stream?> OpenOriginalVideoAsync(long videoId, string? agentId = null, CancellationToken cancellationToken = default)
-    {
-        var path = _videos.GetAll().FirstOrDefault(video => video.Id == videoId)?.Path;
-        return Task.FromResult<Stream?>(path is not null && File.Exists(path) ? File.OpenRead(path) : null);
-    }
+    public Task<GatewayVideoPage> SearchVideosAsync(GatewayVideoQuery query, int pageSize = 200, string? cursor = null, CancellationToken cancellationToken = default) =>
+        ReadAsync(reader => GatewayBrowseQueries.Videos(reader, query, pageSize, cursor, cancellationToken), cancellationToken);
 
-    public Task<GatewayVideoPage> ListVideosAsync(long? sourceId = null, int pageSize = 200, string? cursor = null, CancellationToken cancellationToken = default)
-    {
-        var all = _videos.GetAll().Where(video => sourceId is null || video.SourceId == sourceId).ToArray();
-        var offset = int.TryParse(cursor, out var parsed) ? Math.Max(0, parsed) : 0;
-        var size = Math.Clamp(pageSize, 1, 500);
-        var items = all.Skip(offset).Take(size).ToArray();
-        var next = offset + items.Length < all.Length ? (offset + items.Length).ToString() : null;
-        return Task.FromResult(new GatewayVideoPage(items, next, all.Length));
-    }
+    public Task<IReadOnlyList<GatewayDirectorySummary>> ListDirectoriesAsync(CancellationToken cancellationToken = default) =>
+        ReadAsync(reader => GatewayBrowseQueries.Directories(reader, cancellationToken), cancellationToken);
 
     public Task<VideoRecord?> GetVideoAsync(long id, CancellationToken cancellationToken = default) =>
-        Task.FromResult(_videos.GetAll().FirstOrDefault(video => video.Id == id));
+        ReadAsync(reader => new VideoRepository(reader).Get(id), cancellationToken);
 
     public async Task<GatewayPage> SearchAsync(SearchFilters filters, int pageSize = 200, string? cursor = null, CancellationToken cancellationToken = default)
     {
@@ -118,30 +124,37 @@ public sealed class LocalGateway(PicerDatabase db, ThumbnailService thumbnails, 
     }
 
     public Task<IReadOnlyList<SourceFolder>> ListSourcesAsync(CancellationToken cancellationToken = default) =>
-        Task.FromResult<IReadOnlyList<SourceFolder>>(db.GetSources());
+        ReadAsync<IReadOnlyList<SourceFolder>>(reader => reader.GetSources(), cancellationToken);
 
     public Task<IReadOnlyList<Tag>> ListTagsAsync(CancellationToken cancellationToken = default) =>
-        Task.FromResult<IReadOnlyList<Tag>>(SemanticEngine.GetTags(db));
+        ReadAsync<IReadOnlyList<Tag>>(reader => SemanticEngine.GetTags(reader), cancellationToken);
 
     public Task<IReadOnlyList<Album>> ListAlbumsAsync(CancellationToken cancellationToken = default) =>
-        Task.FromResult<IReadOnlyList<Album>>(SemanticEngine.GetAlbums(db));
+        ReadAsync<IReadOnlyList<Album>>(reader => SemanticEngine.GetAlbums(reader), cancellationToken);
 
     public Task<GatewayMetadata> GetMetadataAsync(CancellationToken cancellationToken = default)
     {
-        var albumImages = SemanticEngine.GetAlbums(db).SelectMany(album =>
-            SemanticEngine.GetAlbumImages(db, album.Id).Select(image => new GatewayAlbumImageLink(album.Id, image.Id))).ToArray();
-        var imageTags = db.GetImages(includeMissing: true).SelectMany(image =>
-            SemanticEngine.GetImageTags(db, image.Id).Select(tag => new GatewayImageTagLink(image.Id, tag.Id))).ToArray();
-        return Task.FromResult(new GatewayMetadata(albumImages, imageTags, db.GetImageLocationHierarchyRows(),
-            db.GetAllMirroredFaces(), db.GetAllMirroredFaceAssignments(), db.GetAllMirroredVideoKeyframes(),
-            db.GetAllMirroredVideoTranscripts(), db.GetAllMirroredVideoSummaries(), db.GetAllMirroredVideoFaces(),
-            db.GetAllMirroredCloudVisionAnalyses(), db.GetAllMirroredSceneGroupDescriptions(),
-            db.GetAllMirroredFaceReviewStates(), db.GetAllMirroredFaceCandidateClusters(), db.GetAllMirroredFaceCandidateMembers(),
-            FaceReviewDecisions: db.GetFaceReviewDecisions()));
+        return ReadAsync(reader =>
+        {
+            var albumImages = new List<GatewayAlbumImageLink>();
+            using (var query = reader.Command("SELECT ai.album_id,ai.image_id FROM album_images ai JOIN images i ON i.id=ai.image_id WHERE i.status='active'"))
+            using (var rows = query.ExecuteReader())
+                while (rows.Read()) albumImages.Add(new(rows.GetInt64(0), rows.GetInt64(1)));
+            var imageTags = new List<GatewayImageTagLink>();
+            using (var query = reader.Command("SELECT image_id,tag_id FROM image_tags"))
+            using (var rows = query.ExecuteReader())
+                while (rows.Read()) imageTags.Add(new(rows.GetInt64(0), rows.GetInt64(1)));
+            return new GatewayMetadata(albumImages, imageTags, reader.GetImageLocationHierarchyRows(),
+                reader.GetAllMirroredFaces(), reader.GetAllMirroredFaceAssignments(), reader.GetAllMirroredVideoKeyframes(),
+                reader.GetAllMirroredVideoTranscripts(), reader.GetAllMirroredVideoSummaries(), reader.GetAllMirroredVideoFaces(),
+                reader.GetAllMirroredCloudVisionAnalyses(), reader.GetAllMirroredSceneGroupDescriptions(),
+                reader.GetAllMirroredFaceReviewStates(), reader.GetAllMirroredFaceCandidateClusters(), reader.GetAllMirroredFaceCandidateMembers(),
+                FaceReviewDecisions: reader.GetFaceReviewDecisions(), DescriptionVersions: reader.GetDescriptionVersions());
+        }, cancellationToken);
     }
 
     public Task<IReadOnlyList<PersonSummary>> ListPeopleAsync(CancellationToken cancellationToken = default) =>
-        Task.FromResult<IReadOnlyList<PersonSummary>>(new PeopleService(db).GetAll());
+        ReadAsync<IReadOnlyList<PersonSummary>>(reader => new PeopleService(reader).GetAll(), cancellationToken);
 
     public Task<SourceFolder> RegisterSourceAsync(string path, CancellationToken cancellationToken = default)
     {

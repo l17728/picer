@@ -329,6 +329,30 @@ public sealed partial class HttpIndexGateway : IIndexGateway, IMediaAssetGateway
         return await response.Content.ReadFromJsonAsync<IReadOnlyList<SourceFolder>>(Json, cancellationToken) ?? [];
     }
 
+    public async Task<IReadOnlyList<GatewayDirectorySummary>> ListDirectoriesAsync(CancellationToken cancellationToken = default)
+    {
+        using var response = await GetWithRetryAsync("api/gateway/v1/directories", cancellationToken);
+        // Older account gateways reject unknown optional routes with 403.
+        // Fallback calls still require their own index.read authorization.
+        if (response.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.MethodNotAllowed or HttpStatusCode.Forbidden)
+            throw new NotSupportedException("directory_summary_unavailable");
+        await EnsureSuccessAsync(response, cancellationToken);
+        return await response.Content.ReadFromJsonAsync<GatewayDirectorySummary[]>(Json, cancellationToken) ?? [];
+    }
+
+    public async Task<GatewayVideoPage> SearchVideosAsync(GatewayVideoQuery query, int pageSize = 200, string? cursor = null, CancellationToken cancellationToken = default)
+    {
+        var payload = new { Query = query, PageSize = Math.Clamp(pageSize, 1, 500), Cursor = cursor };
+        using var response = await SendWithRetryAsync(token => _client.PostAsJsonAsync("api/gateway/v1/video-search", payload, Json, token), cancellationToken);
+        // Older account gateways reject unknown optional routes with 403.
+        // Fallback calls still require their own index.read authorization.
+        if (response.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.MethodNotAllowed or HttpStatusCode.Forbidden)
+            throw new NotSupportedException("video_search_unavailable");
+        await EnsureSuccessAsync(response, cancellationToken);
+        return await response.Content.ReadFromJsonAsync<GatewayVideoPage>(Json, cancellationToken)
+            ?? throw new InvalidOperationException("empty_video_page");
+    }
+
     public async Task<IReadOnlyList<Tag>> ListTagsAsync(CancellationToken cancellationToken = default)
     {
         using var response = await GetSnapshotReadAsync("api/gateway/v1/tags", cancellationToken);
@@ -349,24 +373,54 @@ public sealed partial class HttpIndexGateway : IIndexGateway, IMediaAssetGateway
     public async Task<GatewayMetadata> GetMetadataAsync(CancellationToken cancellationToken, bool includeEmbeddings)
         => await GetMetadataAsync(cancellationToken, includeEmbeddings, includeFaceModels: false);
 
+    private readonly SemaphoreSlim _metadataTransferGate = new(1, 1);
+    private readonly Dictionary<(bool Embeddings, bool Models), (System.Text.Json.Nodes.JsonObject Snapshot, Dictionary<string,string> Hashes)> _metadataBaselines = [];
+
     public async Task<GatewayMetadata> GetMetadataAsync(CancellationToken cancellationToken, bool includeEmbeddings, bool includeFaceModels)
     {
-        // Account transports have a short request timeout. Large vector payloads
-        // must not be buffered under that timeout and restarted every two minutes.
-        // Keep a separate bounded body deadline, linked to the caller's cancellation.
-        return await ResilientJsonRead.RunAsync(async token =>
+        await _metadataTransferGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
         {
-            using var response = await GetSnapshotReadAsync($"api/gateway/v1/metadata?includeEmbeddings={includeEmbeddings.ToString().ToLowerInvariant()}&includeFaceModels={includeFaceModels.ToString().ToLowerInvariant()}", token, streamResponse: true);
-            await EnsureSuccessAsync(response, token);
-            return await response.Content.ReadFromJsonAsync<GatewayMetadata>(Json, token)
-                ?? new GatewayMetadata([], [], []);
-        }, cancellationToken).ConfigureAwait(false);
+            var key = (includeEmbeddings, includeFaceModels);
+            _metadataBaselines.TryGetValue(key, out var baseline);
+            var hashes = Convert.ToBase64String(JsonSerializer.SerializeToUtf8Bytes(baseline.Hashes ?? []));
+            return await ResilientJsonRead.RunAsync(async token =>
+            {
+                using var response = await GetSnapshotReadAsync($"api/gateway/v1/metadata?includeEmbeddings={includeEmbeddings.ToString().ToLowerInvariant()}&includeFaceModels={includeFaceModels.ToString().ToLowerInvariant()}", token, streamResponse: true, metadataHashes: hashes);
+                await EnsureSuccessAsync(response, token);
+                MetadataTransfer transfer;
+                if (response.Headers.TryGetValues(MetadataTransfer.ResponseHeader, out var versions) && versions.Contains("1"))
+                    transfer = await response.Content.ReadFromJsonAsync<MetadataTransfer>(Json, token)
+                        ?? throw new InvalidDataException("metadata_delta_empty");
+                else
+                {
+                    var full = await response.Content.ReadFromJsonAsync<GatewayMetadata>(Json, token)
+                        ?? throw new InvalidDataException("metadata_empty");
+                    transfer = MetadataTransfer.Create(full, "");
+                }
+                GatewayMetadata result;
+                System.Text.Json.Nodes.JsonObject snapshot;
+                try { result = transfer.Apply(baseline.Snapshot, out snapshot); }
+                catch (InvalidDataException)
+                {
+                    _metadataBaselines.Remove(key);
+                    baseline = default;
+                    hashes = Convert.ToBase64String(JsonSerializer.SerializeToUtf8Bytes(new Dictionary<string,string>()));
+                    throw; // The bounded read retry requests a complete baseline.
+                }
+                token.ThrowIfCancellationRequested();
+                _metadataBaselines[key] = (snapshot, transfer.Hashes);
+                return result;
+            }, cancellationToken).ConfigureAwait(false);
+        }
+        finally { _metadataTransferGate.Release(); }
     }
 
-    private Task<HttpResponseMessage> GetSnapshotReadAsync(string path, CancellationToken token, bool streamResponse = false) => SendWithRetryAsync(async ct =>
+    private Task<HttpResponseMessage> GetSnapshotReadAsync(string path, CancellationToken token, bool streamResponse = false, string? metadataHashes = null) => SendWithRetryAsync(async ct =>
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, path);
         if (Volatile.Read(ref _readSnapshot) is { } snapshot) request.Headers.Add("X-Picer-Read-Snapshot", snapshot);
+        if (metadataHashes is not null) request.Headers.Add(MetadataTransfer.RequestHeader, metadataHashes);
         return await _client.SendAsync(request, streamResponse ? HttpCompletionOption.ResponseHeadersRead : HttpCompletionOption.ResponseContentRead, ct).ConfigureAwait(false);
     }, token);
 

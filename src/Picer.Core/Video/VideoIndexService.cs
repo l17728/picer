@@ -11,6 +11,8 @@ public sealed record VideoRecord(long Id, long SourceId, string Path, long FileS
     public string? PersonAnalysisStatus { get; init; }
     public string? PersonAnalyzedUtc { get; init; }
 }
+
+public sealed record PreparedVideoFile(string Path, long FileSize, DateTime ModifiedUtc, string Sha256);
 /// <summary>视频人物、对话和摘要分析状态的独立汇总。</summary>
 public sealed record VideoFaceReviewSummary(
     int Total,
@@ -30,6 +32,7 @@ public static class VideoFormats
 
 public sealed class VideoRepository(PicerDatabase database)
 {
+    public PicerDatabase Database => database;
     internal string DatabaseIdentity => database.DatabasePath == ":memory:"
         ? "memory:" + System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(database)
         : Path.GetFullPath(database.DatabasePath);
@@ -211,6 +214,13 @@ public sealed class VideoRepository(PicerDatabase database)
                 return new VideoRecord(reader.GetInt64(0), sourceId, fullPath, info.Length, info.LastWriteTimeUtc,
                     null, 0, 0, null, null, "active") { Sha256 = reader.GetString(4) };
         }
+        return UpsertPrepared(sourceId, PrepareFile(fullPath, cancellationToken));
+    }
+
+    public static PreparedVideoFile PrepareFile(string path, CancellationToken cancellationToken = default)
+    {
+        var fullPath = Path.GetFullPath(path);
+        var info = new FileInfo(fullPath);
         var size = info.Length; var modified = info.LastWriteTimeUtc;
         string hash;
         using (var stream = File.OpenRead(fullPath))
@@ -228,6 +238,16 @@ public sealed class VideoRepository(PicerDatabase database)
         }
         info.Refresh();
         if (info.Length != size || info.LastWriteTimeUtc != modified) throw new IOException("video_changed_during_hash");
+        return new(fullPath, size, modified, hash);
+    }
+
+    public VideoRecord UpsertPrepared(long sourceId, PreparedVideoFile prepared)
+    {
+        var fullPath = prepared.Path;
+        var info = new FileInfo(fullPath);
+        if (!info.Exists || info.Length != prepared.FileSize || info.LastWriteTimeUtc != prepared.ModifiedUtc)
+            throw new IOException("video_changed_after_hash");
+        var hash = prepared.Sha256;
         using var transaction = database.BeginTransaction();
         InvalidateChangedContent(fullPath, 0, info.Length, info.LastWriteTimeUtc, hash);
         using var command = database.Command("""
@@ -247,8 +267,18 @@ public sealed class VideoRepository(PicerDatabase database)
     }
 
     public IReadOnlyList<VideoRecord> GetAll()
+        => GetFiltered();
+
+    public IReadOnlyList<VideoRecord> GetFiltered(long? sourceId = null, string? directory = null, bool includeMissing = true)
     {
-        using var command = database.Command("SELECT id,source_id,path,file_size,modified_utc,duration_seconds,width,height,taken_utc,gps,status,person_analysis_status,person_analyzed_utc,sha256 FROM videos ORDER BY path");
+        using var command = database.Command("""
+            SELECT id,source_id,path,file_size,modified_utc,duration_seconds,width,height,taken_utc,gps,status,person_analysis_status,person_analyzed_utc,sha256
+            FROM videos WHERE ($source IS NULL OR source_id=$source) AND ($missing=1 OR status='active')
+            AND ($prefix IS NULL OR substr(replace(path,char(92),'/'),1,length($prefix))=$prefix COLLATE NOCASE) ORDER BY path
+            """);
+        command.Parameters.AddWithValue("$source", (object?)sourceId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$missing", includeMissing ? 1 : 0);
+        command.Parameters.AddWithValue("$prefix", string.IsNullOrWhiteSpace(directory) ? DBNull.Value : directory.Replace('\\', '/').TrimEnd('/') + "/");
         using var reader = command.ExecuteReader(); var result = new List<VideoRecord>();
         while (reader.Read()) result.Add(new VideoRecord(reader.GetInt64(0),reader.GetInt64(1),reader.GetString(2),reader.GetInt64(3),
             DateTime.Parse(reader.GetString(4),null,System.Globalization.DateTimeStyles.RoundtripKind),reader.IsDBNull(5)?null:reader.GetDouble(5),
@@ -413,11 +443,12 @@ public sealed class VideoRepository(PicerDatabase database)
 
     public AnalysisBillingRepository Billing { get; } = new(database);
 
-    public void SaveSummary(long videoId,ICloudVisionAnalyzer analyzer,VideoRecord video,CloudVisionResult result, string? requestId = null)
+    public bool SaveSummary(long videoId,ICloudVisionAnalyzer analyzer,VideoRecord video,CloudVisionResult result, string? requestId = null)
     {
         Billing.Record(requestId ?? Guid.NewGuid().ToString("N"), analyzer, result.Usage);
         using var transaction = database.BeginTransaction();
-        if (!IsCurrentContent(videoId, video)) return;
+        if (!IsCurrentContent(videoId, video)) return false;
+        database.ArchiveCurrentVideoDescription(videoId);
         using var command=database.Command("""
             INSERT INTO video_summaries(video_id,provider,model_version,prompt_version,source_file_size,source_modified_utc,summary,result_json,input_tokens,output_tokens,estimated_cost_yuan,created_utc)
             VALUES($video,$provider,$model,$prompt,$size,$modified,$summary,$json,$input,$output,$cost,$now)
@@ -426,7 +457,9 @@ public sealed class VideoRepository(PicerDatabase database)
         var metadata = new VideoSearchMetadata(database);
         var concepts = VisualConceptCatalog.Parse(string.Join(" ", (result.Scenes ?? []).Concat(result.Activities ?? []).Concat(result.Objects ?? []).Concat(result.SearchTerms ?? []))).ConceptIds;
         foreach (var concept in concepts) metadata.SetConcept(videoId, concept, analyzer.Provider + ":" + analyzer.ModelVersion, "suggested", transaction);
+        database.QueueVideoDescription(videoId);
         transaction.Commit();
+        return true;
     }
     public string? GetSummary(long videoId){using var command=database.Command("SELECT summary FROM video_summaries WHERE video_id=$video");command.Parameters.AddWithValue("$video",GetContentId(videoId));return command.ExecuteScalar() as string;}
 
@@ -455,6 +488,44 @@ public sealed class VideoRepository(PicerDatabase database)
 
 public sealed class VideoIndexService(PicerDatabase database, VideoRepository repository)
 {
+    public async Task<int> ScanDirectoryIncrementalAsync(long sourceId, string directoryPath,
+        Func<Action, CancellationToken, Task> databaseWork, CancellationToken cancellationToken = default)
+    {
+        IReadOnlyList<VideoRecord> indexed = [];
+        await databaseWork(() => indexed = repository.GetFiltered(sourceId, directoryPath), cancellationToken).ConfigureAwait(false);
+        var byPath = indexed.ToDictionary(video => video.Path, StringComparer.OrdinalIgnoreCase);
+        var paths = await Task.Run(() => Directory.Exists(directoryPath)
+            ? Directory.EnumerateFiles(directoryPath, "*", new EnumerationOptions
+            {
+                RecurseSubdirectories = true, IgnoreInaccessible = true,
+                AttributesToSkip = FileAttributes.Hidden | FileAttributes.System
+            }).Where(path => { cancellationToken.ThrowIfCancellationRequested(); return VideoFormats.IsSupported(path); }).ToArray()
+            : [], cancellationToken).ConfigureAwait(false);
+        var changed = 0;
+        foreach (var path in paths)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                var prepared = await Task.Run(() =>
+                {
+                    var info = new FileInfo(path);
+                    if (byPath.TryGetValue(Path.GetFullPath(path), out var current) && current.Status == "active" &&
+                        current.FileSize == info.Length && current.ModifiedUtc == info.LastWriteTimeUtc &&
+                        !string.IsNullOrWhiteSpace(current.Sha256)) return null;
+                    return VideoRepository.PrepareFile(path, cancellationToken);
+                }, cancellationToken).ConfigureAwait(false);
+                if (prepared is null) continue;
+                // Hashing and directory enumeration never occupy the UI writer queue.
+                await databaseWork(() => repository.UpsertPrepared(sourceId, prepared), cancellationToken).ConfigureAwait(false);
+                changed++;
+            }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+        }
+        return changed;
+    }
+
     public IReadOnlyList<VideoRecord> ScanDirectory(long sourceId, string directoryPath, bool includeDescendants = true,
         CancellationToken cancellationToken = default)
     {

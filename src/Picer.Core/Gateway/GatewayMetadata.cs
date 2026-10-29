@@ -79,7 +79,8 @@ public sealed record GatewayMetadata(
     IReadOnlyList<GatewayClassificationAssertion>? ClassificationAssertions = null,
     IReadOnlyList<GatewayClassificationRejection>? ClassificationRejections = null,
     IReadOnlyList<GatewaySemanticContentCluster>? SemanticContentClusters = null,
-    IReadOnlyList<GatewaySemanticContentClusterMember>? SemanticContentClusterMembers = null)
+    IReadOnlyList<GatewaySemanticContentClusterMember>? SemanticContentClusterMembers = null,
+    IReadOnlyList<DescriptionVersion>? DescriptionVersions = null)
 {
     public GatewayMetadata(
         IReadOnlyList<GatewayAlbumImageLink> albumImages,

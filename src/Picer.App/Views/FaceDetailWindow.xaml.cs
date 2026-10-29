@@ -31,7 +31,7 @@ public partial class FaceDetailWindow : Window
     private async Task InitializeAsync()
     {
         Status.Text = "正在加载关联照片和人脸…";
-        var people = await UiWork.RunDatabaseAsync(() => _people.GetAll().ToArray());
+        var people = await UiWork.ReadSnapshotAsync("FaceDetail.People", _repository.Database, reader => new PeopleService(reader).GetAll().ToArray());
         PersonPicker.ItemsSource = people;
         await LoadPhotoAsync();
         await RefreshFacesAsync();
@@ -60,7 +60,7 @@ public partial class FaceDetailWindow : Window
 
     private async Task RefreshFacesAsync()
     {
-        var faces = await UiWork.RunDatabaseAsync(() => _repository.GetFaces(_image.Id).Select(face => new FaceDetailItem(face)).ToArray());
+        var faces = await UiWork.ReadSnapshotAsync("FaceDetail.Faces", _repository.Database, reader => new VisionAnalysisRepository(reader).GetFaces(_image.Id).Select(face => new FaceDetailItem(face)).ToArray());
         FaceList.ItemsSource = faces;
         FaceCanvas.Children.Clear();
         _rectangles.Clear();

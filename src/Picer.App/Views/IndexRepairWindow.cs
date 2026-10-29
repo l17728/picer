@@ -1,4 +1,4 @@
-﻿using System.IO;
+using System.IO;
 using System.Net.Http.Json;
 using System.Windows;
 using System.Windows.Controls;
@@ -83,17 +83,16 @@ public sealed partial class IndexRepairWindow : Window
             if (AppServices.ServiceMode)
                 await AppServices.SyncRemoteMirrorAsync(token, requireMetadataSync: true);
 
-            var integrity = await UiWork.RunDatabaseAsync(() =>
+            var integrity = await UiWork.ReadSnapshotAsync("Inspection.Integrity", AppServices.Db, reader =>
             {
-                using var check = AppServices.Db.Command("PRAGMA quick_check");
+                using var check = reader.Command("PRAGMA quick_check");
                 return Convert.ToString(check.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture) ?? "unknown";
             }, token);
-            var counts = await UiWork.RunDatabaseAsync(() =>
+            var counts = await UiWork.ReadSnapshotAsync("Inspection.Counts", AppServices.Db, reader =>
             {
-                var images = AppServices.Db.GetImages(includeMissing: true);
-                var videos = new Picer.Core.Video.VideoRepository(AppServices.Db).GetAll();
-                return (Images: images.Count, MissingImages: images.Count(item => item.Status != Picer.Core.Models.ImageStatus.Active),
-                    Videos: videos.Count, MissingVideos: videos.Count(item => item.Status != "active"));
+                using var query = reader.Command("SELECT (SELECT COUNT(*) FROM images),(SELECT COUNT(*) FROM images WHERE status<>'active'),(SELECT COUNT(*) FROM videos),(SELECT COUNT(*) FROM videos WHERE status<>'active')");
+                using var row = query.ExecuteReader(); row.Read();
+                return (Images: row.GetInt64(0), MissingImages: row.GetInt64(1), Videos: row.GetInt64(2), MissingVideos: row.GetInt64(3));
             }, token);
             var syncSummary = pushed is null
                 ? AppServices.LocalSpaceSyncConfigured ? "已按用户选择的来源范围执行照片空间增量发布" : "当前没有配置可写的同步服务"
@@ -131,8 +130,9 @@ public sealed partial class IndexRepairWindow : Window
             var roots = _roots.Items.Cast<string>().ToArray();
             _status.Text = "读取索引并检查原位置…";
             if (AppServices.ServiceMode) await AppServices.SyncRemoteMirrorAsync(token, requireMetadataSync: true, refreshMedia: true);
-            var images = await UiWork.RunDatabaseAsync(() => AppServices.Db.GetImages(includeMissing: true), token);
-            var videos = await UiWork.RunDatabaseAsync(() => new Picer.Core.Video.VideoRepository(AppServices.Db).GetAll(), token);
+            var snapshot = await UiWork.ReadSnapshotAsync("Repair.Input", AppServices.Db, reader => (Images: reader.GetImages(includeMissing: true), Videos: new Picer.Core.Video.VideoRepository(reader).GetAll()), token);
+            var images = snapshot.Images;
+            var videos = snapshot.Videos;
             var progress = new Progress<string>(message => _status.Text = message);
             var plan = await Task.Run(() => IndexRepairService.BuildAsync(images, roots, progress, token, videos), token);
             using var mutation = await AppServices.AcquireIndexMutationAsync(token);
@@ -144,7 +144,7 @@ public sealed partial class IndexRepairWindow : Window
                 // Root selection is the source host's authorization. Persist it
                 // locally; the server cannot expand the agent's allowed roots.
                 MediaAgentController.AuthorizeRepairRoots(roots);
-                var sources = await UiWork.RunDatabaseAsync(AppServices.Db.GetSources, token);
+                var sources = await UiWork.ReadSnapshotAsync("Repair.Sources", AppServices.Db, reader => reader.GetSources(), token);
                 var settings = MediaAgentController.Load();
                 var ip = string.IsNullOrWhiteSpace(settings.ServiceIp) ? new Uri(backend.BaseUrl!).Host : settings.ServiceIp;
                 if (!await Task.Run(() => MediaAgentController.Start(ip, MediaAgentController.ResolveToken(), MediaAgentController.ResolveSpkiPin(),

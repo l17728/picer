@@ -83,7 +83,8 @@ public partial class IndexServiceWindow : Window
                     AgentStatusText.Text = "原图代理已启动，正在同步索引。";
                 }
             }
-            var client = Picer.Core.Gateway.IndexSyncClient.Create($"https://{ip}:8445", token);
+            var client = Picer.Core.Gateway.IndexSyncClient.Create($"https://{ip}:8445", token,
+                databaseWork: (work, ct) => Picer.App.Infrastructure.UiWork.RunDatabaseAsync(work, ct));
             var progress = new Progress<(int done, int total)>(value => HealthText.Text = $"正在同步索引：{value.done}/{value.total}…");
             var count = await client.PushImagesAsync(AppServices.Db, progress);
             var videoCount = await client.PushVideosAsync(AppServices.Db, progress);

@@ -120,6 +120,11 @@ public sealed class SpaceSyncApi(AccountStore accounts) : IDisposable
             try { return accounts.ExecuteAuthorizedWrite(device, accessToken, current =>
             {
                 using var database = runtime.OpenDatabase();
+                if (path == "/api/sync/v2/descriptions")
+                {
+                    if (current.Kind != "gui") return Results.StatusCode(403);
+                    return Results.Json(database.AcceptDescriptionUpload(DeviceAuthorization.ReadDocument<DescriptionUpload>(payload)));
+                }
                 if (path is "/api/sync/v1/metadata-edits" or "/api/sync/v1/face-review-decisions")
                     return ApplyMirrorEdit(context, path, payload, database);
                 var receiver = new SpaceSyncReceiver(database, current);
@@ -161,7 +166,8 @@ public sealed class SpaceSyncApi(AccountStore accounts) : IDisposable
         catch (InvalidOperationException exception) when (exception.Message is "space_epoch_reset_required" or "publisher_epoch_reset_required" or
             "sync_sequence_gap" or "sync_sequence_conflict" or "space_fenced" or "identity_adoption_conflict" or "too_many_active_inspections" or "inspection_receipt_conflict" or "video_ownership_review_changed" or "video_ownership_review_missing" or
             "metadata_conflict_changed" or "metadata_conflict_missing" or "metadata_conflict_resolution_changed" or "metadata_conflict_entity_unavailable" or
-            "video_face_ownership_review_changed" or "video_face_review_geometry_changed" or "video_face_missing" or "video_content_changed" or "video_source_ownership_ambiguous")
+            "video_face_ownership_review_changed" or "video_face_review_geometry_changed" or "video_face_missing" or "video_content_changed" or "video_source_ownership_ambiguous" or
+            "description_baseline_changed" or "description_operation_conflict" or "description_media_changed" or "description_result_conflict")
         { return Results.Json(new { error = exception.Message }, statusCode: 409); }
         catch (UnauthorizedAccessException) { return Results.StatusCode(403); }
         catch (Exception exception) when (exception is ArgumentException or InvalidDataException or System.Text.Json.JsonException)

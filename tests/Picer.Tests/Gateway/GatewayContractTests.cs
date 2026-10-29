@@ -149,6 +149,51 @@ public sealed class GatewayContractCollection { }
 public sealed class GatewayContractTests(GatewayServiceFixture fixture) : IClassFixture<GatewayServiceFixture>
 {
     [Fact]
+    public async Task MetadataDeltaEndpointOmitsUnchangedCollectionsAndClientRebuildsSnapshot()
+    {
+        using var handler = new HttpClientHandler { ServerCertificateCustomValidationCallback = (_,_,_,_) => true };
+        using var client = new HttpClient(handler) { BaseAddress = new Uri(fixture.BaseUrl) };
+        client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer","picer-test-token");
+        client.DefaultRequestHeaders.Add(MetadataTransfer.RequestHeader, Convert.ToBase64String(Encoding.UTF8.GetBytes("{}")));
+        using var first = await client.GetAsync("api/gateway/v1/metadata");
+        first.EnsureSuccessStatusCode(); Assert.Equal("1",Assert.Single(first.Headers.GetValues(MetadataTransfer.ResponseHeader)));
+        var full=(await first.Content.ReadFromJsonAsync<MetadataTransfer>())!;
+        full.Apply(null,out var baseline);
+        client.DefaultRequestHeaders.Remove(MetadataTransfer.RequestHeader);
+        client.DefaultRequestHeaders.Add(MetadataTransfer.RequestHeader,Convert.ToBase64String(JsonSerializer.SerializeToUtf8Bytes(full.Hashes)));
+        using var second=await client.GetAsync("api/gateway/v1/metadata"); second.EnsureSuccessStatusCode();
+        var delta=(await second.Content.ReadFromJsonAsync<MetadataTransfer>())!;
+        Assert.Empty(delta.Changes);
+        Assert.Equal(full.Apply(null,out _).Faces.Count,delta.Apply(baseline,out _).Faces.Count);
+        using var gateway=fixture.CreateHttpGateway();
+        var one=await gateway.GetMetadataAsync(); var two=await gateway.GetMetadataAsync();
+        Assert.Equal(one.Faces,two.Faces);
+    }
+
+    [Fact]
+    public async Task InteractiveDirectoryAndVideoEndpointsSupportFilteredPaging()
+    {
+        using var isolated = new GatewayServiceFixture();
+        var directory = Path.Combine(isolated.Root, "interactive"); Directory.CreateDirectory(directory);
+        var repository = new VideoRepository(isolated.Db);
+        var ids = new List<long>();
+        for (var index = 0; index < 3; index++)
+        {
+            var path = Path.Combine(directory, $"clip-{index}.mp4"); File.WriteAllBytes(path, [(byte)index]);
+            ids.Add(repository.Upsert(isolated.SourceId, path).Id);
+        }
+        using var gateway = isolated.CreateHttpGateway();
+        var directories = await gateway.ListDirectoriesAsync();
+        Assert.Equal(3, Assert.Single(directories.Where(row => row.Path == directory.Replace('\\', '/'))).Videos);
+        var first = await gateway.SearchVideosAsync(new(isolated.SourceId, directory, "clip"), 2);
+        var last = await gateway.SearchVideosAsync(new(isolated.SourceId, directory, "clip"), 2, first.NextCursor);
+        Assert.Equal(3, first.TotalCount); Assert.Null(last.NextCursor);
+        Assert.Equal(ids, first.Items.Concat(last.Items).Select(video => video.Id));
+        var photos = await gateway.SearchAsync(new SearchFilters { DirectoryPath = directory });
+        Assert.Empty(photos.Items); Assert.Equal(0, photos.TotalCount);
+    }
+
+    [Fact]
     public async Task FaceReviewDecisionEndpoint_AcknowledgesAndProtectsAgainstOldSnapshots()
     {
         using var isolated = new GatewayServiceFixture();

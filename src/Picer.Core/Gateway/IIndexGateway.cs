@@ -12,6 +12,10 @@ public sealed record GatewayVideoPage(IReadOnlyList<VideoRecord> Items, string? 
 
 public interface IIndexGateway : IDisposable
 {
+    Task<IReadOnlyList<GatewayDirectorySummary>> ListDirectoriesAsync(CancellationToken cancellationToken = default)
+        => Task.FromException<IReadOnlyList<GatewayDirectorySummary>>(new NotSupportedException("directory_summary_unavailable"));
+    Task<GatewayVideoPage> SearchVideosAsync(GatewayVideoQuery query, int pageSize = 200, string? cursor = null, CancellationToken cancellationToken = default)
+        => Task.FromException<GatewayVideoPage>(new NotSupportedException("video_search_unavailable"));
     Task ReleaseReadSnapshotAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
     Task<GatewayChangePage> GetChangesAsync(GatewayChangeRequest request, CancellationToken cancellationToken = default)
         => Task.FromException<GatewayChangePage>(new NotSupportedException("mirror_change_feed_unavailable"));

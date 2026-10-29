@@ -11,6 +11,38 @@ namespace Picer.Tests;
 public sealed class MediaStreamingTests
 {
     [Fact]
+    public async Task KeyframeUsesIndependentBinaryMediaChannel()
+    {
+        using var fixture = new GatewayServiceFixture();
+        await using var agent = await TestAgent.StartAsync(fixture);
+        var videoPath = Path.Combine(fixture.Root,"frame-video.mp4");
+        await File.WriteAllBytesAsync(videoPath,[1]);
+        var framePath = Path.Combine(fixture.Root,"frame.jpg");
+        byte[] expected=[1,2,3,4,5]; await File.WriteAllBytesAsync(framePath,expected);
+        var repository = new VideoRepository(fixture.Db);
+        var video=repository.Upsert(fixture.SourceId,videoPath);
+        repository.SaveKeyframes(video.Id,[new VideoKeyframe(0,framePath)]);
+        var frame=Assert.Single(repository.GetKeyframes(video.Id));
+        using var gateway=new HttpIndexGateway(fixture.BaseUrl,"picer-test-token",fixture.SpkiPin);
+        using var timeout=new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var leases=new List<(long Id,RemoteMediaInfo Info)>();
+        for(var index=0;index<4;index++)
+        {
+            var path=Path.Combine(fixture.Root,$"playing-{index}.mp4"); await File.WriteAllBytesAsync(path,[(byte)index]);
+            var playing=repository.Upsert(fixture.SourceId,path);
+            leases.Add((playing.Id,await gateway.GetMediaInfoAsync(playing.Id,true,timeout.Token)));
+        }
+        await using var stream=await gateway.OpenVideoKeyframeAsync(frame.Id,timeout.Token);
+        Assert.NotNull(stream);
+        using var copy=new MemoryStream(); await stream.CopyToAsync(copy,timeout.Token);
+        Assert.Equal(expected,copy.ToArray());
+        Assert.Equal(5,agent.MediaConnections);
+        await using var playback=await gateway.OpenMediaRangeAsync(leases[0].Id,true,leases[0].Info,0,1,timeout.Token);
+        var firstByte=new byte[1]; await playback.ReadExactlyAsync(firstByte,timeout.Token);
+        Assert.Equal(5,agent.MediaConnections); // Keyframe did not evict a playback lease.
+    }
+
+    [Fact]
     public async Task AgentReplacementCancelsStalledMediaAndNewRequestsRecover()
     {
         using var fixture = new GatewayServiceFixture();

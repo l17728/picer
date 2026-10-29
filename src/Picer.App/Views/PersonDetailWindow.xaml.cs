@@ -27,17 +27,19 @@ public partial class PersonDetailWindow : Window
 
     private async Task RefreshAsync()
     {
-        var snapshot = await UiWork.RunDatabaseAsync(() =>
+        var snapshot = await UiWork.ReadSnapshotAsync("PersonDetail.Snapshot", _database, reader =>
         {
-            var person = _people.Get(_personId);
+            var people = new PeopleService(reader);
+            var person = people.Get(_personId);
             if (person is null) return null;
-            var images = _people.GetImageIds(_personId).Select(_database.GetImage).Where(x => x is not null).Cast<ImageRecord>()
+            var images = reader.GetImagesByIds(people.GetImageIds(_personId))
                 .OrderBy(SceneTimeClusterService.EffectiveTime).ThenBy(x => x.Id).ToArray();
-            var clusters = new SceneTimeClusterService(_database).Build(images).ToArray();
-            var targets = _people.GetAll().Where(x => x.Id != _personId).ToArray();
-            return new { Person = person, Images = images, Clusters = clusters, Targets = targets };
+            var input = new SceneTimeClusterService(reader).Capture(images);
+            var targets = people.GetAll().Where(x => x.Id != _personId).ToArray();
+            return new { Person = person, Images = images, Input = input, Targets = targets };
         });
         if (snapshot is null) { Close(); return; }
+        var clusters = await Task.Run(() => SceneTimeClusterService.Build(snapshot.Input));
         var person = snapshot.Person;
         var images = snapshot.Images;
         Heading.Text = person.DisplayName; NameBox.Text = person.DisplayName;
@@ -50,7 +52,7 @@ public partial class PersonDetailWindow : Window
         {
             new("全部照片", images.Select(image => new PersonPhotoItem(image)).ToArray(), null)
         };
-        foreach (var cluster in snapshot.Clusters)
+        foreach (var cluster in clusters)
         {
             var photos = cluster.ImageIds.Where(byId.ContainsKey).Select(id => new PersonPhotoItem(byId[id])).ToArray();
             groups.Add(new PersonSceneGroup(cluster.DisplayName, photos, cluster));

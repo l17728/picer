@@ -8,7 +8,7 @@ namespace Picer.Core.Data;
 
 public sealed partial class PicerDatabase : IDisposable
 {
-    public const int CurrentSchemaVersion = 91;
+    public const int CurrentSchemaVersion = 92;
     private readonly SqliteConnection _conn;
     private readonly string _connectionString;
     private readonly FileStream? _lifetimeLease;
@@ -22,12 +22,12 @@ public sealed partial class PicerDatabase : IDisposable
 
     public PicerDatabase(string dbPath) : this(dbPath, staging: false) { }
 
-    private PicerDatabase(string dbPath, bool staging, bool independent = false)
+    private PicerDatabase(string dbPath, bool staging, bool independent = false, bool readOnly = false)
     {
         _isInMemory = string.Equals(dbPath, ":memory:", StringComparison.Ordinal);
         var isNewDatabase = _isInMemory || !File.Exists(dbPath) || new FileInfo(dbPath).Length == 0;
         var dir = _isInMemory ? null : Path.GetDirectoryName(dbPath);
-        if (!string.IsNullOrEmpty(dir))
+        if (!readOnly && !string.IsNullOrEmpty(dir))
             Directory.CreateDirectory(dir);
 
         using var startup = staging || _isInMemory ? null : DatabaseMigrationSafety.Enter(dbPath);
@@ -53,6 +53,7 @@ public sealed partial class PicerDatabase : IDisposable
         _connectionString = new SqliteConnectionStringBuilder
         {
             DataSource = dbPath,
+            Mode = readOnly ? SqliteOpenMode.ReadOnly : SqliteOpenMode.ReadWriteCreate,
             ForeignKeys = true,
             DefaultTimeout = 30,
             Pooling = false
@@ -1583,6 +1584,8 @@ public sealed partial class PicerDatabase : IDisposable
             FaceCandidateAdoptionMigration.Apply(_conn);
         if (schemaVersion < 91)
             TrainingSyncBaselineMigration.Apply(_conn);
+        if (schemaVersion < 92)
+            DescriptionSyncMigration.Apply(_conn);
         }
         catch
         {
@@ -1913,6 +1916,37 @@ public sealed partial class PicerDatabase : IDisposable
         return list;
     }
 
+    public List<ImageRecord> GetImagesByIds(IEnumerable<long> imageIds)
+    {
+        var ids = imageIds.Distinct().ToArray();
+        if (ids.Length == 0) return [];
+        using var command = Command("SELECT * FROM images WHERE id IN (SELECT value FROM json_each($ids)) ORDER BY id");
+        command.Parameters.AddWithValue("$ids", System.Text.Json.JsonSerializer.Serialize(ids));
+        using var reader = command.ExecuteReader();
+        var result = new List<ImageRecord>();
+        while (reader.Read()) result.Add(ReadRecord(reader));
+        return result;
+    }
+
+    public List<ImageRecord> GetImagesInPathPrefix(long sourceId, string? directory, bool includeMissing = false, bool recursive = true)
+    {
+        var prefix = string.IsNullOrWhiteSpace(directory) ? null : directory.Replace('\\', '/').TrimEnd('/') + "/";
+        using var command = Command("""
+            SELECT * FROM images WHERE source_id=$source AND ($missing=1 OR status='active')
+            AND ($prefix IS NULL OR (substr(replace(path,char(92),'/'),1,length($prefix))=$prefix COLLATE NOCASE
+                AND ($recursive=1 OR instr(substr(replace(path,char(92),'/'),length($prefix)+1),'/')=0)))
+            ORDER BY COALESCE(taken_utc,file_created_utc,modified_utc),id
+            """);
+        command.Parameters.AddWithValue("$source", sourceId);
+        command.Parameters.AddWithValue("$prefix", (object?)prefix ?? DBNull.Value);
+        command.Parameters.AddWithValue("$missing", includeMissing ? 1 : 0);
+        command.Parameters.AddWithValue("$recursive", recursive ? 1 : 0);
+        using var reader = command.ExecuteReader();
+        var result = new List<ImageRecord>();
+        while (reader.Read()) result.Add(ReadRecord(reader));
+        return result;
+    }
+
     public List<ImageRecord> GetImagesByPaths(IEnumerable<string> paths)
     {
         var pathList = paths.ToList();
@@ -2060,14 +2094,14 @@ public sealed partial class PicerDatabase : IDisposable
 
     public void UpsertMirroredTag(Tag tag)
     {
-        using var cmd = Command("INSERT INTO tags(id,name,created_utc) VALUES($id,$name,$created) ON CONFLICT(id) DO UPDATE SET name=excluded.name,created_utc=excluded.created_utc");
+        using var cmd = Command("INSERT INTO tags(id,name,created_utc) VALUES($id,$name,$created) ON CONFLICT(id) DO UPDATE SET name=excluded.name,created_utc=excluded.created_utc WHERE tags.name IS NOT excluded.name OR tags.created_utc IS NOT excluded.created_utc");
         cmd.Parameters.AddWithValue("$id", tag.Id); cmd.Parameters.AddWithValue("$name", tag.Name);
         cmd.Parameters.AddWithValue("$created", tag.CreatedUtc.ToUniversalTime().ToString("o")); cmd.ExecuteNonQuery();
     }
 
     public void UpsertMirroredAlbum(Album album)
     {
-        using var cmd = Command("INSERT INTO albums(id,name,creator_id,created_utc,description) VALUES($id,$name,$creator,$created,$description) ON CONFLICT(id) DO UPDATE SET name=excluded.name,creator_id=excluded.creator_id,created_utc=excluded.created_utc,description=excluded.description");
+        using var cmd = Command("INSERT INTO albums(id,name,creator_id,created_utc,description) VALUES($id,$name,$creator,$created,$description) ON CONFLICT(id) DO UPDATE SET name=excluded.name,creator_id=excluded.creator_id,created_utc=excluded.created_utc,description=excluded.description WHERE albums.name IS NOT excluded.name OR albums.creator_id IS NOT excluded.creator_id OR albums.created_utc IS NOT excluded.created_utc OR albums.description IS NOT excluded.description");
         cmd.Parameters.AddWithValue("$id", album.Id); cmd.Parameters.AddWithValue("$name", album.Name);
         cmd.Parameters.AddWithValue("$creator", (object?)album.CreatorId ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$created", album.CreatedUtc.ToUniversalTime().ToString("o"));
@@ -2076,7 +2110,7 @@ public sealed partial class PicerDatabase : IDisposable
 
     public void UpsertMirroredPerson(PersonSummary person)
     {
-        using var cmd = Command("INSERT INTO people(id,display_name,created_utc,updated_utc) VALUES($id,$name,$created,$updated) ON CONFLICT(id) DO UPDATE SET display_name=CASE WHEN EXISTS(SELECT 1 FROM metadata_edits WHERE kind='person' AND entity_id=$id AND field='name') THEN people.display_name ELSE excluded.display_name END,updated_utc=excluded.updated_utc");
+        using var cmd = Command("INSERT INTO people(id,display_name,created_utc,updated_utc) VALUES($id,$name,$created,$updated) ON CONFLICT(id) DO UPDATE SET display_name=CASE WHEN EXISTS(SELECT 1 FROM metadata_edits WHERE kind='person' AND entity_id=$id AND field='name') THEN people.display_name ELSE excluded.display_name END,updated_utc=excluded.updated_utc WHERE people.display_name IS NOT excluded.display_name AND NOT EXISTS(SELECT 1 FROM metadata_edits WHERE kind='person' AND entity_id=$id AND field='name')");
         var now = DateTime.UtcNow.ToString("o");
         cmd.Parameters.AddWithValue("$id", person.Id); cmd.Parameters.AddWithValue("$name", person.DisplayName);
         cmd.Parameters.AddWithValue("$created", now); cmd.Parameters.AddWithValue("$updated", now); cmd.ExecuteNonQuery();
@@ -2091,6 +2125,8 @@ public sealed partial class PicerDatabase : IDisposable
               box_x=excluded.box_x,box_y=excluded.box_y,box_width=excluded.box_width,box_height=excluded.box_height,
               confidence=excluded.confidence,landmarks_json=excluded.landmarks_json,
               embedding=CASE WHEN detected_faces.model_version<>excluded.model_version OR detected_faces.image_id<>excluded.image_id THEN excluded.embedding ELSE COALESCE(excluded.embedding,detected_faces.embedding) END,created_utc=excluded.created_utc,is_archived=excluded.is_archived
+              WHERE detected_faces.image_id IS NOT excluded.image_id OR detected_faces.model_version IS NOT excluded.model_version OR detected_faces.ordinal IS NOT excluded.ordinal OR detected_faces.box_x IS NOT excluded.box_x OR detected_faces.box_y IS NOT excluded.box_y OR detected_faces.box_width IS NOT excluded.box_width OR detected_faces.box_height IS NOT excluded.box_height OR detected_faces.confidence IS NOT excluded.confidence OR detected_faces.landmarks_json IS NOT excluded.landmarks_json OR detected_faces.created_utc IS NOT excluded.created_utc OR detected_faces.is_archived IS NOT excluded.is_archived
+                OR detected_faces.embedding IS NOT CASE WHEN detected_faces.model_version<>excluded.model_version OR detected_faces.image_id<>excluded.image_id THEN excluded.embedding ELSE COALESCE(excluded.embedding,detected_faces.embedding) END
             """);
         using var transactionContext = _conn.CreateCommand();
         cmd.Transaction = externalTransaction ?? transactionContext.Transaction;
@@ -2125,9 +2161,10 @@ public sealed partial class PicerDatabase : IDisposable
         cmd.ExecuteNonQuery();
     }
 
-    public void UpsertMirroredFaces(IReadOnlyList<GatewayDetectedFace> faces, IReadOnlyList<GatewayFaceAssignment> assignments)
+    public void UpsertMirroredFaces(IReadOnlyList<GatewayDetectedFace> faces, IReadOnlyList<GatewayFaceAssignment> assignments, SqliteTransaction? externalTransaction = null)
     {
-        using var transaction = BeginTransaction();
+        using var ownedTransaction = externalTransaction is null ? BeginTransaction() : null;
+        var transaction = externalTransaction ?? ownedTransaction!;
         using var faceCommand = Command("""
             INSERT INTO detected_faces(id,image_id,model_version,ordinal,box_x,box_y,box_width,box_height,confidence,landmarks_json,embedding,created_utc,is_archived)
             VALUES($id,$image,$model,$ordinal,$x,$y,$w,$h,$confidence,$landmarks,$embedding,$created,$archived)
@@ -2135,6 +2172,8 @@ public sealed partial class PicerDatabase : IDisposable
               box_x=excluded.box_x,box_y=excluded.box_y,box_width=excluded.box_width,box_height=excluded.box_height,
               confidence=excluded.confidence,landmarks_json=excluded.landmarks_json,
               embedding=CASE WHEN detected_faces.model_version<>excluded.model_version OR detected_faces.image_id<>excluded.image_id THEN excluded.embedding ELSE COALESCE(excluded.embedding,detected_faces.embedding) END,created_utc=excluded.created_utc,is_archived=excluded.is_archived
+              WHERE detected_faces.image_id IS NOT excluded.image_id OR detected_faces.model_version IS NOT excluded.model_version OR detected_faces.ordinal IS NOT excluded.ordinal OR detected_faces.box_x IS NOT excluded.box_x OR detected_faces.box_y IS NOT excluded.box_y OR detected_faces.box_width IS NOT excluded.box_width OR detected_faces.box_height IS NOT excluded.box_height OR detected_faces.confidence IS NOT excluded.confidence OR detected_faces.landmarks_json IS NOT excluded.landmarks_json OR detected_faces.created_utc IS NOT excluded.created_utc OR detected_faces.is_archived IS NOT excluded.is_archived
+                OR detected_faces.embedding IS NOT CASE WHEN detected_faces.model_version<>excluded.model_version OR detected_faces.image_id<>excluded.image_id THEN excluded.embedding ELSE COALESCE(excluded.embedding,detected_faces.embedding) END
             """);
         faceCommand.Transaction = transaction;
         foreach (var face in faces)
@@ -2155,6 +2194,7 @@ public sealed partial class PicerDatabase : IDisposable
             VALUES($face,$person,$state,$confidence,$by,$updated)
             ON CONFLICT(face_id) DO UPDATE SET person_id=excluded.person_id,state=excluded.state,
               confidence=excluded.confidence,assigned_by=excluded.assigned_by,updated_utc=excluded.updated_utc
+              WHERE face_person_assignments.person_id IS NOT excluded.person_id OR face_person_assignments.state IS NOT excluded.state OR face_person_assignments.confidence IS NOT excluded.confidence OR face_person_assignments.assigned_by IS NOT excluded.assigned_by OR face_person_assignments.updated_utc IS NOT excluded.updated_utc
             """);
         assignmentCommand.Transaction = transaction;
         foreach (var assignment in assignments)
@@ -2167,7 +2207,7 @@ public sealed partial class PicerDatabase : IDisposable
         }
         var changedFaceIds = faces.Select(item => item.Id).Concat(assignments.Select(item => item.FaceId)).ToHashSet();
         ApplyFaceReviewDecisions(GetFaceReviewDecisions(transaction).Where(item => changedFaceIds.Contains(item.FaceId)).ToArray(), transaction);
-        transaction.Commit();
+        ownedTransaction?.Commit();
     }
 
     public IReadOnlyList<GatewayDetectedFace> GetAllMirroredFaces()
@@ -2225,16 +2265,36 @@ public sealed partial class PicerDatabase : IDisposable
     /// These tables are a projection of the source model space and must not be
     /// left partially stale, otherwise a remote UI reports thousands of false
     /// pending faces after switching models.</summary>
-    public void ReplaceMirroredFaceWorkflow(GatewayMetadata metadata)
+    public void ReplaceMirroredFaceWorkflow(GatewayMetadata metadata, SqliteTransaction? externalTransaction = null)
     {
-        using var transaction = BeginTransaction();
-        using (var clearMembers = Command("DELETE FROM face_candidate_members")) { clearMembers.Transaction = transaction; clearMembers.ExecuteNonQuery(); }
-        using (var clearClusters = Command("DELETE FROM face_candidate_clusters")) { clearClusters.Transaction = transaction; clearClusters.ExecuteNonQuery(); }
-        using (var clearReview = Command("DELETE FROM face_review_states")) { clearReview.Transaction = transaction; clearReview.ExecuteNonQuery(); }
-        using (var clusters = Command("INSERT INTO face_candidate_clusters(id,model_version,created_utc) VALUES($id,$model,$created)"))
+        using var ownedTransaction = externalTransaction is null ? BeginTransaction() : null;
+        var transaction = externalTransaction ?? ownedTransaction!;
+        var incomingMembers = metadata.FaceCandidateMembersOrEmpty.ToHashSet();
+        var incomingClusters = metadata.FaceCandidateClustersOrEmpty.ToHashSet();
+        var incomingReviews = metadata.FaceReviewStatesOrEmpty.ToHashSet();
+        var oldMembers = GetAllMirroredFaceCandidateMembers().ToHashSet();
+        var oldClusters = GetAllMirroredFaceCandidateClusters().ToHashSet();
+        var oldReviews = GetAllMirroredFaceReviewStates().ToHashSet();
+        foreach (var item in oldMembers.Except(incomingMembers))
+        {
+            using var delete = Command("DELETE FROM face_candidate_members WHERE cluster_id=$cluster AND face_id=$face");
+            delete.Parameters.AddWithValue("$cluster", item.ClusterId); delete.Parameters.AddWithValue("$face", item.FaceId); delete.ExecuteNonQuery();
+        }
+        var clusterIds = incomingClusters.Select(item => item.Id).ToHashSet();
+        foreach (var item in oldClusters.Where(item => !clusterIds.Contains(item.Id)))
+        {
+            using var delete = Command("DELETE FROM face_candidate_clusters WHERE id=$id");
+            delete.Parameters.AddWithValue("$id", item.Id); delete.ExecuteNonQuery();
+        }
+        foreach (var item in oldReviews.Except(incomingReviews))
+        {
+            using var delete = Command("DELETE FROM face_review_states WHERE face_id=$id");
+            delete.Parameters.AddWithValue("$id", item.FaceId); delete.ExecuteNonQuery();
+        }
+        using (var clusters = Command("INSERT INTO face_candidate_clusters(id,model_version,created_utc) VALUES($id,$model,$created) ON CONFLICT(id) DO UPDATE SET model_version=excluded.model_version,created_utc=excluded.created_utc"))
         {
             clusters.Transaction = transaction;
-            foreach (var item in metadata.FaceCandidateClustersOrEmpty)
+            foreach (var item in incomingClusters.Except(oldClusters))
             {
                 clusters.Parameters.Clear(); clusters.Parameters.AddWithValue("$id", item.Id); clusters.Parameters.AddWithValue("$model", item.ModelVersion); clusters.Parameters.AddWithValue("$created", item.CreatedUtc); clusters.ExecuteNonQuery();
             }
@@ -2242,7 +2302,7 @@ public sealed partial class PicerDatabase : IDisposable
         using (var members = Command("INSERT INTO face_candidate_members(cluster_id,face_id,similarity) VALUES($cluster,$face,$similarity)"))
         {
             members.Transaction = transaction;
-            foreach (var item in metadata.FaceCandidateMembersOrEmpty)
+            foreach (var item in incomingMembers.Except(oldMembers))
             {
                 members.Parameters.Clear(); members.Parameters.AddWithValue("$cluster", item.ClusterId); members.Parameters.AddWithValue("$face", item.FaceId); members.Parameters.AddWithValue("$similarity", item.Similarity); members.ExecuteNonQuery();
             }
@@ -2250,14 +2310,14 @@ public sealed partial class PicerDatabase : IDisposable
         using (var reviews = Command("INSERT INTO face_review_states(face_id,state,updated_utc) VALUES($face,$state,$updated)"))
         {
             reviews.Transaction = transaction;
-            foreach (var item in metadata.FaceReviewStatesOrEmpty)
+            foreach (var item in incomingReviews.Except(oldReviews))
             {
                 reviews.Parameters.Clear(); reviews.Parameters.AddWithValue("$face", item.FaceId); reviews.Parameters.AddWithValue("$state", item.State); reviews.Parameters.AddWithValue("$updated", item.UpdatedUtc); reviews.ExecuteNonQuery();
             }
         }
         MergeFaceReviewDecisions(metadata.FaceReviewDecisions ?? [], transaction);
         ApplyFaceReviewDecisions(GetFaceReviewDecisions(transaction), transaction);
-        transaction.Commit();
+        ownedTransaction?.Commit();
     }
 
     /// <summary>Mirrors the source index's face calibration state, including the
@@ -2266,17 +2326,10 @@ public sealed partial class PicerDatabase : IDisposable
     public void UpsertMirroredFaceTrainingMetadata(GatewayMetadata metadata)
     {
         using var transaction = BeginTransaction();
-        using (var clearPolicies = Command("DELETE FROM face_person_policies"))
-        { clearPolicies.Transaction = transaction; clearPolicies.ExecuteNonQuery(); }
-        using (var clearPrototypes = Command("DELETE FROM face_person_prototypes"))
-        { clearPrototypes.Transaction = transaction; clearPrototypes.ExecuteNonQuery(); }
-        using (var clearArtifacts = Command("DELETE FROM face_training_artifacts"))
-        { clearArtifacts.Transaction = transaction; clearArtifacts.ExecuteNonQuery(); }
-        using (var clearSettings = Command("DELETE FROM face_model_settings"))
-        { clearSettings.Transaction = transaction; clearSettings.ExecuteNonQuery(); }
+        PrepareTrainingMirrorStages();
 
         using (var artifacts = Command("""
-            INSERT INTO face_training_artifacts(artifact_id,dataset_id,endpoint,model_version,artifact_json,
+            INSERT INTO stage_face_training_artifacts(artifact_id,dataset_id,endpoint,model_version,artifact_json,
                 false_accept_rate,false_reject_rate,state,created_utc,applied_utc)
             VALUES($id,$dataset,$endpoint,$model,$json,$far,$frr,$state,$created,$applied)
             """))
@@ -2299,7 +2352,7 @@ public sealed partial class PicerDatabase : IDisposable
             }
         }
         using (var prototypes = Command("""
-            INSERT INTO face_person_prototypes(person_id,centroid,threshold,sample_count,model_version,updated_utc)
+            INSERT INTO stage_face_person_prototypes(person_id,centroid,threshold,sample_count,model_version,updated_utc)
             VALUES($person,$centroid,$threshold,$count,$model,$updated)
             """))
         {
@@ -2317,7 +2370,7 @@ public sealed partial class PicerDatabase : IDisposable
             }
         }
         using (var policies = Command("""
-            INSERT INTO face_person_policies(person_id,artifact_id,model_version,prototype,match_threshold,updated_utc)
+            INSERT INTO stage_face_person_policies(person_id,artifact_id,model_version,prototype,match_threshold,updated_utc)
             VALUES($person,$artifact,$model,$prototype,$threshold,$updated)
             """))
         {
@@ -2335,7 +2388,7 @@ public sealed partial class PicerDatabase : IDisposable
             }
         }
         using (var settings = Command("""
-            INSERT INTO face_model_settings(model_version,match_threshold,calibrated_same_pairs,calibrated_different_pairs,updated_utc)
+            INSERT INTO stage_face_model_settings(model_version,match_threshold,calibrated_same_pairs,calibrated_different_pairs,updated_utc)
             VALUES($model,$threshold,$same,$different,$updated)
             """))
         {
@@ -2351,6 +2404,7 @@ public sealed partial class PicerDatabase : IDisposable
                 settings.ExecuteNonQuery();
             }
         }
+        PublishTrainingMirrorStages();
         transaction.Commit();
     }
 
@@ -2370,9 +2424,12 @@ public sealed partial class PicerDatabase : IDisposable
         return result;
     }
 
-    public IReadOnlyList<GatewayVideoSummary> GetAllMirroredVideoSummaries()
+    public IReadOnlyList<GatewayVideoSummary> GetAllMirroredVideoSummaries() => GetAllMirroredVideoSummaries(null);
+
+    public IReadOnlyList<GatewayVideoSummary> GetAllMirroredVideoSummaries(long? contentId)
     {
-        using var command = Command("SELECT (SELECT MIN(id) FROM videos WHERE content_id=video_summaries.video_id),provider,model_version,prompt_version,summary,result_json,source_file_size,source_modified_utc,created_utc FROM video_summaries");
+        using var command = Command("SELECT (SELECT MIN(id) FROM videos WHERE content_id=video_summaries.video_id),provider,model_version,prompt_version,summary,result_json,source_file_size,source_modified_utc,created_utc FROM video_summaries" + (contentId is null ? "" : " WHERE video_id=$content"));
+        if (contentId is not null) command.Parameters.AddWithValue("$content", contentId);
         using var reader = command.ExecuteReader(); var result = new List<GatewayVideoSummary>();
         while (reader.Read()) result.Add(new GatewayVideoSummary(reader.GetInt64(0), reader.GetString(1), reader.GetString(2), reader.GetString(3), reader.GetString(4), reader.GetString(5), reader.GetInt64(6), reader.GetString(7)) { UpdatedUtc = reader.GetString(8) });
         return result;
@@ -2386,9 +2443,14 @@ public sealed partial class PicerDatabase : IDisposable
         return result;
     }
 
-    public IReadOnlyList<GatewayCloudVisionAnalysis> GetAllMirroredCloudVisionAnalyses()
+    public IReadOnlyList<GatewayCloudVisionAnalysis> GetAllMirroredCloudVisionAnalyses() => GetAllMirroredCloudVisionAnalyses(null, null);
+
+    public IReadOnlyList<GatewayCloudVisionAnalysis> GetAllMirroredCloudVisionAnalyses(long? imageId, string? provider)
     {
-        using var command = Command("SELECT image_id,provider,model_version,prompt_version,status,summary,result_json,updated_utc,source_file_size,source_modified_utc FROM cloud_vision_analyses WHERE status='completed'");
+        using var command = Command("SELECT image_id,provider,model_version,prompt_version,status,summary,result_json,updated_utc,source_file_size,source_modified_utc FROM cloud_vision_analyses WHERE status='completed'" +
+            (imageId is null ? "" : " AND image_id=$image") + (provider is null ? "" : " AND provider=$provider"));
+        if (imageId is not null) command.Parameters.AddWithValue("$image", imageId);
+        if (provider is not null) command.Parameters.AddWithValue("$provider", provider);
         using var reader = command.ExecuteReader(); var result = new List<GatewayCloudVisionAnalysis>();
         while (reader.Read()) result.Add(new GatewayCloudVisionAnalysis(reader.GetInt64(0), reader.GetString(1), reader.GetString(2), reader.GetString(3), reader.GetString(4), reader.IsDBNull(5) ? null : reader.GetString(5), reader.IsDBNull(6) ? null : reader.GetString(6), reader.GetString(7), reader.GetInt64(8), reader.GetString(9)));
         return result;
@@ -2417,6 +2479,7 @@ public sealed partial class PicerDatabase : IDisposable
     {
         using var ownedTransaction = externalTransaction is null ? BeginTransaction() : null;
         var transaction = externalTransaction ?? ownedTransaction!;
+        metadata = ProtectDescriptionSnapshot(metadata);
         if (authoritative)
         {
             ReconcileVideoRows("video_detected_faces", "id", metadata.VideoFacesOrEmpty.Select(face => face.Id));
@@ -2427,38 +2490,40 @@ public sealed partial class PicerDatabase : IDisposable
 
         foreach (var frame in metadata.VideoKeyframes)
         {
-            using var command = Command("INSERT INTO video_keyframes(id,video_id,timestamp_seconds,path,dhash,created_utc) VALUES($id,$video,$time,$path,$hash,$now) ON CONFLICT(id) DO UPDATE SET video_id=excluded.video_id,timestamp_seconds=excluded.timestamp_seconds,path=CASE WHEN excluded.path='' THEN video_keyframes.path ELSE excluded.path END,dhash=excluded.dhash");
+            using var command = Command("INSERT INTO video_keyframes(id,video_id,timestamp_seconds,path,dhash,created_utc) VALUES($id,$video,$time,$path,$hash,$now) ON CONFLICT(id) DO UPDATE SET video_id=excluded.video_id,timestamp_seconds=excluded.timestamp_seconds,path=CASE WHEN excluded.path='' THEN video_keyframes.path ELSE excluded.path END,dhash=excluded.dhash WHERE (video_keyframes.video_id IS NOT (excluded.video_id) OR video_keyframes.timestamp_seconds IS NOT (excluded.timestamp_seconds) OR video_keyframes.path IS NOT (CASE WHEN excluded.path='' THEN video_keyframes.path ELSE excluded.path END) OR video_keyframes.dhash IS NOT (excluded.dhash))");
             command.Transaction = transaction; command.Parameters.AddWithValue("$id", frame.Id); command.Parameters.AddWithValue("$video", new VideoContentRepository(this).GetContentId(frame.VideoId)); command.Parameters.AddWithValue("$time", frame.TimestampSeconds); command.Parameters.AddWithValue("$path", frame.Path); command.Parameters.AddWithValue("$hash", frame.DifferenceHash); command.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("o")); command.ExecuteNonQuery();
         }
         foreach (var face in metadata.VideoFacesOrEmpty)
         {
             RequireVideoFaceOwner(face.Id,GetVideoOwnerKey(face.VideoId,transaction),transaction);
-            using var command = Command("INSERT INTO video_detected_faces(id,video_id,keyframe_id,timestamp_seconds,ordinal,owner_key,model_version,box_x,box_y,box_width,box_height,confidence,embedding,suggested_person_id,match_confidence,assigned_person_id,assignment_state,updated_utc,created_utc) VALUES($id,$video,$key,$time,$ordinal,$owner,COALESCE(NULLIF($model,''),'legacy-video'),$x,$y,$w,$h,$confidence,$embedding,$suggested,$match,$assigned,$state,$updated,$created) ON CONFLICT(id) DO UPDATE SET video_id=excluded.video_id,keyframe_id=excluded.keyframe_id,timestamp_seconds=excluded.timestamp_seconds,ordinal=excluded.ordinal,box_x=excluded.box_x,box_y=excluded.box_y,box_width=excluded.box_width,box_height=excluded.box_height,confidence=excluded.confidence,embedding=CASE WHEN ($model<>'' AND video_detected_faces.model_version<>excluded.model_version) OR video_detected_faces.video_id<>excluded.video_id OR video_detected_faces.keyframe_id<>excluded.keyframe_id THEN excluded.embedding ELSE COALESCE(excluded.embedding,video_detected_faces.embedding) END,model_version=CASE WHEN $model='' THEN video_detected_faces.model_version ELSE excluded.model_version END,assigned_person_id=CASE WHEN excluded.assignment_state IS NOT NULL AND excluded.updated_utc IS NOT NULL AND (video_detected_faces.updated_utc IS NULL OR excluded.updated_utc>=video_detected_faces.updated_utc) THEN excluded.assigned_person_id ELSE video_detected_faces.assigned_person_id END,assignment_state=CASE WHEN excluded.assignment_state IS NOT NULL AND excluded.updated_utc IS NOT NULL AND (video_detected_faces.updated_utc IS NULL OR excluded.updated_utc>=video_detected_faces.updated_utc) THEN excluded.assignment_state ELSE video_detected_faces.assignment_state END,updated_utc=CASE WHEN excluded.assignment_state IS NOT NULL AND excluded.updated_utc IS NOT NULL AND (video_detected_faces.updated_utc IS NULL OR excluded.updated_utc>=video_detected_faces.updated_utc) THEN excluded.updated_utc ELSE video_detected_faces.updated_utc END,suggested_person_id=excluded.suggested_person_id,match_confidence=excluded.match_confidence");
+            using var command = Command("INSERT INTO video_detected_faces(id,video_id,keyframe_id,timestamp_seconds,ordinal,owner_key,model_version,box_x,box_y,box_width,box_height,confidence,embedding,suggested_person_id,match_confidence,assigned_person_id,assignment_state,updated_utc,created_utc) VALUES($id,$video,$key,$time,$ordinal,$owner,COALESCE(NULLIF($model,''),'legacy-video'),$x,$y,$w,$h,$confidence,$embedding,$suggested,$match,$assigned,$state,$updated,$created) ON CONFLICT(id) DO UPDATE SET video_id=excluded.video_id,keyframe_id=excluded.keyframe_id,timestamp_seconds=excluded.timestamp_seconds,ordinal=excluded.ordinal,box_x=excluded.box_x,box_y=excluded.box_y,box_width=excluded.box_width,box_height=excluded.box_height,confidence=excluded.confidence,embedding=CASE WHEN ($model<>'' AND video_detected_faces.model_version<>excluded.model_version) OR video_detected_faces.video_id<>excluded.video_id OR video_detected_faces.keyframe_id<>excluded.keyframe_id THEN excluded.embedding ELSE COALESCE(excluded.embedding,video_detected_faces.embedding) END,model_version=CASE WHEN $model='' THEN video_detected_faces.model_version ELSE excluded.model_version END,assigned_person_id=CASE WHEN excluded.assignment_state IS NOT NULL AND excluded.updated_utc IS NOT NULL AND (video_detected_faces.updated_utc IS NULL OR excluded.updated_utc>=video_detected_faces.updated_utc) THEN excluded.assigned_person_id ELSE video_detected_faces.assigned_person_id END,assignment_state=CASE WHEN excluded.assignment_state IS NOT NULL AND excluded.updated_utc IS NOT NULL AND (video_detected_faces.updated_utc IS NULL OR excluded.updated_utc>=video_detected_faces.updated_utc) THEN excluded.assignment_state ELSE video_detected_faces.assignment_state END,updated_utc=CASE WHEN excluded.assignment_state IS NOT NULL AND excluded.updated_utc IS NOT NULL AND (video_detected_faces.updated_utc IS NULL OR excluded.updated_utc>=video_detected_faces.updated_utc) THEN excluded.updated_utc ELSE video_detected_faces.updated_utc END,suggested_person_id=excluded.suggested_person_id,match_confidence=excluded.match_confidence WHERE (video_detected_faces.video_id IS NOT (excluded.video_id) OR video_detected_faces.keyframe_id IS NOT (excluded.keyframe_id) OR video_detected_faces.timestamp_seconds IS NOT (excluded.timestamp_seconds) OR video_detected_faces.ordinal IS NOT (excluded.ordinal) OR video_detected_faces.box_x IS NOT (excluded.box_x) OR video_detected_faces.box_y IS NOT (excluded.box_y) OR video_detected_faces.box_width IS NOT (excluded.box_width) OR video_detected_faces.box_height IS NOT (excluded.box_height) OR video_detected_faces.confidence IS NOT (excluded.confidence) OR video_detected_faces.embedding IS NOT (CASE WHEN ($model<>'' AND video_detected_faces.model_version<>excluded.model_version) OR video_detected_faces.video_id<>excluded.video_id OR video_detected_faces.keyframe_id<>excluded.keyframe_id THEN excluded.embedding ELSE COALESCE(excluded.embedding,video_detected_faces.embedding) END) OR video_detected_faces.model_version IS NOT (CASE WHEN $model='' THEN video_detected_faces.model_version ELSE excluded.model_version END) OR video_detected_faces.assigned_person_id IS NOT (CASE WHEN excluded.assignment_state IS NOT NULL AND excluded.updated_utc IS NOT NULL AND (video_detected_faces.updated_utc IS NULL OR excluded.updated_utc>=video_detected_faces.updated_utc) THEN excluded.assigned_person_id ELSE video_detected_faces.assigned_person_id END) OR video_detected_faces.assignment_state IS NOT (CASE WHEN excluded.assignment_state IS NOT NULL AND excluded.updated_utc IS NOT NULL AND (video_detected_faces.updated_utc IS NULL OR excluded.updated_utc>=video_detected_faces.updated_utc) THEN excluded.assignment_state ELSE video_detected_faces.assignment_state END) OR video_detected_faces.updated_utc IS NOT (CASE WHEN excluded.assignment_state IS NOT NULL AND excluded.updated_utc IS NOT NULL AND (video_detected_faces.updated_utc IS NULL OR excluded.updated_utc>=video_detected_faces.updated_utc) THEN excluded.updated_utc ELSE video_detected_faces.updated_utc END) OR video_detected_faces.suggested_person_id IS NOT (excluded.suggested_person_id) OR video_detected_faces.match_confidence IS NOT (excluded.match_confidence))");
             command.Transaction = transaction; command.Parameters.AddWithValue("$id", face.Id); command.Parameters.AddWithValue("$owner", GetVideoOwnerKey(face.VideoId,transaction)); command.Parameters.AddWithValue("$video", new VideoContentRepository(this).GetContentId(face.VideoId)); command.Parameters.AddWithValue("$key", face.KeyframeId); command.Parameters.AddWithValue("$time", face.TimestampSeconds); command.Parameters.AddWithValue("$ordinal", face.Ordinal); command.Parameters.AddWithValue("$model", face.ModelVersion ?? ""); command.Parameters.AddWithValue("$x", face.BoxX); command.Parameters.AddWithValue("$y", face.BoxY); command.Parameters.AddWithValue("$w", face.BoxWidth); command.Parameters.AddWithValue("$h", face.BoxHeight); command.Parameters.AddWithValue("$confidence", face.Confidence); command.Parameters.AddWithValue("$embedding", (object?)face.Embedding ?? DBNull.Value); command.Parameters.AddWithValue("$suggested", (object?)face.SuggestedPersonId ?? DBNull.Value); command.Parameters.AddWithValue("$match", (object?)face.MatchConfidence ?? DBNull.Value); command.Parameters.AddWithValue("$assigned", (object?)face.AssignedPersonId ?? DBNull.Value); command.Parameters.AddWithValue("$state", (object?)face.AssignmentState ?? DBNull.Value); command.Parameters.AddWithValue("$updated", (object?)face.UpdatedUtc ?? DBNull.Value); command.Parameters.AddWithValue("$created", face.CreatedUtc); command.ExecuteNonQuery();
         }
         foreach(var face in metadata.VideoFacesOrEmpty) ReplayVideoFaceManualFields(face.Id,transaction);
         foreach (var analysis in metadata.CloudVisionAnalysesOrEmpty)
         {
-            using var command = Command("INSERT INTO cloud_vision_analyses(image_id,provider,model_version,prompt_version,source_file_size,source_modified_utc,location_fingerprint,status,summary,result_json,updated_utc) VALUES($image,$provider,$model,$prompt,COALESCE($size,0),COALESCE($modified,''),'remote','completed',$summary,$json,$updated) ON CONFLICT(image_id,provider) DO UPDATE SET model_version=excluded.model_version,prompt_version=excluded.prompt_version,status=excluded.status,summary=excluded.summary,result_json=excluded.result_json,updated_utc=excluded.updated_utc,source_file_size=COALESCE($size,cloud_vision_analyses.source_file_size),source_modified_utc=COALESCE($modified,cloud_vision_analyses.source_modified_utc) WHERE excluded.updated_utc>=cloud_vision_analyses.updated_utc");
+            using var command = Command("INSERT INTO cloud_vision_analyses(image_id,provider,model_version,prompt_version,source_file_size,source_modified_utc,location_fingerprint,status,summary,result_json,updated_utc) VALUES($image,$provider,$model,$prompt,COALESCE($size,0),COALESCE($modified,''),'remote','completed',$summary,$json,$updated) ON CONFLICT(image_id,provider) DO UPDATE SET model_version=excluded.model_version,prompt_version=excluded.prompt_version,status=excluded.status,summary=excluded.summary,result_json=excluded.result_json,updated_utc=excluded.updated_utc,source_file_size=COALESCE($size,cloud_vision_analyses.source_file_size),source_modified_utc=COALESCE($modified,cloud_vision_analyses.source_modified_utc) WHERE (excluded.updated_utc>=cloud_vision_analyses.updated_utc) AND (cloud_vision_analyses.model_version IS NOT (excluded.model_version) OR cloud_vision_analyses.prompt_version IS NOT (excluded.prompt_version) OR cloud_vision_analyses.status IS NOT (excluded.status) OR cloud_vision_analyses.summary IS NOT (excluded.summary) OR cloud_vision_analyses.result_json IS NOT (excluded.result_json) OR cloud_vision_analyses.updated_utc IS NOT (excluded.updated_utc) OR cloud_vision_analyses.source_file_size IS NOT (COALESCE($size,cloud_vision_analyses.source_file_size)) OR cloud_vision_analyses.source_modified_utc IS NOT (COALESCE($modified,cloud_vision_analyses.source_modified_utc)))");
             command.Transaction = transaction; command.Parameters.AddWithValue("$image", analysis.ImageId); command.Parameters.AddWithValue("$provider", analysis.Provider); command.Parameters.AddWithValue("$model", analysis.ModelVersion); command.Parameters.AddWithValue("$prompt", analysis.PromptVersion); command.Parameters.AddWithValue("$summary", (object?)analysis.Summary ?? DBNull.Value); command.Parameters.AddWithValue("$json", (object?)analysis.ResultJson ?? DBNull.Value); command.Parameters.AddWithValue("$updated", analysis.UpdatedUtc); command.Parameters.AddWithValue("$size", (object?)analysis.SourceFileSize ?? DBNull.Value); command.Parameters.AddWithValue("$modified", (object?)analysis.SourceModifiedUtc ?? DBNull.Value); command.ExecuteNonQuery();
         }
         foreach (var scene in metadata.SceneGroupDescriptionsOrEmpty)
         {
-            using var command = Command("INSERT INTO scene_group_descriptions(fingerprint,directory_path,start_utc,end_utc,image_ids_json,representative_image_ids_json,provider,model_version,prompt_version,scene_name,summary,search_terms_json,state,created_utc,reviewed_utc) VALUES($fingerprint,$directory,$start,$end,$images,$representatives,$provider,$model,$prompt,$scene,$summary,$terms,$state,$created,$reviewed) ON CONFLICT(fingerprint) DO UPDATE SET scene_name=excluded.scene_name,summary=excluded.summary,search_terms_json=excluded.search_terms_json,state=excluded.state,reviewed_utc=excluded.reviewed_utc");
+            using var command = Command("INSERT INTO scene_group_descriptions(fingerprint,directory_path,start_utc,end_utc,image_ids_json,representative_image_ids_json,provider,model_version,prompt_version,scene_name,summary,search_terms_json,state,created_utc,reviewed_utc) VALUES($fingerprint,$directory,$start,$end,$images,$representatives,$provider,$model,$prompt,$scene,$summary,$terms,$state,$created,$reviewed) ON CONFLICT(fingerprint) DO UPDATE SET scene_name=excluded.scene_name,summary=excluded.summary,search_terms_json=excluded.search_terms_json,state=excluded.state,reviewed_utc=excluded.reviewed_utc WHERE (scene_group_descriptions.scene_name IS NOT (excluded.scene_name) OR scene_group_descriptions.summary IS NOT (excluded.summary) OR scene_group_descriptions.search_terms_json IS NOT (excluded.search_terms_json) OR scene_group_descriptions.state IS NOT (excluded.state) OR scene_group_descriptions.reviewed_utc IS NOT (excluded.reviewed_utc))");
             command.Transaction = transaction; command.Parameters.AddWithValue("$fingerprint", scene.Fingerprint); command.Parameters.AddWithValue("$directory", scene.DirectoryPath); command.Parameters.AddWithValue("$start", scene.StartUtc); command.Parameters.AddWithValue("$end", scene.EndUtc); command.Parameters.AddWithValue("$images", scene.ImageIdsJson); command.Parameters.AddWithValue("$representatives", scene.RepresentativeImageIdsJson); command.Parameters.AddWithValue("$provider", scene.Provider); command.Parameters.AddWithValue("$model", scene.ModelVersion); command.Parameters.AddWithValue("$prompt", scene.PromptVersion); command.Parameters.AddWithValue("$scene", scene.SceneName); command.Parameters.AddWithValue("$summary", scene.Summary); command.Parameters.AddWithValue("$terms", scene.SearchTermsJson); command.Parameters.AddWithValue("$state", scene.State); command.Parameters.AddWithValue("$created", scene.CreatedUtc); command.Parameters.AddWithValue("$reviewed", scene.ReviewedUtc); command.ExecuteNonQuery();
         }
         foreach (var transcript in metadata.VideoTranscripts)
         {
-            using var command = Command("INSERT INTO video_transcripts(video_id,model_version,transcript_json,created_utc) VALUES($video,$model,$json,$now) ON CONFLICT(video_id) DO UPDATE SET model_version=excluded.model_version,transcript_json=excluded.transcript_json,created_utc=excluded.created_utc WHERE excluded.created_utc>=video_transcripts.created_utc");
+            using var command = Command("INSERT INTO video_transcripts(video_id,model_version,transcript_json,created_utc) VALUES($video,$model,$json,$now) ON CONFLICT(video_id) DO UPDATE SET model_version=excluded.model_version,transcript_json=excluded.transcript_json,created_utc=excluded.created_utc WHERE (excluded.created_utc>=video_transcripts.created_utc) AND (video_transcripts.model_version IS NOT (excluded.model_version) OR video_transcripts.transcript_json IS NOT (excluded.transcript_json) OR video_transcripts.created_utc IS NOT (excluded.created_utc))");
             command.Transaction = transaction; command.Parameters.AddWithValue("$video", new VideoContentRepository(this).GetContentId(transcript.VideoId)); command.Parameters.AddWithValue("$model", transcript.ModelVersion); command.Parameters.AddWithValue("$json", transcript.TranscriptJson); command.Parameters.AddWithValue("$now", transcript.UpdatedUtc ?? DateTime.UtcNow.ToString("o")); command.ExecuteNonQuery();
         }
         foreach (var summary in metadata.VideoSummaries)
         {
-            using var command = Command("INSERT INTO video_summaries(video_id,provider,model_version,prompt_version,source_file_size,source_modified_utc,summary,result_json,input_tokens,output_tokens,estimated_cost_yuan,created_utc) SELECT $video,$provider,$model,$prompt,COALESCE($size,0),COALESCE($modified,''),$summary,$json,0,0,0,$now ON CONFLICT(video_id) DO UPDATE SET provider=excluded.provider,model_version=excluded.model_version,prompt_version=excluded.prompt_version,summary=excluded.summary,result_json=excluded.result_json,created_utc=excluded.created_utc,source_file_size=COALESCE($size,video_summaries.source_file_size),source_modified_utc=COALESCE($modified,video_summaries.source_modified_utc) WHERE excluded.created_utc>=video_summaries.created_utc");
+            using var command = Command("INSERT INTO video_summaries(video_id,provider,model_version,prompt_version,source_file_size,source_modified_utc,summary,result_json,input_tokens,output_tokens,estimated_cost_yuan,created_utc) SELECT $video,$provider,$model,$prompt,COALESCE($size,0),COALESCE($modified,''),$summary,$json,0,0,0,$now ON CONFLICT(video_id) DO UPDATE SET provider=excluded.provider,model_version=excluded.model_version,prompt_version=excluded.prompt_version,summary=excluded.summary,result_json=excluded.result_json,created_utc=excluded.created_utc,source_file_size=COALESCE($size,video_summaries.source_file_size),source_modified_utc=COALESCE($modified,video_summaries.source_modified_utc) WHERE (excluded.created_utc>=video_summaries.created_utc) AND (video_summaries.provider IS NOT (excluded.provider) OR video_summaries.model_version IS NOT (excluded.model_version) OR video_summaries.prompt_version IS NOT (excluded.prompt_version) OR video_summaries.summary IS NOT (excluded.summary) OR video_summaries.result_json IS NOT (excluded.result_json) OR video_summaries.created_utc IS NOT (excluded.created_utc) OR video_summaries.source_file_size IS NOT (COALESCE($size,video_summaries.source_file_size)) OR video_summaries.source_modified_utc IS NOT (COALESCE($modified,video_summaries.source_modified_utc)))");
             command.Parameters.AddWithValue("$size", (object?)summary.SourceFileSize ?? DBNull.Value);
             command.Parameters.AddWithValue("$modified", (object?)summary.SourceModifiedUtc ?? DBNull.Value);
             command.Transaction = transaction; command.Parameters.AddWithValue("$video", new VideoContentRepository(this).GetContentId(summary.VideoId)); command.Parameters.AddWithValue("$provider", summary.Provider); command.Parameters.AddWithValue("$model", summary.ModelVersion); command.Parameters.AddWithValue("$prompt", summary.PromptVersion); command.Parameters.AddWithValue("$summary", summary.Summary); command.Parameters.AddWithValue("$json", summary.ResultJson); command.Parameters.AddWithValue("$now", summary.UpdatedUtc ?? DateTime.UtcNow.ToString("o")); command.ExecuteNonQuery();
         }
+        foreach (var imageId in metadata.CloudVisionAnalysesOrEmpty.Select(x => x.ImageId).Distinct())
+            RefreshDescriptionSearchText(imageId, transaction);
         ownedTransaction?.Commit();
     }
 
@@ -2517,6 +2582,7 @@ public sealed partial class PicerDatabase : IDisposable
               country=excluded.country,province=excluded.province,city=excluded.city,county=excluded.county,
               district=excluded.district,town=excluded.town,village=excluded.village,display_name=excluded.display_name,
               search_text=excluded.search_text,resolved_utc=excluded.resolved_utc
+              WHERE image_locations.latitude IS NOT excluded.latitude OR image_locations.longitude IS NOT excluded.longitude OR image_locations.country IS NOT excluded.country OR image_locations.province IS NOT excluded.province OR image_locations.city IS NOT excluded.city OR image_locations.county IS NOT excluded.county OR image_locations.district IS NOT excluded.district OR image_locations.town IS NOT excluded.town OR image_locations.village IS NOT excluded.village OR image_locations.display_name IS NOT excluded.display_name OR image_locations.search_text IS NOT excluded.search_text
             """);
         gpsCommand.Transaction = transaction;
         command.Transaction = transaction;

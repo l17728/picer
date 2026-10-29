@@ -81,7 +81,7 @@ public sealed class MetadataConflictsWindow : Window
                 _epoch=snapshot.Epoch;
                 conflicts=snapshot.Reviews.Select(review=>new ConflictRow(review.Conflict,review.Title,true,review.ProposedDisplay,review.CurrentDisplay)).ToArray();
             }
-            else conflicts=await UiWork.RunDatabaseAsync(()=>AppServices.Db.GetMetadataEditConflicts()
+            else conflicts=await UiWork.ReadSnapshotAsync("Metadata.Conflicts", AppServices.Db, reader=>reader.GetMetadataEditConflicts()
                 .Select(conflict=>new ConflictRow(conflict,AppServices.Db.DescribeMetadataEdit(conflict.Proposed),
                     ProposedDisplay:AppServices.Db.DescribeMetadataValue(conflict.Proposed),CurrentDisplay:AppServices.Db.DescribeMetadataValue(conflict.Current))).ToArray(),_token);
             _items.ItemsSource=conflicts;

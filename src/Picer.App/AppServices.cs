@@ -109,8 +109,10 @@ public static partial class AppServices
         if (ServiceMode && backend.BaseUrl is { Length: > 0 } serviceUrl)
             SyncClient = backend.DeviceAuthentication
                 ? new IndexSyncClient(AccountClient!.CreateSpaceClient(), accountMode: true,
-                    canWrite: AccountClient.Connection.Session!.Scope.Split(' ').Contains("index.write", StringComparer.Ordinal))
-                : IndexSyncClient.Create(serviceUrl, RequireToken(backend), backend.SpkiPin);
+                    canWrite: AccountClient.Connection.Session!.Scope.Split(' ').Contains("index.write", StringComparer.Ordinal),
+                    databaseWork: (work, ct) => UiWork.RunDatabaseAsync(work, ct))
+                : IndexSyncClient.Create(serviceUrl, RequireToken(backend), backend.SpkiPin,
+                    databaseWork: (work, ct) => UiWork.RunDatabaseAsync(work, ct));
         if (ServiceMode)
         {
             RemoteDataRoot = backend.CachePartition is { } partition
@@ -121,6 +123,8 @@ public static partial class AppServices
                 : new PipeIndexGateway(backend.PipeName ?? throw new InvalidOperationException("service-endpoint.json 缺少管道名与 URL。"), RequireToken(backend));
             AppLogger.Info("AppServices 已进入 service 模式（零构建逻辑，仅网关）");
             Db = new PicerDatabase(Path.Combine(RemoteDataRoot, "remote-mirror.db"));
+            Db.EnableDescriptionSync = backend.DeviceAuthentication;
+            Db.RecoverUnsyncedDescriptions();
             Config = StorageConfig.Load(ConfigPath);
             Storage = Config.CreateProvider(Path.Combine(RemoteDataRoot, "remote-cache"));
             Thumbnails = new ThumbnailService(Path.Combine(RemoteDataRoot, "remote-thumbs"));
@@ -186,7 +190,8 @@ public static partial class AppServices
         if (!string.IsNullOrWhiteSpace(syncIp) && !string.IsNullOrWhiteSpace(syncToken)
             && System.Net.IPAddress.TryParse(syncIp, out _))
         {
-            SyncClient = IndexSyncClient.Create($"https://{syncIp}:8445", syncToken);
+            SyncClient = IndexSyncClient.Create($"https://{syncIp}:8445", syncToken,
+                databaseWork: (work, ct) => UiWork.RunDatabaseAsync(work, ct));
             SyncGateway = new HttpIndexGateway($"https://{syncIp}:8445", syncToken);
             AppLogger.Info("local mode incremental index publisher configured from PICER_INDEX_SYNC_IP");
         }
@@ -199,7 +204,8 @@ public static partial class AppServices
                     static cipher => System.Security.Cryptography.ProtectedData.Unprotect(cipher, null, System.Security.Cryptography.DataProtectionScope.CurrentUser));
                 if (paired?.BaseUrl is { Length: > 0 } pairedUrl && paired.Token is { Length: > 0 } pairedToken)
                 {
-                    SyncClient = IndexSyncClient.Create(pairedUrl, pairedToken, paired.SpkiPin);
+                    SyncClient = IndexSyncClient.Create(pairedUrl, pairedToken, paired.SpkiPin,
+                        databaseWork: (work, ct) => UiWork.RunDatabaseAsync(work, ct));
                     SyncGateway = new HttpIndexGateway(pairedUrl, pairedToken, paired.SpkiPin);
                     AppLogger.Info("local mode incremental index publisher configured from paired service endpoint");
                 }
@@ -346,6 +352,9 @@ public static partial class AppServices
         }
         if (SyncClient is not null && publishPendingEdits)
         {
+            try { await SyncClient.PushDescriptionsAsync(Db, cancellationToken).ConfigureAwait(false); }
+            catch (Exception exception) when (exception is HttpRequestException or InvalidOperationException or InvalidDataException)
+            { AppLogger.Warn("描述结果已保存在本机，等待同步确认：" + exception.GetType().Name); }
             try { await SyncClient.PushMetadataEditsAsync(Db, cancellationToken).ConfigureAwait(false); }
             catch (Exception exception) when (exception is HttpRequestException or InvalidOperationException)
             { AppLogger.Warn("Manual metadata sync pending: " + exception.GetType().Name); }
@@ -502,10 +511,13 @@ public static partial class AppServices
             if (incremental.Supported)
                 await UiWork.RunDatabaseAsync("RemoteMirror.ReconcileRelationships", () =>
                     Db.ReconcileMirroredPhotoMetadata(metadata, authoritativeCatalog: ServiceMode && incremental.Supported), cancellationToken).ConfigureAwait(false);
-            await UiWork.RunDatabaseAsync("RemoteMirror.Faces", () =>
-                Db.UpsertMirroredFaces(metadata.Faces, metadata.FaceAssignments), cancellationToken).ConfigureAwait(false);
-            await UiWork.RunDatabaseAsync("RemoteMirror.FaceWorkflow", () =>
-                Db.ReplaceMirroredFaceWorkflow(metadata), cancellationToken).ConfigureAwait(false);
+            await UiWork.RunDatabaseAsync("RemoteMirror.FaceState", () =>
+            {
+                using var transaction = Db.BeginTransaction();
+                Db.UpsertMirroredFaces(metadata.Faces, metadata.FaceAssignments, transaction);
+                Db.ReplaceMirroredFaceWorkflow(metadata, transaction);
+                transaction.Commit();
+            }, cancellationToken).ConfigureAwait(false);
             if (metadata.FaceTrainingArtifacts is not null && metadata.FacePersonPrototypes is not null &&
                 metadata.FacePersonPolicies is not null && metadata.FaceModelSettings is not null)
                 await UiWork.RunDatabaseAsync("RemoteMirror.FaceTrainingMetadata", () =>

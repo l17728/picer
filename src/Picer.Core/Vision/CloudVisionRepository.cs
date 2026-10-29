@@ -145,11 +145,18 @@ public sealed partial class CloudVisionRepository(PicerDatabase database)
         string? reason, CloudVisionResult result, string? requestId = null)
     {
         Billing.Record(requestId ?? Guid.NewGuid().ToString("N"), analyzer, result.Usage);
+        using var transaction = database.BeginTransaction();
+        var current = database.GetImage(image.Id);
+        if (current is null || current.FileSize != image.FileSize || current.ModifiedUtc != image.ModifiedUtc ||
+            (image.ContentSha256 ?? image.Sha256) is { } hash && !hash.Equals(current.ContentSha256 ?? current.Sha256, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("description_media_changed");
         Upsert(image, analyzer, locationFingerprint, "completed", reason, result.Summary,
             JsonSerializer.Serialize(result), null);
         _textIndex.UpsertImage(image, [image.Path, image.Camera, image.Gps, image.TakenUtc?.ToString("O"), result.Summary,
             .. (result.Scenes ?? []), .. (result.Activities ?? []), .. (result.Objects ?? []), .. (result.SearchTerms ?? [])],
-            $"cloud:{analyzer.Provider}:{analyzer.ModelVersion}:{analyzer.PromptVersion}");
+            $"cloud:{analyzer.Provider}:{analyzer.ModelVersion}:{analyzer.PromptVersion}", transaction);
+        database.QueuePhotoDescription(image.Id, analyzer.Provider);
+        transaction.Commit();
     }
 
     public void SaveFailure(ImageRecord image, ICloudVisionAnalyzer analyzer, string locationFingerprint,
@@ -179,7 +186,7 @@ public sealed partial class CloudVisionRepository(PicerDatabase database)
             SELECT provider,model_version,prompt_version,result_json
             FROM cloud_vision_analyses
             WHERE image_id=$image AND status='completed' AND result_json IS NOT NULL
-            ORDER BY updated_utc DESC LIMIT 1
+            ORDER BY updated_utc DESC,provider ASC LIMIT 1
             """);
         command.Parameters.AddWithValue("$image", imageId);
         using var reader = command.ExecuteReader();
@@ -193,9 +200,38 @@ public sealed partial class CloudVisionRepository(PicerDatabase database)
         catch (JsonException) { return null; }
     }
 
+    public IReadOnlyDictionary<long, (string Provider, string ModelVersion, string PromptVersion, CloudVisionResult Result)> GetLatestCompleted(IEnumerable<long> imageIds)
+    {
+        var ids = imageIds.Distinct().ToArray();
+        var results = new Dictionary<long, (string, string, string, CloudVisionResult)>();
+        if (ids.Length == 0) return results;
+        using var command = database.Command("""
+            WITH ranked AS (
+                SELECT image_id,provider,model_version,prompt_version,result_json,
+                    ROW_NUMBER() OVER(PARTITION BY image_id ORDER BY updated_utc DESC,provider ASC) AS position
+                FROM cloud_vision_analyses WHERE status='completed' AND result_json IS NOT NULL
+                    AND image_id IN (SELECT value FROM json_each($ids)))
+            SELECT image_id,provider,model_version,prompt_version,result_json FROM ranked WHERE position=1
+            """);
+        command.Parameters.AddWithValue("$ids", JsonSerializer.Serialize(ids));
+        using var reader = command.ExecuteReader();
+        var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+        while (reader.Read())
+        {
+            try
+            {
+                if (JsonSerializer.Deserialize<CloudVisionResult>(reader.GetString(4), options) is { } result)
+                    results[reader.GetInt64(0)] = (reader.GetString(1), reader.GetString(2), reader.GetString(3), result);
+            }
+            catch (JsonException) { }
+        }
+        return results;
+    }
+
     private void Upsert(ImageRecord image, ICloudVisionAnalyzer analyzer, string locationFingerprint,
         string status, string? reason, string? summary, string? resultJson, string? errorCode)
     {
+        database.ArchiveCurrentPhotoDescription(image.Id, analyzer.Provider);
         using var command = database.Command("""
             INSERT INTO cloud_vision_analyses(image_id,provider,model_version,prompt_version,
               source_file_size,source_modified_utc,location_fingerprint,status,reason,summary,result_json,error_code,updated_utc,

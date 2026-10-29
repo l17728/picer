@@ -23,6 +23,7 @@ using Picer.Core.Vision;
 namespace Picer.IndexService;
 
 public sealed record GatewaySearchRequest(SearchFilters? Filters, int PageSize, string? Cursor);
+public sealed record GatewayVideoSearchRequest(GatewayVideoQuery Query, int PageSize, string? Cursor);
 public sealed record ServiceCapability(string Id, string State, string ExecutionNode, string? Reason = null);
 public sealed record SyncImagesRequest(string SourcePath, IReadOnlyList<ImageRecord> Images);
 public sealed record SyncVideosRequest(string SourcePath, IReadOnlyList<VideoRecord> Videos);
@@ -61,6 +62,16 @@ public sealed record ImageTagLink(long ImageId, long TagId);
 
 public sealed class IndexApiHandlers(PicerDatabase db, ThumbnailService thumbnails, VideoRepository videos)
 {
+    private readonly PicerDatabase _videoDatabase = videos.Database;
+    public Task<GatewayVideoPage> SearchVideosAsync(GatewayVideoQuery query, int pageSize, string? cursor, CancellationToken token) =>
+        Task.Run(() => _videoDatabase.SupportsIndependentReadSnapshots
+            ? _videoDatabase.ReadSnapshot(reader => GatewayBrowseQueries.Videos(reader, query, pageSize, cursor, token), token)
+            : GatewayBrowseQueries.Videos(_videoDatabase, query, pageSize, cursor, token), token);
+
+    public Task<IReadOnlyList<GatewayDirectorySummary>> ListDirectoriesAsync(CancellationToken token) =>
+        Task.Run(() => db.SupportsIndependentReadSnapshots
+            ? db.ReadSnapshot(reader => GatewayBrowseQueries.Directories(reader, token), token)
+            : GatewayBrowseQueries.Directories(db, token), token);
     internal PicerDatabase OpenSpaceConnection() => db.OpenIndependentConnection();
     internal void DisposeDatabase() => db.Dispose();
     public Func<long, CancellationToken, Task<bool>>? VideoPurgeHandler { get; set; }
@@ -92,12 +103,7 @@ public sealed class IndexApiHandlers(PicerDatabase db, ThumbnailService thumbnai
 
     public Task<GatewayVideoPage> ListVideosAsync(long? sourceId, int pageSize, string? cursor, CancellationToken cancellationToken)
     {
-        var all = videos.GetAll().Where(video => sourceId is null || video.SourceId == sourceId).ToArray();
-        var offset = int.TryParse(cursor, out var parsed) ? Math.Max(0, parsed) : 0;
-        var size = Math.Clamp(pageSize, 1, 500);
-        var items = all.Skip(offset).Take(size).ToArray();
-        var next = offset + items.Length < all.Length ? (offset + items.Length).ToString() : null;
-        return Task.FromResult(new GatewayVideoPage(items, next, all.Length));
+        return SearchVideosAsync(new(SourceId: sourceId), pageSize, cursor, cancellationToken);
     }
 
     public Task<VideoRecord?> GetVideoAsync(long id, CancellationToken cancellationToken)
@@ -225,7 +231,9 @@ public sealed class IndexApiHandlers(PicerDatabase db, ThumbnailService thumbnai
     public IReadOnlyList<Tag> ListTags() => SemanticEngine.GetTags(db);
     public IReadOnlyList<Album> ListAlbums() => SemanticEngine.GetAlbums(db);
     public GatewayMetadata GetMetadata(bool includeEmbeddings = true, bool includeFaceModels = true)
-        => ReadMetadata(db, includeEmbeddings, includeFaceModels);
+        => db.SupportsIndependentReadSnapshots
+            ? db.ReadSnapshot(reader => ReadMetadata(reader, includeEmbeddings, includeFaceModels))
+            : ReadMetadata(db, includeEmbeddings, includeFaceModels);
     public static GatewayMetadata ReadMetadata(PicerDatabase db, bool includeEmbeddings = true, bool includeFaceModels = true)
     {
         var albumImages = new List<GatewayAlbumImageLink>();
@@ -262,9 +270,9 @@ public sealed class IndexApiHandlers(PicerDatabase db, ThumbnailService thumbnai
         using (var reader = command.ExecuteReader())
             while (reader.Read()) transcripts.Add(new GatewayVideoTranscript(reader.GetInt64(0), reader.GetString(1), reader.GetString(2)));
         var summaries = new List<GatewayVideoSummary>();
-        using (var command = db.Command("SELECT (SELECT MIN(id) FROM videos WHERE content_id=video_summaries.video_id),provider,model_version,prompt_version,summary,result_json,source_file_size,source_modified_utc FROM video_summaries"))
+        using (var command = db.Command("SELECT (SELECT MIN(id) FROM videos WHERE content_id=video_summaries.video_id),provider,model_version,prompt_version,summary,result_json,source_file_size,source_modified_utc,created_utc FROM video_summaries"))
         using (var reader = command.ExecuteReader())
-            while (reader.Read()) summaries.Add(new GatewayVideoSummary(reader.GetInt64(0), reader.GetString(1), reader.GetString(2), reader.GetString(3), reader.GetString(4), reader.GetString(5), reader.GetInt64(6), reader.GetString(7)));
+            while (reader.Read()) summaries.Add(new GatewayVideoSummary(reader.GetInt64(0), reader.GetString(1), reader.GetString(2), reader.GetString(3), reader.GetString(4), reader.GetString(5), reader.GetInt64(6), reader.GetString(7)) { UpdatedUtc = reader.GetString(8) });
         var videoFaces = db.GetAllMirroredVideoFaces()
             .Select(face => includeEmbeddings ? face : face with { Embedding = null }).ToArray();
         var analyses = new List<GatewayCloudVisionAnalysis>();
@@ -310,7 +318,8 @@ public sealed class IndexApiHandlers(PicerDatabase db, ThumbnailService thumbnai
         return new GatewayMetadata(albumImages, imageTags, db.GetImageLocationHierarchyRows(), faces, assignments, keyframes, transcripts,
             summaries, videoFaces, analyses, scenes, reviews, clusters, members,
             includeFaceModels ? trainingArtifacts : null, includeFaceModels ? prototypes : null,
-            includeFaceModels ? policies : null, includeFaceModels ? modelSettings : null, db.GetFaceReviewDecisions());
+            includeFaceModels ? policies : null, includeFaceModels ? modelSettings : null, db.GetFaceReviewDecisions(),
+            DescriptionVersions: db.GetDescriptionVersions());
     }
     public IReadOnlyList<PersonSummary> ListPeople() => new PeopleService(db).GetAll();
 
@@ -841,7 +850,7 @@ async function load(){const [c,g]=await Promise.all([fetch('/api/service/v1/capa
         // The default remote mirror payload deliberately omits embeddings. Face
         // boxes, albums and video metadata become available quickly; vectors
         // remain available to an explicit trusted caller when needed.
-        app.MapGet("/api/gateway/v1/metadata", (bool includeEmbeddings = false, bool includeFaceModels = false) => Results.Json(handlers.GetMetadata(includeEmbeddings, includeFaceModels)));
+        app.MapGet("/api/gateway/v1/metadata", (HttpContext context, bool includeEmbeddings = false, bool includeFaceModels = false) => MetadataTransferResults.Create(context, handlers.GetMetadata(includeEmbeddings, includeFaceModels)));
         app.MapGet("/api/gateway/v1/thumbs/{id:long}", async (long id, string? agentId, CancellationToken cancellationToken) =>
         {
             var stream = await handlers.OpenThumbnailAsync(id, cancellationToken);
@@ -1068,25 +1077,19 @@ async function load(){const [c,g]=await Promise.all([fetch('/api/service/v1/capa
             if (record is null) return Results.NotFound();
             return await MediaAssetResults.OpenAsync(agents, context, agentId, IndexApiHandlers.NormalizeAgentPath(record.Path));
         });
-        app.MapGet("/api/gateway/v1/video-keyframes/{id:long}", async (long id, string? agentId, CancellationToken cancellationToken) =>
+        app.MapGet("/api/gateway/v1/video-keyframes/{id:long}", async (long id, string? agentId, HttpContext context) =>
         {
             var path = handlers.GetVideoKeyframePath(id);
             if (path is null) return Results.NotFound();
-            var asset = await agents.RequestAsync(agentId, IndexApiHandlers.NormalizeAgentPath(path), cancellationToken);
-            return asset is null
-                ? Results.Json(new { error = "media_agent_offline", detail = "没有在线的原图代理" }, statusCode: StatusCodes.Status503ServiceUnavailable)
-                : Results.File(asset.Value.Content, "image/jpeg");
+            return await MediaAssetResults.OpenAsync(agents, context, agentId, IndexApiHandlers.NormalizeAgentPath(path), keyframe: true);
         });
         // Ordinal fallback keeps older mirrored rows readable when a client
         // carries a frame id from a previous service database snapshot.
-        app.MapGet("/api/gateway/v1/video-keyframes/by-video/{videoId:long}/{ordinal:int}", async (long videoId, int ordinal, string? agentId, CancellationToken cancellationToken) =>
+        app.MapGet("/api/gateway/v1/video-keyframes/by-video/{videoId:long}/{ordinal:int}", async (long videoId, int ordinal, string? agentId, HttpContext context) =>
         {
             var path = handlers.GetVideoKeyframePathByOrdinal(videoId, ordinal);
             if (path is null) return Results.NotFound();
-            var asset = await agents.RequestAsync(agentId, IndexApiHandlers.NormalizeAgentPath(path), cancellationToken);
-            return asset is null
-                ? Results.Json(new { error = "media_agent_offline" }, statusCode: StatusCodes.Status503ServiceUnavailable)
-                : Results.File(asset.Value.Content, "image/jpeg");
+            return await MediaAssetResults.OpenAsync(agents, context, agentId, IndexApiHandlers.NormalizeAgentPath(path), keyframe: true);
         });
         // Media operations are executed by the source-machine agent.  The
         // client supplies only a video id; the service resolves the indexed
@@ -1663,6 +1666,10 @@ async function load(){const [c,g]=await Promise.all([fetch('/api/service/v1/capa
                 }
             }
         });
+        app.MapPost("/api/gateway/v1/video-search", async (GatewayVideoSearchRequest request, CancellationToken token) =>
+            Results.Json(await handlers.SearchVideosAsync(request.Query, request.PageSize, request.Cursor, token)));
+        app.MapGet("/api/gateway/v1/directories", async (CancellationToken token) =>
+            Results.Json(await handlers.ListDirectoriesAsync(token)));
         app.MapPost("/api/gateway/v1/search", async (GatewaySearchRequest request, CancellationToken cancellationToken) =>
             Results.Json(await handlers.SearchAsync(request, cancellationToken)));
         app.MapGet("/api/gateway/v1/sources", () => Results.Json(handlers.ListSources()));

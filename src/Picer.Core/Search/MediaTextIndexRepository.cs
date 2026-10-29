@@ -12,15 +12,18 @@ public sealed class MediaTextIndexRepository
     public MediaTextIndexRepository(PicerDatabase database)
     {
         _database = database;
-        EnsureSchema();
+        // Schema creation belongs to PicerDatabase migrations. Query repositories
+        // must be safe to construct on a read-only snapshot connection.
     }
 
-    public void UpsertImage(ImageRecord image, IEnumerable<string?> fields, string sourceVersion = "v1")
+    public void UpsertImage(ImageRecord image, IEnumerable<string?> fields, string sourceVersion = "v1",
+        Microsoft.Data.Sqlite.SqliteTransaction? externalTransaction = null)
     {
         var content = string.Join(" ", fields.Where(value => !string.IsNullOrWhiteSpace(value)).Select(value => value!.Trim()).Distinct(StringComparer.OrdinalIgnoreCase));
         var fingerprint = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(
             $"{image.Id}|{image.FileSize}|{image.ModifiedUtc:o}|{sourceVersion}|{content}")));
-        using var tx = _database.BeginTransaction();
+        using var ownedTransaction = externalTransaction is null ? _database.BeginTransaction() : null;
+        var tx = externalTransaction ?? ownedTransaction!;
         using (var doc = _database.Command("""
             INSERT INTO media_text_documents(media_id,media_type,content,fingerprint,source_version,updated_utc)
             VALUES($id,'photo',$content,$fingerprint,$version,$now)
@@ -36,7 +39,7 @@ public sealed class MediaTextIndexRepository
         {
             fts.Transaction = tx; fts.Parameters.AddWithValue("$id", image.Id); fts.Parameters.AddWithValue("$content", content); fts.ExecuteNonQuery();
         }
-        tx.Commit();
+        ownedTransaction?.Commit();
     }
 
     public void UpsertVideo(VideoRecord video, IEnumerable<string?> fields, string sourceVersion = "v1")
@@ -180,14 +183,4 @@ public sealed class MediaTextIndexRepository
         IndexedUtc = DateTime.Parse(r.GetString(r.GetOrdinal("indexed_utc")), null, System.Globalization.DateTimeStyles.RoundtripKind)
     };
 
-    private void EnsureSchema()
-    {
-        using var command = _database.Command("""
-            CREATE TABLE IF NOT EXISTS media_text_documents(
-              media_id INTEGER PRIMARY KEY, media_type TEXT NOT NULL, content TEXT NOT NULL DEFAULT '',
-              fingerprint TEXT NOT NULL, source_version TEXT NOT NULL, updated_utc TEXT NOT NULL);
-            CREATE VIRTUAL TABLE IF NOT EXISTS media_text_fts USING fts5(content);
-            """);
-        command.ExecuteNonQuery();
-    }
 }

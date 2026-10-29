@@ -20,6 +20,9 @@ public sealed class VideoFaceTimelineService(PicerDatabase database, IImageFaceA
 {
     public string PreferredModelVersion => analyzer.ModelVersion;
 
+    public VideoFaceTimelineService WithDatabase(PicerDatabase connection) =>
+        new(connection, analyzer, new VisionAnalysisRepository(connection), new Picer.Core.People.PeopleService(connection), includeAllModels);
+
     public IReadOnlyList<VideoFaceBackfillSource> GetFacesForBackfill(string modelVersion)
     {
         using var command=database.Command("""

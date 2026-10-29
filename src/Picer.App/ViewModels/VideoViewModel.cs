@@ -24,6 +24,7 @@ public partial class VideoViewModel(VideoRepository repository, VideoIndexServic
     private readonly ClientServices _services = services ?? new();
     private CancellationTokenSource? _loadCancellation;
     private CancellationTokenSource? _selectedVideoLoadCancellation;
+    private Task _selectedVideoLoad = Task.CompletedTask;
     public ObservableCollection<VideoItemViewModel> Videos { get; } = new();
     public ObservableCollection<VideoKeyframeItemViewModel> Frames { get; } = new();
     public ObservableCollection<VideoFaceItemViewModel> VideoFaces { get; } = new();
@@ -67,12 +68,13 @@ public partial class VideoViewModel(VideoRepository repository, VideoIndexServic
         var started = Stopwatch.StartNew();
         try
         {
-        var rows = await UiWork.RunDatabaseAsync("Videos.Catalog.Read", () =>
+        var rows = await UiWork.ReadSnapshotAsync("Videos.Catalog.Read", repository.Database, connection =>
         {
-            var faceReviews = repository.GetFaceReviewSummaries();
-            var counts = remoteMode ? repository.GetKeyframeCounts() : null;
-            return (string.IsNullOrWhiteSpace(query) ? repository.GetAll() : repository.Search(query))
-                .Select(video => new VideoItemViewModel(video, counts?.GetValueOrDefault(video.Id) ?? repository.GetKeyframes(video.Id, existingOnly: !remoteMode).Count,
+            var reader = new VideoRepository(connection);
+            var faceReviews = reader.GetFaceReviewSummaries();
+            var counts = remoteMode ? reader.GetKeyframeCounts() : null;
+            return (string.IsNullOrWhiteSpace(query) ? reader.GetAll() : reader.Search(query))
+                .Select(video => new VideoItemViewModel(video, counts?.GetValueOrDefault(video.Id) ?? reader.GetKeyframes(video.Id, existingOnly: !remoteMode).Count,
                     faceReviews.GetValueOrDefault(video.Id) ?? new VideoFaceReviewSummary(0, 0, 0, 0, null))).ToArray();
         }, cancellation.Token);
         cancellation.Token.ThrowIfCancellationRequested();
@@ -162,7 +164,7 @@ public partial class VideoViewModel(VideoRepository repository, VideoIndexServic
         PeopleTimelineText = "正在加载人物标注…";
         SummaryText = "正在加载摘要…";
         var cancellation = _selectedVideoLoadCancellation = new CancellationTokenSource();
-        _ = LoadSelectedVideoAsync(value, cancellation.Token);
+        _selectedVideoLoad = LoadSelectedVideoAsync(value, cancellation.Token);
     }
 
     private async Task LoadSelectedVideoAsync(VideoItemViewModel selected, CancellationToken cancellationToken)
@@ -171,12 +173,18 @@ public partial class VideoViewModel(VideoRepository repository, VideoIndexServic
         var metadataLoaded = false;
         try
         {
-        var snapshot = await UiWork.RunDatabaseAsync(() => (
-            Transcript: repository.GetTranscript(selected.Record.Id),
-            Timeline: faceTimeline?.GetTimeline(selected.Record.Id),
-            Summary: repository.GetSummary(selected.Record.Id),
-            Frames: repository.GetKeyframes(selected.Record.Id, existingOnly: !remoteMode).ToArray(),
-            People: peopleService?.GetAll().ToArray() ?? []), cancellationToken);
+        var snapshot = await UiWork.ReadSnapshotAsync("VideoDetails.Snapshot", repository.Database, connection =>
+        {
+            var reader = new VideoRepository(connection);
+            var video = reader.Get(selected.Record.Id) ?? throw new InvalidOperationException("video_reference_missing");
+            return (
+                Video: video,
+                Transcript: reader.GetTranscript(video.Id),
+                Timeline: faceTimeline?.WithDatabase(connection).GetTimeline(video.Id),
+                Summary: reader.GetSummary(video.Id),
+                Frames: reader.GetKeyframes(video.Id, existingOnly: !remoteMode).ToArray(),
+                People: peopleService is null ? [] : new PeopleService(connection).GetAll().ToArray());
+        }, cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
         if (SelectedVideo?.Record.Id != selected.Record.Id) return;
         AppLogger.Info($"视频详情加载：video={selected.Record.Id}; frames={snapshot.Frames.Length}; videoFaces={snapshot.Timeline?.Count ?? 0}; remote={remoteMode}");
@@ -186,7 +194,20 @@ public partial class VideoViewModel(VideoRepository repository, VideoIndexServic
         PopulateVideoFaces(snapshot.Timeline ?? [], snapshot.People);
         metadataLoaded = true;
         AppLogger.Info($"Video people annotation projection: video={selected.Record.Id}; preferredModel={faceTimeline?.PreferredModelVersion ?? "none"}; resolvedModels={string.Join(',', snapshot.Timeline?.Select(face => face.ModelVersion).Distinct(StringComparer.OrdinalIgnoreCase) ?? [])}; indexedFaces={selected.FaceReview.Total}; displayedFaces={snapshot.Timeline?.Count ?? 0}; analysisStatus={selected.FaceReview.AnalysisStatus ?? "none"}");
-        var frames = remoteMode ? await (remoteFrameLoader ?? ((frames, id, ct) => MaterializeRemoteFramesAsync(_services, frames, id, ct)))(snapshot.Frames, selected.Record.Id, cancellationToken) : snapshot.Frames;
+        if (remoteMode && remoteFrameLoader is null && _services.Gateway is Picer.Core.Gateway.HttpIndexGateway)
+        {
+            var cached = GetCachedRemoteFrames(snapshot.Frames, snapshot.Video.Id, _services.RemoteVideoCacheRoot ?? AppServices.RemoteDataRoot);
+            foreach (var frame in cached) Frames.Add(new VideoKeyframeItemViewModel(frame));
+            var cachedPaths = cached.GroupBy(frame => frame.TimestampSeconds)
+                .ToDictionary(group => group.Key, group => group.First().Path);
+            PopulateVideoFaces(snapshot.Timeline?.Select(face => cachedPaths.TryGetValue(face.TimestampSeconds, out var path)
+                ? face with { KeyframePath = path } : face).ToArray() ?? [], snapshot.People);
+        }
+        var frames = remoteMode
+            ? await (remoteFrameLoader is not null
+                ? remoteFrameLoader(snapshot.Frames, snapshot.Video.Id, cancellationToken)
+                : MaterializeRemoteFramesAsync(_services, snapshot.Frames, snapshot.Video, cancellationToken))
+            : snapshot.Frames;
         cancellationToken.ThrowIfCancellationRequested();
         if (SelectedVideo?.Record.Id != selected.Record.Id) return;
         AppLogger.Info($"Video keyframes materialized: video={selected.Record.Id}; requested={snapshot.Frames.Length}; available={frames.Count}; elapsedMs={started.ElapsedMilliseconds}");
@@ -206,6 +227,7 @@ public partial class VideoViewModel(VideoRepository repository, VideoIndexServic
         PeopleTimelineText = FormatTimeline(timeline);
         PopulateVideoFaces(timeline ?? [], snapshot.People);
         AppLogger.Info($"视频人物标注已绑定：video={selected.Record.Id}; displayedFaces={timeline?.Count ?? 0}; cachedFrames={frames.Count}");
+        Frames.Clear();
         await UiWork.AddInBatchesAsync(frames, frame => Frames.Add(new VideoKeyframeItemViewModel(frame)), cancellationToken, batchSize: 30);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
@@ -359,6 +381,7 @@ public partial class VideoViewModel(VideoRepository repository, VideoIndexServic
         _selectedVideoFaces = [];
         await LoadAsync();
         SelectedVideo = selectedVideoId is null ? null : Videos.FirstOrDefault(video => video.Record.Id == selectedVideoId);
+        await _selectedVideoLoad;
         SelectedVideoFace = FilteredVideoFaces.FirstOrDefault(face => face.Record.FaceId == selectedFaceId);
         StatusText = message;
     }
@@ -514,7 +537,7 @@ public partial class VideoViewModel(VideoRepository repository, VideoIndexServic
                             AppLogger.Warn($"视频元数据探测失败，将继续处理关键帧：{video.Path}；{CompactError(ex.Message)}");
                         }
                     }
-                    var cached = await UiWork.RunDatabaseAsync(() => repository.GetKeyframes(video.Id, existingOnly: !remoteMode));
+                    var cached = await UiWork.ReadSnapshotAsync("Video.KeyframeState", repository.Database, reader => new VideoRepository(reader).GetKeyframes(video.Id, existingOnly: !remoteMode));
                     if (cached.Count > 0)
                     {
                         Interlocked.Increment(ref reused);
@@ -596,7 +619,7 @@ public partial class VideoViewModel(VideoRepository repository, VideoIndexServic
         var video = SelectedVideo.Record;
         var activeTranscription = _services.CreateVideoTranscriptionService() ?? transcription;
         if (activeTranscription is null) { StatusText="请先在 AI 模型设置中为视频语音转文字选择可用的本地语音模型"; return; }
-        var cachedRecord=await UiWork.RunDatabaseAsync(()=>repository.GetTranscriptWithModel(video.Id));
+        var cachedRecord=await UiWork.ReadSnapshotAsync("Video.TranscriptState", repository.Database, reader => new VideoRepository(reader).GetTranscriptWithModel(video.Id));
         var cached=cachedRecord?.Json;
         if(cachedRecord is not null && string.Equals(cachedRecord.Value.ModelVersion, activeTranscription.ModelVersion, StringComparison.OrdinalIgnoreCase) && IsUsableTranscript(cached)){ TranscriptText=ExtractTranscriptText(cached); StatusText=$"已复用 {activeTranscription.ModelVersion} 转写缓存"; if (!ReferenceEquals(activeTranscription, transcription) && activeTranscription is IDisposable cachedDisposable) cachedDisposable.Dispose(); return; }
         IsBusy=true;
@@ -661,7 +684,7 @@ public partial class VideoViewModel(VideoRepository repository, VideoIndexServic
         StatusText=$"已收到人物分析请求：{selected.FileName}；正在检查关键帧…";
         AppLogger.Info($"视频人物分析请求：video={selected.Record.Id}; path={selected.Record.Path}");
         await Application.Current.Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.Render);
-        var keyframeCount=await UiWork.RunDatabaseAsync("VideoPeople.CheckKeyframes",()=>repository.GetKeyframes(selected.Record.Id, existingOnly: !remoteMode).Count);
+        var keyframeCount=await UiWork.ReadSnapshotAsync("VideoPeople.CheckKeyframes", repository.Database, reader=>new VideoRepository(reader).GetKeyframes(selected.Record.Id, existingOnly: !remoteMode).Count);
         if(keyframeCount==0){StatusText=$"无法分析 {selected.FileName}：尚未生成关键帧";AppLogger.Warn($"视频人物分析未启动：无关键帧；video={selected.Record.Id}");return;}
         IsBusy=true;
         try
@@ -673,7 +696,7 @@ public partial class VideoViewModel(VideoRepository repository, VideoIndexServic
             var count=await faceTimeline.AnalyzeAsync(selected.Record, progress: progress);
             await UiWork.RunDatabaseAsync("VideoPeople.SaveCompleted",()=>repository.SavePersonAnalysisStatus(selected.Record.Id,"completed",selected.Record));
             _services.QueueImmediateRemoteSync("视频人物分析状态写入");
-            var view=await UiWork.RunDatabaseAsync("VideoPeople.LoadResult",()=>(Timeline:faceTimeline.GetTimeline(selected.Record.Id),People:peopleService?.GetAll().ToArray()??[]));
+            var view=await UiWork.ReadSnapshotAsync("VideoPeople.LoadResult", repository.Database, reader=>(Timeline:faceTimeline.WithDatabase(reader).GetTimeline(selected.Record.Id),People:peopleService is null ? [] : new PeopleService(reader).GetAll().ToArray()));
             if(SelectedVideo?.Record.Id==selected.Record.Id){PeopleTimelineText=FormatTimeline(view.Timeline);PopulateVideoFaces(view.Timeline,view.People);}
             await LoadAsync();
             SelectedVideo=Videos.FirstOrDefault(video=>video.Record.Id==selected.Record.Id);
@@ -705,8 +728,8 @@ public partial class VideoViewModel(VideoRepository repository, VideoIndexServic
         var configured = _services.CreateCloudVisionService(AiFeatureIds.VideoSummary);
         if (configured is null) { StatusText = "请先在 AI 模型设置中为视频内容总结选择本地 VL 或云端多模态模型"; return; }
         using var analyzer = configured.Value.Analyzer;
-        if (await UiWork.RunDatabaseAsync(() => repository.GetKeyframes(selected.Id, existingOnly: !remoteMode).Count) == 0) { StatusText = "请先生成关键帧"; return; }
-        var transcriptNotice = await UiWork.RunDatabaseAsync(() => repository.GetTranscript(selected.Id)) is null ? "不含语音转写" : "包含本地语音转写文本";
+        if (await UiWork.ReadSnapshotAsync("Video.SummaryFrames", repository.Database, reader => new VideoRepository(reader).GetKeyframes(selected.Id, existingOnly: !remoteMode).Count) == 0) { StatusText = "请先生成关键帧"; return; }
+        var transcriptNotice = await UiWork.ReadSnapshotAsync("Video.SummaryTranscript", repository.Database, reader => new VideoRepository(reader).GetTranscript(selected.Id)) is null ? "不含语音转写" : "包含本地语音转写文本";
         var locationNotice = configured.Value.Policy.IncludePreciseGps ? "允许提供该视频的精确位置" : "不提供精确位置";
         var confirmation = configured.Value.IsLocal
             ? $"将把关键帧拼图（最多12帧）经已配置索引服务转发至所选本地模型，{transcriptNotice}，{locationNotice}。是否继续？"
@@ -717,7 +740,7 @@ public partial class VideoViewModel(VideoRepository repository, VideoIndexServic
         try
         {
             StatusText = "正在生成并分析关键帧拼图…";
-            var summaryFrames = await UiWork.RunDatabaseAsync(() => repository.GetKeyframes(selected.Id, existingOnly: !remoteMode));
+            var summaryFrames = await UiWork.ReadSnapshotAsync("Video.SummaryFrames", repository.Database, reader => new VideoRepository(reader).GetKeyframes(selected.Id, existingOnly: !remoteMode));
             if (remoteMode) summaryFrames = await MaterializeRemoteFramesAsync(_services, summaryFrames, selected.Id);
             var result = await summaryService.AnalyzeAsync(selected, analyzer, summaryFrames, CancellationToken.None, configured.Value.Policy);
             if (SelectedVideo?.Record.Id == selected.Id && SelectedVideo.Record.Sha256 == selected.Sha256)
@@ -733,16 +756,37 @@ public partial class VideoViewModel(VideoRepository repository, VideoIndexServic
         finally { IsBusy = false; }
     }
 
+    internal static IReadOnlyList<VideoKeyframe> GetCachedRemoteFrames(
+        IReadOnlyList<VideoKeyframe> frames, long videoId, string cacheRoot)
+    {
+        var directory = Path.Combine(cacheRoot, "remote-video-keyframes", videoId.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        return frames.Select((frame, ordinal) => frame with { Path = RemoteFrameCachePath(directory, frame, ordinal) })
+            .Where(frame => File.Exists(frame.Path) && new FileInfo(frame.Path).Length > 0).ToArray();
+    }
+
+    private static string RemoteFrameCachePath(string directory, VideoKeyframe frame, int ordinal) =>
+        Path.Combine(directory, $"v2-{frame.Id}-{ordinal}-{frame.DifferenceHash}.jpg");
+
     internal static async Task<IReadOnlyList<VideoKeyframe>> MaterializeRemoteFramesAsync(
         ClientServices _services,
         IReadOnlyList<VideoKeyframe> frames, long videoId, CancellationToken cancellationToken = default)
     {
         if (_services.Gateway is not Picer.Core.Gateway.HttpIndexGateway gateway) return frames;
-        var video = await UiWork.RunDatabaseAsync(() => _services.Videos.GetAll().FirstOrDefault(item => item.Id == videoId), cancellationToken)
+        var video = await UiWork.ReadSnapshotAsync("VideoFrames.Reference", _services.Videos.Database,
+            connection => new VideoRepository(connection).Get(videoId), cancellationToken)
             ?? throw new InvalidOperationException("video_reference_missing");
+        return await MaterializeRemoteFramesAsync(_services, frames, video, cancellationToken);
+    }
+
+    internal static async Task<IReadOnlyList<VideoKeyframe>> MaterializeRemoteFramesAsync(
+        ClientServices _services, IReadOnlyList<VideoKeyframe> frames, VideoRecord video,
+        CancellationToken cancellationToken = default)
+    {
+        if (_services.Gateway is not Picer.Core.Gateway.HttpIndexGateway gateway) return frames;
+        var videoId = video.Id;
         using var operation = VideoOperationLifetime.Begin(video.Path, cancellationToken);
         cancellationToken = operation.Token;
-        var directory = Path.Combine(AppServices.RemoteDataRoot, "remote-video-keyframes", videoId.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        var directory = Path.Combine(_services.RemoteVideoCacheRoot ?? AppServices.RemoteDataRoot, "remote-video-keyframes", videoId.ToString(System.Globalization.CultureInfo.InvariantCulture));
         Directory.CreateDirectory(directory);
         using var concurrency = new SemaphoreSlim(4, 4);
         var downloads = frames.Select(async (frame, ordinal) =>
@@ -750,7 +794,7 @@ public partial class VideoViewModel(VideoRepository repository, VideoIndexServic
             cancellationToken.ThrowIfCancellationRequested();
             // v2 files have passed image decoding before publication. The id
             // and ordinal also disambiguate rounded/equal frame timestamps.
-            var target = Path.Combine(directory, $"v2-{frame.Id}-{ordinal}-{frame.DifferenceHash}.jpg");
+            var target = RemoteFrameCachePath(directory, frame, ordinal);
             if (File.Exists(target) && new FileInfo(target).Length > 0)
                 return (ordinal, Frame: (VideoKeyframe?)(frame with { Path = target }));
 

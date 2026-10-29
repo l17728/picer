@@ -42,8 +42,8 @@ internal static class ClassificationJobCoordinator
         await RefreshAsync();
     }
 
-    public static Task RefreshAsync() => UiWork.RunDatabaseAsync("classification-status",
-        () => AppServices.ClassificationProjection.GetLatestRun()).ContinueWith(task =>
+    public static Task RefreshAsync() => UiWork.ReadSnapshotAsync("classification-status", AppServices.Db,
+        reader => new ClassificationProjectionService(reader).GetLatestRun()).ContinueWith(task =>
         {
             if (task.Status == TaskStatus.RanToCompletion && task.Result is { } progress) Publish(progress);
         }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);

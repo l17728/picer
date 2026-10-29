@@ -100,9 +100,10 @@ public sealed class CatalogConflictsWindow : Window
             }
             catch { output.Dispose();throw; }
         }
-        return await UiWork.RunDatabaseAsync(()=>review.Anchor.MediaKind=="image"
-            ?AppServices.Gateway.OpenThumbnailAsync(review.MediaId,token).GetAwaiter().GetResult()
-            :AppServices.Gateway is IMediaAssetGateway media?media.OpenVideoThumbnailAsync(review.MediaId,cancellationToken:token).GetAwaiter().GetResult():null,token);
+        return review.Anchor.MediaKind == "image"
+            ? await AppServices.Gateway.OpenThumbnailAsync(review.MediaId, token)
+            : AppServices.Gateway is IMediaAssetGateway media
+                ? await media.OpenVideoThumbnailAsync(review.MediaId, cancellationToken: token) : null;
     }
 
     private async Task RefreshAsync()
@@ -119,7 +120,7 @@ public sealed class CatalogConflictsWindow : Window
                 reviews=await response.Content.ReadFromJsonAsync<CatalogRetirementReview[]>(DeviceAuthorization.Json,_stop.Token)
                     ??throw new InvalidDataException("catalog_reviews_missing");
             }
-            else reviews=await UiWork.RunDatabaseAsync(()=>AppServices.Db.GetCatalogRetirementReviews(),_stop.Token);
+            else reviews=await UiWork.ReadSnapshotAsync("Catalog.Conflicts", AppServices.Db, reader=>reader.GetCatalogRetirementReviews(),_stop.Token);
             _items.ItemsSource=reviews.Select(review=>new Row(review)).ToArray();
             _status.Text=reviews.Count==0?"当前没有需要在此端处理的分类删除冲突。":$"待处理 {reviews.Count} 项，每次最多显示 200 项。";
         }

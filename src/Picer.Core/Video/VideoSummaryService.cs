@@ -106,7 +106,11 @@ public sealed class VideoSummaryService(VideoRepository repository, string cache
                 var result = await analyzer.AnalyzeAsync(request, cancellationToken).ConfigureAwait(false);
                 // Preserve a completed model response even if cancellation arrives while saving.
                 stage = AnalysisStage.Save;
-                await DatabaseAsync(() => repository.SaveSummary(video.Id, analyzer, video, result, requestId), CancellationToken.None).ConfigureAwait(false);
+                await DatabaseAsync(() =>
+                {
+                    if (!repository.SaveSummary(video.Id, analyzer, video, result, requestId))
+                        throw new InvalidOperationException("description_media_changed");
+                }, CancellationToken.None).ConfigureAwait(false);
                 return result;
             }
             finally { await DatabaseAsync(() => repository.Billing.Release(requestId), CancellationToken.None).ConfigureAwait(false); }

@@ -222,11 +222,12 @@ public partial class MainWindow : Window
             // Voice planning only exposes manually confirmed people. Candidate
             // clusters and unassigned/automatic suggestions must not enter the
             // LLM context.
-            () => AppServices.People.GetAll()
+            token => Picer.App.Infrastructure.UiWork.ReadSnapshotAsync<IReadOnlyList<string>>("Voice.PeopleContext", AppServices.Db,
+                reader => new Picer.Core.People.PeopleService(reader).GetAll()
                 .Where(person => person.ConfirmedFaceCount > 0)
                 .Select(person => person.DisplayName)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToArray(), ExecuteVoiceActionAsync,
+                .ToArray(), token), ExecuteVoiceActionAsync,
             asrEndpoint!, speechModel, ttsEndpoint!)
             { Owner = this };
         window.Closed += (_, _) => chat.Dispose();

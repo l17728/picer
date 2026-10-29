@@ -12,6 +12,7 @@ internal sealed partial class AgentApplication
 {
     private readonly Picer.Core.Indexing.BackgroundWorkCoordinator _maintenanceActivity = new();
     private readonly SemaphoreSlim _mediaReaders = new(4, 4);
+    private readonly SemaphoreSlim _keyframeReaders = new(2, 2);
     private readonly SemaphoreSlim _previewReaders = new(2, 2);
     private readonly SemaphoreSlim _analysisReaders = new(2, 2);
     private readonly MediaPreviewCache _mediaPreviews = new();
@@ -22,7 +23,8 @@ internal sealed partial class AgentApplication
         using var foreground = _maintenanceActivity.EnterForeground();
         var id = request.GetProperty("requestId").GetString()!;
         var size = request.GetProperty("previewSize").GetInt32();
-        var gate = size == 1280 ? _analysisReaders : size > 0 ? _previewReaders : _mediaReaders;
+        var keyframe = request.TryGetProperty("keyframe", out var keyframeValue) && keyframeValue.ValueKind == JsonValueKind.True;
+        var gate = keyframe ? _keyframeReaders : size == 1280 ? _analysisReaders : size > 0 ? _previewReaders : _mediaReaders;
         var elapsed = Stopwatch.StartNew();
         var entered = false;
         ClientWebSocket? socket = null;

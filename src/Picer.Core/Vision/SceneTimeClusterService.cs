@@ -9,16 +9,27 @@ public sealed record SceneTimeCluster(DateTime StartUtc, DateTime EndUtc, string
     public string DisplayName => $"{StartUtc.ToLocalTime():yyyy-MM-dd HH:mm} · {SceneName}";
 }
 
+public sealed record SceneTimeClusterInput(IReadOnlyList<ImageRecord> Images,
+    IReadOnlyDictionary<long, string> Scenes, SceneDescriptionLookup Descriptions);
+
 public sealed class SceneTimeClusterService(PicerDatabase database)
 {
     public IReadOnlyList<SceneTimeCluster> Build(string directoryPath, bool includeDescendants = false, TimeSpan? maximumGap = null) =>
         Build(database.GetActiveImagesInDirectory(directoryPath, includeDescendants), maximumGap);
 
     public IReadOnlyList<SceneTimeCluster> Build(IReadOnlyList<ImageRecord> images, TimeSpan? maximumGap = null)
+        => Build(Capture(images), maximumGap);
+
+    public SceneTimeClusterInput Capture(IReadOnlyList<ImageRecord> images) =>
+        new(images.ToArray(), LoadScenes(images.Select(image => image.Id)),
+            new SceneGroupDescriptionService(database, new CloudVisionRepository(database)).ReadAcceptedLookup());
+
+    public static IReadOnlyList<SceneTimeCluster> Build(SceneTimeClusterInput input, TimeSpan? maximumGap = null)
     {
+        var images = input.Images;
         if (images.Count == 0) return [];
         var gap = maximumGap ?? TimeSpan.FromHours(3);
-        var sceneByImage = LoadScenes(images.Select(image => image.Id));
+        var sceneByImage = input.Scenes;
         var ordered = images.OrderBy(EffectiveTime).ThenBy(image => image.Id).ToArray();
         var timeGroups = new List<List<ImageRecord>>();
         var current = new List<ImageRecord>();
@@ -34,7 +45,7 @@ public sealed class SceneTimeClusterService(PicerDatabase database)
         if (current.Count > 0) timeGroups.Add(current);
 
         var result = new List<SceneTimeCluster>();
-        var descriptions = new SceneGroupDescriptionService(database, new CloudVisionRepository(database));
+        var descriptions = input.Descriptions;
         foreach (var group in timeGroups)
         {
             // Only an exact fingerprint may short-circuit a time group. The
@@ -84,7 +95,7 @@ public sealed class SceneTimeClusterService(PicerDatabase database)
         new(EffectiveTime(images[0]), EffectiveTime(images[^1]), sceneName, images.Select(image => image.Id).ToArray());
 
     private static SceneTimeCluster CreateWithAccepted(IReadOnlyList<ImageRecord> images, string fallbackSceneName,
-        SceneGroupDescriptionService descriptions)
+        SceneDescriptionLookup descriptions)
     {
         var accepted = descriptions.GetAccepted(SceneGroupDescriptionService.CreateFingerprint(images))
             ?? descriptions.GetAcceptedForGroup(Path.GetDirectoryName(images[0].Path) ?? string.Empty, images);

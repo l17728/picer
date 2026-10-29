@@ -248,9 +248,9 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         var initializationTimer = Stopwatch.StartNew();
         IsLoading = true;
         StatusText = "正在加载人物分类…";
-        var modelVersions = await UiWork.RunDatabaseAsync(() =>
+        var modelVersions = await UiWork.ReadSnapshotAsync("People.ModelOptions", _database, connection =>
         {
-            var versionCounts = _repository.GetFaceModelVersionCounts();
+            var versionCounts = new VisionAnalysisRepository(connection).GetFaceModelVersionCounts();
             var insight = versionCounts.Where(value => IsInsightModelVersion(value.Version))
                 .OrderByDescending(value => value.Count).ThenBy(value => value.Version)
                 .FirstOrDefault();
@@ -279,17 +279,17 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         if (!string.IsNullOrWhiteSpace(selectedVersion)) await LoadTrainingHistoryAsync(selectedVersion);
         _ = PublishEvaluationSnapshotAsync();
 
-        var summary = await UiWork.RunDatabaseAsync(_repository.GetSummary);
+        var summary = await UiWork.ReadSnapshotAsync("People.Summary", _database, reader => new VisionAnalysisRepository(reader).GetSummary());
         if (summary.CompletedImages == 0 || IsAnalyzing) return;
         StatusText = "已显示人物分类，正在后台更新自动归类…";
-        var fingerprint = await UiWork.RunDatabaseAsync(GetOrganizeFingerprint);
+        var fingerprint = await UiWork.ReadSnapshotAsync("People.OrganizeFingerprint", _database, GetOrganizeFingerprint);
         if (string.Equals(fingerprint, _lastOrganizeFingerprint, StringComparison.Ordinal))
         {
             StatusText = "人物界面已刷新；自动归类参数和模型没有变化，跳过重复计算";
             return;
         }
         await OrganizeFacesAsync();
-        _lastOrganizeFingerprint = await UiWork.RunDatabaseAsync(GetOrganizeFingerprint);
+        _lastOrganizeFingerprint = await UiWork.ReadSnapshotAsync("People.OrganizeFingerprint", _database, GetOrganizeFingerprint);
     }
 
     private static string GetFaceModelDisplayName(string version)
@@ -343,9 +343,9 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             // when it completes, while the model-specific faces continue
             // loading immediately.
             var historyTask = LoadTrainingHistoryAsync(modelVersion);
-            var (sourceModel, sourceCount, targetCount, targetEmbeddings, missingCount) = await UiWork.RunDatabaseAsync(() =>
+            var (sourceModel, sourceCount, targetCount, targetEmbeddings, missingCount) = await UiWork.ReadSnapshotAsync("People.ModelCoverage", _database, connection =>
             {
-                var versionCounts = _repository.GetFaceModelVersionCounts();
+                var versionCounts = new VisionAnalysisRepository(connection).GetFaceModelVersionCounts();
                 var source = versionCounts.Where(value => !string.Equals(value.Version, modelVersion, StringComparison.OrdinalIgnoreCase))
                     .Select(value => (Version: value.Version, Count: value.Count))
                     // 必须先选择覆盖率最高的人脸框来源；自适应版本只有在覆盖率
@@ -355,7 +355,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
                     .FirstOrDefault();
                 var targetCount = versionCounts.FirstOrDefault(value =>
                     string.Equals(value.Version, modelVersion, StringComparison.OrdinalIgnoreCase)).Count;
-                var targetEmbeddings = _repository.GetFaceEmbeddingCount(modelVersion);
+                var targetEmbeddings = new VisionAnalysisRepository(connection).GetFaceEmbeddingCount(modelVersion);
                 var missing = targetCount == 0
                     ? source.Count
                     : Math.Max(0, targetCount - targetEmbeddings);
@@ -454,8 +454,8 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
     {
         var requestedGeneration = Volatile.Read(ref _modelSwitchGeneration);
         var aliases = GetModelVersionAliases(modelVersion);
-        var history = await UiWork.RunDatabaseAsync(() => aliases
-            .SelectMany(version => _repository.GetFaceTrainingHistory(version))
+        var history = await UiWork.ReadSnapshotAsync("People.TrainingHistory", _database, connection => aliases
+            .SelectMany(version => new VisionAnalysisRepository(connection).GetFaceTrainingHistory(version))
             .GroupBy(value => value.ArtifactId, StringComparer.OrdinalIgnoreCase)
             .Select(group => group.First())
             .ToArray());
@@ -569,8 +569,8 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         IsAnalyzing = true;
         try
         {
-            var baseline = CaptureTrainingBaseline(modelVersion);
-            var artifact = await UiWork.RunDatabaseAsync(() => _repository.GetFaceTrainingArtifact(selectedHistory.ArtifactId, modelVersion));
+            var baseline = await CaptureTrainingBaselineAsync(modelVersion);
+            var artifact = await UiWork.ReadSnapshotAsync("People.TrainingArtifact", _database, reader => new VisionAnalysisRepository(reader).GetFaceTrainingArtifact(selectedHistory.ArtifactId, modelVersion));
             if (artifact is null && selectedHistory.CanApply)
                 artifact = await TryGetRemoteArtifactAsync(selectedHistory.ArtifactId);
             if (artifact is null && !selectedHistory.CanApply)
@@ -584,6 +584,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             MarkAppliedArtifactInView(artifact);
             await MarkArtifactAppliedOnPlatformAsync(artifact.ArtifactId);
             _services.QueueImmediateRemoteSync("人物识别制品应用");
+            _ = RefreshPendingSummaryAsync();
             TrainingResultText = $"已应用历史模型：{artifact.ModelVersion} · 准确率 {artifact.Metrics.ValidationAccuracy:P1} · 制品 {artifact.ArtifactId}";
             StatusText = $"已应用 {GetFaceModelDisplayName(modelVersion)} 的历史训练版本，分类结果将按该模型空间刷新";
             await RefreshPageAsync();
@@ -649,8 +650,8 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
                 AppLogger.Info($"统一基线评估集指纹未变化，跳过重复上传：snapshot={snapshot.SnapshotId}");
                 return;
             }
-            var members = await UiWork.RunDatabaseAsync(() => new FaceEvaluationSnapshotService(_repository).GetMembers(snapshot.SnapshotId));
-            var sources = await UiWork.RunDatabaseAsync(() => _repository.GetFaceSources(snapshot.EmbeddingModelVersion));
+            var members = await UiWork.ReadSnapshotAsync("People.EvaluationMembers", _database, reader => new FaceEvaluationSnapshotService(new VisionAnalysisRepository(reader)).GetMembers(snapshot.SnapshotId));
+            var sources = await UiWork.ReadSnapshotAsync("People.EvaluationSources", _database, reader => new VisionAnalysisRepository(reader).GetFaceSources(snapshot.EmbeddingModelVersion));
             var byFace = sources.ToDictionary(source => source.FaceId);
             var samples = new List<(long FaceId, long PersonId, string Split, string Group, string FaceImageBase64)>();
             var membersToEncode = members.Where(member => member.FaceId is not null)
@@ -677,9 +678,9 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         catch (Exception exception) { AppLogger.Warn($"准备统一基线评估集失败：{exception.Message}"); }
     }
 
-    private string GetOrganizeFingerprint()
+    private static string GetOrganizeFingerprint(PicerDatabase database)
     {
-        using var command = _database.Command("""
+        using var command = database.Command("""
             SELECT (SELECT COUNT(*) FROM face_person_assignments WHERE state IN ('confirmed','suggested')),
                    (SELECT COUNT(*) FROM people),
                    (SELECT COUNT(*) FROM face_person_prototypes),
@@ -704,20 +705,24 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         var restoreIgnored = DisplayedFacesTitle.StartsWith("不分类", StringComparison.Ordinal);
         var restoreUnassigned = DisplayedFacesTitle.StartsWith("待分类", StringComparison.Ordinal);
         var modelVersion = SelectedFaceModelVersion;
-        var snapshot = await UiWork.RunDatabaseAsync(() => (
-            People: _peopleService.GetAll().ToArray(),
+        var snapshot = await UiWork.ReadSnapshotAsync("People.Refresh", _database, connection =>
+        {
+            var reader = new VisionAnalysisRepository(connection);
+            return (
+            People: new PeopleService(connection).GetAll().ToArray(),
             Faces: loadFaces
-                ? _repository.GetUnassignedFaces(modelVersion: modelVersion).ToArray()
+                ? reader.GetUnassignedFaces(modelVersion: modelVersion).ToArray()
                 : Array.Empty<UnassignedFaceRecord>(),
-            Clusters: _repository.GetCandidateClusters(modelVersion).ToArray(),
-            SuggestedGroups: _repository.GetSuggestedPersonGroups(modelVersion).ToArray(),
-            WorkQueue: _repository.GetFaceWorkQueueCounts(modelVersion),
+            Clusters: reader.GetCandidateClusters(modelVersion).ToArray(),
+            SuggestedGroups: reader.GetSuggestedPersonGroups(modelVersion).ToArray(),
+            WorkQueue: reader.GetFaceWorkQueueCounts(modelVersion),
             Partition: string.IsNullOrWhiteSpace(modelVersion)
                 ? new FacePartitionCounts(0, 0, 0, 0, 0, 0)
-                : _repository.GetFacePartitionCounts(modelVersion),
+                : reader.GetFacePartitionCounts(modelVersion),
             // “不分类”是用户明确做出的跨模型人工确认，始终共享。
-            IgnoredCount: _repository.GetIgnoredFaceCount(),
-            Summary: _repository.GetSummary()), cancellation.Token);
+            IgnoredCount: reader.GetIgnoredFaceCount(),
+            Summary: reader.GetSummary());
+        }, cancellation.Token);
         cancellation.Token.ThrowIfCancellationRequested();
         AppLogger.Info($"People refresh snapshot: model={modelVersion}; faces={snapshot.Faces.Length}; candidates={snapshot.Clusters.Length}; suggestedGroups={snapshot.SuggestedGroups.Length}; partition={snapshot.Partition.Total}/{snapshot.Partition.Ignored}/{snapshot.Partition.Named}/{snapshot.Partition.Suggested}/{snapshot.Partition.Candidate}/{snapshot.Partition.Unassigned}");
 
@@ -782,7 +787,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         await RefreshAsync();
         if (!string.IsNullOrWhiteSpace(SelectedFaceModelVersion))
             await LoadTrainingHistoryAsync(SelectedFaceModelVersion);
-        var ignored = await UiWork.RunDatabaseAsync(() => _repository.GetIgnoredFaceCount());
+        var ignored = await UiWork.ReadSnapshotAsync("People.IgnoredCount", _database, reader => new VisionAnalysisRepository(reader).GetIgnoredFaceCount());
         OnPropertyChanged(nameof(FaceModelSpaceText));
         StatusText = $"UI 已同步：{People.Count} 位人物，{CandidateClusters.Count} 个候选组，" +
             $"{UnassignedFaces.Count} 张待分类，{ignored} 张不分类";
@@ -806,7 +811,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         _analysisCancellation = new CancellationTokenSource();
         try
         {
-            var images = await UiWork.RunDatabaseAsync(() => _database.GetImages(includeMissing: false), _analysisCancellation.Token);
+            var images = await UiWork.ReadSnapshotAsync("People.AnalysisImages", _database, reader => reader.GetImages(includeMissing: false), _analysisCancellation.Token);
             var progress = new Progress<(int Completed, int Total)>(value =>
             {
                 ProgressValue = value.Total == 0 ? 0 : value.Completed * 100d / value.Total;
@@ -891,22 +896,22 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
     [RelayCommand]
     private async Task StartTrainingAsync()
     {
-        var eligibility = await UiWork.RunDatabaseAsync(() => FaceTrainingSnapshotService.CheckEligibility(_database));
+        var eligibility = await UiWork.ReadSnapshotAsync("People.TrainingEligibility", _database, reader => FaceTrainingSnapshotService.CheckEligibility(reader));
         if (eligibility.PositiveFaceCount < 2) { StatusText = "至少需要确认 2 张人脸才能开始训练"; return; }
         IsAnalyzing = true;
         try
         {
             var trainingModelVersion = SelectedFaceModelVersion ?? "sface";
-            var baseline = CaptureTrainingBaseline(trainingModelVersion);
+            var baseline = await CaptureTrainingBaselineAsync(trainingModelVersion);
             var snapshot = await UiWork.RunDatabaseAsync(() => FaceTrainingSnapshotService.BuildSnapshot(_database));
-            var samples = await UiWork.RunDatabaseAsync(() => ExtractEmbeddings(snapshot.SnapshotId, trainingModelVersion));
-            var negativeSamples = await UiWork.RunDatabaseAsync(() => ExtractNegativeEmbeddings(snapshot.SnapshotId, trainingModelVersion));
+            var samples = await UiWork.ReadSnapshotAsync("People.ExtractEmbeddings", _database, reader => ExtractEmbeddings(reader, snapshot.SnapshotId, trainingModelVersion));
+            var negativeSamples = await UiWork.ReadSnapshotAsync("People.ExtractNegativeEmbeddings", _database, reader => ExtractNegativeEmbeddings(reader, snapshot.SnapshotId, trainingModelVersion));
             if (samples.Count == 0)
             {
                 StatusText = $"{GetFaceModelDisplayName(trainingModelVersion)} 尚无可用于训练的完整向量，请先完成该模型的向量补齐";
                 return;
             }
-            var actions = await UiWork.RunDatabaseAsync(() => FaceActionLogService.GetActions(_database, limit: 100_000)
+            var actions = await UiWork.ReadSnapshotAsync("People.TrainingActions", _database, reader => FaceActionLogService.GetActions(reader, limit: 100_000)
                 .Select(value => new TrainingActionEvidence(value.FaceId, value.PersonId, value.SourcePersonId,
                     value.Action, value.CreatedUtc, value.CoClusteredFaceIds, value.CoClusteredPersonIds,
                     value.ClusterConfidence, value.ModelVersion, value.ErrorType)).ToArray());
@@ -933,8 +938,8 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
                 return;
             }
             var artifact = result.Artifact;
-            var historicalBest = await UiWork.RunDatabaseAsync(() =>
-                _repository.GetBestFaceTrainingValidationAccuracy(trainingModelVersion));
+            var historicalBest = await UiWork.ReadSnapshotAsync("People.TrainingBest", _database, reader =>
+                new VisionAnalysisRepository(reader).GetBestFaceTrainingValidationAccuracy(trainingModelVersion));
             if (artifact.Metrics.ValidationAccuracy < 0.90 ||
                 (historicalBest is double best && artifact.Metrics.ValidationAccuracy <= best + 1e-9))
             {
@@ -947,6 +952,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             await ApplyTrainedPrototypesAsync(artifact, baseline);
             MarkAppliedArtifactInView(artifact);
             _services.QueueImmediateRemoteSync("人物识别训练 Agent 制品应用");
+            _ = RefreshPendingSummaryAsync();
             await submission.MarkArtifactAppliedAsync(artifact.ArtifactId);
             // Adoption updates the repository asynchronously; refresh the
             // model-scoped history and current people page immediately so
@@ -973,9 +979,9 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         IsAnalyzing = true;
         try
         {
-            var baseline = CaptureTrainingBaseline(modelVersion);
-            var artifact = await UiWork.RunDatabaseAsync(() =>
-                _repository.GetPreviousAgentTrainingArtifact(modelVersion, useStoredIdentity: _services.ServiceMode));
+            var baseline = await CaptureTrainingBaselineAsync(modelVersion);
+            var artifact = await UiWork.ReadSnapshotAsync("People.PreviousArtifact", _database, reader =>
+                new VisionAnalysisRepository(reader).GetPreviousAgentTrainingArtifact(modelVersion, useStoredIdentity: _services.ServiceMode));
             if (artifact is null)
             {
                 StatusText = $"{GetFaceModelDisplayName(modelVersion)} 没有可回退的历史训练版本";
@@ -985,6 +991,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             MarkAppliedArtifactInView(artifact);
             await MarkArtifactAppliedOnPlatformAsync(artifact.ArtifactId);
             _services.QueueImmediateRemoteSync("人物识别制品回退");
+            _ = RefreshPendingSummaryAsync();
             TrainingResultText = $"已回退到历史制品：{artifact.ArtifactId}；准确率 {artifact.Metrics.ValidationAccuracy:P1}";
             StatusText = $"已回退 {GetFaceModelDisplayName(modelVersion)} 的上一版训练结果，当前模型未改变人工标注";
             await RefreshPageAsync();
@@ -1013,8 +1020,8 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
                 StatusText = "基线评估未启动：平台没有可用人脸模型";
                 return;
             }
-            var sourceModel = await UiWork.RunDatabaseAsync(() => _repository.GetFaceModelVersions()
-                .Select(model => (Version: model, Count: _repository.GetFaceSources(model).Count))
+            var sourceModel = await UiWork.ReadSnapshotAsync("People.SourceModel", _database, reader => new VisionAnalysisRepository(reader).GetFaceModelVersions()
+                .Select(model => (Version: model, Count: new VisionAnalysisRepository(reader).GetFaceSources(model).Count))
                 .OrderByDescending(value => value.Count)
                 .ThenByDescending(value => value.Version.StartsWith("adaptive:", StringComparison.OrdinalIgnoreCase))
                 .Select(value => value.Version)
@@ -1029,8 +1036,8 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             foreach (var model in available.Where(model => !string.Equals(model.ModelVersion, sourceModel, StringComparison.OrdinalIgnoreCase)))
             {
                 var target = model.ModelVersion;
-                var coverage = await UiWork.RunDatabaseAsync(() => (Source: _repository.GetFaceEmbeddingCount(sourceModel),
-                    Target: _repository.GetFaceEmbeddingCount(target)));
+                var coverage = await UiWork.ReadSnapshotAsync("People.VectorCoverage", _database, reader => (Source: new VisionAnalysisRepository(reader).GetFaceEmbeddingCount(sourceModel),
+                    Target: new VisionAnalysisRepository(reader).GetFaceEmbeddingCount(target)));
                 if (coverage.Target < coverage.Source)
                 {
                     StatusText = $"正在为基线补齐 {target} 向量…";
@@ -1051,12 +1058,12 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
 
             var snapshot = await UiWork.RunDatabaseAsync(() => new FaceEvaluationSnapshotService(_repository)
                 .CreateSnapshot(dataVersion: "face-baseline-v1", algorithmId: "multi-model-baseline"));
-            var members = await UiWork.RunDatabaseAsync(() => new FaceEvaluationSnapshotService(_repository).GetMembers(snapshot.SnapshotId));
+            var members = await UiWork.ReadSnapshotAsync("People.EvaluationMembers", _database, reader => new FaceEvaluationSnapshotService(new VisionAnalysisRepository(reader)).GetMembers(snapshot.SnapshotId));
             var expected = members.Count(member => member.FaceId is not null);
             var datasets = new Dictionary<string, IReadOnlyList<(long FaceId, long PersonId, float[] Embedding, string Split, string Group)>>();
             foreach (var model in available)
             {
-                var samples = await UiWork.RunDatabaseAsync(() => _repository.GetSnapshotModelSamples(snapshot.SnapshotId, model.ModelVersion));
+                var samples = await UiWork.ReadSnapshotAsync("People.EvaluationSamples", _database, reader => new VisionAnalysisRepository(reader).GetSnapshotModelSamples(snapshot.SnapshotId, model.ModelVersion));
                 if (samples.Count != expected)
                 {
                     StatusText = $"基线评估已阻止：{model.ModelVersion} 向量覆盖 {samples.Count}/{expected}，不能用不完整数据冒充基线";
@@ -1099,7 +1106,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
 
     private async Task StartTrainingLegacyAsync()
     {
-        var eligibility = await UiWork.RunDatabaseAsync(() => FaceTrainingSnapshotService.CheckEligibility(_database));
+        var eligibility = await UiWork.ReadSnapshotAsync("People.TrainingEligibility", _database, reader => FaceTrainingSnapshotService.CheckEligibility(reader));
         if (eligibility.PositiveFaceCount < 2)
         {
             StatusText = "至少需要确认 2 张人脸才能开始训练";
@@ -1111,10 +1118,10 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         try
         {
             var trainingModelVersion = SelectedFaceModelVersion ?? "insightface-arcface";
-            var baseline = CaptureTrainingBaseline(trainingModelVersion);
+            var baseline = await CaptureTrainingBaselineAsync(trainingModelVersion);
             var snapshot = await UiWork.RunDatabaseAsync(() => FaceTrainingSnapshotService.BuildSnapshot(_database));
-            var samples = await UiWork.RunDatabaseAsync(() => ExtractEmbeddings(snapshot.SnapshotId, trainingModelVersion));
-            var negativeSamples = await UiWork.RunDatabaseAsync(() => ExtractNegativeEmbeddings(snapshot.SnapshotId, trainingModelVersion));
+            var samples = await UiWork.ReadSnapshotAsync("People.ExtractEmbeddings", _database, reader => ExtractEmbeddings(reader, snapshot.SnapshotId, trainingModelVersion));
+            var negativeSamples = await UiWork.ReadSnapshotAsync("People.ExtractNegativeEmbeddings", _database, reader => ExtractNegativeEmbeddings(reader, snapshot.SnapshotId, trainingModelVersion));
 
             var baseUrl = ResolveTrainingEndpoint() ?? "";
             if (string.IsNullOrWhiteSpace(baseUrl)) { StatusText = "训练平台地址未配置；请由 IndexService/统一模型平台提供训练服务"; return; }
@@ -1163,6 +1170,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
                         await ApplyTrainedPrototypesAsync(artifact, baseline);
                         MarkAppliedArtifactInView(artifact);
                         _services.QueueImmediateRemoteSync("人物识别训练制品应用");
+                        _ = RefreshPendingSummaryAsync();
                         // Keep platform adoption and the local model-scoped
                         // history synchronized for this direct submission path.
                         await submission.MarkArtifactAppliedAsync(artifact.ArtifactId);
@@ -1202,10 +1210,10 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         }
     }
 
-    private List<(long FaceId, long PersonId, float[] Embedding, string Split)> ExtractEmbeddings(long snapshotId, string modelVersion)
+    private static List<(long FaceId, long PersonId, float[] Embedding, string Split)> ExtractEmbeddings(PicerDatabase database, long snapshotId, string modelVersion)
     {
         var results = new List<(long, long, float[], string)>();
-        using var cmd = _database.Command("""
+        using var cmd = database.Command("""
             SELECT DISTINCT target.id, m.person_id, m.split, target.embedding
             FROM face_snapshot_members m
             JOIN detected_faces source ON source.id = m.face_id
@@ -1226,10 +1234,10 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         return results;
     }
 
-    private List<TrainingNegativeSample> ExtractNegativeEmbeddings(long snapshotId, string modelVersion)
+    private static List<TrainingNegativeSample> ExtractNegativeEmbeddings(PicerDatabase database, long snapshotId, string modelVersion)
     {
         var results = new List<TrainingNegativeSample>();
-        using var cmd = _database.Command("""
+        using var cmd = database.Command("""
             SELECT r.face_id,r.person_id,r.split,target.embedding
             FROM face_snapshot_rejections r
             JOIN detected_faces source ON source.id=r.face_id
@@ -1251,9 +1259,10 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         return results;
     }
 
-    private TrainingApplicationBaseline? CaptureTrainingBaseline(string modelVersion) => !_services.ServiceMode ? null
-        : new(_database.GetMirrorCheckpoint()?.Epoch ?? throw new InvalidOperationException("请先刷新照片空间索引。"),
-            _repository.GetActiveFaceAdapterVersion(modelVersion));
+    private async Task<TrainingApplicationBaseline?> CaptureTrainingBaselineAsync(string modelVersion) => !_services.ServiceMode ? null
+        : await UiWork.ReadSnapshotAsync("People.TrainingBaseline", _database, reader => new TrainingApplicationBaseline(
+            reader.GetMirrorCheckpoint()?.Epoch ?? throw new InvalidOperationException("mirror_not_ready"),
+            new VisionAnalysisRepository(reader).GetActiveFaceAdapterVersion(modelVersion)));
 
     private async Task ApplyTrainedPrototypesAsync(TrainingArtifactData artifact, TrainingApplicationBaseline? baseline)
     {
@@ -1400,6 +1409,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         var personName = SelectedPerson?.DisplayName ?? SelectedFace.Record.SuggestedPersonName!;
         await UiWork.RunDatabaseAsync(() => _peopleService.ConfirmFace(SelectedFace.Record.FaceId, personId));
         _services.QueueImmediateRemoteSync("人脸人工确认");
+        _ = RefreshPendingSummaryAsync();
         await RefreshAsync();
         StatusText = $"已将所选人脸确认为“{personName}”";
     }
@@ -1414,6 +1424,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             ? (await OrganizeRemoteFacesAsync("suggest")).Suggestions
             : await UiWork.RunDatabaseAsync(() => _suggestionEngine.Suggest(modelVersion: SelectedFaceModelVersion));
         _services.QueueImmediateRemoteSync("人物自动推荐更新");
+        _ = RefreshPendingSummaryAsync();
         await RefreshAsync();
         StatusText = $"候选匹配完成：检查 {result.Considered} 张，新增建议 {result.Suggested}；" +
                      $"暂缓：基础阈值 {result.BelowThreshold}、低质量 {result.LowQualityDeferred}、人物歧义 {result.AmbiguousDeferred}、负样本冲突 {result.NegativeConflictDeferred}；" +
@@ -1480,6 +1491,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
                 () => _unknownFaceClusterer.Rebuild(suggestions.AppliedThreshold, progress: clusterProgress,
                     modelVersion: organizingModelVersion), cancellationToken);
             _services.QueueImmediateRemoteSync("人物自动归类更新");
+            _ = RefreshPendingSummaryAsync();
 
             ProgressValue = 80;
             cancellationToken.ThrowIfCancellationRequested();
@@ -1527,6 +1539,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         }
         await UiWork.RunDatabaseAsync(() => _peopleService.MarkNotThisPerson(SelectedFace.Record.FaceId, personId));
         _services.QueueImmediateRemoteSync("人脸拒绝自动推荐");
+        _ = RefreshPendingSummaryAsync();
         await RefreshAsync();
         StatusText = "已标记为不是此人，后续自动匹配不会再次给出该建议";
     }
@@ -1544,7 +1557,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             StatusText = "请先选择一张人脸";
             return;
         }
-        var image = await UiWork.RunDatabaseAsync(() => _database.GetImage(face.Record.ImageId));
+        var image = await UiWork.ReadSnapshotAsync("People.Photo", _database, reader => reader.GetImage(face.Record.ImageId));
         if (image is null || !File.Exists(image.Path))
         {
             StatusText = "原照片当前不可用";
@@ -1582,6 +1595,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
                 AuditFaceAction("confirm", face.FaceId, personId, face.Record.SuggestedPersonId);
             });
             _services.QueueImmediateRemoteSync("人脸自动推荐人工确认");
+            _ = RefreshPendingSummaryAsync();
             StatusText = "已确认该人脸，后续自动归类会将其作为人物参照";
         }
         catch (Exception exception)
@@ -1606,6 +1620,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
                 AuditFaceAction("reject", face.FaceId, null, personId, "false_positive");
             });
             _services.QueueImmediateRemoteSync("人脸自动推荐人工拒绝");
+            _ = RefreshPendingSummaryAsync();
             StatusText = "已标记不是此人；请选择正确人物，或保留在待分类";
         }
         catch (Exception exception)
@@ -1642,6 +1657,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
                 return value;
             });
             _services.QueueImmediateRemoteSync("人脸重新归类");
+            _ = RefreshPendingSummaryAsync();
             var uiResumeMilliseconds = Stopwatch.GetElapsedTime(backgroundCompleted).TotalMilliseconds;
             AppLogger.Info($"FaceMove #{operationId}: database batch completed in {stopwatch.ElapsedMilliseconds - databaseStart} ms; changed={result.Changed}; already-assigned={result.AlreadyAssigned}");
             if (uiResumeMilliseconds >= 50) AppLogger.Info($"FaceMove #{operationId}: UI resume delay={uiResumeMilliseconds:F0} ms");
@@ -1745,6 +1761,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             }
         });
         _services.QueueImmediateRemoteSync("人脸移回待分类");
+        _ = RefreshPendingSummaryAsync();
         StatusText = $"已将 {faceIds.Length} 张人脸移到待分类";
     }
 
@@ -1771,11 +1788,12 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
                         sourceByFace.GetValueOrDefault(faceId) is not null ? "false_positive" : "unknown_person");
                 return result;
             })).Changed;
-            var verified = await UiWork.RunDatabaseAsync(() => _repository.GetIgnoredFaceIds(faceIds));
+            var verified = await UiWork.ReadSnapshotAsync("People.VerifyIgnored", _database, reader => new VisionAnalysisRepository(reader).GetIgnoredFaceIds(faceIds));
             var missing = faceIds.Where(faceId => !verified.Contains(faceId)).ToArray();
             if (missing.Length > 0)
                 throw new InvalidOperationException($"数据库复核失败，仍有 {missing.Length} 张人脸未进入不分类");
             _services.QueueImmediateRemoteSync("人脸标记不分类");
+            _ = RefreshPendingSummaryAsync();
             StatusText = changed == 0
                 ? $"所选 {faceIds.Length} 张人脸早已是不分类；界面已重新同步"
                 : $"已将 {changed} 张人脸移到不分类；人工标记已本地保存" +
@@ -1784,10 +1802,11 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         catch (Exception exception)
         {
             AppLogger.Error($"移动人脸到不分类失败：{string.Join(',', faceIds)}", exception);
-            var alreadyIgnored = await UiWork.RunDatabaseAsync(() => _repository.GetIgnoredFaceIds(faceIds));
+            var alreadyIgnored = await UiWork.ReadSnapshotAsync("People.VerifyIgnored", _database, reader => new VisionAnalysisRepository(reader).GetIgnoredFaceIds(faceIds));
             if (faceIds.All(alreadyIgnored.Contains))
             {
                 _services.QueueImmediateRemoteSync("人脸标记不分类状态复核");
+                _ = RefreshPendingSummaryAsync();
                 foreach (var item in DisplayedFaces.Where(item => faceIds.Contains(item.FaceId)).ToArray())
                     DisplayedFaces.Remove(item);
                 RemoveFacesFromCurrentView(faceIds);
@@ -1812,6 +1831,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         {
             var result = await UiWork.RunDatabaseAsync("IgnoreCandidateCluster", () => _peopleService.IgnoreFaces(faceIds));
             _services.QueueImmediateRemoteSync("候选人物组标记不分类");
+            _ = RefreshPendingSummaryAsync();
             StatusText = $"已将整组 {result.Requested} 张人脸标记为不分类";
         }
         catch (Exception exception)
@@ -1839,9 +1859,9 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         var modelVersion = SelectedFaceModelVersion;
         try
         {
-            var counts = await UiWork.RunDatabaseAsync("People.Pending.Counts",
-                () => _repository.GetFaceWorkQueueCounts(modelVersion), cancellation.Token);
-            var records = await LoadOrderedFacesAsync(() => _repository.GetUnassignedFaces(5000, modelVersion), cancellation.Token);
+            var counts = await UiWork.ReadSnapshotAsync("People.Pending.Counts", _database,
+                connection => new VisionAnalysisRepository(connection).GetFaceWorkQueueCounts(modelVersion), cancellation.Token);
+            var records = await LoadOrderedFacesAsync(reader => reader.GetUnassignedFaces(5000, modelVersion), cancellation.Token);
             var snapshot = (Records: records, Counts: counts);
             cancellation.Token.ThrowIfCancellationRequested();
             if (DisplayedCollectionKind != DisplayedFaceCollectionKind.Unassigned) return;
@@ -1891,7 +1911,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         var cancellation = _collectionLoadCancellation = new CancellationTokenSource();
         try
         {
-            var records = await LoadOrderedFacesAsync(() => _repository.GetIgnoredFaces(5000), cancellation.Token);
+            var records = await LoadOrderedFacesAsync(reader => reader.GetIgnoredFaces(5000), cancellation.Token);
             cancellation.Token.ThrowIfCancellationRequested();
             if (DisplayedCollectionKind != DisplayedFaceCollectionKind.Ignored) return;
             var items = await BuildBurstAwareFaceItemsAsync(records, cancellation.Token);
@@ -1918,12 +1938,13 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
     }
 
     private async Task<UnassignedFaceRecord[]> LoadOrderedFacesAsync(
-        Func<IReadOnlyList<UnassignedFaceRecord>> read, CancellationToken cancellationToken)
+        Func<VisionAnalysisRepository, IReadOnlyList<UnassignedFaceRecord>> read, CancellationToken cancellationToken)
     {
-        var snapshot = await UiWork.RunDatabaseAsync("People.FaceOrder.Read", () =>
+        var snapshot = await UiWork.ReadSnapshotAsync("People.FaceOrder.Read", _database, connection =>
         {
-            var faces = read();
-            return (Faces: faces, Embeddings: _repository.GetFaceEmbeddings(faces.Select(face => face.FaceId)));
+            var reader = new VisionAnalysisRepository(connection);
+            var faces = read(reader);
+            return (Faces: faces, Embeddings: reader.GetFaceEmbeddings(faces.Select(face => face.FaceId)));
         }, cancellationToken);
         // CPU-heavy feature ordering must not hold the shared database gate:
         // video scan and model history reads need to remain responsive.
@@ -1940,6 +1961,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             ? (await OrganizeRemoteFacesAsync("cluster")).Clusters
             : await UiWork.RunDatabaseAsync(() => _unknownFaceClusterer.Rebuild(modelVersion: SelectedFaceModelVersion));
         if (!_services.ServiceMode) _services.QueueImmediateRemoteSync("人物候选分组更新");
+        _ = RefreshPendingSummaryAsync();
         await RefreshAsync();
         StatusText = $"候选分组完成：{result.ClusterCount} 组、{result.ClusteredFaces} 张脸，未成组 {result.Considered - result.ClusteredFaces} 张";
         }
@@ -1998,6 +2020,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             foreach (var faceId in faceIds) _peopleService.MoveFace(faceId, person.Id);
         });
         _services.QueueImmediateRemoteSync("候选人物组归类");
+        _ = RefreshPendingSummaryAsync();
         await RefreshAsync();
         SelectedPerson = People.FirstOrDefault(value => value.Id == person.Id);
         StatusText = $"已将候选组中的 {faceIds.Length} 张人脸归入“{person.DisplayName}”";
@@ -2036,8 +2059,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
     {
         try
         {
-            var faces = await UiWork.RunDatabaseAsync(() =>
-                _repository.OrderByFeature(group.Faces).ToArray(), cancellationToken);
+            var faces = await LoadOrderedFacesAsync(_ => group.Faces, cancellationToken);
             var items = await BuildBurstAwareFaceItemsAsync(faces, cancellationToken);
             await UiWork.AddInBatchesAsync(items, item =>
             {
@@ -2059,8 +2081,10 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         await UiWork.RunDatabaseAsync("People.ConfirmSuggestedGroup",
             () => _peopleService.MoveFaces(faceIds, group.Record.PersonId));
         _services.QueueImmediateRemoteSync("推荐人物组人工确认");
+        _ = RefreshPendingSummaryAsync();
         RemoveFacesFromCurrentView(faceIds);
         SuggestedPersonGroups.Remove(group);
+        _ = RefreshPendingSummaryAsync();
         SelectedSuggestedPersonGroup = null;
         StatusText = $"已整组确认为“{group.Record.PersonName}”：{faceIds.Length} 张人脸";
     }
@@ -2069,8 +2093,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
     {
         try
         {
-            var faces = await UiWork.RunDatabaseAsync(() =>
-                _repository.OrderByFeature(cluster.Faces).ToArray(), cancellationToken);
+            var faces = await LoadOrderedFacesAsync(_ => cluster.Faces, cancellationToken);
             var items = await BuildBurstAwareFaceItemsAsync(faces, cancellationToken);
             await UiWork.AddInBatchesAsync(items, item =>
             {
@@ -2103,6 +2126,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         {
             await UiWork.RunDatabaseAsync(() => _repository.RemoveFaceFromCandidateCluster(clusterId, faceId));
             _services.QueueImmediateRemoteSync("拆出候选人脸");
+            _ = RefreshPendingSummaryAsync();
         }
         StatusText = "已从候选组拆出该人脸；人脸仍保留在未归类列表中";
         await RefreshAsync();
@@ -2184,13 +2208,13 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         AppLogger.Info($"People named-person load started: personId={person.Id}");
         try
         {
-            var snapshot = await UiWork.RunDatabaseAsync("People.NamedFaces.Load", () => (
+            var snapshot = await UiWork.ReadSnapshotAsync("People.NamedFaces.Load", _database, connection => (
                 // 人工确认的人脸是跨模型共享的真值；模型切换只改变自动归类工作集，
                 // 不应把已命名人物拆成互不相见的列表。
-                Photos: _repository.GetPersonFaces(person.Id).ToArray(),
-                Videos: _services.VideoFaceTimeline?.GetPersonFaces(person.Id).ToArray() ?? []), cancellationToken);
+                Photos: new VisionAnalysisRepository(connection).GetPersonFaces(person.Id).ToArray(),
+                Videos: _services.VideoFaceTimeline?.WithDatabase(connection).GetPersonFaces(person.Id).ToArray() ?? []), cancellationToken);
             AppLogger.Info($"People named-person records ready: personId={person.Id}; photos={snapshot.Photos.Length}; videos={snapshot.Videos.Length}; elapsedMs={loadStarted.ElapsedMilliseconds}");
-            var faces = await LoadOrderedFacesAsync(() => snapshot.Photos, cancellationToken);
+            var faces = await LoadOrderedFacesAsync(_ => snapshot.Photos, cancellationToken);
             if (cancellationToken.IsCancellationRequested || SelectedPerson?.Id != person.Id) return;
             var items = await BuildBurstAwareFaceItemsAsync(faces, cancellationToken);
             await UiWork.AddInBatchesAsync(items, item =>
@@ -2235,8 +2259,8 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         IReadOnlyList<UnassignedFaceRecord> records, CancellationToken cancellationToken)
     {
         if (records.Count == 0) return [];
-        var groups = await UiWork.RunDatabaseAsync("People.BurstGroups.Load", () =>
-            new BurstGroupService(_database).GetGroupsForImages(records.Select(face => face.ImageId)), cancellationToken);
+        var groups = await UiWork.ReadSnapshotAsync("People.BurstGroups.Load", _database, connection =>
+            new BurstGroupService(connection).GetGroupsForImages(records.Select(face => face.ImageId)), cancellationToken);
         var groupByImage = groups.Values.SelectMany(group => group.ImageIds.Select(imageId => (imageId, group)))
             .ToDictionary(value => value.imageId, value => value.group);
         var recordsByImage = records.GroupBy(face => face.ImageId)
@@ -2310,7 +2334,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             or DisplayedFaceCollectionKind.SuggestedGroup)
         {
             UnassignedSummary = "待处理人脸 · 正在同步…";
-            _ = RefreshPendingSummaryAsync();
+            Interlocked.Increment(ref _pendingSummaryGeneration);
         }
         var ids = faceIds.ToHashSet();
         foreach (var item in DisplayedFaces.Where(item => ids.Contains(item.FaceId)).ToArray()) DisplayedFaces.Remove(item);
@@ -2329,6 +2353,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             group.RemoveFaces(ids);
             if (group.FaceCount > 0) continue;
             SuggestedPersonGroups.Remove(group);
+        _ = RefreshPendingSummaryAsync();
             if (SelectedSuggestedPersonGroup?.Record.PersonId == group.Record.PersonId)
                 SelectedSuggestedPersonGroup = null;
         }
@@ -2346,17 +2371,17 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         };
     }
 
+    private long _pendingSummaryGeneration;
+
     private async Task RefreshPendingSummaryAsync()
     {
         var modelVersion = SelectedFaceModelVersion;
         try
         {
-            // Give the mutation transaction a chance to commit when this
-            // refresh was scheduled by the optimistic view update.
-            await Task.Delay(150);
-            var counts = await UiWork.RunDatabaseAsync(
-                "People.PendingSummary",
-                () => _repository.GetFaceWorkQueueCounts(modelVersion));
+            var generation = Interlocked.Increment(ref _pendingSummaryGeneration);
+            var counts = await UiWork.ReadSnapshotAsync("People.PendingSummary", _database,
+                reader => new VisionAnalysisRepository(reader).GetFaceWorkQueueCounts(modelVersion));
+            if (generation != Volatile.Read(ref _pendingSummaryGeneration)) return;
             // A model switch may have happened while the query was running;
             // never let an old model overwrite the newly selected summary.
             if (!string.Equals(SelectedFaceModelVersion, modelVersion, StringComparison.OrdinalIgnoreCase))
@@ -2373,7 +2398,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
     private async Task RefreshPeopleDropdownAsync(long createdPersonId)
     {
         var selectedId = SelectedPerson?.Id;
-        var values = await UiWork.RunDatabaseAsync(() => _peopleService.GetAll().ToArray());
+        var values = await UiWork.ReadSnapshotAsync("People.Dropdown", _database, reader => new PeopleService(reader).GetAll().ToArray());
         _suppressPersonSelectionLoad = true;
         try
         {

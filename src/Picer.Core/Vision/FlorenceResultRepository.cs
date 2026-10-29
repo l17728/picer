@@ -7,10 +7,23 @@ public sealed record FlorenceStoredResult(long ImageId, string Path, string Task
 
 public sealed class FlorenceResultRepository(PicerDatabase database)
 {
+    public PicerDatabase Database => database;
     public IReadOnlyList<ImageRecord> GetPending(string task, string modelVersion)
     {
-        var images = database.GetImages(includeMissing: false);
-        return images.Where(image => image.Status == ImageStatus.Active && File.Exists(image.Path) && !IsCurrent(image, task, modelVersion)).ToArray();
+        return GetPendingCandidates(task, modelVersion).Where(image => File.Exists(image.Path)).ToArray();
+    }
+    public IReadOnlyList<ImageRecord> GetPendingCandidates(string task, string modelVersion)
+    {
+        using var command = database.Command("""
+            SELECT i.id FROM images i WHERE i.status='active' AND NOT EXISTS (
+                SELECT 1 FROM florence_image_results f WHERE f.image_id=i.id AND f.task=$task
+                AND f.model_version=$model AND f.source_file_size=i.file_size AND f.source_modified_utc=i.modified_utc)
+            ORDER BY i.id
+            """);
+        command.Parameters.AddWithValue("$task", task); command.Parameters.AddWithValue("$model", modelVersion);
+        var ids = new List<long>();
+        using (var reader = command.ExecuteReader()) while (reader.Read()) ids.Add(reader.GetInt64(0));
+        return database.GetImagesByIds(ids);
     }
     public bool IsCurrent(ImageRecord image, string task, string modelVersion)
     {

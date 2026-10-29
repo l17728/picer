@@ -106,7 +106,7 @@ public sealed class ServiceBrowseWindowTests
             {
                 var window = new ServiceBrowseWindow(new StubGateway(), autoLoad: true);
                 window.Show();
-                WaitUntil(window, () => window.ViewModel.Items.Count == 5, TimeSpan.FromSeconds(15));
+                WaitUntil(window, () => window.ViewModel.Items.Count == 5 && !window.ViewModel.IsBusy, TimeSpan.FromSeconds(15));
                 Assert.Equal(5, window.ViewModel.Items.Count);
                 Assert.Equal(5, window.ViewModel.TotalCount);
 

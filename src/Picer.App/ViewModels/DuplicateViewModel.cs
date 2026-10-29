@@ -45,7 +45,9 @@ public partial class DuplicateViewModel : ObservableObject
             StatusText = "正在检测完全重复与视觉相似图片...";
             var ah = Math.Max(1, (int)((100 - SimilarityThreshold) * 64.0 / 100));
             var dh = Math.Max(1, (int)((100 - SimilarityThreshold) * 56.0 / 100));
-            var groups = await UiWork.RunDatabaseAsync(() => DuplicateDetector.FindReviewGroups(_db, aHashThreshold: ah, dHashThreshold: dh));
+            var records = await UiWork.ReadSnapshotAsync("Duplicates.Input", _db,
+                reader => reader.GetImages(includeMissing: false));
+            var groups = await Task.Run(() => DuplicateDetector.FindReviewGroups(records, ah, dh));
             Groups.Clear();
             foreach (var group in groups) Groups.Add(new(group, OnDecisionChanged));
             SelectedGroup = Groups.FirstOrDefault();

@@ -17,7 +17,13 @@ public static class DuplicateDetector
         int aHashThreshold = DefaultAHashThreshold,
         int dHashThreshold = DefaultDHashThreshold)
     {
-        var images = db.GetImages(sourceId, includeMissing: false);
+        return FindReviewGroups(db.GetImages(sourceId, includeMissing: false), aHashThreshold, dHashThreshold);
+    }
+
+    public static ImmutableArray<ImageGroup> FindReviewGroups(
+        IReadOnlyList<ImageRecord> images, int aHashThreshold = DefaultAHashThreshold,
+        int dHashThreshold = DefaultDHashThreshold)
+    {
         var exact = images
             .Where(image => !string.IsNullOrWhiteSpace(image.Sha256))
             .GroupBy(image => image.Sha256!, StringComparer.OrdinalIgnoreCase)

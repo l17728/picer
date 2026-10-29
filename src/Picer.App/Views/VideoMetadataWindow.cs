@@ -23,8 +23,8 @@ public sealed class VideoMetadataWindow : Window
             try
             {
                 var repository = new VideoSearchMetadata(database);
-                var data = await UiWork.RunDatabaseAsync(() => (Tags: SemanticEngine.GetTags(database).ToArray(),
-                    Assigned: repository.GetTags(videoId), Concepts: repository.GetConcepts(videoId)));
+                var data = await UiWork.ReadSnapshotAsync("Video.Metadata", database, reader => (Tags: SemanticEngine.GetTags(reader).ToArray(),
+                    Assigned: new VideoSearchMetadata(reader).GetTags(videoId), Concepts: new VideoSearchMetadata(reader).GetConcepts(videoId)));
                 status.Text = "标签和已确认概念参与视频组合筛选；取消概念勾选会排除该建议。";
                 panel.Children.Add(new TextBlock { Text = "标签", Margin = new Thickness(0, 10, 0, 4) });
                 var tags = data.Tags.Select(tag => (tag.Id, Box: new CheckBox { Content = tag.Name, IsChecked = data.Assigned.Contains(tag.Id) })).ToArray();

@@ -135,6 +135,7 @@ public static class AccountServiceHost
                 or "/api/sync/v2/catalog-conflicts" or "/api/sync/v2/catalog-conflicts/resolve"
                 or "/api/sync/v2/catalog-retirements/compact"
                 or "/api/sync/v2/media-reference"
+                or "/api/sync/v2/descriptions"
                 or "/api/sync/v2/training-applications"
                 or "/api/sync/v2/catalog-retirements/acknowledge" or "/api/sync/v2/catalog-retirements/completions" or "/api/sync/v2/catalog-retirements/complete")
             {
@@ -155,8 +156,10 @@ public static class AccountServiceHost
                     var change = await context.Request.ReadFromJsonAsync<Picer.Core.Gateway.GatewayChangeRequest>(context.RequestAborted) ?? throw new ArgumentException();
                     return Results.Json(snapshots.ReadChanges(database, device, change, () => lease.Runtime.Purging));
                 }
-                return Results.Json(snapshots.ReadCatalog(database, device, context.Request.Headers["X-Picer-Read-Snapshot"].ToString(), relative,
-                    context.Request.Query["includeEmbeddings"] == "true", context.Request.Query["includeFaceModels"] == "true"));
+                var catalog = snapshots.ReadCatalog(database, device, context.Request.Headers["X-Picer-Read-Snapshot"].ToString(), relative,
+                    context.Request.Query["includeEmbeddings"] == "true", context.Request.Query["includeFaceModels"] == "true");
+                return catalog is Picer.Core.Gateway.GatewayMetadata metadata
+                    ? MetadataTransferResults.Create(context, metadata) : Results.Json(catalog);
             }
             using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(context.RequestAborted,
                 scope == "source.serve" ? CancellationToken.None : lease.Runtime.DataLifetime);
@@ -194,11 +197,11 @@ public static class AccountServiceHost
                     request.Content = new StreamContent(context.Request.Body);
                     if (context.Request.ContentType is { } contentType) request.Content.Headers.TryAddWithoutValidation("Content-Type", contentType);
                 }
-                foreach (var name in new[] { "Range", "If-Range", "If-Match", "If-None-Match", "If-Modified-Since", "Accept" })
+                foreach (var name in new[] { "Range", "If-Range", "If-Match", "If-None-Match", "If-Modified-Since", "Accept", Picer.Core.Gateway.MetadataTransfer.RequestHeader })
                     if (context.Request.Headers.TryGetValue(name, out var value)) request.Headers.TryAddWithoutValidation(name, value.ToArray());
                 using var response = await lease.Runtime.Client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellation.Token);
                 context.Response.StatusCode = (int)response.StatusCode;
-                foreach (var name in new[] { "ETag", "Accept-Ranges", "Content-Range", "Content-Type", "Content-Length", "Last-Modified", "Retry-After", "X-Picer-Media-Streaming", "X-Picer-Analysis-Input" })
+                foreach (var name in new[] { "ETag", "Accept-Ranges", "Content-Range", "Content-Type", "Content-Length", "Last-Modified", "Retry-After", "X-Picer-Media-Streaming", "X-Picer-Analysis-Input", Picer.Core.Gateway.MetadataTransfer.ResponseHeader, "Server-Timing", "Cache-Control" })
                 {
                     if (response.Headers.TryGetValues(name, out var values) || response.Content.Headers.TryGetValues(name, out values))
                         context.Response.Headers[name] = values.ToArray();
@@ -240,6 +243,7 @@ public static class SpaceRoutePermissions
         if (method == "POST" && path is "/api/service/v1/clip/text" or "/api/service/v1/clip/image") return "analysis.run";
         if (method == "POST" && path == "/api/service/v1/classification/clustering/settings") return "index.write";
         if (method == "POST" && path == "/api/service/v1/scenes/edit") return "index.write";
+        if (method == "POST" && path == "/api/sync/v2/descriptions") return "index.write";
         if (method == "POST" && path == "/api/service/v1/faces/organize") return "index.write";
         if (method == "POST" && path == "/api/service/v1/faces/candidate/remove") return "index.write";
         if (method == "POST" && path == "/api/service/v1/faces/training/apply") return "index.write";
@@ -272,7 +276,7 @@ public static class SpaceRoutePermissions
         if (method is "GET" or "HEAD" && mediaParts.Length == 6 && mediaParts[0] == "api" && mediaParts[1] == "gateway" &&
             mediaParts[2] == "v1" && mediaParts[3] == "assets" && mediaParts[4] is "images" or "videos" &&
             long.TryParse(mediaParts[5], out var mediaId) && mediaId > 0) return "media.read";
-        if (method == "POST" && path is "/api/gateway/v1/search" or "/api/gateway/v1/changes") return "index.read";
+        if (method == "POST" && path is "/api/gateway/v1/search" or "/api/gateway/v1/changes" or "/api/gateway/v1/video-search") return "index.read";
         if (method != "GET") return null;
         var components = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
         if (components.Length is < 4 or > 5 || components[0] != "api" || components[1] != "gateway" || components[2] != "v1") return null;
@@ -280,6 +284,7 @@ public static class SpaceRoutePermissions
         return components[3] switch
         {
             "images" or "videos" => "index.read",
+            "directories" when components.Length == 4 => "index.read",
             "thumbs" or "face-thumbs" or "video-thumbs" when components.Length == 5 => "thumb.read",
             "previews" or "video-keyframes" when components.Length == 5 => "media.read",
             "sources" or "metadata" or "tags" or "albums" or "people" or "directory-classification" when components.Length == 4 => "index.read",

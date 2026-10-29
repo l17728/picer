@@ -32,7 +32,8 @@ public sealed partial class PicerDatabase
 
     public MetadataConflictSnapshot GetMetadataConflictSnapshot()
     {
-        using var transaction = BeginReadTransaction();
+        using var ownedTransaction = _readSnapshotTransaction is null ? BeginReadTransaction() : null;
+        var transaction = _readSnapshotTransaction ?? ownedTransaction!;
         using var epoch = Command("SELECT epoch FROM sync_space_state WHERE id=1 AND state='active'"); epoch.Transaction = transaction;
         var value = epoch.ExecuteScalar() as string ?? throw new InvalidOperationException("space_fenced");
         return new(value, GetMetadataEditConflicts(transaction)

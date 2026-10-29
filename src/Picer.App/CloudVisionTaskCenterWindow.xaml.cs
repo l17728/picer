@@ -1,4 +1,4 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
 using System.IO;
 using System.Windows;
 using System.Windows.Input;
@@ -17,7 +17,7 @@ public partial class CloudVisionTaskCenterWindow : Window
     {
         try
         {
-            var tasks = await UiWork.RunDatabaseAsync(() => AppServices.CloudVisionRepository.GetRecentTasks().Select(item => new TaskItem(item)).ToList());
+            var tasks = await UiWork.ReadSnapshotAsync("Analysis.Tasks", AppServices.Db, reader => new Picer.Core.Vision.CloudVisionRepository(reader).GetRecentTasks().Select(item => new TaskItem(item)).ToList());
             TasksGrid.ItemsSource = tasks;
             SummaryText.Text = $"最近 {tasks.Count} 项 · 完成 {tasks.Count(x => x.Status == "completed")} · 失败 {tasks.Count(x => x.Status == "failed")} · 等待/处理中 {tasks.Count(x => x.Status is "queued" or "processing")}";
         }
@@ -27,7 +27,7 @@ public partial class CloudVisionTaskCenterWindow : Window
     private async void Retry_Click(object sender, RoutedEventArgs e)
     {
         var ids = TasksGrid.SelectedItems.Cast<TaskItem>().Where(item => item.Status is "failed" or "canceled").Select(item => item.ImageId).ToArray();
-        var records = await UiWork.RunDatabaseAsync(() => ids.Distinct().Select(AppServices.Db.GetImage).Where(item => item is not null).Cast<Picer.Core.Models.ImageRecord>().ToList());
+        var records = await UiWork.ReadSnapshotAsync("Analysis.RetryInputs", AppServices.Db, reader => reader.GetImagesByIds(ids));
         if (records.Count == 0) { MessageBox.Show(this, "请选择至少一个失败任务。", "任务重试", MessageBoxButton.OK, MessageBoxImage.Information); return; }
         await _mainViewModel.AnalyzeImagesWithCloudAsync(records); await LoadTasksAsync();
     }

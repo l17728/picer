@@ -227,8 +227,8 @@ public sealed class VideoContentReferenceTests : IDisposable
     {
         var original = Add(100);
         _videos.UpsertMirrored(original with { Sha256 = new string('b', 64) }, _source);
-        _videos.SaveSummary(100, new Analyzer(), original,
-            new CloudVisionResult("old result", [], [], [], [], Usage: new CloudVisionUsage(1, 1, .5m)), "late-request");
+        Assert.False(_videos.SaveSummary(100, new Analyzer(), original,
+            new CloudVisionResult("old result", [], [], [], [], Usage: new CloudVisionUsage(1, 1, .5m)), "late-request"));
         Assert.Null(_videos.GetSummary(100));
         Assert.False(_videos.HasCurrentSummary(original));
         Assert.Equal(1, Count("analysis_billing_events"));

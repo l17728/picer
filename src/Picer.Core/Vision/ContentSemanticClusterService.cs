@@ -8,10 +8,101 @@ public sealed record ContentClusterResult(int Considered, int ClusterCount, int 
 public sealed record ContentClusterSettings(bool Automatic, float ManualThreshold, float RecommendedThreshold,
     float EffectiveThreshold, long Version = 0, string? OperationId = null, string? Epoch = null, string? ModelVersion = null);
 public sealed record ContentClusterPreview(float Threshold, int EstimatedClusters, int EstimatedClusteredImages);
+public sealed record ContentClusterRecommendation(string? Model, string Fingerprint, Func<float> Calculate, bool NeedsRefresh = true);
+public sealed record ContentClusterRebuildPlan(Func<PicerDatabase, ContentClusterResult> Commit);
 
 /// <summary>Builds deterministic, multi-label-aware visual groups from the persisted CLIP index.</summary>
 public sealed class ContentSemanticClusterService(PicerDatabase database)
 {
+    public ContentClusterSettings ReadSettings() => GetSettings(null, SettingsModel());
+
+    public Func<ContentClusterPreview> CapturePreview(float threshold)
+    {
+        var model = LatestModel();
+        var items = model is null ? new List<Item>() : Load(model);
+        return () => Preview(items, threshold);
+    }
+
+    public ContentClusterRecommendation CaptureRecommendation()
+    {
+        var model = SettingsModel();
+        var fingerprint = EmbeddingFingerprint(model);
+        using (var query = database.Command("SELECT recommended_threshold FROM semantic_cluster_model_recommendations WHERE model_version=$model AND fingerprint=$fingerprint"))
+        {
+            query.Parameters.AddWithValue("$model", model ?? "");
+            query.Parameters.AddWithValue("$fingerprint", fingerprint);
+            if (query.ExecuteScalar() is double cached) return new(model, fingerprint, () => (float)cached, false);
+        }
+        var items = model is null ? new List<Item>() : Load(model);
+        return new(model, fingerprint, () => RecommendThreshold(items));
+    }
+
+    public bool SaveRecommendation(ContentClusterRecommendation input, float value)
+    {
+        using var transaction = database.BeginTransaction();
+        if (SettingsModel() != input.Model || EmbeddingFingerprint(input.Model) != input.Fingerprint) return false;
+        using var command = database.Command("""
+            INSERT INTO semantic_cluster_model_recommendations(model_version,recommended_threshold,fingerprint)
+            VALUES($model,$value,$fingerprint) ON CONFLICT(model_version) DO UPDATE
+            SET recommended_threshold=excluded.recommended_threshold,fingerprint=excluded.fingerprint
+            WHERE recommended_threshold<>excluded.recommended_threshold OR fingerprint<>excluded.fingerprint
+            """);
+        command.Parameters.AddWithValue("$model", input.Model ?? "");
+        command.Parameters.AddWithValue("$value", value);
+        command.Parameters.AddWithValue("$fingerprint", input.Fingerprint);
+        command.ExecuteNonQuery(); transaction.Commit(); return true;
+    }
+
+    private static string InputFingerprint(List<Item> items, Dictionary<long, (string ClusterKey, string Signature)> assignments)
+    {
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        void Add(string value)
+        {
+            var bytes = Encoding.UTF8.GetBytes(value);
+            hash.AppendData(BitConverter.GetBytes(bytes.Length));
+            hash.AppendData(bytes);
+        }
+        foreach (var item in items.OrderBy(item => item.ImageId))
+        {
+            hash.AppendData(BitConverter.GetBytes(item.ImageId));
+            hash.AppendData(BitConverter.GetBytes(item.Vector.Length));
+            foreach (var value in item.Vector) hash.AppendData(BitConverter.GetBytes(value));
+            hash.AppendData(BitConverter.GetBytes(item.Concepts.Length));
+            foreach (var concept in item.Concepts) Add(concept);
+            Add(item.Summary ?? "");
+        }
+        foreach (var assignment in assignments.OrderBy(pair => pair.Key))
+        {
+            hash.AppendData(BitConverter.GetBytes(assignment.Key));
+            Add(assignment.Value.ClusterKey); Add(assignment.Value.Signature);
+        }
+        return Convert.ToHexString(hash.GetHashAndReset());
+    }
+
+    public Func<ContentClusterRebuildPlan> CaptureRebuild(ContentClusterSettings settings)
+    {
+        if (settings.ModelVersion is not { } model) return () => new(_ => new(0, 0, 0));
+        var items = Load(model);
+        var existing = LoadExistingAssignments(model);
+        var fingerprint = InputFingerprint(items, existing);
+        return () =>
+        {
+            var drafts = BuildDrafts(items, existing, settings.EffectiveThreshold, 3);
+            return new(writer =>
+            {
+                var service = new ContentSemanticClusterService(writer);
+                using var transaction = writer.BeginTransaction();
+                var current = service.GetSettings(transaction, model);
+                if (InputFingerprint(service.Load(model), service.LoadExistingAssignments(model)) != fingerprint || service.SettingsModel() != model ||
+                    current.OperationId != settings.OperationId || current.Version != settings.Version)
+                    throw new InvalidOperationException("cluster_input_changed");
+                service.Save(model, drafts, transaction);
+                transaction.Commit();
+                return new(items.Count, drafts.Count, drafts.Sum(cluster => cluster.Members.Count));
+            });
+        };
+    }
+
     private sealed record Item(long ImageId, float[] Vector, string[] Concepts, string? Summary)
     {
         public string Signature => string.Join('|', Concepts.Order(StringComparer.Ordinal).Take(3));
@@ -35,6 +126,14 @@ public sealed class ContentSemanticClusterService(PicerDatabase database)
         var effectiveThreshold = similarityThreshold ?? GetSettingsForModel(modelVersion).EffectiveThreshold;
         var items = Load(modelVersion);
         var existing = LoadExistingAssignments(modelVersion);
+        var drafts = BuildDrafts(items, existing, effectiveThreshold, minimumSize);
+        Save(modelVersion, drafts);
+        return new(items.Count, drafts.Count, drafts.Sum(cluster => cluster.Members.Count));
+    }
+
+    private static List<Draft> BuildDrafts(List<Item> items,
+        Dictionary<long, (string ClusterKey, string Signature)> existing, float effectiveThreshold, int minimumSize)
+    {
         var drafts = new List<Draft>();
         foreach (var bucket in items.Where(item => item.Concepts.Length > 0)
                      .GroupBy(item => item.Signature))
@@ -58,8 +157,7 @@ public sealed class ContentSemanticClusterService(PicerDatabase database)
             }
             drafts.AddRange(local.Where(cluster => cluster.ExistingKey is not null || cluster.Members.Count >= minimumSize));
         }
-        Save(modelVersion, drafts);
-        return new(items.Count, drafts.Count, drafts.Sum(cluster => cluster.Members.Count));
+        return drafts;
     }
 
     private Dictionary<long, (string ClusterKey, string Signature)> LoadExistingAssignments(string modelVersion)
@@ -153,9 +251,10 @@ public sealed class ContentSemanticClusterService(PicerDatabase database)
         return string.IsNullOrWhiteSpace(summary) ? label : label + "｜" + summary[..Math.Min(24, summary.Length)];
     }
 
-    private void Save(string modelVersion, IReadOnlyList<Draft> clusters)
+    private void Save(string modelVersion, IReadOnlyList<Draft> clusters, Microsoft.Data.Sqlite.SqliteTransaction? externalTransaction = null)
     {
-        using var transaction = database.BeginTransaction();
+        using var owned = externalTransaction is null ? database.BeginTransaction() : null;
+        var transaction = externalTransaction ?? owned!;
         foreach (var sql in new[] {
             "DELETE FROM image_classification_assertions WHERE source_kind='vision_model' AND source_version='semantic-cluster-v1' AND evidence_ref IN (SELECT cluster_key FROM semantic_content_clusters WHERE model_version=$model)",
             "DELETE FROM semantic_content_clusters WHERE model_version=$model" })
@@ -182,7 +281,7 @@ public sealed class ContentSemanticClusterService(PicerDatabase database)
                 assertion.Transaction = transaction; assertion.Parameters.AddWithValue("$image", item.ImageId); assertion.Parameters.AddWithValue("$concept", "cluster.semantic." + key); assertion.Parameters.AddWithValue("$score", score); assertion.Parameters.AddWithValue("$key", key); assertion.Parameters.AddWithValue("$now", now); assertion.ExecuteNonQuery();
             }
         }
-        transaction.Commit();
+        owned?.Commit();
     }
 
     private static float Cosine(float[] left, float[] right) { double dot = 0, a = 0, b = 0; for (var i = 0; i < left.Length; i++) { dot += left[i] * right[i]; a += left[i] * left[i]; b += right[i] * right[i]; } return a <= 0 || b <= 0 ? 0 : (float)(dot / Math.Sqrt(a * b)); }
@@ -217,8 +316,13 @@ public sealed class ContentSemanticClusterService(PicerDatabase database)
     private float RecommendThreshold(string? model)
     {
         if (model is null) return 0.82f;
+        return RecommendThreshold(Load(model));
+    }
+
+    private static float RecommendThreshold(IReadOnlyList<Item> items)
+    {
         var nearest = new List<float>();
-        foreach (var bucket in Load(model).Where(item => item.Concepts.Length > 0).GroupBy(item => item.Signature))
+        foreach (var bucket in items.Where(item => item.Concepts.Length > 0).GroupBy(item => item.Signature))
         {
             var sample = bucket.Take(128).ToArray();
             for (var i = 0; i < sample.Length; i++)
@@ -254,17 +358,17 @@ public sealed class ContentSemanticClusterService(PicerDatabase database)
         return GetSettings(transaction,model);
     }
 
-    private ContentClusterSettings GetSettings(Microsoft.Data.Sqlite.SqliteTransaction transaction,string? model)
+    private ContentClusterSettings GetSettings(Microsoft.Data.Sqlite.SqliteTransaction? transaction,string? model)
     {
         var automatic=true;var manual=0.82f;
         if (model is null)
         {
             using var legacy=database.Command("SELECT automatic,manual_threshold FROM semantic_cluster_settings WHERE id=1");
-            legacy.Transaction=transaction;using var row=legacy.ExecuteReader();
+            if (transaction is not null) legacy.Transaction=transaction;using var row=legacy.ExecuteReader();
             if(row.Read()) { automatic=row.GetBoolean(0);manual=row.GetFloat(1); }
         }
         using var command=database.Command("SELECT recommended_threshold FROM semantic_cluster_model_recommendations WHERE model_version=$model");
-        command.Transaction=transaction;
+        if (transaction is not null) command.Transaction=transaction;
         command.Parameters.AddWithValue("$model",model??"");
         var recommended=command.ExecuteScalar() is double value?(float)value:0.82f;
         var edit=database.GetClusterPreferenceEdit(transaction,model);
@@ -284,7 +388,7 @@ public sealed class ContentSemanticClusterService(PicerDatabase database)
         return GetSettings(transaction,model) with { Epoch=current };
     }
 
-    public ContentClusterSettings SaveSettings(bool automatic, float manualThreshold,bool authoritative=false,long? expectedVersion=null,string? expectedOperationId=null,string? expectedEpoch=null,string? expectedModelVersion=null)
+    public ContentClusterSettings SaveSettings(bool automatic, float manualThreshold,bool authoritative=false,long? expectedVersion=null,string? expectedOperationId=null,string? expectedEpoch=null,string? expectedModelVersion=null,bool refreshRecommendation=true)
     {
         if (!float.IsFinite(manualThreshold)) throw new ArgumentException("invalid_cluster_preference");
         var bounded = Math.Clamp(manualThreshold, 0.70f, 0.95f);
@@ -292,14 +396,19 @@ public sealed class ContentSemanticClusterService(PicerDatabase database)
         if (expectedVersion is not null && model!=expectedModelVersion) throw new InvalidOperationException("cluster_model_changed");
         if (!database.SaveClusterPreference(automatic,bounded,authoritative,expectedVersion,expectedOperationId,expectedEpoch,model))
             throw new InvalidOperationException("metadata_conflict_pending");
-        return GetSettingsForModel(model);
+        return refreshRecommendation ? GetSettingsForModel(model) : GetSettings(null, model);
     }
 
     public ContentClusterPreview Preview(float threshold)
     {
         var model = LatestModel(); if (model is null) return new(Math.Clamp(threshold, 0.70f, 0.95f), 0, 0);
+        return Preview(Load(model), threshold);
+    }
+
+    private static ContentClusterPreview Preview(IReadOnlyList<Item> items, float threshold)
+    {
         var bounded = Math.Clamp(threshold, 0.70f, 0.95f); var clusters = 0; var members = 0;
-        foreach (var bucket in Load(model).Where(item => item.Concepts.Length > 0).GroupBy(item => item.Signature))
+        foreach (var bucket in items.Where(item => item.Concepts.Length > 0).GroupBy(item => item.Signature))
         {
             var drafts = new List<Draft>();
             foreach (var item in bucket.Take(1000))

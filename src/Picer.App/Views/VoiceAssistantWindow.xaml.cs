@@ -10,14 +10,14 @@ public partial class VoiceAssistantWindow : Window
 {
     private readonly VoiceCommandAgent _agent;
     private readonly Func<IReadOnlyList<string>> _locations;
-    private readonly Func<IReadOnlyList<string>> _people;
+    private readonly Func<CancellationToken, Task<IReadOnlyList<string>>> _people;
     private readonly Func<VoiceAction, Task> _execute;
     private readonly FullDuplexVoiceSession _voice;
     private CancellationTokenSource? _turn;
     private CancellationTokenSource? _utteranceMerge;
     private string? _pendingUtterance;
 
-    public VoiceAssistantWindow(VoiceCommandAgent agent, Func<IReadOnlyList<string>> locations, Func<IReadOnlyList<string>> people,
+    public VoiceAssistantWindow(VoiceCommandAgent agent, Func<IReadOnlyList<string>> locations, Func<CancellationToken, Task<IReadOnlyList<string>>> people,
         Func<VoiceAction, Task> execute, Uri asrEndpoint, string asrModel, Uri ttsEndpoint)
     {
         InitializeComponent();
@@ -70,7 +70,9 @@ public partial class VoiceAssistantWindow : Window
         try
         {
             AppLogger.Info($"Voice turn started; inputLength={text.Length}");
-            var action = await _agent.PlanAsync(text, _locations(), _people(), token);
+            var people = await _people(token);
+            token.ThrowIfCancellationRequested();
+            var action = await _agent.PlanAsync(text, _locations(), people, token);
             AppLogger.Info($"Voice plan completed; kind={action.Kind}; hasTarget={!string.IsNullOrWhiteSpace(action.Target)}");
             Conversation.Items.Add($"助手：{action.Reply}"); Conversation.ScrollIntoView(Conversation.Items[^1]);
             await _execute(action); StatusText.Text = action.Kind == VoiceActionKind.Clarify ? "等待补充信息" : "已执行";

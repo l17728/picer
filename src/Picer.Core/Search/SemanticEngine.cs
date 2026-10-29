@@ -171,6 +171,18 @@ public static class SemanticEngine
         return ReadRecords(cmd.ExecuteReader());
     }
 
+    public static IReadOnlyDictionary<long, ImageRecord[]> GetAlbumImageMap(PicerDatabase db)
+    {
+        var links = new List<(long Album, long Image)>();
+        using (var command = db.Command("SELECT ai.album_id,ai.image_id FROM album_images ai JOIN images i ON i.id=ai.image_id WHERE i.status='active'"))
+        using (var reader = command.ExecuteReader())
+            while (reader.Read()) links.Add((reader.GetInt64(0), reader.GetInt64(1)));
+        var images = db.GetImagesByIds(links.Select(link => link.Image)).ToDictionary(image => image.Id);
+        return links.GroupBy(link => link.Album).ToDictionary(group => group.Key,
+            group => group.Select(link => images[link.Image]).OrderBy(image => image.TakenUtc is null)
+                .ThenByDescending(image => image.TakenUtc).ThenBy(image => image.Path).ToArray());
+    }
+
     public static int GetAlbumImageCount(PicerDatabase db, long albumId)
     {
         using var cmd = db.Command("SELECT COUNT(*) FROM album_images WHERE album_id = $aid");

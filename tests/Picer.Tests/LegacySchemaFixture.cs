@@ -230,6 +230,16 @@ internal static class LegacySchemaFixture
         {
             using var transaction = connection.BeginTransaction();
             probe.Transaction = transaction;
+            // v92 history notifications reference mirror_revision, which this
+            // fixture removes to reproduce a pre-mirror database.
+            Execute("""
+                DROP TRIGGER IF EXISTS description_image_removed;
+                DROP TRIGGER IF EXISTS description_video_removed;
+                DROP TABLE IF EXISTS description_versions;
+                DROP TABLE IF EXISTS description_outbox;
+                DROP TABLE IF EXISTS description_receipts;
+                DROP TABLE IF EXISTS description_recovery_state;
+                """);
             var triggers = new List<string>();
             probe.CommandText = "SELECT name FROM sqlite_master WHERE type='trigger' AND (name LIKE 'mirror_%' OR name LIKE 'video_content_%' OR name LIKE 'description_text_video%')";
             using (var reader = probe.ExecuteReader()) while (reader.Read()) triggers.Add(reader.GetString(0));

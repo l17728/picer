@@ -59,7 +59,8 @@ public sealed partial class PicerDatabase
 
     public IReadOnlyList<VideoOwnershipReview> GetVideoOwnershipReviews()
     {
-        using var transaction=BeginReadTransaction();
+        using var ownedTransaction = _readSnapshotTransaction is null ? BeginReadTransaction() : null;
+        var transaction = _readSnapshotTransaction ?? ownedTransaction!;
         using var epochQuery=Command("SELECT epoch FROM sync_space_state WHERE id=1 AND state='active'"); epochQuery.Transaction=transaction;
         var epoch=epochQuery.ExecuteScalar() as string ?? throw new InvalidOperationException("space_fenced");
         var rows=new List<(string Operation,long Content,MetadataEdit Edit)>();

@@ -13,13 +13,35 @@ using Picer.Core.Vision;
 
 namespace Picer.Core.Gateway;
 
-public sealed class IndexSyncClient(HttpClient client, bool accountMode = false, bool canWrite = true) : IDisposable
+public sealed class IndexSyncClient(HttpClient client, bool accountMode = false, bool canWrite = true,
+    Func<Action, CancellationToken, Task>? databaseWork = null) : IDisposable
 {
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
     private string? _lastReviewFingerprint;
     private readonly SemaphoreSlim _reviewSyncGate = new(1, 1);
+    private readonly SemaphoreSlim _metadataSyncGate = new(1, 1);
+    private readonly SemaphoreSlim _descriptionSyncGate = new(1, 1);
+    private const int MergeBatchSize = 100;
     private HashSet<string> _acknowledgedMetadataOperations = new(StringComparer.Ordinal);
     public IReadOnlySet<string> AcknowledgedMetadataOperations => Volatile.Read(ref _acknowledgedMetadataOperations);
+
+    private Task WriteDatabaseAsync(Action work, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (databaseWork is not null) return databaseWork(work, cancellationToken);
+        work();
+        return Task.CompletedTask;
+    }
+
+    private async Task MergeMetadataAsync(PicerDatabase database, IReadOnlyList<MetadataEdit> edits,
+        CancellationToken cancellationToken)
+    {
+        // Do not hold SQLite's sole writer for an entire cold-start snapshot.
+        // Each batch commits before yielding the shared UI database scheduler.
+        foreach (var batch in edits.Chunk(MergeBatchSize))
+            await WriteDatabaseAsync(() => database.MergeMetadataEdits(batch, applyOnlyChangedFields: true),
+                cancellationToken).ConfigureAwait(false);
+    }
 
     public async Task ApplyLearnedTrainingArtifactAsync(PicerDatabase database, LearnedTrainingApplication application, CancellationToken cancellationToken = default,
         TrainingApplicationBaseline? baseline = null)
@@ -98,7 +120,9 @@ public sealed class IndexSyncClient(HttpClient client, bool accountMode = false,
                 response.EnsureSuccessStatusCode();
                 var accepted = await response.Content.ReadFromJsonAsync<GatewayFaceReviewDecision[]>(Json, cancellationToken)
                     ?? throw new InvalidOperationException("face_review_ack_missing");
-                reviewDatabase.MergeFaceReviewDecisions(accepted);
+                foreach (var mergeBatch in accepted.Chunk(MergeBatchSize))
+                    await WriteDatabaseAsync(() => reviewDatabase.MergeFaceReviewDecisions(mergeBatch),
+                        cancellationToken).ConfigureAwait(false);
                 if (!batch.Select(item => item.FaceId).ToHashSet().SetEquals(accepted.Select(item => item.FaceId))) complete = false;
             }
             // Cache only the sent version, never edits made during the request.
@@ -111,30 +135,35 @@ public sealed class IndexSyncClient(HttpClient client, bool accountMode = false,
 
     public async Task PushMetadataEditsAsync(PicerDatabase database, CancellationToken cancellationToken = default)
     {
-        var acknowledged = new HashSet<string>(StringComparer.Ordinal);
-        using var independent = database.OpenIndependentConnection();
-        if (accountMode && independent.GetMirrorCheckpoint() is null) return;
-        var edits = accountMode ? independent.GetPendingMetadataEdits() : independent.GetMetadataEdits();
-        foreach (var batch in edits.Where(edit => canWrite && (edit.Kind is not ("video-tag-link" or "video-concept")
-            || edit.VideoContentIdentity is { Length: 71 } identity && identity.StartsWith("sha256:", StringComparison.Ordinal)
-                && identity[7..].All(Uri.IsHexDigit))).Chunk(500))
+        await _metadataSyncGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
         {
-            using var response = await PostMirrorEditAsync("api/sync/v1/metadata-edits", batch, independent, cancellationToken).ConfigureAwait(false);
-            response.EnsureSuccessStatusCode();
-            var winners = await response.Content.ReadFromJsonAsync<MetadataEdit[]>(Json, cancellationToken).ConfigureAwait(false)
-                ?? throw new InvalidOperationException("metadata_ack_missing");
-            independent.MergeMetadataEdits(winners, applyOnlyChangedFields: true);
-            foreach (var winner in winners) acknowledged.Add(winner.OperationId);
+            var acknowledged = new HashSet<string>(StringComparer.Ordinal);
+            using var independent = database.OpenIndependentConnection();
+            if (accountMode && independent.GetMirrorCheckpoint() is null) return;
+            var edits = accountMode ? independent.GetPendingMetadataEdits() : independent.GetMetadataEdits();
+            foreach (var batch in edits.Where(edit => canWrite && (edit.Kind is not ("video-tag-link" or "video-concept")
+                || edit.VideoContentIdentity is { Length: 71 } identity && identity.StartsWith("sha256:", StringComparison.Ordinal)
+                    && identity[7..].All(Uri.IsHexDigit))).Chunk(500))
+            {
+                using var response = await PostMirrorEditAsync("api/sync/v1/metadata-edits", batch, independent, cancellationToken).ConfigureAwait(false);
+                response.EnsureSuccessStatusCode();
+                var winners = await response.Content.ReadFromJsonAsync<MetadataEdit[]>(Json, cancellationToken).ConfigureAwait(false)
+                    ?? throw new InvalidOperationException("metadata_ack_missing");
+                await MergeMetadataAsync(independent, winners, cancellationToken).ConfigureAwait(false);
+                foreach (var winner in winners) acknowledged.Add(winner.OperationId);
+            }
+            var remote = await ResilientJsonRead.RunAsync(async token =>
+            {
+                using var response = await client.GetAsync("api/sync/v1/metadata-edits", HttpCompletionOption.ResponseHeadersRead, token).ConfigureAwait(false);
+                response.EnsureSuccessStatusCode();
+                return await response.Content.ReadFromJsonAsync<MetadataEdit[]>(Json, token).ConfigureAwait(false);
+            }, cancellationToken).ConfigureAwait(false);
+            await MergeMetadataAsync(independent, remote ?? [], cancellationToken).ConfigureAwait(false);
+            foreach (var winner in remote ?? []) acknowledged.Add(winner.OperationId);
+            Volatile.Write(ref _acknowledgedMetadataOperations, acknowledged);
         }
-        var remote = await ResilientJsonRead.RunAsync(async token =>
-        {
-            using var response = await client.GetAsync("api/sync/v1/metadata-edits", HttpCompletionOption.ResponseHeadersRead, token).ConfigureAwait(false);
-            response.EnsureSuccessStatusCode();
-            return await response.Content.ReadFromJsonAsync<MetadataEdit[]>(Json, token).ConfigureAwait(false);
-        }, cancellationToken).ConfigureAwait(false);
-        independent.MergeMetadataEdits(remote ?? [], applyOnlyChangedFields: true);
-        foreach (var winner in remote ?? []) acknowledged.Add(winner.OperationId);
-        Volatile.Write(ref _acknowledgedMetadataOperations, acknowledged);
+        finally { _metadataSyncGate.Release(); }
     }
 
     private async Task<HttpResponseMessage> PostMirrorEditAsync<T>(string path, T payload, PicerDatabase database, CancellationToken cancellationToken)
@@ -146,7 +175,8 @@ public sealed class IndexSyncClient(HttpClient client, bool accountMode = false,
         return await client.SendAsync(request, cancellationToken).ConfigureAwait(false);
     }
 
-    public static IndexSyncClient Create(string baseUrl, string token, byte[]? expectedSpkiPin = null)
+    public static IndexSyncClient Create(string baseUrl, string token, byte[]? expectedSpkiPin = null,
+        Func<Action, CancellationToken, Task>? databaseWork = null)
     {
         var handler = new HttpClientHandler
         {
@@ -160,7 +190,7 @@ public sealed class IndexSyncClient(HttpClient client, bool accountMode = false,
         };
         var http = new HttpClient(handler) { BaseAddress = new Uri(baseUrl.TrimEnd('/') + "/"), Timeout = TimeSpan.FromMinutes(2) };
         http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
-        return new IndexSyncClient(http);
+        return new IndexSyncClient(http, databaseWork: databaseWork);
     }
 
     public async Task<int> PushImagesAsync(PicerDatabase database, IProgress<(int done, int total)>? progress = null, CancellationToken cancellationToken = default)
@@ -209,6 +239,7 @@ public sealed class IndexSyncClient(HttpClient client, bool accountMode = false,
     {
         if (accountMode)
         {
+            await PushDescriptionsAsync(database, cancellationToken).ConfigureAwait(false);
             await PushMetadataEditsAsync(database, cancellationToken).ConfigureAwait(false);
             await PushFaceReviewDecisionsAsync(database, cancellationToken).ConfigureAwait(false);
             return;
@@ -237,6 +268,33 @@ public sealed class IndexSyncClient(HttpClient client, bool accountMode = false,
         using var response = await client.PostAsJsonAsync("api/sync/v1/metadata", request, Json, cancellationToken);
         response.EnsureSuccessStatusCode();
         await PushMetadataEditsAsync(database, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task PushDescriptionsAsync(PicerDatabase database, CancellationToken cancellationToken = default)
+    {
+        if (!accountMode || !canWrite) return;
+        await _descriptionSyncGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            using var independent = database.OpenIndependentConnection();
+            IReadOnlyList<DescriptionUpload> pending = [];
+            await WriteDatabaseAsync(() => pending = independent.GetDescriptionOutbox(pendingOnly: true), cancellationToken).ConfigureAwait(false);
+            var conflicts = 0;
+            foreach (var item in pending)
+            {
+                if (item.Epoch != independent.GetMirrorCheckpoint()?.Epoch)
+                { conflicts++; continue; }
+                using var response = await PostMirrorEditAsync("api/sync/v2/descriptions", item, independent, cancellationToken).ConfigureAwait(false);
+                if (response.StatusCode is System.Net.HttpStatusCode.Conflict or System.Net.HttpStatusCode.BadRequest)
+                { conflicts++; continue; }
+                response.EnsureSuccessStatusCode();
+                var receipt = await response.Content.ReadFromJsonAsync<DescriptionUploadReceipt>(Json, cancellationToken).ConfigureAwait(false);
+                if (receipt?.OperationId != item.OperationId) throw new InvalidDataException("description_ack_missing");
+                await WriteDatabaseAsync(() => independent.AcknowledgeDescription(item.OperationId), cancellationToken).ConfigureAwait(false);
+            }
+            if (conflicts > 0) throw new InvalidOperationException("description_sync_conflicts_pending");
+        }
+        finally { _descriptionSyncGate.Release(); }
     }
 
     private static void EnsureSceneLayoutSnapshots(PicerDatabase database, CancellationToken cancellationToken)
@@ -277,10 +335,14 @@ public sealed class IndexSyncClient(HttpClient client, bool accountMode = false,
         if (accountMode)
         {
             string[] pending;
+            bool descriptionsPending;
             using (var independent = database.OpenIndependentConnection())
+            {
                 pending = canWrite ? independent.GetPendingMetadataEdits().Select(edit => edit.OperationId).ToArray() : [];
+                descriptionsPending = canWrite && independent.GetDescriptionOutbox(pendingOnly: true).Count > 0;
+            }
             await PushMetadataAsync(database, cancellationToken, publishSceneLayouts: false).ConfigureAwait(false);
-            return new IndexSyncResult(pending.Any(AcknowledgedMetadataOperations.Contains), 0, 0, "", "");
+            return new IndexSyncResult(descriptionsPending || pending.Any(AcknowledgedMetadataOperations.Contains), 0, 0, "", "");
         }
         await PushFaceReviewDecisionsAsync(database, cancellationToken).ConfigureAwait(false);
         await PushMetadataEditsAsync(database, cancellationToken).ConfigureAwait(false);

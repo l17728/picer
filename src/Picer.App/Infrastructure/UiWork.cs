@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Windows.Threading;
 using Picer.Core.Logging;
+using Picer.Core.Data;
 
 namespace Picer.App.Infrastructure;
 
@@ -8,6 +9,22 @@ internal static class UiWork
 {
     public const int DefaultBatchSize = 40;
     private static readonly SemaphoreSlim DatabaseGate = new(1, 1);
+
+    public static Task<T> ReadSnapshotAsync<T>(string operation, PicerDatabase database,
+        Func<PicerDatabase, T> read, CancellationToken cancellationToken = default)
+    {
+        // Isolated :memory: fixtures cannot be reopened. Keep their shared
+        // connection serialized; production file-backed indexes never take this gate.
+        if (!database.SupportsIndependentReadSnapshots)
+            return RunDatabaseAsync(operation, () => read(database), cancellationToken);
+        return Task.Run(() =>
+        {
+            var timer = Stopwatch.StartNew();
+            var result = database.ReadSnapshot(read, cancellationToken);
+            AppLogger.Info($"DatabaseRead {operation}: snapshotMs={timer.ElapsedMilliseconds}");
+            return result;
+        }, cancellationToken);
+    }
 
     public static Task<T> RunAsync<T>(Func<T> work, CancellationToken cancellationToken = default) =>
         Task.Run(work, cancellationToken);

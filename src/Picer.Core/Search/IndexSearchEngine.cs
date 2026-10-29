@@ -411,6 +411,11 @@ public static class IndexSearchEngine
 
     private static void AddGeoConditions(SearchFilters filters, List<string> conditions, List<(string Name, object Value)> parameters)
     {
+        if (!string.IsNullOrWhiteSpace(filters.DirectoryPath))
+        {
+            conditions.Add("substr(replace(t.path,char(92),'/'),1,length($directoryPrefix))=$directoryPrefix COLLATE NOCASE");
+            parameters.Add(("directoryPrefix", filters.DirectoryPath.Replace('\\', '/').TrimEnd('/') + "/"));
+        }
         if (filters.GeoBounds is not { } bounds) return;
         if (bounds.AreaKey is not null)
         {

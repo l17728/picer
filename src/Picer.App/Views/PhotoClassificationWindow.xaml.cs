@@ -16,6 +16,9 @@ public partial class PhotoClassificationWindow : Window
     private CancellationTokenSource? _remoteRunCancellation;
     private string? _remoteRunId;
     private ContentClusterSettings? _loadedClusterSettings;
+    private int _itemsGeneration;
+    private bool _refreshingLabels;
+    private bool _refreshingRecommendation;
     private readonly CancellationTokenSource _previewCancellation = new();
 
     public PhotoClassificationWindow()
@@ -32,10 +35,12 @@ public partial class PhotoClassificationWindow : Window
             _remoteRunCancellation?.Cancel();
             _remoteClient?.Dispose();
             _previewCancellation.Cancel();
-            _previewCancellation.Dispose();
         };
         Loaded += async (_, _) =>
         {
+            try
+            {
+            await Task.WhenAll(LoadItemsAsync(), LoadClusterSettingsAsync());
             if (AppServices.ServiceMode)
             {
                 StatusText.Text = "远程分类由照片空间服务执行，关闭窗口不会删除已完成结果。";
@@ -58,6 +63,9 @@ public partial class PhotoClassificationWindow : Window
             await LoadItemsAsync();
             if (repairError is not null) FeedbackText.Text = "旧截图分类修复未完成：" + repairError;
             else if (repaired > 0) FeedbackText.Text = $"已修复 {repaired} 张照片的旧“屏幕截图”分类，并根据已有描述和元数据重新整理标签。";
+            }
+            catch (OperationCanceledException) { }
+            catch (Exception exception) { if (!_previewCancellation.IsCancellationRequested) FeedbackText.Text = "加载失败：" + exception.Message; }
         };
     }
 
@@ -123,13 +131,21 @@ public partial class PhotoClassificationWindow : Window
         UpdateThresholdHelp();
     }
     private void Threshold_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e) => UpdateThresholdHelp();
+    private long _previewGeneration;
     private async void PreviewThreshold_Click(object sender, RoutedEventArgs e)
     {
+        var generation = ++_previewGeneration;
+        try
+        {
         var threshold = (float)ClusterThreshold.Value;
         var preview = AppServices.ServiceMode
             ? await _remoteClient!.GetFromJsonAsync<ContentClusterPreview>($"clustering/preview?threshold={threshold.ToString(System.Globalization.CultureInfo.InvariantCulture)}")
-            : await UiWork.RunDatabaseAsync("classification-cluster-preview", () => AppServices.ContentSemanticClusters.Preview(threshold));
-        if (preview is not null) ThresholdHelp.Text = $"预览：约 {preview.EstimatedClusters} 个动态分类，涉及 {preview.EstimatedClusteredImages} 张照片。";
+            : await PreviewLocalAsync(threshold);
+        if (preview is not null && generation == _previewGeneration && !_previewCancellation.IsCancellationRequested)
+            ThresholdHelp.Text = $"预览：约 {preview.EstimatedClusters} 个动态分类，涉及 {preview.EstimatedClusteredImages} 张照片。";
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception exception) { if (!_previewCancellation.IsCancellationRequested) FeedbackText.Text = "预览失败：" + exception.Message; }
     }
     private async void ApplyThreshold_Click(object sender, RoutedEventArgs e)
     {
@@ -155,12 +171,17 @@ public partial class PhotoClassificationWindow : Window
             }
             response.EnsureSuccessStatusCode();
         }
-        else await UiWork.RunDatabaseAsync("classification-cluster-settings", () =>
+        else
         {
-            var settings = AppServices.ContentSemanticClusters.SaveSettings(automatic, threshold,
-                expectedVersion:baseline.Version,expectedOperationId:baseline.OperationId,expectedModelVersion:baseline.ModelVersion);
-            AppServices.ContentSemanticClusters.RebuildConfigured(settings);
-        });
+            var settings = await UiWork.RunDatabaseAsync("classification-cluster-settings", () =>
+                AppServices.ContentSemanticClusters.SaveSettings(automatic, threshold,
+                    expectedVersion:baseline.Version, expectedOperationId:baseline.OperationId,
+                    expectedModelVersion:baseline.ModelVersion, refreshRecommendation:false));
+            var compute = await UiWork.ReadSnapshotAsync("Classification.RebuildInput", AppServices.Db,
+                reader => new ContentSemanticClusterService(reader).CaptureRebuild(settings), _previewCancellation.Token);
+            var plan = await Task.Run(compute, _previewCancellation.Token);
+            await UiWork.RunDatabaseAsync("Classification.RebuildCommit", () => plan.Commit(AppServices.Db), _previewCancellation.Token);
+        }
         await LoadClusterSettingsAsync(); await LoadItemsAsync();
         if (!AppServices.ServiceMode) AppServices.QueueImmediateRemoteSync("动态分类阈值更新");
         FeedbackText.Text = "动态分类阈值已应用；标签未变化的照片保留原分类。";
@@ -169,6 +190,9 @@ public partial class PhotoClassificationWindow : Window
         { FeedbackText.Text="分类设置已被更新。你的修改已保留，请从“索引巡检、同步与修复 → 处理同步冲突…”选择版本。"; }
         catch (InvalidOperationException exception) when (exception.Message=="cluster_model_changed")
         { await LoadClusterSettingsAsync(); FeedbackText.Text="分类模型已更新，已重新加载设置；请确认后重新应用。"; }
+        catch (InvalidOperationException exception) when (exception.Message=="cluster_input_changed")
+        { await LoadClusterSettingsAsync(); await LoadItemsAsync(); FeedbackText.Text="设置已保存，但图库在计算期间发生变化；请重新应用以更新分类。"; }
+        catch (OperationCanceledException) { }
         catch (Exception exception) when (exception is HttpRequestException or InvalidOperationException or IOException)
         { FeedbackText.Text="分类设置未保存，请检查连接后重试。"; }
         finally { if (sender is Button button) button.IsEnabled=true; }
@@ -178,7 +202,8 @@ public partial class PhotoClassificationWindow : Window
     {
         var settings = AppServices.ServiceMode
             ? await _remoteClient!.GetFromJsonAsync<ContentClusterSettings>("clustering/settings")
-            : await UiWork.RunDatabaseAsync("classification-cluster-settings-load", AppServices.ContentSemanticClusters.GetSettings);
+            : await UiWork.ReadSnapshotAsync("Classification.Settings", AppServices.Db,
+                reader => new ContentSemanticClusterService(reader).ReadSettings(), _previewCancellation.Token);
         if (settings is null) return;
         _loadedClusterSettings=settings;
         AutomaticThreshold.IsChecked = settings.Automatic;
@@ -186,6 +211,7 @@ public partial class PhotoClassificationWindow : Window
         ClusterThreshold.IsEnabled = !settings.Automatic;
         ThresholdHelp.Tag = settings.RecommendedThreshold;
         UpdateThresholdHelp();
+        if (!AppServices.ServiceMode && !_refreshingRecommendation) _ = RefreshRecommendationAsync();
     }
 
     private void UpdateThresholdHelp()
@@ -204,6 +230,7 @@ public partial class PhotoClassificationWindow : Window
     private async Task LoadItemsAsync()
     {
         if (Tabs.SelectedItem is not TabItem tab) return;
+        var generation = Interlocked.Increment(ref _itemsGeneration);
         var view = tab.Tag?.ToString() ?? "pending";
         OwnershipHelp.Visibility = view == "ownership" ? Visibility.Visible : Visibility.Collapsed;
         ReviewRow[] rows;
@@ -215,18 +242,61 @@ public partial class PhotoClassificationWindow : Window
                 item.ConceptId, item.DisplayName, SourceText(item.SourceKind, item.AssertionState,
                     item.ReviewState), item.ReferenceCount)).ToArray();
         }
-        else rows = await UiWork.RunDatabaseAsync("classification-list", () =>
+        else rows = await UiWork.ReadSnapshotAsync("Classification.List", AppServices.Db, reader =>
         {
-            AppServices.ContentSemanticClusters.RefreshLabelsIncremental();
+            var projection = new ClassificationProjectionService(reader);
             if (view == "unclassified")
-                return AppServices.ClassificationProjection.ListUnclassified().Select(image =>
+                return projection.ListUnclassified().Select(image =>
                     new ReviewRow(image.Id, image.Path, image.ThumbPath, "—", "无分类", "处理完成，无有效分类", 1)).ToArray();
-            return AppServices.ClassificationProjection.List(view).Select(item => new ReviewRow(item.ImageId,
+            return projection.List(view).Select(item => new ReviewRow(item.ImageId,
                 item.Path, item.ThumbnailPath, item.ConceptId, item.DisplayName,
                 SourceText(item.SourceKind, item.AssertionState, item.ReviewState), item.ReferenceCount)).ToArray();
-        });
+        }, _previewCancellation.Token);
+        if (generation != Volatile.Read(ref _itemsGeneration) || _previewCancellation.IsCancellationRequested) return;
         Items.ItemsSource = rows;
+        if (!AppServices.ServiceMode && !_refreshingLabels) _ = RefreshLabelsAsync();
         FeedbackText.Text = $"当前页签：分类项 {rows.Length} 条，涉及照片 {rows.Select(row => row.ImageId).Distinct().Count()} 张。";
+    }
+
+    private async Task<ContentClusterPreview> PreviewLocalAsync(float threshold)
+    {
+        var compute = await UiWork.ReadSnapshotAsync("Classification.PreviewInput", AppServices.Db,
+            reader => new ContentSemanticClusterService(reader).CapturePreview(threshold), _previewCancellation.Token);
+        return await Task.Run(compute, _previewCancellation.Token);
+    }
+
+    private async Task RefreshLabelsAsync()
+    {
+        _refreshingLabels = true;
+        try
+        {
+            var changed = await UiWork.RunDatabaseAsync("Classification.RefreshLabels",
+                AppServices.ContentSemanticClusters.RefreshLabelsIncremental, _previewCancellation.Token);
+            if (changed > 0 && !_previewCancellation.IsCancellationRequested) await LoadItemsAsync();
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception exception) { Picer.Core.Logging.AppLogger.Warn($"Classification labels refresh failed: {exception.GetType().Name}"); }
+        finally { _refreshingLabels = false; }
+    }
+
+    private async Task RefreshRecommendationAsync()
+    {
+        _refreshingRecommendation = true;
+        try
+        {
+            var input = await UiWork.ReadSnapshotAsync("Classification.RecommendationInput", AppServices.Db,
+                reader => new ContentSemanticClusterService(reader).CaptureRecommendation(), _previewCancellation.Token);
+            if (!input.NeedsRefresh) return;
+            var recommendation = await Task.Run(input.Calculate, _previewCancellation.Token);
+            if (!await UiWork.RunDatabaseAsync("Classification.RecommendationCommit",
+                () => AppServices.ContentSemanticClusters.SaveRecommendation(input, recommendation), _previewCancellation.Token)) return;
+            if (_previewCancellation.IsCancellationRequested || _loadedClusterSettings?.ModelVersion != input.Model) return;
+            ThresholdHelp.Tag = recommendation;
+            UpdateThresholdHelp();
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception exception) { Picer.Core.Logging.AppLogger.Warn($"Classification recommendation failed: {exception.GetType().Name}"); }
+        finally { _refreshingRecommendation = false; }
     }
 
     private async Task<int> RepairObsoleteScreenshotClassificationsAsync()

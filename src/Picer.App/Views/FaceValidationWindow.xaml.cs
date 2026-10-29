@@ -44,7 +44,7 @@ public partial class FaceValidationWindow : Window
         if (!TryBeginOperation("正在生成只读人物学习报告…")) return;
         try
         {
-            var report = await UiWork.RunDatabaseAsync(_report.Generate);
+            var report = await UiWork.ReadSnapshotAsync("Faces.LearningReport", _repository.Database, reader => new FaceLearningReportService(new VisionAnalysisRepository(reader)).Generate());
             ReportText.Text = $"生成时间：{report.GeneratedUtc.ToLocalTime():yyyy-MM-dd HH:mm:ss}\n" +
                 $"人物 {report.TotalPeople}；确认正样本 {report.TotalConfirmedFaces}；排他负样本 {report.TotalRejectedFaces}；待确认建议 {report.TotalSuggestedFaces}\n" +
                 (report.GlobalRisks.Count == 0 ? "总体风险：未发现" : "总体风险：" + string.Join("；", report.GlobalRisks)) + "\n\n" +
@@ -69,7 +69,7 @@ public partial class FaceValidationWindow : Window
 
     private async void RefreshTrainingHistory_Click(object sender, RoutedEventArgs e)
     {
-        TrainingHistory.ItemsSource = (await UiWork.RunDatabaseAsync(() => _repository.GetFaceTrainingHistory())).ToArray();
+        TrainingHistory.ItemsSource = (await UiWork.ReadSnapshotAsync("Faces.TrainingHistory", _repository.Database, reader => new VisionAnalysisRepository(reader).GetFaceTrainingHistory())).ToArray();
     }
 
     private async void CalibrateSFace_Click(object sender, RoutedEventArgs e)
@@ -98,9 +98,10 @@ public partial class FaceValidationWindow : Window
                 Status.Text = message;
                 SFaceProgressText.Text = message;
             });
-            var result = await UiWork.RunDatabaseAsync("FaceValidation.CalibrateSFace",
-                () => _validation.CalibrateSFace(progress: progress));
-            var applied = await UiWork.RunDatabaseAsync(() => _validation.GetAppliedSFaceThreshold(result.ModelVersion));
+            var compute = await UiWork.ReadSnapshotAsync("FaceValidation.SFaceInput", _repository.Database,
+                reader => new FaceValidationService(reader, new VisionAnalysisRepository(reader)).CaptureCalibration(progress: progress));
+            var result = await Task.Run(compute);
+            var applied = await UiWork.ReadSnapshotAsync("FaceValidation.AppliedThreshold", _repository.Database, reader => new VisionAnalysisRepository(reader).GetFaceMatchThreshold(result.ModelVersion));
             var sameAsPreviousCalculation = _lastCalculatedCalibration is { } previous &&
                 string.Equals(previous.ModelVersion, result.ModelVersion, StringComparison.Ordinal) &&
                 Math.Abs(previous.Threshold - result.RecommendedThreshold) <= 0.000_001 &&
@@ -155,8 +156,8 @@ public partial class FaceValidationWindow : Window
                 MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
-        var currentApplied = await UiWork.RunDatabaseAsync(() =>
-            _validation.GetAppliedSFaceThreshold(_lastCalibration.ModelVersion));
+        var currentApplied = await UiWork.ReadSnapshotAsync("FaceValidation.AppliedThreshold", _repository.Database, reader =>
+            new FaceValidationService(reader, new VisionAnalysisRepository(reader)).GetAppliedSFaceThreshold(_lastCalibration.ModelVersion));
         if (currentApplied is double current &&
             Math.Abs(current - _lastCalibration.RecommendedThreshold) <= 0.000_001)
         {
@@ -173,8 +174,8 @@ public partial class FaceValidationWindow : Window
         try
         {
             await UiWork.RunDatabaseAsync(() => _validation.ApplySFaceThreshold(_lastCalibration));
-            var applied = await UiWork.RunDatabaseAsync(() =>
-                _validation.GetAppliedSFaceThreshold(_lastCalibration.ModelVersion));
+            var applied = await UiWork.ReadSnapshotAsync("FaceValidation.AppliedThreshold", _repository.Database, reader =>
+                new FaceValidationService(reader, new VisionAnalysisRepository(reader)).GetAppliedSFaceThreshold(_lastCalibration.ModelVersion));
             if (applied is null || Math.Abs(applied.Value - _lastCalibration.RecommendedThreshold) > 0.000_001)
                 throw new InvalidOperationException("数据库回读的阈值与待应用值不一致");
             var message = $"阈值 {applied.Value:F3} 已成功应用到模型 {_lastCalibration.ModelVersion}。";
@@ -216,10 +217,11 @@ public partial class FaceValidationWindow : Window
                 Status.Text = value.Total > 1
                     ? $"InsightFace ArcFace：{value.Stage} {value.Completed}/{value.Total}"
                     : $"InsightFace ArcFace：{value.Stage}");
-            var result = await UiWork.RunDatabaseAsync("FaceValidation.CalibrateInsightFace",
-                () => _validation.CalibrateModel("insightface-arcface", progress: progress));
+            var compute = await UiWork.ReadSnapshotAsync("FaceValidation.InsightFaceInput", _repository.Database,
+                reader => new FaceValidationService(reader, new VisionAnalysisRepository(reader)).CaptureCalibration("insightface-arcface", progress: progress));
+            var result = await Task.Run(compute);
             _lastInsightFaceCalibration = result;
-            var applied = await UiWork.RunDatabaseAsync(() => _validation.GetAppliedSFaceThreshold(result.ModelVersion));
+            var applied = await UiWork.ReadSnapshotAsync("FaceValidation.AppliedThreshold", _repository.Database, reader => new VisionAnalysisRepository(reader).GetFaceMatchThreshold(result.ModelVersion));
             var unchanged = applied is double threshold && Math.Abs(threshold - result.RecommendedThreshold) <= 0.000_001;
             _insightFaceApplyAllowed = !unchanged && result.SamePairs > 0 && result.DifferentPairs > 0;
             ApplyInsightFaceThreshold.IsEnabled = _insightFaceApplyAllowed;
@@ -468,7 +470,7 @@ public partial class FaceValidationWindow : Window
 
     private async Task EvaluateYuNetAsync()
     {
-        var result = await UiWork.RunDatabaseAsync(_validation.EvaluateYuNet);
+        var result = await UiWork.ReadSnapshotAsync("FaceValidation.YuNet", _repository.Database, reader => new FaceValidationService(reader, new VisionAnalysisRepository(reader)).EvaluateYuNet());
         var target = result.LabeledImages is >= 500 and <= 1000 ? "已达到建议样本规模" : $"建议 500–1000 张，当前还差 {Math.Max(0, 500 - result.LabeledImages)} 张";
         var categories = result.Categories.Count == 0 ? "尚无场景标签" : string.Join("；", result.Categories.OrderBy(pair => pair.Key).Select(pair => $"{pair.Key} {pair.Value.Images}张/漏{pair.Value.MissedFaces}"));
         YuNetResult.Text = $"已标注 {result.LabeledImages} 张（{target}）；人工人脸 {result.ExpectedFaces}，检测 {result.DetectedFaces}，漏检 {result.MissedFaces}，额外检测 {result.ExtraDetections}；漏检率 {result.MissRate:P2}，额外检测率 {result.ExtraDetectionRate:P2}\n分类：{categories}";
@@ -476,7 +478,7 @@ public partial class FaceValidationWindow : Window
 
     private async Task ReloadYuNetRowsAsync(bool evaluate = true)
     {
-        var rows = await UiWork.RunDatabaseAsync(() => _validation.GetYuNetRows().Select(row => new YuNetValidationItem(row)).ToArray());
+        var rows = await UiWork.ReadSnapshotAsync("FaceValidation.Rows", _repository.Database, reader => new FaceValidationService(reader, new VisionAnalysisRepository(reader)).GetYuNetRows().Select(row => new YuNetValidationItem(row)).ToArray());
         _rows.Clear();
         foreach (var batch in rows.Chunk(50))
         {

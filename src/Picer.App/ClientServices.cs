@@ -54,6 +54,7 @@ public sealed class ClientServices
     public MediaSearchTool MediaSearch { get; set; } = default!;
     public VisualConceptRepository VisualConceptRepository { get; set; } = default!;
     public VideoRepository Videos { get; set; } = default!;
+    internal string? RemoteVideoCacheRoot { get; set; }
     public VideoIndexService VideoIndex { get; set; } = default!;
     public IVideoMediaProcessor? VideoKeyframes { get; set; } = default!;
     public IVideoTranscriptionService? VideoTranscription { get; set; } = default!;

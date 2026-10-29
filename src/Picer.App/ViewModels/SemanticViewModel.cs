@@ -66,7 +66,7 @@ public partial class SemanticViewModel : ObservableObject
         await Application.Current.Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.Render);
         try
         {
-        var snapshot = await UiWork.RunDatabaseAsync(() => (Tags: SemanticEngine.GetTags(_db).ToArray(), Albums: SemanticEngine.GetAlbums(_db).ToArray()));
+        var snapshot = await UiWork.ReadSnapshotAsync("Semantic.Catalog", _db, reader => (Tags: SemanticEngine.GetTags(reader).ToArray(), Albums: SemanticEngine.GetAlbums(reader).ToArray()));
         Tags = new(snapshot.Tags.Select(tag => new TagItemViewModel(tag)));
         Albums = new(snapshot.Albums.Select(album => new AlbumItemViewModel(album)));
             StatusText = $"已加载 {Tags.Count} 个标签、{Albums.Count} 个相册";
@@ -93,10 +93,10 @@ public partial class SemanticViewModel : ObservableObject
     {
         try
         {
-            var suggestions = await UiWork.RunDatabaseAsync(() =>
+            var suggestions = await UiWork.ReadSnapshotAsync("Semantic.Suggestions", _db, reader =>
             {
-                var local = SemanticEngine.ExtractAISuggestions(_db, imageId).ToList();
-                foreach (var name in _services.CloudVisionRepository.GetSuggestedTags(imageId)
+                var local = SemanticEngine.ExtractAISuggestions(reader, imageId).ToList();
+                foreach (var name in new Picer.Core.Vision.CloudVisionRepository(reader).GetSuggestedTags(imageId)
                              .Where(name => local.All(existing => !string.Equals(existing.TagName, name, StringComparison.OrdinalIgnoreCase))))
                     local.Add(new SuggestedTag(name, Confidence.Medium));
                 return local;
@@ -233,7 +233,7 @@ public partial class SemanticViewModel : ObservableObject
         try
         {
             var albums = await UiWork.RunDatabaseAsync(() => SemanticEngine.AutoCreateTimeLineAlbums(_db));
-            var refreshed = await UiWork.RunDatabaseAsync(() => SemanticEngine.GetAlbums(_db).ToArray());
+            var refreshed = await UiWork.ReadSnapshotAsync("Semantic.Albums", _db, reader => SemanticEngine.GetAlbums(reader).ToArray());
             Albums = new(refreshed.Select(album => new AlbumItemViewModel(album)));
             StatusText = $"时间线相册已增量更新；新建 {albums.Count} 个，其余仅补充新增照片";
             _changed?.Invoke();
@@ -251,7 +251,7 @@ public partial class SemanticViewModel : ObservableObject
         try
         {
             var albums = await UiWork.RunDatabaseAsync(() => SemanticEngine.AutoCreateCameraAlbums(_db, autoTag: true));
-            var snapshot = await UiWork.RunDatabaseAsync(() => (Albums: SemanticEngine.GetAlbums(_db).ToArray(), Tags: SemanticEngine.GetTags(_db).ToArray()));
+            var snapshot = await UiWork.ReadSnapshotAsync("Semantic.Catalog", _db, reader => (Albums: SemanticEngine.GetAlbums(reader).ToArray(), Tags: SemanticEngine.GetTags(reader).ToArray()));
             Albums = new(snapshot.Albums.Select(album => new AlbumItemViewModel(album)));
             Tags = new(snapshot.Tags.Select(tag => new TagItemViewModel(tag)));
             StatusText = $"相机相册已增量更新；新建 {albums.Count} 个，其余仅补充新增照片和标签";

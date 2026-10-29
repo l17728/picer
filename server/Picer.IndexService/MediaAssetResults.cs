@@ -24,14 +24,14 @@ internal static class MediaAssetResults
         image.SaveAsJpeg(result);
         return result.ToArray();
     }
-    public static async Task<IResult> OpenAsync(AgentConnectionRegistry agents, HttpContext context, string? agentId, string path, int previewSize = 0)
+    public static async Task<IResult> OpenAsync(AgentConnectionRegistry agents, HttpContext context, string? agentId, string path, int previewSize = 0, bool keyframe = false)
     {
         var started = System.Diagnostics.Stopwatch.StartNew();
         SocketMediaStream? stream;
         try
         {
             var expected = context.Request.Headers.IfMatch.ToString();
-            stream = await agents.OpenMediaAsync(agentId, path, previewSize, context.RequestAborted, expected.Length > 0 ? expected : null, HttpMethods.IsHead(context.Request.Method));
+            stream = await agents.OpenMediaAsync(agentId, path, previewSize, context.RequestAborted, expected.Length > 0 ? expected : null, HttpMethods.IsHead(context.Request.Method), keyframe: keyframe);
         }
         catch (MediaSourceChangedException) { return Results.StatusCode(412); }
         if (stream is not null)
@@ -45,6 +45,7 @@ internal static class MediaAssetResults
                 if (start >= 0 && start <= end && start < stream.Length) stream.LimitReadAhead(end + 1);
             }
             context.Response.Headers["X-Picer-Media-Streaming"] = "1";
+            context.Response.Headers.Append("Server-Timing", $"media_prepare;dur={started.ElapsedMilliseconds}");
             AppLogger.Info($"Media source ready; requestId={context.TraceIdentifier}; prepareMs={started.ElapsedMilliseconds}; bytes={stream.Length}; preview={previewSize}");
             try { return Results.Stream(stream, stream.Metadata.ContentType, entityTag: EntityTagHeaderValue.Parse(stream.Metadata.ETag), enableRangeProcessing: true); }
             catch { await stream.DisposeAsync(); throw; }

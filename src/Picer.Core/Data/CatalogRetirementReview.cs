@@ -32,7 +32,8 @@ public sealed partial class PicerDatabase
     public IReadOnlyList<CatalogRetirementReview> GetCatalogRetirementReviews(int limit=200)
     {
         if(limit is <1 or >500) throw new ArgumentOutOfRangeException(nameof(limit));
-        using var transaction=BeginReadTransaction();
+        using var ownedTransaction = _readSnapshotTransaction is null ? BeginReadTransaction() : null;
+        var transaction = _readSnapshotTransaction ?? ownedTransaction!;
         var candidates=new List<(string Publisher,string Epoch,CatalogRetirementAnchor Anchor,string State,long Media,long Catalog,bool Completion)>();
         using(var query=Command("""
             WITH review AS (
