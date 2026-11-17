@@ -18,7 +18,10 @@ public sealed class CloudVisionAnalysisService(
     bool allowConcurrent = false)
 {
     private readonly SemaphoreSlim _singleWorker = new(1, 1);
-    private async Task DatabaseAsync(Action work, CancellationToken token)
+    private Task DatabaseAsync(Action work, CancellationToken token, string operation = "photo_state")
+        => Logging.AnalysisDatabaseWork.RunAsync(operation, work, token, ExecuteDatabaseAsync);
+
+    private async Task ExecuteDatabaseAsync(Action work, CancellationToken token)
     {
         if (databaseWork is not null) { await databaseWork(work, token).ConfigureAwait(false); return; }
         await _singleWorker.WaitAsync(token).ConfigureAwait(false);
@@ -79,23 +82,29 @@ public sealed class CloudVisionAnalysisService(
                             var result = await analyzer.AnalyzeAsync(
                                 new CloudVisionRequest(item.Image, location, item.LocalConcepts, trustedContext), cancellationToken).ConfigureAwait(false);
                             failureStage = AnalysisStage.Save;
-                            await DatabaseAsync(() => repository.Save(item.Image, analyzer, fingerprint, item.Reason, result, requestId), CancellationToken.None).ConfigureAwait(false);
+                            await DatabaseAsync(() => repository.Save(item.Image, analyzer, fingerprint, item.Reason, result, requestId), CancellationToken.None, "photo_save_result").ConfigureAwait(false);
                             completed++;
                         }
                         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                         {
-                            await DatabaseAsync(() => repository.MarkCanceled(item.Image, analyzer, fingerprint, item.Reason), CancellationToken.None).ConfigureAwait(false);
+                            await CleanupDatabaseAsync(() => repository.MarkCanceled(item.Image, analyzer, fingerprint, item.Reason),
+                                "photo_mark_cancelled", item.Image.Id, "next_description_attempt", cancellationToken.IsCancellationRequested).ConfigureAwait(false);
                             throw;
                         }
                         catch (Exception exception)
                         {
+                            Logging.AnalysisFailureDiagnostics.Record("photo_" + failureStage, item.Image.Id, exception, cancellationToken.IsCancellationRequested);
                             var failure = AnalysisStageException.Wrap(failureStage, exception);
                             var detail = $"{nameof(AnalysisStageException)}: {failure.Message}";
                             await DatabaseAsync(() => repository.SaveFailure(item.Image, analyzer, fingerprint, item.Reason,
                                 detail[..Math.Min(detail.Length, 500)]), CancellationToken.None).ConfigureAwait(false);
                             failed++;
                         }
-                        finally { await DatabaseAsync(() => repository.Billing.Release(requestId), CancellationToken.None).ConfigureAwait(false); }
+                        finally
+                        {
+                            await CleanupDatabaseAsync(() => repository.Billing.Release(requestId), "photo_release_budget",
+                                item.Image.Id, "reservation_expiry_next_reserve", cancellationToken.IsCancellationRequested).ConfigureAwait(false);
+                        }
                     }
                     progress?.Report((++progressCount, batch.Count));
                 }
@@ -103,6 +112,20 @@ public sealed class CloudVisionAnalysisService(
         }
         finally { if (!allowConcurrent) _serialRun.Release(); }
         return new CloudVisionBatchResult(batch.Count, completed, skipped, failed, budgetBlocked);
+    }
+
+    private async Task CleanupDatabaseAsync(Action work, string operation, long imageId, string recovery, bool cancelled)
+    {
+        try { await DatabaseAsync(work, CancellationToken.None, operation).ConfigureAwait(false); }
+        catch (Exception exception)
+        {
+            // Reservations expire after one hour and TryReserve removes expired rows.
+            // Completed saves already consume the reservation through Billing.Record. A failed
+            // cancellation marker leaves a non-completed row eligible for the next attempt.
+            Logging.AnalysisFailureDiagnostics.Record(operation, imageId, exception, cancelled);
+            try { Logging.AnalysisDiagnosticLog.Warn($"Analysis cleanup deferred; attemptId={Logging.AnalysisTrace.Current ?? "none"}; mediaId={imageId}; phase={operation}; recovery={recovery}"); }
+            catch { /* Diagnostics cannot replace the primary result or cancellation. */ }
+        }
     }
 
     private async Task<PhotoLocationContext?> ResolveLocationAsync(ImageRecord image, bool includePreciseGps, CancellationToken cancellationToken)

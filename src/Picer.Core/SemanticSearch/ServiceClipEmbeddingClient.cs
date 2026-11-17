@@ -5,8 +5,9 @@ namespace Picer.Core.SemanticSearch;
 
 public sealed record ClipEmbeddingResponse(string ModelVersion, float[] Embedding);
 
-public sealed class ServiceClipEmbeddingClient(HttpClient client) : IClipEmbeddingClient, IDisposable
+public sealed class ServiceClipEmbeddingClient(HttpClient client, string? cacheScope = null) : IClipEmbeddingClient, IDisposable
 {
+    public string? CacheScope => cacheScope;
     public string ModelVersion { get; private set; } = ChineseClipEncoder.ModelVersion;
 
     public async Task<float[]> EncodeTextAsync(string text, CancellationToken cancellationToken)

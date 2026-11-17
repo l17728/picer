@@ -13,7 +13,10 @@ public sealed class VideoSummaryService(VideoRepository repository, string cache
     private static readonly Dictionary<(string Database, long Content), ContentGate> ContentGates = [];
     private sealed class ContentGate { public readonly SemaphoreSlim Semaphore = new(1, 1); public int Users; }
 
-    private async Task DatabaseAsync(Action work, CancellationToken token)
+    private Task DatabaseAsync(Action work, CancellationToken token, string operation = "video_state")
+        => Logging.AnalysisDatabaseWork.RunAsync(operation, work, token, ExecuteDatabaseAsync);
+
+    private async Task ExecuteDatabaseAsync(Action work, CancellationToken token)
     {
         if (databaseWork is not null) { await databaseWork(work, token).ConfigureAwait(false); return; }
         await _databaseGate.WaitAsync(token).ConfigureAwait(false);
@@ -110,14 +113,29 @@ public sealed class VideoSummaryService(VideoRepository repository, string cache
                 {
                     if (!repository.SaveSummary(video.Id, analyzer, video, result, requestId))
                         throw new InvalidOperationException("description_media_changed");
-                }, CancellationToken.None).ConfigureAwait(false);
+                }, CancellationToken.None, "video_save_result").ConfigureAwait(false);
                 return result;
             }
-            finally { await DatabaseAsync(() => repository.Billing.Release(requestId), CancellationToken.None).ConfigureAwait(false); }
+            finally
+            {
+                try { await DatabaseAsync(() => repository.Billing.Release(requestId), CancellationToken.None, "video_release_budget").ConfigureAwait(false); }
+                catch (Exception exception)
+                {
+                    // Successful SaveSummary consumes the reservation. If cancellation
+                    // or failure left one, it expires after one hour; TryReserve reaps it.
+                    Logging.AnalysisFailureDiagnostics.Record("video_release_budget", video.Id, exception, cancellationToken.IsCancellationRequested);
+                    try { Logging.AnalysisDiagnosticLog.Warn($"Analysis cleanup deferred; attemptId={Logging.AnalysisTrace.Current ?? "none"}; mediaId={video.Id}; phase=video_release_budget; recovery=reservation_expiry_next_reserve"); }
+                    catch { /* Diagnostics cannot replace the primary result or cancellation. */ }
+                }
+            }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
         catch (AnalysisBudgetExceededException) { throw; }
-        catch (Exception exception) { throw AnalysisStageException.Wrap(stage, exception); }
+        catch (Exception exception)
+        {
+            Logging.AnalysisFailureDiagnostics.Record("video_" + stage, video.Id, exception, cancellationToken.IsCancellationRequested);
+            throw AnalysisStageException.Wrap(stage, exception);
+        }
     }
 
     private static async Task CreateMontageAsync(IReadOnlyList<VideoKeyframe> frames, string output,
@@ -141,7 +159,14 @@ public sealed class VideoSummaryService(VideoRepository repository, string cache
             cancellationToken.ThrowIfCancellationRequested();
             File.Move(temporary, output, overwrite: true);
         }
-        finally { if (File.Exists(temporary)) File.Delete(temporary); }
+        finally
+        {
+            try { if (File.Exists(temporary)) File.Delete(temporary); }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                Logging.AnalysisDiagnosticLog.Warn($"Video montage cleanup deferred; attemptId={Logging.AnalysisTrace.Current ?? "none"}; errorType={exception.GetType().Name}; hresult={exception.HResult}");
+            }
+        }
     }
 
     private static string ExtractTranscript(string? json)

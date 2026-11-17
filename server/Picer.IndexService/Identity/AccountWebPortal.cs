@@ -123,7 +123,7 @@ public static partial class AccountWebPortal
             if (account is null)
             {
                 Core.Logging.AppLogger.Warn($"Account portal login rejected; accountMatch={store.ContainsLogin(login)}; loginFieldPresent={form.ContainsKey("login")}; loginLength={login.Length}; passwordFieldPresent={form.ContainsKey("password")}; passwordLength={password.Length}");
-                return Page("登录未成功", "<p>账号或密码不正确，或账号暂时锁定。请稍后重试。</p><a href='/account/login'>返回登录</a>", 401);
+                return Page("登录未成功", "<p>账号或密码不正确，或账号暂时锁定。请稍后重试。</p><a href='/account/login?request=" + E(RequestId(form["request"].ToString())) + "'>返回登录</a>", 401);
             }
             await SignIn(context, store, account);
             if (store.RequiresPasswordChange(account)) return Results.Redirect("/account/password");

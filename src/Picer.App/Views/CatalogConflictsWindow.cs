@@ -15,6 +15,7 @@ namespace Picer.App.Views;
 
 public sealed class CatalogConflictsWindow : Window
 {
+    private static readonly Lazy<RemoteThumbnailCache> ReviewCache = new(() => new(Path.Combine(AppPaths.DataRoot, "review-thumbs")));
     private readonly bool _remote;
     private readonly HttpClient? _client;
     private readonly CancellationTokenSource _stop=new();
@@ -60,18 +61,17 @@ public sealed class CatalogConflictsWindow : Window
         _previewStatus.Text="正在读取缩略图…";
         try
         {
-            using var stream=await ReadPreviewAsync(row.Review,token);
-            if(stream is null) { if(!token.IsCancellationRequested) _previewStatus.Text="缩略图暂不可用，仍可根据分类和路径审核。";return; }
-            using var bytes=new MemoryStream();var buffer=new byte[32768];int read;
-            while((read=await stream.ReadAsync(buffer,token))>0)
-            {
-                if(bytes.Length+read>8*1024*1024) throw new InvalidDataException("thumbnail_too_large");
-                await bytes.WriteAsync(buffer.AsMemory(0,read),token);
-            }
-            token.ThrowIfCancellationRequested();bytes.Position=0;
-            var bitmap=new BitmapImage();bitmap.BeginInit();bitmap.CacheOption=BitmapCacheOption.OnLoad;
-            bitmap.DecodePixelWidth=440;bitmap.StreamSource=bytes;bitmap.EndInit();bitmap.Freeze();
-            _preview.Source=bitmap;_previewStatus.Text=row.Review.Anchor.MediaKind=="video"?"视频缩略图":"照片缩略图";
+            var record = !_remote || AppServices.ServiceMode
+                ? await UiWork.ReadSnapshotAsync("Catalog.ThumbnailIdentity", AppServices.Db,
+                    db => row.Review.Anchor.MediaKind == "image" ? db.GetImage(row.Review.MediaId) : null, token) : null;
+            record ??= RemoteThumbnailCache.DerivedRecord("catalog-review-v1",
+                (_client?.BaseAddress?.AbsoluteUri ?? "local") + ":" + row.Review.Epoch + ":" + row.Review.Anchor.MediaKind + ":" + row.Review.MediaId + ":" + row.Review.CurrentFingerprint);
+            var bitmap = await Services.ThumbnailBitmapLoader.LoadRemoteAsync(
+                AppServices.ServiceMode ? AppServices.RemoteThumbnails : ReviewCache.Value,
+                record, cancellation => ReadPreviewAsync(row.Review, cancellation), token);
+            token.ThrowIfCancellationRequested();
+            _preview.Source = bitmap;
+            _previewStatus.Text = bitmap is null ? "缩略图暂不可用，可重新选择重试" : row.Review.Anchor.MediaKind == "video" ? "视频缩略图" : "照片缩略图";
         }
         catch(OperationCanceledException) { }
         catch(Exception) { if(!token.IsCancellationRequested) _previewStatus.Text="缩略图暂不可用，请确认媒体读取权限或来源设备状态。"; }

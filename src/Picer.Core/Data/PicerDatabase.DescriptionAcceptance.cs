@@ -9,6 +9,25 @@ namespace Picer.Core.Data;
 
 public sealed partial class PicerDatabase
 {
+    public DescriptionBatchReceipt AcceptDescriptionBatch(DescriptionUploadBatch batch)
+    {
+        if (batch.Items is null || batch.Items.Count is < 1 or > DescriptionUploadBatch.MaxItems ||
+            batch.Items.Any(x => x is null) || batch.Items.Select(x => x.OperationId).Distinct(StringComparer.Ordinal).Count() != batch.Items.Count)
+            throw new ArgumentException("invalid_description_batch");
+        var receipts = new List<DescriptionBatchItemReceipt>(batch.Items.Count);
+        foreach (var item in batch.Items)
+        {
+            try { AcceptDescriptionUpload(item); receipts.Add(new(item.OperationId, "accepted")); }
+            catch (InvalidOperationException exception) when (exception.Message.StartsWith("description_", StringComparison.Ordinal))
+            { receipts.Add(new(item.OperationId, "conflict")); }
+            catch (Exception exception) when (exception is ArgumentException or JsonException or InvalidDataException)
+            { receipts.Add(new(item.OperationId, "rejected")); }
+            catch (Microsoft.Data.Sqlite.SqliteException exception) when (exception.SqliteErrorCode is 5 or 6)
+            { receipts.Add(new(item.OperationId, "retryable")); }
+        }
+        return new(receipts);
+    }
+
     public DescriptionUploadReceipt AcceptDescriptionUpload(DescriptionUpload item)
     {
         if (!Guid.TryParseExact(item.OperationId, "N", out _) || item.MediaId <= 0 ||
@@ -42,7 +61,7 @@ public sealed partial class PicerDatabase
         if (string.IsNullOrWhiteSpace(provider) || provider.Length > 256 || string.IsNullOrWhiteSpace(model) || model.Length > 512 ||
             string.IsNullOrWhiteSpace(prompt) || prompt.Length > 256 || string.IsNullOrWhiteSpace(summary) || summary.Length > 65536 ||
             json is null || json.Length > 1024 * 1024 || size is null or < 0 ||
-            !DateTimeOffset.TryParse(updated, out _) || !DateTimeOffset.TryParse(modified, out _)) throw new ArgumentException("invalid_description");
+            !SourceTimestamp.TryParse(updated, out _) || !SourceTimestamp.TryParse(modified, out _)) throw new ArgumentException("invalid_description");
         var parsed = JsonSerializer.Deserialize<CloudVisionResult>(json) ?? throw new ArgumentException("invalid_description");
         if (parsed.Summary != summary) throw new ArgumentException("description_summary_mismatch");
         string? actualHash;
@@ -58,7 +77,7 @@ public sealed partial class PicerDatabase
             var record = new VideoRepository(this).Get(item.MediaId) ?? throw new InvalidOperationException("description_media_changed");
             actualHash = record.Sha256; actualSize = record.FileSize; actualModified = record.ModifiedUtc;
         }
-        if (actualSize != size || (photo is not null || item.Sha256 is null) && actualModified.ToUniversalTime() != DateTimeOffset.Parse(modified!).UtcDateTime ||
+        if (actualSize != size || (photo is not null || item.Sha256 is null) && !SourceTimestamp.SameInstant(actualModified.ToUniversalTime().ToString("O"), modified) ||
             item.Sha256 is { } supplied && (!supplied.Equals(actualHash, StringComparison.OrdinalIgnoreCase) || supplied.Length != 64))
             throw new InvalidOperationException("description_media_changed");
         var currentPhoto = photo is null ? null : GetAllMirroredCloudVisionAnalyses(item.MediaId, provider).SingleOrDefault();
@@ -69,7 +88,7 @@ public sealed partial class PicerDatabase
         // every accepted version is returned in subsequent metadata snapshots.
         UpsertMirroredVideoMetadata(new GatewayMetadata([], [], [], [], [], [], [],
             new[] { currentVideo, video }.OfType<GatewayVideoSummary>().ToArray(),
-            CloudVisionAnalyses: new[] { currentPhoto, photo }.OfType<GatewayCloudVisionAnalysis>().ToArray()), externalTransaction: transaction);
+            CloudVisionAnalyses: new[] { currentPhoto, photo }.OfType<GatewayCloudVisionAnalysis>().ToArray()), externalTransaction: transaction, descriptionOnly: true);
         using (var receipt = Command("INSERT INTO description_receipts(operation_id,payload_hash) VALUES($op,$hash)"))
         {
             receipt.Parameters.AddWithValue("$op", item.OperationId); receipt.Parameters.AddWithValue("$hash", hash); receipt.ExecuteNonQuery();

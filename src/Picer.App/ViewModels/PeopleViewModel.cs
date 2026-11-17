@@ -89,10 +89,13 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             await _thumbnailGate.WaitAsync(cancellationToken).ConfigureAwait(false);
             try
             {
-                var cached = _faceThumbnails.GetCachedPath(face.FaceId);
-                if (cached is not null) return cached;
-                await using var stream = await _mediaGateway.OpenFaceThumbnailAsync(face.FaceId, cancellationToken: cancellationToken).ConfigureAwait(false);
-                return stream is null ? null : await _faceThumbnails.StoreAsync(face.FaceId, stream, cancellationToken).ConfigureAwait(false);
+                var key = Picer.Core.Gateway.RemoteThumbnailCache.DerivedRecord("face-v1",
+                    System.Text.Json.JsonSerializer.Serialize(new { face.FaceId, face.ImageId, face.Ordinal, face.Box }));
+                var legacy = _faceThumbnails.GetCachedPath(face.FaceId);
+                var decoded = await Picer.App.Services.ThumbnailBitmapLoader.LoadRemoteAsync(_services.RemoteThumbnails, key,
+                    token => legacy is not null ? Task.FromResult<Stream?>(File.OpenRead(legacy))
+                        : _mediaGateway.OpenFaceThumbnailAsync(face.FaceId, cancellationToken: token), cancellationToken).ConfigureAwait(false);
+                return decoded is null ? null : _services.RemoteThumbnails.TryGet(key);
             }
             catch (Exception exception) when (exception is IOException or HttpRequestException or InvalidOperationException)
             {
@@ -1558,7 +1561,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             return;
         }
         var image = await UiWork.ReadSnapshotAsync("People.Photo", _database, reader => reader.GetImage(face.Record.ImageId));
-        if (image is null || !File.Exists(image.Path))
+        if (image is null || !_services.ServiceMode && !File.Exists(image.Path))
         {
             StatusText = "原照片当前不可用";
             return;
@@ -2227,9 +2230,9 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
                 DisplayedFacesTitle = $"{person.DisplayName} · {AssignedFaces.Count} 张人脸 · {CurrentClassificationModelLabel()}";
             foreach (var record in snapshot.Videos)
             {
-                var item = new VideoFaceItemViewModel(record);
+                var item = new VideoFaceItemViewModel(record, _services);
                 PersonVideoFaces.Add(item);
-                _ = item.LoadThumbnailAsync();
+                _ = item.LoadThumbnailAsync(cancellationToken);
             }
             if (PersonVideoFaces.Count > 0) DisplayedFacesTitle += $" + {PersonVideoFaces.Count} 张视频人脸";
             AppLogger.Info($"People named-person loaded: person={person.Id}; photos={AssignedFaces.Count}; videos={PersonVideoFaces.Count}; elapsedMs={loadStarted.ElapsedMilliseconds}");

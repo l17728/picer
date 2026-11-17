@@ -117,7 +117,8 @@ public partial class ServiceBrowseWindow : Window
     private void Photos_SizeChanged(object sender, SizeChangedEventArgs e) => ScheduleThumbnailPrefetch();
     private void Photos_ScrollChanged(object sender, ScrollChangedEventArgs e)
     {
-        if (Math.Abs(e.VerticalChange) > .01 || Math.Abs(e.HorizontalChange) > .01)
+        if (Math.Abs(e.VerticalChange) > .01 || Math.Abs(e.HorizontalChange) > .01 ||
+            e.ViewportHeightChange != 0 || e.ViewportWidthChange != 0 || e.ExtentHeightChange != 0)
             ScheduleThumbnailPrefetch();
     }
 

@@ -15,6 +15,13 @@ public interface IRangeMediaGateway
 
 public sealed partial class HttpIndexGateway
 {
+    public async Task<VideoDetailsSnapshot?> GetVideoDetailsAsync(long id, string model, CancellationToken token)
+    {
+        using var response = await GetMediaWithRetryAsync($"api/gateway/v1/videos/{id}/details?model={Uri.EscapeDataString(model)}", token);
+        if (response.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.NotImplemented) return null;
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadFromJsonAsync<VideoDetailsSnapshot>(cancellationToken: token);
+    }
     public async Task<Stream?> OpenPhotoAnalysisInputAsync(Picer.Core.Models.ImageRecord image, CancellationToken cancellationToken = default)
     {
         var identity = new MediaWire.SourceFingerprint(image.FileSize, image.ModifiedUtc, image.ContentSha256 ?? image.Sha256);
@@ -43,7 +50,20 @@ public sealed partial class HttpIndexGateway
 
     private Task<HttpResponseMessage> GetMediaWithRetryAsync(string route, CancellationToken token,
         [System.Runtime.CompilerServices.CallerMemberName] string operation = "") =>
-        SendWithRetryAsync(ct => _client.GetAsync(route, HttpCompletionOption.ResponseHeadersRead, ct), token, operation);
+        SendWithRetryAsync(async ct =>
+        {
+            using var trace = new Picer.Core.Logging.MediaReadTrace("http-media");
+            using var request = new HttpRequestMessage(HttpMethod.Get, route);
+            request.Headers.Add("X-Picer-Request-Id", trace.Id);
+            trace.Mark("send");
+            try
+            {
+                var response = await _client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
+                trace.Mark("headers", response.Content.Headers.ContentLength ?? 0, (int)response.StatusCode);
+                return response;
+            }
+            catch (Exception exception) { trace.Failure(exception); throw; }
+        }, token, operation);
     public async Task<Stream?> OpenPreviewAsync(long id, CancellationToken token = default)
     {
         var response = await _client.GetAsync($"api/gateway/v1/previews/{id}", HttpCompletionOption.ResponseHeadersRead, token).ConfigureAwait(false);

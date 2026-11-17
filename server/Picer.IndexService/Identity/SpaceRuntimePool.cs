@@ -37,7 +37,26 @@ public sealed class SpaceRuntimePool(AccountStore accounts, int capacity = 32, R
                     await idle.DisposeAsync();
                 }
                 var secret = DeviceAuthorization.NewSecret();
-                var instance = IndexServiceHost.Build(accounts.SpaceRoot(spaceId), 0, secret, isolatedSpace: true);
+                AuthorizedDevice? Actor(string? encoded)
+                {
+                    try { return encoded is null ? null : System.Text.Json.JsonSerializer.Deserialize<AuthorizedDevice>(System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(encoded))); }
+                    catch (Exception exception) when (exception is FormatException or System.Text.Json.JsonException) { return null; }
+                }
+                var classificationAuthorization = new Picer.Core.Classification.ClassificationAuthorization(
+                    encoded => Actor(encoded) is { } actor && actor.SpaceId == spaceId && actor.Allows("analysis.run") && accounts.IsAuthorizationCurrent(actor),
+                    (encoded, action) =>
+                    {
+                        var actor = Actor(encoded);
+                        if (actor is null || actor.SpaceId != spaceId) throw new UnauthorizedAccessException("classification_authorization_revoked");
+                        accounts.ExecuteAuthorizedBackgroundWrite(actor, action);
+                    },
+                    (encoded, scope, action) =>
+                    {
+                        var actor = Actor(encoded);
+                        if (actor is null || actor.SpaceId != spaceId) throw new UnauthorizedAccessException("classification_authorization_revoked");
+                        accounts.ExecuteAuthorizedBackgroundWrite(actor, action, scope);
+                    });
+                var instance = IndexServiceHost.Build(accounts.SpaceRoot(spaceId), 0, secret, isolatedSpace: true, classificationAuthorization: classificationAuthorization);
                 try
                 {
                     if (restoreGuard is not null)

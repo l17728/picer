@@ -6,6 +6,7 @@ namespace Picer.Core.SemanticSearch;
 
 public interface IClipEmbeddingClient
 {
+    string? CacheScope => null;
     string ModelVersion { get; }
     Task<float[]> EncodeTextAsync(string text, CancellationToken cancellationToken);
     Task<float[]> EncodeImageAsync(ImageRecord image, CancellationToken cancellationToken);
@@ -28,7 +29,8 @@ public sealed class ClipSemanticService(PicerDatabase db, ClipSemanticRepository
     public string ModelVersion => embeddings.ModelVersion;
     public async Task BuildIndexAsync(IProgress<ClipIndexProgress>? progress = null, CancellationToken cancellationToken = default)
     {
-        var images = db.GetImages(includeMissing: false).Where(x => x.Status == ImageStatus.Active && File.Exists(x.Path)).ToArray();
+        var images = db.GetImages(includeMissing: false).Where(x => x.Status == ImageStatus.Active &&
+            (embeddings is not LocalClipEmbeddingClient || File.Exists(x.Path))).ToArray();
         var completed = 0;
         foreach (var image in images)
         {

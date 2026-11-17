@@ -163,7 +163,7 @@ public static class IndexRepairService
             db.UpdateImageInTransaction(image, transaction);
             foreach (var table in new[] { "cloud_vision_analyses", "vision_analyses", "florence_image_results" })
             {
-                using var rebind = db.Command($"UPDATE {table} SET source_file_size=$size,source_modified_utc=$modified WHERE image_id=$id AND source_file_size=$oldSize AND source_modified_utc=$oldModified");
+                using var rebind = db.Command($"UPDATE {table} SET source_file_size=$size,source_modified_utc=$modified WHERE image_id=$id AND source_file_size=$oldSize AND picer_same_instant(source_modified_utc,$oldModified)");
                 rebind.Parameters.AddWithValue("$size", target.FileSize); rebind.Parameters.AddWithValue("$modified", target.ModifiedUtc.ToString("o"));
                 rebind.Parameters.AddWithValue("$oldSize", oldSize); rebind.Parameters.AddWithValue("$oldModified", oldModified.ToString("o"));
                 rebind.Parameters.AddWithValue("$id", image.Id); rebind.ExecuteNonQuery();
@@ -225,7 +225,7 @@ public static class IndexRepairService
             using var update = db.Command("UPDATE videos SET source_id=$source,path=$path,file_size=$size,modified_utc=$modified,status='active',indexed_utc=$now WHERE id=$id");
             Bind(update); update.ExecuteNonQuery();
         }
-        using (var summary = db.Command("UPDATE video_summaries SET source_file_size=$size,source_modified_utc=$modified WHERE video_id=$id AND source_file_size=$oldSize AND source_modified_utc=$oldModified"))
+        using (var summary = db.Command("UPDATE video_summaries SET source_file_size=$size,source_modified_utc=$modified WHERE video_id=$id AND source_file_size=$oldSize AND picer_same_instant(source_modified_utc,$oldModified)"))
         {
             summary.Parameters.AddWithValue("$id", new VideoContentRepository(db).GetContentId(resultId)); summary.Parameters.AddWithValue("$size", target.FileSize);
             summary.Parameters.AddWithValue("$modified", target.ModifiedUtc.ToUniversalTime().ToString("o")); summary.Parameters.AddWithValue("$oldSize", operation.FileSize);

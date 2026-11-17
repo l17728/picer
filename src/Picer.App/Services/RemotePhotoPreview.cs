@@ -27,18 +27,9 @@ public static class RemotePhotoPreview
         window.Show();
         try
         {
-            await using var input = await gateway.OpenPreviewAsync(id, stop.Token);
-            if (input is null) status.Text = "服务暂不提供预览，可以下载原图。";
-            else
+            var cached = await SharedImageAssets.GetAsync(gateway, id, path, hash, true, stop.Token);
+            using (var bytes = File.OpenRead(cached))
             {
-                using var bytes = new MemoryStream();
-                var buffer = new byte[64 * 1024];
-                int count;
-                while ((count = await input.ReadAsync(buffer, stop.Token)) > 0)
-                {
-                    if (bytes.Length + count > 8 * 1024 * 1024) throw new InvalidDataException("preview_too_large");
-                    bytes.Write(buffer, 0, count);
-                }
                 var timer = Stopwatch.StartNew();
                 bytes.Position = 0;
                 var bitmap = new BitmapImage();

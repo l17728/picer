@@ -79,6 +79,19 @@
                                 <Border Background="#F0F0F0"/>
                                 <Image Source="{Binding Thumbnail}" Stretch="Uniform" Loaded="Thumbnail_Loaded"
                                        AutomationProperties.Name="{Binding FileName}"/>
+                                <TextBlock Text="{Binding RecallEvidence}" ToolTip="{Binding RecallEvidence}"
+                                           VerticalAlignment="Bottom" Background="#EFFFFFFF" Foreground="#334155"
+                                           FontSize="10" Padding="3" TextTrimming="CharacterEllipsis">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding RecallEvidence}" Value="">
+                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
                                 <Border x:Name="VideoPlayOverlay" Visibility="Collapsed" HorizontalAlignment="Center" VerticalAlignment="Center"
                                         Background="#B3000000" CornerRadius="24" Width="48" Height="48">
                                     <TextBlock Text="▶" Foreground="White" FontSize="24" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="4,0,0,0"/>

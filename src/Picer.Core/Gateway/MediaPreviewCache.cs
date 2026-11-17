@@ -10,21 +10,25 @@ public sealed class MediaPreviewCache(long capacity = 64L * 1024 * 1024)
     private long _bytes, _generation;
     public async Task<byte[]> GetAsync(string key, Func<CancellationToken, Task<byte[]>> factory, CancellationToken token)
     {
+        using var trace = Picer.Core.Logging.AnalysisTrace.Current is null ? null : new Picer.Core.Logging.MediaReadTrace("preview-cache");
         token.ThrowIfCancellationRequested();
         long generation;
         lock (_sync)
         {
             generation = _generation;
-            if (TryGet(key) is { } cached) return cached;
+            if (TryGet(key) is { } cached) { trace?.Mark("hit", cached.Length); return cached; }
         }
+        trace?.Mark("miss");
         using (await _keys.EnterAsync(key, token).ConfigureAwait(false))
         {
+            trace?.Mark("key_admitted");
             lock (_sync)
             {
                 if (generation != _generation) throw new OperationCanceledException("media_cache_cleared");
-                if (TryGet(key) is { } cached) return cached;
+                if (TryGet(key) is { } cached) { trace?.Mark("shared_hit", cached.Length); return cached; }
             }
             var bytes = await factory(token).ConfigureAwait(false);
+            trace?.Mark("generated", bytes.Length);
             if (bytes.LongLength > Math.Min(capacity, 8 * 1024 * 1024)) throw new IOException("media_preview_too_large");
             token.ThrowIfCancellationRequested();
             lock (_sync)

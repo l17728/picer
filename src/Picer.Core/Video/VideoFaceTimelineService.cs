@@ -117,24 +117,26 @@ public sealed class VideoFaceTimelineService(PicerDatabase database, IImageFaceA
         return total;
     }
 
-    public IReadOnlyList<VideoFaceTimelineRecord> GetTimeline(long videoId)
+    public IReadOnlyList<VideoFaceTimelineRecord> GetTimeline(long videoId) => ReadTimeline(database, videoId, analyzer.ModelVersion, includeAllModels);
+
+    public static IReadOnlyList<VideoFaceTimelineRecord> ReadTimeline(PicerDatabase database, long videoId, string preferredModel, bool includeAllModels = false)
     {
-        var preferred = GetTimelineForModel(videoId, analyzer.ModelVersion);
+        var preferred = GetTimelineForModel(database, videoId, preferredModel, includeAllModels);
         if (includeAllModels || preferred.Count > 0) return preferred;
 
         // Prefer the configured/default model as a whole. Only when that model
         // has no displayable rows do we select one fallback space. Choosing a
         // single space avoids mixing distances, proposals, or duplicate crops.
-        var fallbackModel = GetAvailableModels(videoId)
+        var fallbackModel = GetAvailableModels(database, videoId, preferredModel)
             .OrderBy(candidate => FallbackModelPriority(candidate.ModelVersion))
             .ThenByDescending(candidate => candidate.FaceCount)
             .ThenBy(candidate => candidate.ModelVersion, StringComparer.OrdinalIgnoreCase)
             .Select(candidate => candidate.ModelVersion)
             .FirstOrDefault();
-        return fallbackModel is null ? preferred : GetTimelineForModel(videoId, fallbackModel);
+        return fallbackModel is null ? preferred : GetTimelineForModel(database, videoId, fallbackModel, includeAllModels);
     }
 
-    private IReadOnlyList<VideoFaceTimelineRecord> GetTimelineForModel(long videoId, string modelVersion)
+    private static IReadOnlyList<VideoFaceTimelineRecord> GetTimelineForModel(PicerDatabase database, long videoId, string modelVersion, bool includeAllModels)
     {
         using var command=database.Command("""
             SELECT vf.timestamp_seconds,k.path,vf.box_x,vf.box_y,vf.box_width,vf.box_height,vf.confidence,vf.id,
@@ -149,7 +151,7 @@ public sealed class VideoFaceTimelineService(PicerDatabase database, IImageFaceA
         while(reader.Read())result.Add(new(reader.GetDouble(0),reader.GetString(1),new(reader.GetFloat(2),reader.GetFloat(3),reader.GetFloat(4),reader.GetFloat(5)),reader.GetFloat(6),reader.GetInt64(7),reader.IsDBNull(8)?null:reader.GetInt64(8),reader.IsDBNull(9)?null:reader.GetString(9),reader.IsDBNull(10)?null:reader.GetDouble(10),reader.IsDBNull(11)?null:reader.GetInt64(11),reader.IsDBNull(12)?null:reader.GetString(12),reader.IsDBNull(13)?null:reader.GetString(13)){ModelVersion=reader.GetString(14)});return result;
     }
 
-    private IReadOnlyList<(string ModelVersion, int FaceCount)> GetAvailableModels(long videoId)
+    private static IReadOnlyList<(string ModelVersion, int FaceCount)> GetAvailableModels(PicerDatabase database, long videoId, string preferredModel)
     {
         using var command = database.Command("""
             SELECT vf.model_version,COUNT(*)
@@ -158,7 +160,7 @@ public sealed class VideoFaceTimelineService(PicerDatabase database, IImageFaceA
             GROUP BY vf.model_version
             """);
         command.Parameters.AddWithValue("$video", new VideoContentRepository(database).GetContentId(videoId));command.Parameters.AddWithValue("$owner",database.GetVideoOwnerKey(videoId));
-        command.Parameters.AddWithValue("$preferred", analyzer.ModelVersion);
+        command.Parameters.AddWithValue("$preferred", preferredModel);
         using var reader = command.ExecuteReader();
         var result = new List<(string ModelVersion, int FaceCount)>();
         while (reader.Read()) result.Add((reader.GetString(0), reader.GetInt32(1)));

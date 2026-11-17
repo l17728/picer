@@ -8,7 +8,7 @@ namespace Picer.Core.Data;
 
 public sealed partial class PicerDatabase : IDisposable
 {
-    public const int CurrentSchemaVersion = 92;
+    public const int CurrentSchemaVersion = 94;
     private readonly SqliteConnection _conn;
     private readonly string _connectionString;
     private readonly FileStream? _lifetimeLease;
@@ -1586,6 +1586,14 @@ public sealed partial class PicerDatabase : IDisposable
             TrainingSyncBaselineMigration.Apply(_conn);
         if (schemaVersion < 92)
             DescriptionSyncMigration.Apply(_conn);
+        if (schemaVersion < 93)
+            ClassificationV2Migration.Apply(_conn);
+        if (schemaVersion < 94)
+        {
+            DescriptionDeltaMigration.Apply(_conn);
+            ArchiveDescriptionSnapshot(new GatewayMetadata([], [], [], [], [], [], [], GetAllMirroredVideoSummaries(),
+                CloudVisionAnalyses: GetAllMirroredCloudVisionAnalyses()));
+        }
         }
         catch
         {
@@ -2475,11 +2483,11 @@ public sealed partial class PicerDatabase : IDisposable
         remove.ExecuteNonQuery();
     }
 
-    public void UpsertMirroredVideoMetadata(GatewayMetadata metadata, bool authoritative = false, SqliteTransaction? externalTransaction = null)
+    public void UpsertMirroredVideoMetadata(GatewayMetadata metadata, bool authoritative = false, SqliteTransaction? externalTransaction = null, bool descriptionOnly = false)
     {
         using var ownedTransaction = externalTransaction is null ? BeginTransaction() : null;
         var transaction = externalTransaction ?? ownedTransaction!;
-        metadata = ProtectDescriptionSnapshot(metadata);
+        metadata = ProtectDescriptionSnapshot(metadata, descriptionOnly);
         if (authoritative)
         {
             ReconcileVideoRows("video_detected_faces", "id", metadata.VideoFacesOrEmpty.Select(face => face.Id));
@@ -2706,6 +2714,7 @@ public sealed partial class PicerDatabase : IDisposable
 
     private static void RegisterFunctions(SqliteConnection connection)
     {
+        connection.CreateFunction<string?, string?, bool>("picer_same_instant", SourceTimestamp.SameInstant, isDeterministic: true);
         connection.CreateFunction<string?, string>("search_tokens", value => ChineseSearchTokens.Encode(value ?? ""), isDeterministic: true);
         connection.CreateFunction<string?, byte[]?>("unhex_blob", value => value is null ? null : Convert.FromHexString(value), isDeterministic: true);
         connection.CreateFunction<string?, double, double, double, double, int>(

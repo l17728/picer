@@ -41,6 +41,8 @@ internal static class UiWork
 
     public static async Task<T> RunDatabaseAsync<T>(string operation, Func<T> work, CancellationToken cancellationToken = default)
     {
+        if (operation.StartsWith("RemoteMirror.", StringComparison.Ordinal) || operation.StartsWith("RemoteVideos.", StringComparison.Ordinal))
+            await AppServices.ForegroundReads.WaitAsync(cancellationToken).ConfigureAwait(false);
         var stopwatch = Stopwatch.StartNew();
         await DatabaseGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         var queueMilliseconds = stopwatch.ElapsedMilliseconds;
@@ -55,6 +57,8 @@ internal static class UiWork
 
     public static async Task RunDatabaseAsync(string operation, Action work, CancellationToken cancellationToken = default)
     {
+        if (operation.StartsWith("RemoteMirror.", StringComparison.Ordinal) || operation.StartsWith("RemoteVideos.", StringComparison.Ordinal))
+            await AppServices.ForegroundReads.WaitAsync(cancellationToken).ConfigureAwait(false);
         var stopwatch = Stopwatch.StartNew();
         await DatabaseGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         var queueMilliseconds = stopwatch.ElapsedMilliseconds;

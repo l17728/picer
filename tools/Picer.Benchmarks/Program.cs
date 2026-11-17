@@ -3,6 +3,18 @@ using System.Text.Json;
 using Picer.Core.Data;
 using Picer.Core.Search;
 
+if (args.Length == 2 && args[0] == "--description-sync-stress")
+{
+    await DescriptionStressBenchmark.RunAsync(int.Parse(args[1], System.Globalization.CultureInfo.InvariantCulture));
+    return;
+}
+
+if (args.Length == 3 && args[0] == "--classification-v2")
+{
+    ClassificationBenchmark.Run(args[1], int.Parse(args[2], System.Globalization.CultureInfo.InvariantCulture));
+    return;
+}
+
 if (args is ["--media-transfer"])
 {
     await MediaBenchmark.RunAsync();

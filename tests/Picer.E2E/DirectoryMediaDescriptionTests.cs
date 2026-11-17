@@ -13,6 +13,137 @@ namespace Picer.E2E;
 public sealed class DirectoryMediaDescriptionTests
 {
     [Fact]
+    public async Task PreparedPhotoInputsBoundOutstandingFilesAndReleaseCanceledWaiters()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "picer-input-prefetch-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var first = new ImageRecord { Id = 1, Path = "remote/one.jpg", FileSize = 4 };
+            var second = new ImageRecord { Id = 2, Path = "remote/two.jpg", FileSize = 4 };
+            var third = new ImageRecord { Id = 3, Path = "remote/three.jpg", FileSize = 4 };
+            var assets = new PreparedAssets(true, [1, 2, 3, 4], [5, 6]);
+            using var inputs = new PreparedPhotoInputs(assets, root);
+            using var one = await inputs.PrepareAsync(first, default);
+            using var two = await inputs.PrepareAsync(second, default);
+            Assert.Equal(2, Directory.GetFiles(root).Length);
+            using var cancel = new CancellationTokenSource();
+            var waiting = inputs.PrepareAsync(third, cancel.Token);
+            Assert.False(waiting.IsCompleted);
+            cancel.Cancel(); await Assert.ThrowsAnyAsync<OperationCanceledException>(() => waiting);
+            var analyzer = new SnapshotAnalyzer(first.Path, [5, 6]);
+            await new MediaDescriptionBatch.PhotoInputAnalyzer(analyzer, Path.Combine(root, "active"), assets, inputs)
+                .AnalyzeAsync(new(first, null, []), default);
+            Assert.Equal(2, assets.PreparedReads);
+            Assert.Equal(0, assets.OriginalReads);
+            one!.Dispose(); two!.Dispose();
+            Assert.Empty(Directory.GetFiles(root));
+        }
+        finally { Directory.Delete(root, true); }
+    }
+    [Fact]
+    public async Task RunCleanupSurvivesFailedStatusRefreshAndResourceDisposal()
+    {
+        var run = new DescriptionRunLifetime();
+        var released = false;
+        var reset = false;
+        await run.FinishAsync(() => Task.FromException(new IOException("status unavailable")), () =>
+        {
+            released = true;
+            throw new InvalidOperationException("dispose failed");
+        }, () => reset = true);
+        Assert.True(released);
+        Assert.True(reset);
+        Assert.True(run.Terminal);
+        Assert.False(run.AcceptsProgress);
+        Assert.False(run.RequestCancellation());
+        var next = new DescriptionRunLifetime();
+        Assert.NotEqual(run.Id, next.Id);
+        Assert.True(next.AcceptsProgress);
+    }
+
+    [Fact]
+    public async Task CancellationRejectsLateProgressAndDuplicateRequestsBeforeWorkersFinish()
+    {
+        var run = new DescriptionRunLifetime();
+        var drain = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Assert.True(run.RequestCancellation());
+        Assert.False(run.RequestCancellation());
+        Assert.False(run.AcceptsProgress);
+        var reset = false;
+        var finishing = run.FinishAsync(() => drain.Task, () => { }, () => reset = true);
+        Assert.False(finishing.IsCompleted);
+        Assert.False(reset);
+        drain.SetResult();
+        await finishing;
+        Assert.True(reset);
+        Assert.False(run.AcceptsProgress);
+    }
+
+    [Fact]
+    public async Task FinalSummaryIsCapturedBeforeDeferredUiProgressRuns()
+    {
+        var run = new DescriptionRunLifetime();
+        var deferred = new DeferredProgress();
+        var runner = new MediaDescriptionBatch((_, _) => Task.FromResult(true), (_, _) => Task.FromResult(true));
+        var plan = new DirectoryMediaDescriptionPlan("test", 1, 0,
+            [new ImageRecord { Id = 1, Path = "one.jpg" }], []);
+        await runner.RunAsync(plan, run.CaptureProgress(deferred), CancellationToken.None);
+        run.CloseProgress();
+        Assert.Contains("发现完成", run.LatestProgress);
+        Assert.Contains("1/1", run.LatestProgress);
+        Assert.False(run.AcceptsProgress);
+        Assert.NotEmpty(deferred.Values);
+    }
+
+    private sealed class DeferredProgress : IProgress<string>
+    {
+        public List<string> Values { get; } = [];
+        public void Report(string value) { lock (Values) Values.Add(value); }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task LockedTemporaryInputDoesNotReplaceSuccessfulResultOrCancellation(bool cancel)
+    {
+        var root = Path.Combine(Path.GetTempPath(), "picer-cleanup-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        using var cancellation = new CancellationTokenSource();
+        using var inner = new LockedInputAnalyzer(cancellation, cancel);
+        try
+        {
+            var image = new ImageRecord { Id = 1, Path = "remote/photo.jpg", FileSize = 3 };
+            var analyzer = new MediaDescriptionBatch.PhotoInputAnalyzer(inner, root, new PreparedAssets(true, [1, 2, 3], [1, 2, 3]));
+            if (cancel)
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(() => analyzer.AnalyzeAsync(new(image, null, []), cancellation.Token));
+            else
+                Assert.Equal("completed", (await analyzer.AnalyzeAsync(new(image, null, []), cancellation.Token)).Summary);
+            Assert.Single(Directory.EnumerateFiles(root));
+        }
+        finally { inner.Dispose(); Directory.Delete(root, true); }
+    }
+
+    private sealed class LockedInputAnalyzer(CancellationTokenSource cancellation, bool cancel) : ICloudVisionAnalyzer, IDisposable
+    {
+        private FileStream? _locked;
+        public string Provider => "test";
+        public string ModelVersion => "test";
+        public string PromptVersion => "test";
+        public Task<CloudVisionResult> AnalyzeAsync(CloudVisionRequest request, CancellationToken token)
+        {
+            _locked = new FileStream(request.Image.Path, FileMode.Open, FileAccess.Read, FileShare.Read);
+            if (cancel)
+            {
+                cancellation.Cancel();
+                return Task.FromCanceled<CloudVisionResult>(token);
+            }
+            return Task.FromResult(new CloudVisionResult("completed", [], [], [], []));
+        }
+        public void Dispose() { _locked?.Dispose(); _locked = null; }
+    }
+
+    [Fact]
     public void RemoteSceneAnchorKeepsActiveImagesWithoutCheckingClientPaths()
     {
         var activeRemote = new ImageRecord { Id = 1, Path = "remote://101APPLE/photo.jpg", Status = ImageStatus.Active };
@@ -167,9 +298,13 @@ public sealed class DirectoryMediaDescriptionTests
     private sealed class PreparedAssets(bool supported, byte[] original, byte[] prepared, bool rejectPrepared = false) : Picer.Core.Gateway.IMediaAssetGateway
     {
         public int OriginalReads;
+        public int PreparedReads;
         public Task<Stream?> OpenPhotoAnalysisInputAsync(ImageRecord image, CancellationToken cancellationToken = default)
-            => rejectPrepared ? throw new InvalidDataException("photo_analysis_source_conflict")
+        {
+            PreparedReads++;
+            return rejectPrepared ? throw new InvalidDataException("photo_analysis_source_conflict")
                 : Task.FromResult<Stream?>(supported ? new MemoryStream(prepared) : null);
+        }
         public Task<Stream?> OpenOriginalImageAsync(long id, string? agentId = null, CancellationToken cancellationToken = default)
         { OriginalReads++; return Task.FromResult<Stream?>(new MemoryStream(original)); }
         public Task<Stream?> OpenOriginalVideoAsync(long id, string? agentId = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();
@@ -338,6 +473,34 @@ public sealed class DirectoryMediaDescriptionTests
             [new VideoRecord(1, 1, "D:/media/video.mp4", 1, DateTime.UtcNow, 1, 1, 1, null, null, "active")]);
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => coordinator.RunAsync(plan, new Capture([]), cancellation.Token));
         Assert.Equal(0, videoCalls);
+    }
+
+    [Fact]
+    public void PublishedDirectoryTreeShowsOriginalFolderNamesAndKeepsQualifiedSelection()
+    {
+        Exception? failure = null;
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                var window = new DirectoryMediaDescriptionWindow(loadOnShow: false);
+                const string publisher = "debaec1fc4714a23bdad031d1eb058da";
+                var rootPath = $"//Picer-{publisher}/G$/Apple照片";
+                window.PopulateDirectories([$"{rootPath}/学生/DCIM/one.jpg"]);
+                var root = Assert.IsType<TreeViewItem>(Assert.Single(window.DirectoryTree.Items.Cast<object>()));
+                Assert.Equal("Apple照片", root.Header);
+                Assert.Equal(rootPath, root.Tag);
+                root.RaiseEvent(new RoutedEventArgs(TreeViewItem.ExpandedEvent, root));
+                var child = Assert.IsType<TreeViewItem>(Assert.Single(root.Items.Cast<object>()));
+                Assert.Equal("学生", child.Header);
+                Assert.Equal(rootPath + "/学生", child.Tag);
+                window.Close();
+            }
+            catch (Exception exception) { failure = exception; }
+        });
+        thread.SetApartmentState(ApartmentState.STA); thread.Start();
+        Assert.True(thread.Join(TimeSpan.FromSeconds(15)));
+        if (failure is not null) throw failure;
     }
 
     [Fact]

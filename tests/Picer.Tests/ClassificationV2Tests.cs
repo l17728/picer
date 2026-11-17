@@ -1,0 +1,273 @@
+using Picer.Core.Classification;
+
+namespace Picer.Tests;
+
+public class ClassificationV2Tests
+{
+    [Fact]
+    public void SparseModelOutputRequiresCompleteEvaluationAndKnownUniqueLabels()
+    {
+        var preset = ClassificationPreset.Load();
+        var taxonomy = new ClassificationTaxonomySnapshot(1, 1, preset.Labels, preset.Edges, []);
+        string Json(bool evaluated, params string[] ids) => System.Text.Json.JsonSerializer.Serialize(new
+        {
+            schemaVersion = "classification-sparse-v1", inputFingerprint = "fingerprint", evaluatedAll = evaluated,
+            labels = ids.Select(id => new { labelId = id, support = "supported", evidenceIds = new[] { "image:current" } }), proposals = Array.Empty<object>()
+        });
+        var result = ClassificationModel.DecodeResult(Json(true, "subject.people", "scene.outdoor"), taxonomy);
+        Assert.Equal(179, result.Labels.Count);
+        Assert.Equal(2, result.Labels.Count(l => l.Support == "supported"));
+        Assert.Equal(177, result.Labels.Count(l => l.Support == "absent"));
+        Assert.Throws<InvalidDataException>(() => ClassificationModel.DecodeResult(Json(false), taxonomy));
+        Assert.Throws<InvalidDataException>(() => ClassificationModel.DecodeResult(Json(true, "unknown"), taxonomy));
+        Assert.Throws<InvalidDataException>(() => ClassificationModel.DecodeResult(Json(true, "subject.people", "subject.people"), taxonomy));
+    }
+
+    [Fact]
+    public void DeletedPersonFilterMatchesNothingInsteadOfBroadeningResults()
+    {
+        var filter = new CompiledClassificationFilter(Graph(), new([new(ClassificationMatchMode.All, ["person.confirmed.123"])], []));
+        Assert.False(filter.Matches(["subject.people"]));
+    }
+    [Fact]
+    public async Task ModelReceivesLiteralChineseTaxonomyWithoutNestedUnicodeEscapes()
+    {
+        var preset = ClassificationPreset.Load();
+        var taxonomy = new ClassificationTaxonomySnapshot(1, 1, preset.Labels, preset.Edges,
+            preset.Labels.Where(l => l.Assignable).Select(l => new ClassificationDefinitionVersion(l.Id, 1)).ToArray());
+        var context = new ClassificationContext(new(), Input(), new Dictionary<string, string>
+        {
+            ["image:current"] = "本次核验的照片",
+            ["description:fixture"] = System.Text.Json.JsonSerializer.Serialize(new { summary = "户外花园与人物" })
+        });
+        var model = new ClassificationModel((_, _) => Task.FromResult(new byte[] { 0xff, 0xd8, 0xff, 0xd9 }), (_, bytes, _) =>
+        {
+            using var payload = System.Text.Json.JsonDocument.Parse(bytes);
+            var text = payload.RootElement.GetProperty("messages")[1].GetProperty("content")[0].GetProperty("text").GetString()!;
+            Assert.Contains("人物", text);
+            Assert.DoesNotContain("\\u", text);
+            using var decoded = System.Text.Json.JsonDocument.Parse(text);
+            Assert.Equal(179, decoded.RootElement.GetProperty("labels").GetArrayLength());
+            Assert.Equal("户外花园与人物", decoded.RootElement.GetProperty("untrustedEvidence").GetProperty("description:fixture").GetProperty("summary").GetString());
+            var result = new ClassificationResult("classification-result-v1", ClassificationInputFingerprint.Compute(context.Input),
+                taxonomy.Labels.Where(l => l.Assignable && l.Active).Select(l => new ClassificationLabelEvaluation(l.Id, "absent", [])).ToArray(), []);
+            var response = System.Text.Json.JsonSerializer.Serialize(new { choices = new[] { new { message = new { content = System.Text.Json.JsonSerializer.Serialize(result) } } } });
+            return Task.FromResult(response);
+        });
+        Assert.Equal(179, (await model.ClassifyAsync(context, taxonomy, new(true, "fixture", "local", false), default)).Labels.Count);
+    }
+    private static ClassificationInput Input() => new("epoch", "owner", "sha256:" + new string('a', 64),
+        [], [], [], "model", "prep", "prompt", [new("subject.people", 1)], 1, "candidate");
+    private static ClassificationEvidence Evidence(string id = "description", char hash = 'b') => new(id, new string(hash, 64), "source");
+    private static ClassificationTaxonomy Graph() => ClassificationPreset.Load().CreateTaxonomy();
+
+    [Fact]
+    public async Task StreamEnvelopeOverOneMegabyteDoesNotRejectSmallValidContent()
+    {
+        var preset = ClassificationPreset.Load();
+        var taxonomy = new ClassificationTaxonomySnapshot(1, 1, preset.Labels, preset.Edges, []);
+        var context = new ClassificationContext(new(), Input(), new Dictionary<string, string> { ["image:current"] = "fixture" });
+        var content = System.Text.Json.JsonSerializer.Serialize(new
+        {
+            schemaVersion = "classification-sparse-v1", inputFingerprint = ClassificationInputFingerprint.Compute(context.Input),
+            evaluatedAll = true, labels = Array.Empty<object>(), proposals = Array.Empty<object>()
+        });
+        var envelope = "data: " + System.Text.Json.JsonSerializer.Serialize(new
+        { padding = new string('x', 1100000), choices = new[] { new { delta = new { content } } } }) + "\n\ndata: [DONE]\n\n";
+        var model = new ClassificationModel((_, _) => Task.FromResult(new byte[] { 255, 216, 255, 217 }),
+            (_, _, _) => Task.FromResult(envelope));
+        Assert.Equal(179, (await model.ClassifyAsync(context, taxonomy, new(true, "fixture", "local", false), default)).Labels.Count);
+    }
+
+    [Fact]
+    public void BatchFingerprintPreservesCanonicalFormatAndDoesNotReuseChangedDefinitions()
+    {
+        var definitions = new[] { new ClassificationDefinitionVersion("subject.people", 1), new("scene.forest", 2) };
+        var input = Input() with { Definitions = definitions, Descriptions = [Evidence()] };
+        var compute = ClassificationInputFingerprint.CreateBatchComputer(definitions);
+        Assert.Equal(ClassificationInputFingerprint.Compute(input), compute(input));
+        var reordered = input with { Definitions = definitions.Reverse().ToArray() };
+        Assert.Equal(ClassificationInputFingerprint.Compute(input), compute(reordered));
+        definitions[0] = new("subject.people", 3);
+        Assert.Equal(ClassificationInputFingerprint.Compute(input), compute(input));
+        var invalid = input with { Definitions = [new("subject.people", 0)] };
+        Assert.Throws<ArgumentException>(() => compute(invalid));
+    }
+
+    [Fact]
+    public void ExplicitModelAgentIsEncodedAndSpaceRouteIsPreserved()
+    {
+        var endpoint = ClassificationModel.ServiceRelayEndpoint(new Uri("https://example.test/spaces/space-id/api/service/v1/classification/"), "agent/a+b");
+        Assert.Equal("/spaces/space-id/api/ai/v1/chat/stream", endpoint.AbsolutePath);
+        Assert.Equal("?agentId=agent%2Fa%2Bb", endpoint.Query);
+    }
+
+    [Fact]
+    public void PresetHasDefinedAssignableLabelsAndAmbiguousLegacyAliases()
+    {
+        var graph = Graph();
+        Assert.Equal(188, graph.Labels.Count);
+        Assert.Equal(179, graph.Labels.Values.Count(x => x.Assignable));
+        Assert.All(graph.Labels.Values.Where(x => x.Assignable), x => Assert.False(string.IsNullOrWhiteSpace(x.Exclusions)));
+        Assert.Equal(new[] { "subject.group", "subject.group_portrait" }, graph.ResolveAlias("合影"));
+        Assert.Equal(new[] { "subject.people", "subject.portrait" }, graph.ResolveAlias("人像"));
+    }
+
+    [Fact]
+    public void MultiParentCampingIsOneIdAndRelatedForestDoesNotMatchIt()
+    {
+        var graph = Graph();
+        Assert.Contains("activity.camping", graph.Expand("nav.event"));
+        Assert.Contains("activity.camping", graph.Expand("nav.activity"));
+        Assert.DoesNotContain("activity.camping", graph.Expand("scene.forest"));
+        Assert.Equal(1, graph.Expand("nav.activity").Count(x => x == "activity.camping"));
+    }
+
+    [Fact]
+    public void ExcessiveGraphDepthIsRejected()
+    {
+        var labels = Enumerable.Range(0, 17).Select(i => new ClassificationLabel("node" + i, "subject", "节点", "定义", "边界", [])).ToArray();
+        var edges = Enumerable.Range(0, 16).Select(i => new ClassificationEdge("node" + i, "node" + (i + 1), TaxonomyEdgeKind.Browse));
+        Assert.Throws<ArgumentException>(() => new ClassificationTaxonomy(labels, edges));
+    }
+
+    [Theory]
+    [InlineData(TaxonomyEdgeKind.IsA)]
+    [InlineData(TaxonomyEdgeKind.Browse)]
+    public void MixedNavigationCyclesIncludingInactiveNodesAreRejected(TaxonomyEdgeKind kind)
+    {
+        ClassificationLabel[] labels = [new("a", "subject", "甲", "定义", "边界", []), new("b", "subject", "乙", "定义", "边界", [], Active: false)];
+        Assert.Throws<ArgumentException>(() => new ClassificationTaxonomy(labels, [new("a", "b", kind), new("b", "a", TaxonomyEdgeKind.Browse)]));
+    }
+
+    [Fact]
+    public void GroupedFilterSupportsPeopleAndForestOrGrassWithGlobalExclusion()
+    {
+        var filter = new CompiledClassificationFilter(Graph(), new([
+            new(ClassificationMatchMode.All, ["subject.people"]),
+            new(ClassificationMatchMode.Any, ["scene.forest", "scene.grassland"])], ["scene.forest.bamboo"]));
+        Assert.True(filter.Matches(["subject.people", "scene.grassland"]));
+        Assert.True(filter.Matches(["subject.people", "scene.forest.conifer"]));
+        Assert.False(filter.Matches(["scene.grassland"]));
+        Assert.False(filter.Matches(["subject.people", "activity.camping"]));
+        Assert.False(filter.Matches(["subject.people", "scene.grassland", "scene.forest.bamboo"]));
+    }
+
+    [Fact]
+    public void LegacyConceptsDoNotGainFacilitiesOrLoseBroadBeachMeaning()
+    {
+        var graph = Graph();
+        Assert.DoesNotContain("object.building.road", graph.Expand("object.building"));
+        Assert.Contains("object.building.road", graph.Expand("nav.architecture"));
+        Assert.DoesNotContain("scene.beach", graph.Expand("scene.coast.sandy"));
+        Assert.Equal(new[] { "scene.beach", "scene.coast.sandy" }, graph.ResolveAlias("沙滩"));
+        Assert.Contains("海边", graph.Labels["scene.beach"].Definition);
+        Assert.Throws<ArgumentException>(() => new ClassificationTaxonomy([new("a", "typo", "甲", "定义", "边界", [])], []));
+    }
+
+    [Fact]
+    public void EmptyFiltersMatchAllButUnknownIdsAndOversizedGroupsFail()
+    {
+        Assert.True(new CompiledClassificationFilter(Graph(), new([new(ClassificationMatchMode.Any, [])], [])).Matches([]));
+        Assert.Throws<ArgumentException>(() => new CompiledClassificationFilter(Graph(), new([], ["missing"])));
+        Assert.Throws<ArgumentException>(() => new CompiledClassificationFilter(Graph(), new([new(ClassificationMatchMode.All, Enumerable.Repeat("subject.people", 33).ToArray())], [])));
+    }
+
+    [Theory]
+    [InlineData(ClassificationMatchMode.All, false)]
+    [InlineData(ClassificationMatchMode.Any, true)]
+    public void ExplicitParentAndChildConditionsRemainIndependent(ClassificationMatchMode mode, bool parentOnlyMatches)
+    {
+        var filter = new CompiledClassificationFilter(Graph(), new([new(mode, ["scene.forest", "scene.forest.bamboo"])], []));
+        Assert.Equal(parentOnlyMatches, filter.Matches(["scene.forest"]));
+        Assert.True(filter.Matches(["scene.forest.bamboo"]));
+        Assert.False(new CompiledClassificationFilter(Graph(), new([], ["scene.forest"])).Matches(["scene.forest.bamboo"]));
+    }
+
+    [Fact]
+    public void FingerprintMatchesIndependentPythonGoldenVector()
+        => Assert.Equal("cf90bc918e2830eb75bb2ed1917646cf5113a326fe784c9ab7088af66ce8ea03", ClassificationInputFingerprint.Compute(Input()));
+
+    [Fact]
+    public void EvidenceOrderDuplicatesAndHashCaseDoNotChangeFingerprint()
+    {
+        var first = Input() with { Descriptions = [Evidence("a"), Evidence("z")] };
+        var reordered = first with { Descriptions = [Evidence("z", 'B'), Evidence("a"), Evidence("a")] };
+        Assert.Equal(ClassificationInputFingerprint.Compute(first), ClassificationInputFingerprint.Compute(reordered));
+        Assert.Equal(ClassificationPlanAction.Skip, ClassificationIncrementalPlanner.Decide(reordered, first).Action);
+    }
+
+    [Fact]
+    public void ConflictingEvidenceAndUnverifiedMediaAreRejected()
+    {
+        Assert.Throws<ArgumentException>(() => ClassificationInputFingerprint.Compute(Input() with { Descriptions = [Evidence(), Evidence(hash: 'c')] }));
+        Assert.Throws<ArgumentException>(() => ClassificationInputFingerprint.Compute(Input() with { MediaIdentity = "C:/photos/a.jpg" }));
+        Assert.Throws<ArgumentException>(() => ClassificationInputFingerprint.Compute(Input() with { Definitions = [new("a", 1), new("a", 2)] }));
+    }
+
+    [Theory]
+    [InlineData("description", ClassificationUpdateReason.DescriptionChanged)]
+    [InlineData("people", ClassificationUpdateReason.PeopleChanged)]
+    [InlineData("metadata", ClassificationUpdateReason.MetadataChanged)]
+    [InlineData("model", ClassificationUpdateReason.ModelChanged)]
+    [InlineData("prompt", ClassificationUpdateReason.PromptChanged)]
+    [InlineData("definition", ClassificationUpdateReason.TaxonomyChanged)]
+    [InlineData("discovery", ClassificationUpdateReason.TaxonomyChanged)]
+    [InlineData("candidate", ClassificationUpdateReason.CandidatePolicyChanged)]
+    [InlineData("owner", ClassificationUpdateReason.MediaChanged)]
+    [InlineData("epoch", ClassificationUpdateReason.MediaChanged)]
+    public void ChangedInputsProduceSpecificIncrementalReason(string field, ClassificationUpdateReason reason)
+    {
+        var previous = Input();
+        var current = field switch
+        {
+            "description" => previous with { Descriptions = [Evidence()] },
+            "people" => previous with { People = [Evidence()] },
+            "metadata" => previous with { Metadata = [Evidence()] },
+            "model" => previous with { ModelVersion = "model-v2" },
+            "prompt" => previous with { PromptVersion = "prompt-v2" },
+            "definition" => previous with { Definitions = [new("subject.people", 2)] },
+            "discovery" => previous with { DiscoveryRevision = 2 },
+            "candidate" => previous with { CandidatePolicyVersion = "candidate-v2" },
+            "owner" => previous with { OwnerId = "another-owner" },
+            _ => previous with { SpaceEpoch = "epoch-v2" }
+        };
+        var decision = ClassificationIncrementalPlanner.Decide(current, previous);
+        Assert.Equal(ClassificationPlanAction.Enqueue, decision.Action);
+        Assert.Equal(reason, decision.Reasons);
+    }
+
+    [Fact]
+    public void FailedAttemptNeverBecomesSuccessAndObsoleteFailureDoesNotBlockNewEvidence()
+    {
+        var input = Input();
+        var now = DateTimeOffset.UtcNow;
+        var failed = new ClassificationAttempt(ClassificationInputFingerprint.Compute(input), now.AddMinutes(1), true);
+        Assert.Equal(ClassificationPlanAction.DeferRetry, ClassificationIncrementalPlanner.Decide(input, null, failed, now: now).Action);
+        var retry = ClassificationIncrementalPlanner.Decide(input, null, failed, now: now.AddMinutes(2));
+        Assert.Equal(ClassificationUpdateReason.NewMedia | ClassificationUpdateReason.RetryDue, retry.Reasons);
+        Assert.Equal(ClassificationPlanAction.Enqueue, retry.Action);
+        Assert.Equal(ClassificationPlanAction.Enqueue, ClassificationIncrementalPlanner.Decide(input with { Descriptions = [Evidence()] }, input, failed, now: now).Action);
+    }
+
+    [Fact]
+    public void RunningLeaseDeduplicatesSameInputAndQueuesChangedSuccessor()
+    {
+        var input = Input();
+        var lease = ClassificationInputFingerprint.Compute(input);
+        Assert.Equal(ClassificationPlanAction.AlreadyLeased, ClassificationIncrementalPlanner.Decide(input, null, leasedFingerprint: lease).Action);
+        Assert.Equal(ClassificationPlanAction.QueueSuccessor, ClassificationIncrementalPlanner.Decide(input with { Descriptions = [Evidence()] }, input, leasedFingerprint: lease).Action);
+        Assert.Equal(ClassificationUpdateReason.Interrupted, ClassificationIncrementalPlanner.Decide(input, input, interrupted: true).Reasons);
+    }
+
+    [Fact]
+    public void EqualDimensionDoesNotPermitMixingEmbeddingSpaces()
+    {
+        var space = new ClassificationEmbeddingSpace(new string('a', 64), "tokenizer", "prep", 512, "l2-v1");
+        Assert.True(space.IsCompatibleWith(space with { ArtifactSha256 = new string('A', 64) }));
+        Assert.False(space.IsCompatibleWith(space with { ArtifactSha256 = new string('b', 64) }));
+        Assert.False(space.IsCompatibleWith(space with { TokenizerVersion = "" }));
+        Assert.False(space.IsCompatibleWith(space with { PreprocessingVersion = "prep-v2" }));
+        Assert.False(space.IsCompatibleWith(space with { NormalizationVersion = "l2-v2" }));
+    }
+}

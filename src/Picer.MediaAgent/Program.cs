@@ -1,4 +1,4 @@
-using Picer.Core.Gateway;
+﻿using Picer.Core.Gateway;
 using System.Net.WebSockets;
 using System.Net.Http;
 using System.IO;
@@ -38,6 +38,7 @@ internal static class Program
     {
         using var mutex = new Mutex(true, SingleInstanceMutexName, out var acquired);
         if (!acquired) return;
+        Picer.Core.Logging.AppLogger.Initialize(Path.Combine(Path.GetTempPath(), "picer-media-agent-diagnostics"));
         ApplicationConfiguration.Initialize();
         using var agent = new AgentApplication();
         Application.Run();
@@ -54,6 +55,8 @@ internal sealed partial class AgentApplication : IDisposable
     private bool _changingConnection;
     private bool _settingsOpen;
     private bool _disposed;
+    private string _connectionState = "Not connected";
+    private string _lastError = "";
     private MediaAgentSettings? _settings;
     private DeviceAccountClient? _accountClient;
     private string[] _roots = [];
@@ -74,6 +77,7 @@ internal sealed partial class AgentApplication : IDisposable
     {
         _directoryScanner = new((path, video, token) => Picer.Core.Indexing.DirectoryMediaMetadataReader.ReadAsync(path, video, token, Setting("PICER_FFMPEG_PATH")));
         var menu = new ContextMenuStrip();
+        menu.Items.Add("查看连接代理", null, (_, _) => ShowConnectionStatus());
         menu.Items.Add("代理设置", null, async (_, _) => await ConfigureAsync());
         menu.Items.Add("重新连接", null, async (_, _) => await ReconnectAsync());
         menu.Items.Add("退出", null, (_, _) => Application.Exit());
@@ -116,7 +120,7 @@ internal sealed partial class AgentApplication : IDisposable
         _changingConnection = true;
         try
         {
-            _icon.Text = "Picer 原图代理（正在重新连接）";
+            _icon.Text = "Picer 鍘熷浘浠ｇ悊锛堟鍦ㄩ噸鏂拌繛鎺ワ級";
             await _stop.CancelAsync();
             if (_loop is not null) { try { await _loop; } catch (OperationCanceledException) { } }
             _stop.Dispose();
@@ -127,7 +131,7 @@ internal sealed partial class AgentApplication : IDisposable
             var token = _stop.Token;
             _loop = Task.Run(() => RunAsync(token));
         }
-        catch (Exception exception) { Log("reconnect failed; type=" + exception.GetType().Name); _icon.Text = "Picer 原图代理（连接失败）"; }
+        catch (Exception exception) { Log("reconnect failed; type=" + exception.GetType().Name + "; message=" + exception.Message); _icon.Text = "Picer 鍘熷浘浠ｇ悊锛堣繛鎺ュけ璐ワ級"; }
         finally { _changingConnection = false; }
     }
 
@@ -136,7 +140,7 @@ internal sealed partial class AgentApplication : IDisposable
         var settings = _settings!.Validate();
         using var account = settings.DeviceCredentialPath is { } credentialPath ? new WindowsDeviceCredentialStore(credentialPath).OpenClient() : null;
         if (account is not null && (account.Connection.Origin != settings.ServiceUrl || account.Connection.SpkiPin != settings.SpkiPin || account.Connection.ClientKind != "agent"))
-            throw new InvalidDataException("agent_device_connection_mismatch");
+        { Log($"device mismatch; accountOrigin={account.Connection.Origin}; settingsOrigin={settings.ServiceUrl}; kind={account.Connection.ClientKind}"); throw new InvalidDataException("agent_device_connection_mismatch"); }
         _accountClient = account;
         var pin = Convert.FromBase64String(settings.SpkiPin);
         while (!cancellationToken.IsCancellationRequested)
@@ -152,10 +156,12 @@ internal sealed partial class AgentApplication : IDisposable
                     var endpoint = new UriBuilder(settings.ServiceUrl) { Scheme = "wss", Path = "/api/agent/v1/connect" };
                     await socket.ConnectAsync(endpoint.Uri, cancellationToken);
                 }
+                _connectionState = "Connected";
+                _lastError = "";
                 Log($"connected; socketState={socket.State}; processId={Environment.ProcessId}");
                 _mediaPreviews.Clear();
                 _mediaLeases.Clear();
-                _icon.Text = "Picer 原图代理（已连接）";
+                _icon.Text = "Picer 原图代理";
                 await SendAsync(socket, new
                 {
                     type = "agent.register",
@@ -185,11 +191,22 @@ internal sealed partial class AgentApplication : IDisposable
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { break; }
             catch (Exception exception)
             {
+                _connectionState = "Not connected";
+                _lastError = exception.Message;
                 Log($"connection failed: {exception.GetType().Name}");
-                _icon.Text = "Picer 原图代理（未连接）";
+                _icon.Text = "Picer 原图代理";
                 try { await Task.Delay(TimeSpan.FromSeconds(5), cancellationToken); } catch (OperationCanceledException) { break; }
             }
         }
+    }
+
+    private void ShowConnectionStatus()
+    {
+        var settings = _settings;
+        var text = $"Service: {settings?.ServiceUrl ?? "Not configured"}\nState: {_connectionState}\nCredential: {settings?.DeviceCredentialPath ?? "Token mode"}\nRoots: {(settings is null || settings.Roots.Length == 0 ? "Not configured" : string.Join(Environment.NewLine, settings.Roots))}\nLast error: {(string.IsNullOrWhiteSpace(_lastError) ? "None" : _lastError)}";
+        using var form = new Form { Text = "Picer 连接代理状态", Width = 620, Height = 360, StartPosition = FormStartPosition.CenterScreen };
+        form.Controls.Add(new TextBox { Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, Dock = DockStyle.Fill, Text = text });
+        form.ShowDialog();
     }
 
     private static void Log(string message)
@@ -274,7 +291,11 @@ internal sealed partial class AgentApplication : IDisposable
                     await SendAsync(socket, new { type = "agent.capabilities", capabilities = BuildCapabilities() }, cancellationToken);
                     break;
                 case "ai.cancel":
-                    if (root.TryGetProperty("requestId", out var cancelId) && _aiRequests.TryGetValue(cancelId.GetString() ?? "", out var request)) request.Cancel();
+                    if (root.TryGetProperty("requestId", out var cancelId) && _aiRequests.TryGetValue(cancelId.GetString() ?? "", out var request))
+                    {
+                        if (Guid.TryParseExact(cancelId.GetString(), "N", out var safeId)) Log($"ai cancel received; requestId={safeId:N}");
+                        request.Cancel();
+                    }
                     break;
             }
         }
@@ -356,7 +377,7 @@ internal sealed partial class AgentApplication : IDisposable
         var started = System.Diagnostics.Stopwatch.StartNew();
         try
         {
-            var fullPath = Path.GetFullPath(requestedPath);
+            var fullPath = ResolveConfiguredPath(requestedPath);
             if (!_roots.Any(root => fullPath.StartsWith(root.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))) throw new UnauthorizedAccessException("asset path is outside configured roots");
             var info = new FileInfo(fullPath);
             if (!info.Exists || info.Length > MaxAssetBytes) throw new FileNotFoundException("asset is missing or too large", fullPath);
@@ -369,6 +390,42 @@ internal sealed partial class AgentApplication : IDisposable
             Log($"asset failed; requestId={requestId}; errorType={exception.GetType().Name}; elapsedMs={started.ElapsedMilliseconds}");
             await SendAsync(socket, new { type = "asset.response", requestId, error = exception.Message }, cancellationToken);
         }
+    }
+
+    private string ResolveConfiguredPath(string requestedPath)
+    {
+        var normalized = requestedPath.Replace('/', '\\');
+        foreach (var root in _roots)
+        {
+            var configuredRoot = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            var candidate = Path.GetFullPath(normalized);
+            if (candidate.StartsWith(configuredRoot + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(candidate, configuredRoot, StringComparison.OrdinalIgnoreCase))
+                return candidate;
+
+            // Index records may retain the source machine's administrative-share
+            // path (for example \\host\G$\Apple照片\...). Map that drive share
+            // to the same local configured root before applying the root check.
+            var share = new Uri(normalized, UriKind.RelativeOrAbsolute).IsAbsoluteUri
+                ? normalized
+                : normalized;
+            var marker = share.IndexOf("\\G$\\", StringComparison.OrdinalIgnoreCase);
+            if (marker < 0)
+            {
+                var parts = share.Split('\\', StringSplitOptions.RemoveEmptyEntries);
+                var drivePart = parts.FirstOrDefault(part => part.Length == 2 && part[1] == '$');
+                marker = drivePart is null ? -1 : share.IndexOf("\\" + drivePart + "\\", StringComparison.OrdinalIgnoreCase);
+            }
+            if (marker >= 0)
+            {
+                var suffix = share[(marker + 4)..].TrimStart('\\');
+                var mapped = Path.GetFullPath(Path.Combine(configuredRoot, suffix));
+                if (mapped.StartsWith(configuredRoot + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(mapped, configuredRoot, StringComparison.OrdinalIgnoreCase))
+                    return mapped;
+            }
+        }
+        return Path.GetFullPath(normalized);
     }
 
     private async Task ServeAiAsync(ClientWebSocket socket, JsonElement request, CancellationToken cancellationToken)
@@ -399,7 +456,11 @@ internal sealed partial class AgentApplication : IDisposable
             await SendAsync(socket, new { type = "ai.done", requestId }, cancellationToken);
             Log($"ai request completed; requestId={requestId}; elapsedMs={started.ElapsedMilliseconds}");
         }
-        catch (OperationCanceledException) when (linked.IsCancellationRequested) { }
+        catch (OperationCanceledException) when (linked.IsCancellationRequested)
+        {
+            if (Guid.TryParseExact(requestId, "N", out var safeId))
+                Log($"ai upstream request cancelled; requestId={safeId:N}; elapsedMs={started.ElapsedMilliseconds}; connectionCancelled={cancellationToken.IsCancellationRequested}");
+        }
         catch (Exception exception)
         {
             Log($"ai request failed; requestId={requestId}; elapsedMs={started.ElapsedMilliseconds}; exception={exception.GetType().Name}; inner={(exception.InnerException?.GetType().Name ?? "none")}; message={exception.Message}");
@@ -1026,3 +1087,5 @@ internal sealed partial class AgentApplication : IDisposable
         else _ = _loop.ContinueWith(_ => ReleaseConnectionResources(), TaskScheduler.Default);
     }
 }
+
+

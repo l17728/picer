@@ -10,9 +10,22 @@ public sealed record ClipIndexProgress(int Completed, int Total, string CurrentF
 
 public sealed class ClipSemanticRepository(PicerDatabase db)
 {
+    private const string CurrentRows = """
+        FROM clip_image_embeddings e JOIN images i ON i.id=e.image_id
+        WHERE e.model_version=$model AND i.status='active' AND e.source_file_size=i.file_size
+          AND picer_same_instant(e.source_modified_utc,i.modified_utc)
+          AND ($allowed IS NULL OR e.image_id IN (SELECT CAST(value AS INTEGER) FROM json_each($allowed)))
+        """;
+    public bool HasCurrentVectors(string modelVersion, IReadOnlySet<long>? allowed = null)
+    {
+        using var command = db.Command("SELECT 1 " + CurrentRows + " LIMIT 1");
+        command.Parameters.AddWithValue("$model", modelVersion);
+        command.Parameters.AddWithValue("$allowed", allowed is null ? DBNull.Value : System.Text.Json.JsonSerializer.Serialize(allowed));
+        return command.ExecuteScalar() is not null;
+    }
     public bool IsCurrent(ImageRecord image, string modelVersion)
     {
-        using var command = db.Command("SELECT COUNT(*) FROM clip_image_embeddings WHERE image_id=$id AND model_version=$model AND source_file_size=$size AND source_modified_utc=$modified");
+        using var command = db.Command("SELECT COUNT(*) FROM clip_image_embeddings WHERE image_id=$id AND model_version=$model AND source_file_size=$size AND picer_same_instant(source_modified_utc,$modified)");
         command.Parameters.AddWithValue("$id", image.Id);
         command.Parameters.AddWithValue("$model", modelVersion);
         command.Parameters.AddWithValue("$size", image.FileSize);
@@ -52,8 +65,9 @@ public sealed class ClipSemanticRepository(PicerDatabase db)
         var indexed = 0;
         var eligible = 0;
         var invalid = 0;
-        using var command = db.Command("SELECT image_id,embedding FROM clip_image_embeddings WHERE model_version=$model");
+        using var command = db.Command("SELECT e.image_id,e.embedding " + CurrentRows);
         command.Parameters.AddWithValue("$model", modelVersion);
+        command.Parameters.AddWithValue("$allowed", allowedImageIds is null ? DBNull.Value : System.Text.Json.JsonSerializer.Serialize(allowedImageIds));
         using var reader = command.ExecuteReader();
         while (reader.Read())
         {

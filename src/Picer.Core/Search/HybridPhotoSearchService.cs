@@ -29,9 +29,20 @@ public sealed class HybridPhotoSearchService(PicerDatabase database, ClipSemanti
         var text = new MediaTextRanking(database).Search([query]).Where(item => allowed.Contains(item.Key))
             .OrderByDescending(item => item.Value).ThenBy(item => item.Key).Take(candidateCount)
             .Select((item, index) => new RankedCandidate(item.Key, index + 1)).ToArray();
-        var queryVector = await embeddings.EncodeTextAsync(query, cancellationToken).ConfigureAwait(false);
-        var clip = clipRepository.SearchStreaming(queryVector, candidateCount,
-            embeddings.ModelVersion, allowed, cancellationToken: cancellationToken);
+        var clip = new ClipSearchReport([], 0, 0, 0);
+        if (clipRepository.HasCurrentVectors(embeddings.ModelVersion, allowed))
+        {
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            deadline.CancelAfter(TimeSpan.FromSeconds(8));
+            try
+            {
+                var queryVector = await embeddings.EncodeTextAsync(query, deadline.Token).ConfigureAwait(false);
+                clip = clipRepository.SearchStreaming(queryVector, candidateCount,
+                    embeddings.ModelVersion, allowed, cancellationToken: deadline.Token);
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested) { }
+            catch (Exception exception) when (exception is HttpRequestException or InvalidDataException or System.Text.Json.JsonException) { }
+        }
         var fused = ReciprocalRankFusion.Fuse([
             ("FTS", (IEnumerable<RankedCandidate>)text),
             ("CLIP", clip.Hits.Select(hit => new RankedCandidate(hit.Image.Id, hit.Rank)))

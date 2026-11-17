@@ -41,9 +41,15 @@ public sealed class MediaSearchTool(PicerDatabase database, VideoRepository? vid
         return IndexSearchEngine.SearchPagedAsync(database, filters, pageSize, cursor, cancellationToken);
     }
 
-    public MediaSearchResult Execute(MediaSearchRequest request)
+    public MediaSearchResult Execute(MediaSearchRequest request) => ExecuteCore(request, false);
+
+    // AI keeps all verified index matches; only the model explanation sample is bounded.
+    internal MediaSearchResult ExecuteAll(MediaSearchRequest request) => ExecuteCore(request, true);
+
+    private MediaSearchResult ExecuteCore(MediaSearchRequest request, bool all)
     {
         Validate(request);
+        var limit = all ? int.MaxValue : request.Limit;
         var warnings = new List<string>();
         var terms = request.Terms?.Where(term => !string.IsNullOrWhiteSpace(term))
             .Select(term => term.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).ToArray() ?? [];
@@ -63,6 +69,8 @@ public sealed class MediaSearchTool(PicerDatabase database, VideoRepository? vid
             IncludeSuggestedClassifications = request.IncludeSuggestedClassifications
         };
         var people = request.PersonIds?.Where(id => id > 0).Distinct().ToArray() ?? [];
+        // Apply identity before text/GPS recall, not after loading the library.
+        filters.PersonId = people.Length > 0 ? people[0] : null;
         // SearchFilters currently accepts one person ID; intersect additional
         // people in memory without weakening the query boundary.
         var photos = ExecutePhotoPass(filters, terms, request.RequireAllTerms);
@@ -105,7 +113,7 @@ public sealed class MediaSearchTool(PicerDatabase database, VideoRepository? vid
             .ThenBy(image => request.SortDirection == SortDirection.Ascending ? (image.TakenUtc ?? image.ModifiedUtc).Ticks : -(image.TakenUtc ?? image.ModifiedUtc).Ticks)
             .ThenBy(image => image.Id);
         var videoCandidates = 0;
-        var photoHits = request.MediaType == MediaTypeFilter.Video ? [] : photos.Take(request.Limit).Select(image => new MediaSearchHit(image.Id, image.Path,
+        var photoHits = request.MediaType == MediaTypeFilter.Video ? [] : photos.Take(limit).Select(image => new MediaSearchHit(image.Id, image.Path,
             MediaTypeFilter.Photo, image.TakenUtc, textScores.GetValueOrDefault(image.Id), terms.Length == 0 ? [] : ["text"])).ToArray();
         var videoHits = Array.Empty<MediaSearchHit>();
         if (request.MediaType is MediaTypeFilter.Video or MediaTypeFilter.All && videoRepository is not null)
@@ -126,11 +134,11 @@ public sealed class MediaSearchTool(PicerDatabase database, VideoRepository? vid
             videoCandidates = videos.Count();
             videoHits = videos.OrderByDescending(v => textScores.GetValueOrDefault(-v.Id))
                 .ThenBy(v => request.SortDirection == SortDirection.Ascending ? (v.TakenUtc ?? v.ModifiedUtc).Ticks : -(v.TakenUtc ?? v.ModifiedUtc).Ticks)
-                .ThenBy(v => v.Id).Take(request.Limit).Select(v => new MediaSearchHit(v.Id, v.Path, MediaTypeFilter.Video, v.TakenUtc,
+                .ThenBy(v => v.Id).Take(limit).Select(v => new MediaSearchHit(v.Id, v.Path, MediaTypeFilter.Video, v.TakenUtc,
                     textScores.GetValueOrDefault(-v.Id), terms.Length == 0 ? [] : ["text"])).ToArray();
         }
         var hits = request.MediaType == MediaTypeFilter.Video ? videoHits : request.MediaType == MediaTypeFilter.All
-            ? photoHits.Concat(videoHits).OrderByDescending(hit => hit.TextScore ?? 0).ThenBy(hit => request.SortDirection == SortDirection.Ascending ? hit.TakenUtc?.Ticks : -hit.TakenUtc?.Ticks).Take(request.Limit).ToArray() : photoHits;
+            ? photoHits.Concat(videoHits).OrderByDescending(hit => hit.TextScore ?? 0).ThenBy(hit => request.SortDirection == SortDirection.Ascending ? hit.TakenUtc?.Ticks : -hit.TakenUtc?.Ticks).Take(limit).ToArray() : photoHits;
         return new(hits, totalCandidates + videoCandidates, request with { Terms = terms }, warnings);
     }
 

@@ -1,0 +1,2857 @@
+{
+  "Version": "family-taxonomy-v1",
+  "Labels": [
+    {
+      "Id": "nav.subject",
+      "Dimension": "subject",
+      "Name": "主体",
+      "Definition": "用于浏览主体维度",
+      "Exclusions": "",
+      "Aliases": [],
+      "Assignable": false,
+      "Active": true
+    },
+    {
+      "Id": "subject.people",
+      "Dimension": "subject",
+      "Name": "人物",
+      "Definition": "可见真实人物，包括背景人物",
+      "Exclusions": "塑像、屏幕内人物及仅有姓名不能单独确认",
+      "Aliases": [
+        "有人",
+        "人像"
+      ],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "subject.group",
+      "Dimension": "subject",
+      "Name": "多人",
+      "Definition": "可见两名及以上真实人物",
+      "Exclusions": "不保证是有意合影",
+      "Aliases": [
+        "合影"
+      ],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "subject.portrait",
+      "Dimension": "subject",
+      "Name": "肖像",
+      "Definition": "以人物外貌和神态为主要构图对象",
+      "Exclusions": "背景路人不等于肖像",
+      "Aliases": [
+        "人像"
+      ],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "subject.group_portrait",
+      "Dimension": "subject",
+      "Name": "有意合影",
+      "Definition": "多人有共同朝向或摆姿等合影证据",
+      "Exclusions": "多人偶然同时出现不足以确认",
+      "Aliases": [
+        "合影"
+      ],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "subject.single",
+      "Dimension": "subject",
+      "Name": "单人",
+      "Definition": "画面可见恰好一名真实人物",
+      "Exclusions": "遮挡区域不能用于断言无人",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "subject.pair",
+      "Dimension": "subject",
+      "Name": "双人",
+      "Definition": "画面可见两名真实人物",
+      "Exclusions": "不据此推断情侣或亲属",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "subject.selfie",
+      "Dimension": "subject",
+      "Name": "自拍",
+      "Definition": "有持机、镜面或拍摄视角的自拍证据",
+      "Exclusions": "近距离肖像不足以确认",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "subject.environmental",
+      "Dimension": "subject",
+      "Name": "人物与环境",
+      "Definition": "人物与可辨认环境共同构成主题",
+      "Exclusions": "普通背景虚化肖像不足以确认",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "subject.animal",
+      "Dimension": "subject",
+      "Name": "动物",
+      "Definition": "可辨认真实动物",
+      "Exclusions": "玩偶、雕塑不算真实动物",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "subject.plant",
+      "Dimension": "subject",
+      "Name": "植物",
+      "Definition": "可辨认真实植物",
+      "Exclusions": "植物图案不算真实植物",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "nav.nature",
+      "Dimension": "nature",
+      "Name": "自然环境",
+      "Definition": "用于浏览自然环境维度",
+      "Exclusions": "",
+      "Aliases": [],
+      "Assignable": false,
+      "Active": true
+    },
+    {
+      "Id": "scene.landscape",
+      "Dimension": "nature",
+      "Name": "风景",
+      "Definition": "自然环境构成显著画面主题",
+      "Exclusions": "单个盆栽或屏幕风景不足以确认",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "scene.grassland",
+      "Dimension": "nature",
+      "Name": "草地",
+      "Definition": "成片低矮草本覆盖地表",
+      "Exclusions": "绿色人工地毯不是草地",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "scene.woodland",
+      "Dimension": "nature",
+      "Name": "树林",
+      "Definition": "多棵树形成可辨认树群",
+      "Exclusions": "孤立树木不足以确认",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "scene.forest",
+      "Dimension": "nature",
+      "Name": "森林",
+      "Definition": "成片树木形成连续林冠或林内环境",
+      "Exclusions": "少量行道树不足以确认",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "scene.mountain",
+      "Dimension": "nature",
+      "Name": "山地",
+      "Definition": "可辨认山体或山间地形",
+      "Exclusions": "土堆及纯背景纹样不足以确认",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "scene.water",
+      "Dimension": "nature",
+      "Name": "水域",
+      "Definition": "可见成片开放水体",
+      "Exclusions": "杯中水和浴缸不算水域",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "scene.coast",
+      "Dimension": "nature",
+      "Name": "海岸",
+      "Definition": "可辨认海陆交界环境",
+      "Exclusions": "缺乏海洋证据的岸边不能确认",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "scene.wetland",
+      "Dimension": "nature",
+      "Name": "湿地",
+      "Definition": "浅水与湿生植被构成地貌",
+      "Exclusions": "积水道路不足以确认",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "scene.desert",
+      "Dimension": "nature",
+      "Name": "沙漠",
+      "Definition": "大范围干旱沙地或荒漠地貌",
+      "Exclusions": "沙坑和普通沙滩不足以确认",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "scene.snow",
+      "Dimension": "nature",
+      "Name": "雪地",
+      "Definition": "地面或景物有可辨认积雪覆盖",
+      "Exclusions": "白色地面或降雪天气不等于积雪",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "scene.glacier",
+      "Dimension": "nature",
+      "Name": "冰川",
+      "Definition": "可辨认大规模自然冰体地貌",
+      "Exclusions": "冰块及一般积雪不足以确认",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "scene.farmland",
+      "Dimension": "nature",
+      "Name": "田野",
+      "Definition": "可辨认成片耕作田地",
+      "Exclusions": "草坪不能自动归为农田",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "scene.sky",
+      "Dimension": "nature",
+      "Name": "天空",
+      "Definition": "天空是显著画面内容",
+      "Exclusions": "少量背景天空不能确认主题",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "nav.place",
+      "Dimension": "place",
+      "Name": "场所",
+      "Definition": "用于浏览场所维度",
+      "Exclusions": "",
+      "Aliases": [],
+      "Assignable": false,
+      "Active": true
+    },
+    {
+      "Id": "place.home",
+      "Dimension": "place",
+      "Name": "家居",
+      "Definition": "有居住空间布局及生活设施证据",
+      "Exclusions": "仅有家具不能确认住宅",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "place.restaurant",
+      "Dimension": "place",
+      "Name": "餐馆",
+      "Definition": "有餐饮营业空间布局或标识",
+      "Exclusions": "家庭餐桌不是餐馆",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "place.cafe",
+      "Dimension": "place",
+      "Name": "咖啡馆",
+      "Definition": "咖啡营业场所的标识或空间证据",
+      "Exclusions": "咖啡杯不能单独确认",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "place.teahouse",
+      "Dimension": "place",
+      "Name": "茶馆",
+      "Definition": "饮茶营业场所的布局或标识",
+      "Exclusions": "家中茶具不足以确认",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "place.classroom",
+      "Dimension": "place",
+      "Name": "教室",
+      "Definition": "有教学座位、讲台或黑板等组合证据",
+      "Exclusions": "单个黑板不足以确认",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "place.playground",
+      "Dimension": "place",
+      "Name": "操场",
+      "Definition": "学校或运动场地的跑道和活动区",
+      "Exclusions": "任意空地不能确认",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "place.library",
+      "Dimension": "place",
+      "Name": "图书馆",
+      "Definition": "借阅、馆藏或公共阅读空间证据",
+      "Exclusions": "家中书架不等于图书馆",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "place.office",
+      "Dimension": "place",
+      "Name": "办公室",
+      "Definition": "有办公工位和工作空间证据",
+      "Exclusions": "单台电脑不足以确认",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "place.mall",
+      "Dimension": "place",
+      "Name": "商场",
+      "Definition": "多店铺的购物商业空间",
+      "Exclusions": "单个商品不能确认",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "place.supermarket",
+      "Dimension": "place",
+      "Name": "超市",
+      "Definition": "商品货架及零售自选布局",
+      "Exclusions": "仓库货架不足以确认",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "place.market",
+      "Dimension": "place",
+      "Name": "集市",
+      "Definition": "成组摊位及交易空间",
+      "Exclusions": "单个临时桌面不足以确认",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "place.medical",
+      "Dimension": "place",
+      "Name": "医疗场所",
+      "Definition": "医疗设施与诊疗空间证据",
+      "Exclusions": "不能推断人物疾病",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "place.hotel",
+      "Dimension": "place",
+      "Name": "酒店",
+      "Definition": "旅馆标识或客房服务空间证据",
+      "Exclusions": "普通卧室不能直接确认",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "place.guesthouse",
+      "Dimension": "place",
+      "Name": "民宿",
+      "Definition": "可靠说明或标识支持民宿场所",
+      "Exclusions": "住宅外观不足以确认",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "place.station",
+      "Dimension": "place",
+      "Name": "车站",
+      "Definition": "站台、站牌或轨道候车空间",
+      "Exclusions": "车辆本身不足以确认",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "place.airport",
+      "Dimension": "place",
+      "Name": "机场",
+      "Definition": "航空航站设施和登机空间",
+      "Exclusions": "飞机照片不等于机场",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "place.carriage",
+      "Dimension": "place",
+      "Name": "车厢",
+      "Definition": "列车或公路客运车辆内部",
+      "Exclusions": "住宅座椅不算车厢",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "place.aircraft_cabin",
+      "Dimension": "place",
+      "Name": "机舱",
+      "Definition": "航空座椅、舷窗等机舱布局",
+      "Exclusions": "仅见窗户不足以确认",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "place.park",
+      "Dimension": "place",
+      "Name": "公园",
+      "Definition": "公共园区景观及游憩空间证据",
+      "Exclusions": "草地本身不能确定公园",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "place.zoo",
+      "Dimension": "place",
+      "Name": "动物园",
+      "Definition": "动物展区与园区标识证据",
+      "Exclusions": "单张动物照片不足以确认",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "place.museum",
+      "Dimension": "place",
+      "Name": "博物馆",
+      "Definition": "馆藏展陈和博物馆空间证据",
+      "Exclusions": "家中藏品不足以确认",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "place.exhibition",
+      "Dimension": "place",
+      "Name": "展馆",
+      "Definition": "有组织的展品展示空间",
+      "Exclusions": "单件商品不足以确认",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "place.amusement",
+      "Dimension": "place",
+      "Name": "游乐园",
+      "Definition": "园区及多种游乐设施证据",
+      "Exclusions": "单个玩具不算游乐园",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "place.theater",
+      "Dimension": "place",
+      "Name": "剧院",
+      "Definition": "舞台与观众席空间证据",
+      "Exclusions": "家庭电视不足以确认",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "place.stadium",
+      "Dimension": "place",
+      "Name": "体育场馆",
+      "Definition": "专门竞赛或健身设施空间",
+      "Exclusions": "运动服不足以确认",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "nav.architecture",
+      "Dimension": "architecture",
+      "Name": "建筑设施",
+      "Definition": "用于浏览建筑设施维度",
+      "Exclusions": "",
+      "Aliases": [],
+      "Assignable": false,
+      "Active": true
+    },
+    {
+      "Id": "object.building",
+      "Dimension": "architecture",
+      "Name": "建筑",
+      "Definition": "可见真实房屋或建筑物主体，保留历史建筑含义",
+      "Exclusions": "微型模型和屏幕影像不足以确认",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "scene.city",
+      "Dimension": "architecture",
+      "Name": "城市",
+      "Definition": "成片街区建筑与城市公共空间",
+      "Exclusions": "孤立建筑不足以确认",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "nav.activity",
+      "Dimension": "activity",
+      "Name": "活动",
+      "Definition": "用于浏览活动维度",
+      "Exclusions": "",
+      "Aliases": [],
+      "Assignable": false,
+      "Active": true
+    },
+    {
+      "Id": "activity.dining",
+      "Dimension": "activity",
+      "Name": "用餐",
+      "Definition": "有进食或围桌用餐行为证据",
+      "Exclusions": "仅有食物不足以确认",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "activity.cooking",
+      "Dimension": "activity",
+      "Name": "烹饪",
+      "Definition": "可见食材加工或烹饪操作",
+      "Exclusions": "厨房场所本身不足以确认",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "activity.study",
+      "Dimension": "activity",
+      "Name": "学习",
+      "Definition": "阅读练习或教学参与行为",
+      "Exclusions": "书本出现不足以确认",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "activity.work",
+      "Dimension": "activity",
+      "Name": "工作",
+      "Definition": "有明确工作任务或操作证据",
+      "Exclusions": "办公地点不能独立确认行为",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "activity.shopping",
+      "Dimension": "activity",
+      "Name": "购物",
+      "Definition": "挑选商品或交易行为证据",
+      "Exclusions": "商品陈列不足以确认",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "activity.hiking",
+      "Dimension": "activity",
+      "Name": "徒步与登山",
+      "Definition": "户外步行游览或登山活动证据",
+      "Exclusions": "普通街道行走不足以确认",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "activity.mountaineering",
+      "Dimension": "activity",
+      "Name": "登山",
+      "Definition": "沿山地攀登或登顶的活动证据",
+      "Exclusions": "山地背景不能单独确认",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "activity.camping",
+      "Dimension": "activity",
+      "Name": "露营",
+      "Definition": "帐篷营地及驻留活动证据",
+      "Exclusions": "孤立商品帐篷不足以确认",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "activity.fishing",
+      "Dimension": "activity",
+      "Name": "垂钓",
+      "Definition": "持竿、钓具布置与钓鱼行为证据",
+      "Exclusions": "水边停留不足以确认",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "activity.boating",
+      "Dimension": "activity",
+      "Name": "划船",
+      "Definition": "人在船上操桨或参与水上行舟",
+      "Exclusions": "岸边船只不足以确认",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "activity.gardening",
+      "Dimension": "activity",
+      "Name": "园艺",
+      "Definition": "种植、修剪或照料植物行为",
+      "Exclusions": "植物出现不足以确认",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "activity.crafts",
+      "Dimension": "activity",
+      "Name": "手工",
+      "Definition": "手工制作过程或工具操作证据",
+      "Exclusions": "成品展示不等于制作行为",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "activity.game",
+      "Dimension": "activity",
+      "Name": "游戏",
+      "Definition": "可辨认参与游戏的行为",
+      "Exclusions": "玩具出现不足以确认",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "activity.rest",
+      "Dimension": "activity",
+      "Name": "休息",
+      "Definition": "坐卧放松等休息情境证据",
+      "Exclusions": "不能推断健康状态",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "nav.event",
+      "Dimension": "event",
+      "Name": "事件",
+      "Definition": "用于浏览事件维度",
+      "Exclusions": "",
+      "Aliases": [],
+      "Assignable": false,
+      "Active": true
+    },
+    {
+      "Id": "event.birthday",
+      "Dimension": "event",
+      "Name": "生日",
+      "Definition": "生日文字、庆祝仪式或可靠描述支持",
+      "Exclusions": "单个蛋糕不足以确认",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "event.wedding",
+      "Dimension": "event",
+      "Name": "婚礼",
+      "Definition": "婚礼仪式、标识或可靠描述支持",
+      "Exclusions": "白裙或情侣照片不足以确认",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "event.graduation",
+      "Dimension": "event",
+      "Name": "毕业",
+      "Definition": "毕业仪式或明确毕业说明",
+      "Exclusions": "学位服单独出现需核对",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "event.family_gathering",
+      "Dimension": "event",
+      "Name": "家庭聚会",
+      "Definition": "聚会及经确认家庭关系证据",
+      "Exclusions": "多人同框不能推断亲属",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "event.travel",
+      "Dimension": "event",
+      "Name": "旅行",
+      "Definition": "行程、旅游活动或可靠描述支持",
+      "Exclusions": "陌生地点本身不足以确认",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "event.moving",
+      "Dimension": "event",
+      "Name": "搬家",
+      "Definition": "搬运与住所迁移的明确证据",
+      "Exclusions": "纸箱出现不足以确认",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "event.daily",
+      "Dimension": "event",
+      "Name": "日常记录",
+      "Definition": "明确描述为日常生活记录",
+      "Exclusions": "不能用作未知内容的兜底类别",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "nav.object",
+      "Dimension": "object",
+      "Name": "物体",
+      "Definition": "用于浏览物体维度",
+      "Exclusions": "",
+      "Aliases": [],
+      "Assignable": false,
+      "Active": true
+    },
+    {
+      "Id": "object.food",
+      "Dimension": "object",
+      "Name": "食物",
+      "Definition": "可辨认供食用的食品",
+      "Exclusions": "食物照片和模型不算真实食物",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "object.vehicle",
+      "Dimension": "object",
+      "Name": "交通工具",
+      "Definition": "可辨认真实运载工具",
+      "Exclusions": "玩具车和图案不算交通工具",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "object.flower",
+      "Dimension": "object",
+      "Name": "花卉",
+      "Definition": "可辨认真实花朵或花序",
+      "Exclusions": "花纹与塑料花需另行区分",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "object.furniture",
+      "Dimension": "object",
+      "Name": "家具",
+      "Definition": "可辨认桌椅床柜等家具",
+      "Exclusions": "微型模型不足以确认",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "object.toy",
+      "Dimension": "object",
+      "Name": "玩具",
+      "Definition": "可辨认玩耍用物件",
+      "Exclusions": "不能仅凭颜色鲜艳判断",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "object.book",
+      "Dimension": "object",
+      "Name": "书籍",
+      "Definition": "可辨认装订书本",
+      "Exclusions": "屏幕文字不算书本",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "object.electronics",
+      "Dimension": "object",
+      "Name": "电子设备",
+      "Definition": "可辨认电子装置",
+      "Exclusions": "仅有电线不足以确认",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "object.clothes",
+      "Dimension": "object",
+      "Name": "衣物",
+      "Definition": "可辨认衣着或服装物件",
+      "Exclusions": "不能推断身份职业",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "object.sports",
+      "Dimension": "object",
+      "Name": "运动用品",
+      "Definition": "可辨认专门运动器材",
+      "Exclusions": "不能据此推断正在运动",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "object.tool",
+      "Dimension": "object",
+      "Name": "工具",
+      "Definition": "可辨认操作工具",
+      "Exclusions": "不能据此推断使用行为",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "object.art",
+      "Dimension": "object",
+      "Name": "艺术品",
+      "Definition": "可辨认绘画雕塑等艺术作品",
+      "Exclusions": "不能推断作者或真伪",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "nav.environment",
+      "Dimension": "environment",
+      "Name": "环境条件",
+      "Definition": "用于浏览环境条件维度",
+      "Exclusions": "",
+      "Aliases": [],
+      "Assignable": false,
+      "Active": true
+    },
+    {
+      "Id": "scene.indoor",
+      "Dimension": "environment",
+      "Name": "室内",
+      "Definition": "封闭建筑内部环境证据",
+      "Exclusions": "窗外景物不自动算拍摄者室外",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "scene.outdoor",
+      "Dimension": "environment",
+      "Name": "户外",
+      "Definition": "露天环境与空间证据",
+      "Exclusions": "室内植物不等于户外",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "scene.night",
+      "Dimension": "environment",
+      "Name": "夜景",
+      "Definition": "夜间自然暗光与人工照明等证据",
+      "Exclusions": "拍摄小时不能单独确认",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "environment.day",
+      "Dimension": "environment",
+      "Name": "白天",
+      "Definition": "自然日光及白昼环境证据",
+      "Exclusions": "强室内照明不足以确认",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "environment.sunrise_sunset",
+      "Dimension": "environment",
+      "Name": "日出日落",
+      "Definition": "太阳近地平线与晨昏光照证据",
+      "Exclusions": "暖色滤镜不足以确认",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "environment.sunny",
+      "Dimension": "environment",
+      "Name": "晴天",
+      "Definition": "清晰日照及天气证据",
+      "Exclusions": "亮度高不等于晴天",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "environment.overcast",
+      "Dimension": "environment",
+      "Name": "阴天",
+      "Definition": "连续云层与阴天气象证据",
+      "Exclusions": "室内灰暗不足以确认",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "environment.rain",
+      "Dimension": "environment",
+      "Name": "雨天",
+      "Definition": "可见雨线、降雨或可靠天气描述",
+      "Exclusions": "湿地面不足以确认正在下雨",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "environment.snowfall",
+      "Dimension": "environment",
+      "Name": "降雪",
+      "Definition": "可见落雪或可靠降雪描述",
+      "Exclusions": "积雪不能确认正在降雪",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "environment.fog",
+      "Dimension": "environment",
+      "Name": "雾",
+      "Definition": "近远景受自然雾气遮蔽证据",
+      "Exclusions": "失焦和镜头污渍不是雾",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "nav.document",
+      "Dimension": "document",
+      "Name": "资料",
+      "Definition": "用于浏览资料维度",
+      "Exclusions": "",
+      "Aliases": [],
+      "Assignable": false,
+      "Active": true
+    },
+    {
+      "Id": "document.general",
+      "Dimension": "document",
+      "Name": "文档资料",
+      "Definition": "文档、文字材料或页面为显著主体",
+      "Exclusions": "场景中的少量文字不足以确认",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "document.receipt",
+      "Dimension": "document",
+      "Name": "票据",
+      "Definition": "可辨认收据、发票或票证版式",
+      "Exclusions": "不能推断有效性和金额",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "document.identity",
+      "Dimension": "document",
+      "Name": "证件",
+      "Definition": "证件版式或明确证件来源",
+      "Exclusions": "不抽取或推断个人敏感身份",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "document.screenshot",
+      "Dimension": "document",
+      "Name": "截图",
+      "Definition": "可靠文件来源或屏幕截图特征",
+      "Exclusions": "不能仅按长宽比判断",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "document.screen_photo",
+      "Dimension": "document",
+      "Name": "屏幕翻拍",
+      "Definition": "可见设备屏幕边界及拍摄痕迹",
+      "Exclusions": "截图本身不是屏幕翻拍",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "document.old_photo",
+      "Dimension": "document",
+      "Name": "旧照片翻拍",
+      "Definition": "可见纸质照片边界或可靠来源",
+      "Exclusions": "复古滤镜不足以确认",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "subject.animal.cat",
+      "Dimension": "subject",
+      "Name": "猫",
+      "Definition": "有可辨认的真实猫形态或可靠当前描述",
+      "Exclusions": "不能从模糊轮廓推断物种或野生状态",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "subject.animal.dog",
+      "Dimension": "subject",
+      "Name": "狗",
+      "Definition": "有可辨认的真实狗形态或可靠当前描述",
+      "Exclusions": "不能从模糊轮廓推断物种或野生状态",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "subject.animal.bird",
+      "Dimension": "subject",
+      "Name": "鸟",
+      "Definition": "有可辨认的真实鸟形态或可靠当前描述",
+      "Exclusions": "不能从模糊轮廓推断物种或野生状态",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "subject.animal.fish",
+      "Dimension": "subject",
+      "Name": "鱼",
+      "Definition": "有可辨认的真实鱼形态或可靠当前描述",
+      "Exclusions": "不能从模糊轮廓推断物种或野生状态",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "subject.animal.insect",
+      "Dimension": "subject",
+      "Name": "昆虫",
+      "Definition": "有可辨认的真实昆虫形态或可靠当前描述",
+      "Exclusions": "不能从模糊轮廓推断物种或野生状态",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "subject.animal.livestock",
+      "Dimension": "subject",
+      "Name": "家畜",
+      "Definition": "有可辨认的真实家畜形态或可靠当前描述",
+      "Exclusions": "不能从模糊轮廓推断物种或野生状态",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "subject.animal.wildlife",
+      "Dimension": "subject",
+      "Name": "野生动物",
+      "Definition": "有可辨认的真实野生动物形态或可靠当前描述",
+      "Exclusions": "不能从模糊轮廓推断物种或野生状态",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "subject.plant.tree",
+      "Dimension": "subject",
+      "Name": "树木",
+      "Definition": "可辨认树木的结构或种植形态",
+      "Exclusions": "不能以绿色或位置代替形态证据",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "subject.plant.potted",
+      "Dimension": "subject",
+      "Name": "盆栽",
+      "Definition": "可辨认盆栽的结构或种植形态",
+      "Exclusions": "不能以绿色或位置代替形态证据",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "subject.plant.crop",
+      "Dimension": "subject",
+      "Name": "农作物",
+      "Definition": "可辨认农作物的结构或种植形态",
+      "Exclusions": "不能以绿色或位置代替形态证据",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "scene.forest.bamboo",
+      "Dimension": "nature",
+      "Name": "竹林",
+      "Definition": "连续林地中可辨认竹林的植被结构",
+      "Exclusions": "不可凭单棵树推断整个林型",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "scene.forest.conifer",
+      "Dimension": "nature",
+      "Name": "针叶林",
+      "Definition": "连续林地中可辨认针叶林的植被结构",
+      "Exclusions": "不可凭单棵树推断整个林型",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "scene.forest.broadleaf",
+      "Dimension": "nature",
+      "Name": "阔叶林",
+      "Definition": "连续林地中可辨认阔叶林的植被结构",
+      "Exclusions": "不可凭单棵树推断整个林型",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "scene.mountain.peak",
+      "Dimension": "nature",
+      "Name": "山峰",
+      "Definition": "可辨认山地中的山峰地形",
+      "Exclusions": "微小土堆或装饰造景不足以确认",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "scene.mountain.valley",
+      "Dimension": "nature",
+      "Name": "山谷",
+      "Definition": "可辨认山地中的山谷地形",
+      "Exclusions": "微小土堆或装饰造景不足以确认",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "scene.mountain.hill",
+      "Dimension": "nature",
+      "Name": "丘陵",
+      "Definition": "可辨认山地中的丘陵地形",
+      "Exclusions": "微小土堆或装饰造景不足以确认",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "scene.mountain.rock",
+      "Dimension": "nature",
+      "Name": "山岩",
+      "Definition": "可辨认山地中的山岩地形",
+      "Exclusions": "微小土堆或装饰造景不足以确认",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "scene.water.river",
+      "Dimension": "nature",
+      "Name": "河流",
+      "Definition": "可辨认河流的水体形态或可靠地理证据",
+      "Exclusions": "不明确水体类型时只保留水域标签",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "scene.water.lake",
+      "Dimension": "nature",
+      "Name": "湖泊",
+      "Definition": "可辨认湖泊的水体形态或可靠地理证据",
+      "Exclusions": "不明确水体类型时只保留水域标签",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "scene.water.pond",
+      "Dimension": "nature",
+      "Name": "池塘",
+      "Definition": "可辨认池塘的水体形态或可靠地理证据",
+      "Exclusions": "不明确水体类型时只保留水域标签",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "scene.water.waterfall",
+      "Dimension": "nature",
+      "Name": "瀑布",
+      "Definition": "可辨认瀑布的水体形态或可靠地理证据",
+      "Exclusions": "不明确水体类型时只保留水域标签",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "scene.water.ocean",
+      "Dimension": "nature",
+      "Name": "海洋",
+      "Definition": "可辨认海洋的水体形态或可靠地理证据",
+      "Exclusions": "不明确水体类型时只保留水域标签",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "scene.beach",
+      "Dimension": "nature",
+      "Name": "海边与沙滩",
+      "Definition": "可辨认海边、海滩或沙滩环境，保留历史宽义",
+      "Exclusions": "普通沙坑或沙漠不能仅凭沙子确认",
+      "Aliases": [
+        "海边",
+        "海滩",
+        "沙滩"
+      ],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "scene.coast.reef",
+      "Dimension": "nature",
+      "Name": "礁石",
+      "Definition": "海岸环境中可辨认礁石形态",
+      "Exclusions": "内陆沙地和普通石块不能确认海岸细类",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "scene.coast.harbor",
+      "Dimension": "nature",
+      "Name": "港湾",
+      "Definition": "海岸环境中可辨认港湾形态",
+      "Exclusions": "内陆沙地和普通石块不能确认海岸细类",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "scene.sky.cloud",
+      "Dimension": "nature",
+      "Name": "云",
+      "Definition": "天空中清晰可辨认云",
+      "Exclusions": "屏幕图案和人工装饰不算自然天空景物",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "scene.sky.stars",
+      "Dimension": "nature",
+      "Name": "星空",
+      "Definition": "天空中清晰可辨认星空",
+      "Exclusions": "屏幕图案和人工装饰不算自然天空景物",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "scene.sky.rainbow",
+      "Dimension": "nature",
+      "Name": "彩虹",
+      "Definition": "天空中清晰可辨认彩虹",
+      "Exclusions": "屏幕图案和人工装饰不算自然天空景物",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "place.home.living_room",
+      "Dimension": "place",
+      "Name": "客厅",
+      "Definition": "住宅环境中有客厅功能布局证据",
+      "Exclusions": "单件家具不能确定房间用途",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "place.home.bedroom",
+      "Dimension": "place",
+      "Name": "卧室",
+      "Definition": "住宅环境中有卧室功能布局证据",
+      "Exclusions": "单件家具不能确定房间用途",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "place.home.kitchen",
+      "Dimension": "place",
+      "Name": "厨房",
+      "Definition": "住宅环境中有厨房功能布局证据",
+      "Exclusions": "单件家具不能确定房间用途",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "place.home.dining_room",
+      "Dimension": "place",
+      "Name": "家庭餐厅",
+      "Definition": "住宅环境中有家庭餐厅功能布局证据",
+      "Exclusions": "单件家具不能确定房间用途",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "place.home.bathroom",
+      "Dimension": "place",
+      "Name": "浴室",
+      "Definition": "住宅环境中有浴室功能布局证据",
+      "Exclusions": "单件家具不能确定房间用途",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "place.home.study",
+      "Dimension": "place",
+      "Name": "书房",
+      "Definition": "住宅环境中有书房功能布局证据",
+      "Exclusions": "单件家具不能确定房间用途",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "place.home.balcony",
+      "Dimension": "place",
+      "Name": "阳台",
+      "Definition": "住宅环境中有阳台功能布局证据",
+      "Exclusions": "单件家具不能确定房间用途",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "place.home.courtyard",
+      "Dimension": "place",
+      "Name": "庭院",
+      "Definition": "住宅环境中有庭院功能布局证据",
+      "Exclusions": "单件家具不能确定房间用途",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "object.building.residential",
+      "Dimension": "architecture",
+      "Name": "住宅",
+      "Definition": "可辨认住宅结构、功能标识或可靠当前描述",
+      "Exclusions": "不以建筑风格推断年代宗教或具体地名",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "object.building.highrise",
+      "Dimension": "architecture",
+      "Name": "高楼",
+      "Definition": "可辨认高楼结构、功能标识或可靠当前描述",
+      "Exclusions": "不以建筑风格推断年代宗教或具体地名",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "object.building.historic",
+      "Dimension": "architecture",
+      "Name": "古建筑",
+      "Definition": "可辨认古建筑结构、功能标识或可靠当前描述",
+      "Exclusions": "不以建筑风格推断年代宗教或具体地名",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "object.building.religious",
+      "Dimension": "architecture",
+      "Name": "宗教建筑",
+      "Definition": "可辨认宗教建筑结构、功能标识或可靠当前描述",
+      "Exclusions": "不以建筑风格推断年代宗教或具体地名",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "object.building.bridge",
+      "Dimension": "architecture",
+      "Name": "桥梁",
+      "Definition": "可辨认桥梁结构、功能标识或可靠当前描述",
+      "Exclusions": "不以建筑风格推断年代宗教或具体地名",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "object.building.road",
+      "Dimension": "architecture",
+      "Name": "道路",
+      "Definition": "可辨认道路结构、功能标识或可靠当前描述",
+      "Exclusions": "不以建筑风格推断年代宗教或具体地名",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "object.building.street",
+      "Dimension": "architecture",
+      "Name": "街道",
+      "Definition": "可辨认街道结构、功能标识或可靠当前描述",
+      "Exclusions": "不以建筑风格推断年代宗教或具体地名",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "object.building.square",
+      "Dimension": "architecture",
+      "Name": "广场",
+      "Definition": "可辨认广场结构、功能标识或可靠当前描述",
+      "Exclusions": "不以建筑风格推断年代宗教或具体地名",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "object.building.garden",
+      "Dimension": "architecture",
+      "Name": "园林",
+      "Definition": "可辨认园林结构、功能标识或可靠当前描述",
+      "Exclusions": "不以建筑风格推断年代宗教或具体地名",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "object.building.wall",
+      "Dimension": "architecture",
+      "Name": "城墙",
+      "Definition": "可辨认城墙结构、功能标识或可靠当前描述",
+      "Exclusions": "不以建筑风格推断年代宗教或具体地名",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "object.building.tunnel",
+      "Dimension": "architecture",
+      "Name": "隧道",
+      "Definition": "可辨认隧道结构、功能标识或可靠当前描述",
+      "Exclusions": "不以建筑风格推断年代宗教或具体地名",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "object.building.dam",
+      "Dimension": "architecture",
+      "Name": "水坝",
+      "Definition": "可辨认水坝结构、功能标识或可靠当前描述",
+      "Exclusions": "不以建筑风格推断年代宗教或具体地名",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "object.building.pier",
+      "Dimension": "architecture",
+      "Name": "码头",
+      "Definition": "可辨认码头结构、功能标识或可靠当前描述",
+      "Exclusions": "不以建筑风格推断年代宗教或具体地名",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "object.building.sculpture",
+      "Dimension": "architecture",
+      "Name": "雕塑",
+      "Definition": "可辨认雕塑结构、功能标识或可靠当前描述",
+      "Exclusions": "不以建筑风格推断年代宗教或具体地名",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "object.building.monument",
+      "Dimension": "architecture",
+      "Name": "纪念碑",
+      "Definition": "可辨认纪念碑结构、功能标识或可靠当前描述",
+      "Exclusions": "不以建筑风格推断年代宗教或具体地名",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "object.building.ride",
+      "Dimension": "architecture",
+      "Name": "游乐设施",
+      "Definition": "可辨认游乐设施结构、功能标识或可靠当前描述",
+      "Exclusions": "不以建筑风格推断年代宗教或具体地名",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "activity.dining.gathering",
+      "Dimension": "activity",
+      "Name": "聚餐",
+      "Definition": "可见聚餐参与行为及对应餐饮情境",
+      "Exclusions": "仅有餐具、食物或器材不足以确认活动",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "activity.dining.picnic",
+      "Dimension": "activity",
+      "Name": "野餐",
+      "Definition": "可见野餐参与行为及对应餐饮情境",
+      "Exclusions": "仅有餐具、食物或器材不足以确认活动",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "activity.dining.barbecue",
+      "Dimension": "activity",
+      "Name": "烧烤",
+      "Definition": "可见烧烤参与行为及对应餐饮情境",
+      "Exclusions": "仅有餐具、食物或器材不足以确认活动",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "activity.running",
+      "Dimension": "activity",
+      "Name": "跑步",
+      "Definition": "可见人物参与跑步的动作或可靠当前描述",
+      "Exclusions": "器材、服装和场所本身不足以确认活动",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "activity.cycling",
+      "Dimension": "activity",
+      "Name": "骑行",
+      "Definition": "可见人物参与骑行的动作或可靠当前描述",
+      "Exclusions": "器材、服装和场所本身不足以确认活动",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "activity.swimming",
+      "Dimension": "activity",
+      "Name": "游泳",
+      "Definition": "可见人物参与游泳的动作或可靠当前描述",
+      "Exclusions": "器材、服装和场所本身不足以确认活动",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "activity.ball_sport",
+      "Dimension": "activity",
+      "Name": "球类运动",
+      "Definition": "可见人物参与球类运动的动作或可靠当前描述",
+      "Exclusions": "器材、服装和场所本身不足以确认活动",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "activity.skiing",
+      "Dimension": "activity",
+      "Name": "滑雪",
+      "Definition": "可见人物参与滑雪的动作或可靠当前描述",
+      "Exclusions": "器材、服装和场所本身不足以确认活动",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "activity.climbing",
+      "Dimension": "activity",
+      "Name": "攀岩",
+      "Definition": "可见人物参与攀岩的动作或可靠当前描述",
+      "Exclusions": "器材、服装和场所本身不足以确认活动",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "activity.performance",
+      "Dimension": "activity",
+      "Name": "演出",
+      "Definition": "可见人物参与演出的动作或可靠当前描述",
+      "Exclusions": "器材、服装和场所本身不足以确认活动",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "activity.dance",
+      "Dimension": "activity",
+      "Name": "舞蹈",
+      "Definition": "可见人物参与舞蹈的动作或可靠当前描述",
+      "Exclusions": "器材、服装和场所本身不足以确认活动",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "activity.instrument",
+      "Dimension": "activity",
+      "Name": "演奏乐器",
+      "Definition": "可见人物参与演奏乐器的动作或可靠当前描述",
+      "Exclusions": "器材、服装和场所本身不足以确认活动",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "activity.painting",
+      "Dimension": "activity",
+      "Name": "绘画",
+      "Definition": "可见人物参与绘画的动作或可靠当前描述",
+      "Exclusions": "器材、服装和场所本身不足以确认活动",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "event.spring_festival",
+      "Dimension": "event",
+      "Name": "春节",
+      "Definition": "有明确春节标识、仪式或可靠当前描述",
+      "Exclusions": "日期、单件食物或装饰不能独立确认节庆事件",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "event.mid_autumn",
+      "Dimension": "event",
+      "Name": "中秋",
+      "Definition": "有明确中秋标识、仪式或可靠当前描述",
+      "Exclusions": "日期、单件食物或装饰不能独立确认节庆事件",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "event.dragon_boat",
+      "Dimension": "event",
+      "Name": "端午",
+      "Definition": "有明确端午标识、仪式或可靠当前描述",
+      "Exclusions": "日期、单件食物或装饰不能独立确认节庆事件",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "event.christmas",
+      "Dimension": "event",
+      "Name": "圣诞",
+      "Definition": "有明确圣诞标识、仪式或可靠当前描述",
+      "Exclusions": "日期、单件食物或装饰不能独立确认节庆事件",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "object.food.meal",
+      "Dimension": "object",
+      "Name": "饭菜",
+      "Definition": "可辨认真实饭菜的形态",
+      "Exclusions": "包装图片不能当作实际食物",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "object.food.fruit",
+      "Dimension": "object",
+      "Name": "水果",
+      "Definition": "可辨认真实水果的形态",
+      "Exclusions": "包装图片不能当作实际食物",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "object.food.dessert",
+      "Dimension": "object",
+      "Name": "甜点",
+      "Definition": "可辨认真实甜点的形态",
+      "Exclusions": "包装图片不能当作实际食物",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "object.food.drink",
+      "Dimension": "object",
+      "Name": "饮品",
+      "Definition": "可辨认真实饮品的形态",
+      "Exclusions": "包装图片不能当作实际食物",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "object.vehicle.car",
+      "Dimension": "object",
+      "Name": "汽车",
+      "Definition": "可辨认真实汽车结构",
+      "Exclusions": "微型玩具和印刷图案不算真实交通工具",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "object.vehicle.bus",
+      "Dimension": "object",
+      "Name": "公交车",
+      "Definition": "可辨认真实公交车结构",
+      "Exclusions": "微型玩具和印刷图案不算真实交通工具",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "object.vehicle.train",
+      "Dimension": "object",
+      "Name": "火车",
+      "Definition": "可辨认真实火车结构",
+      "Exclusions": "微型玩具和印刷图案不算真实交通工具",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "object.vehicle.airplane",
+      "Dimension": "object",
+      "Name": "飞机",
+      "Definition": "可辨认真实飞机结构",
+      "Exclusions": "微型玩具和印刷图案不算真实交通工具",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "object.vehicle.boat",
+      "Dimension": "object",
+      "Name": "船",
+      "Definition": "可辨认真实船结构",
+      "Exclusions": "微型玩具和印刷图案不算真实交通工具",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "object.vehicle.bicycle",
+      "Dimension": "object",
+      "Name": "自行车",
+      "Definition": "可辨认真实自行车结构",
+      "Exclusions": "微型玩具和印刷图案不算真实交通工具",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "object.vehicle.motorcycle",
+      "Dimension": "object",
+      "Name": "摩托车",
+      "Definition": "可辨认真实摩托车结构",
+      "Exclusions": "微型玩具和印刷图案不算真实交通工具",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "scene.coast.sandy",
+      "Dimension": "nature",
+      "Name": "海岸沙滩",
+      "Definition": "海岸环境中可辨认以沙为主的滩地",
+      "Exclusions": "普通海岸、内陆沙地与礁岸不能确认",
+      "Aliases": [
+        "沙滩"
+      ],
+      "Assignable": true,
+      "Active": true
+    }
+  ],
+  "Edges": [
+    {
+      "ParentId": "nav.subject",
+      "ChildId": "subject.people",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.subject",
+      "ChildId": "subject.group",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.subject",
+      "ChildId": "subject.portrait",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.subject",
+      "ChildId": "subject.group_portrait",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.subject",
+      "ChildId": "subject.single",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.subject",
+      "ChildId": "subject.pair",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.subject",
+      "ChildId": "subject.selfie",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.subject",
+      "ChildId": "subject.environmental",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.subject",
+      "ChildId": "subject.animal",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.subject",
+      "ChildId": "subject.plant",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.nature",
+      "ChildId": "scene.landscape",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.nature",
+      "ChildId": "scene.grassland",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.nature",
+      "ChildId": "scene.woodland",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.nature",
+      "ChildId": "scene.forest",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.nature",
+      "ChildId": "scene.mountain",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.nature",
+      "ChildId": "scene.water",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.nature",
+      "ChildId": "scene.coast",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.nature",
+      "ChildId": "scene.wetland",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.nature",
+      "ChildId": "scene.desert",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.nature",
+      "ChildId": "scene.snow",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.nature",
+      "ChildId": "scene.glacier",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.nature",
+      "ChildId": "scene.farmland",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.nature",
+      "ChildId": "scene.sky",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.place",
+      "ChildId": "place.home",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.place",
+      "ChildId": "place.restaurant",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.place",
+      "ChildId": "place.cafe",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.place",
+      "ChildId": "place.teahouse",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.place",
+      "ChildId": "place.classroom",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.place",
+      "ChildId": "place.playground",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.place",
+      "ChildId": "place.library",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.place",
+      "ChildId": "place.office",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.place",
+      "ChildId": "place.mall",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.place",
+      "ChildId": "place.supermarket",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.place",
+      "ChildId": "place.market",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.place",
+      "ChildId": "place.medical",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.place",
+      "ChildId": "place.hotel",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.place",
+      "ChildId": "place.guesthouse",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.place",
+      "ChildId": "place.station",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.place",
+      "ChildId": "place.airport",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.place",
+      "ChildId": "place.carriage",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.place",
+      "ChildId": "place.aircraft_cabin",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.place",
+      "ChildId": "place.park",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.place",
+      "ChildId": "place.zoo",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.place",
+      "ChildId": "place.museum",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.place",
+      "ChildId": "place.exhibition",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.place",
+      "ChildId": "place.amusement",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.place",
+      "ChildId": "place.theater",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.place",
+      "ChildId": "place.stadium",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.architecture",
+      "ChildId": "object.building",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.architecture",
+      "ChildId": "scene.city",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.activity",
+      "ChildId": "activity.dining",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.activity",
+      "ChildId": "activity.cooking",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.activity",
+      "ChildId": "activity.study",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.activity",
+      "ChildId": "activity.work",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.activity",
+      "ChildId": "activity.shopping",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.activity",
+      "ChildId": "activity.hiking",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.activity",
+      "ChildId": "activity.mountaineering",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.activity",
+      "ChildId": "activity.camping",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.activity",
+      "ChildId": "activity.fishing",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.activity",
+      "ChildId": "activity.boating",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.activity",
+      "ChildId": "activity.gardening",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.activity",
+      "ChildId": "activity.crafts",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.activity",
+      "ChildId": "activity.game",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.activity",
+      "ChildId": "activity.rest",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.event",
+      "ChildId": "event.birthday",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.event",
+      "ChildId": "event.wedding",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.event",
+      "ChildId": "event.graduation",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.event",
+      "ChildId": "event.family_gathering",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.event",
+      "ChildId": "event.travel",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.event",
+      "ChildId": "event.moving",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.event",
+      "ChildId": "event.daily",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.object",
+      "ChildId": "object.food",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.object",
+      "ChildId": "object.vehicle",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.object",
+      "ChildId": "object.flower",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.object",
+      "ChildId": "object.furniture",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.object",
+      "ChildId": "object.toy",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.object",
+      "ChildId": "object.book",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.object",
+      "ChildId": "object.electronics",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.object",
+      "ChildId": "object.clothes",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.object",
+      "ChildId": "object.sports",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.object",
+      "ChildId": "object.tool",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.object",
+      "ChildId": "object.art",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.environment",
+      "ChildId": "scene.indoor",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.environment",
+      "ChildId": "scene.outdoor",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.environment",
+      "ChildId": "scene.night",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.environment",
+      "ChildId": "environment.day",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.environment",
+      "ChildId": "environment.sunrise_sunset",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.environment",
+      "ChildId": "environment.sunny",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.environment",
+      "ChildId": "environment.overcast",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.environment",
+      "ChildId": "environment.rain",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.environment",
+      "ChildId": "environment.snowfall",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.environment",
+      "ChildId": "environment.fog",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.document",
+      "ChildId": "document.general",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.document",
+      "ChildId": "document.receipt",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.document",
+      "ChildId": "document.identity",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.document",
+      "ChildId": "document.screenshot",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.document",
+      "ChildId": "document.screen_photo",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.document",
+      "ChildId": "document.old_photo",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "subject.animal",
+      "ChildId": "subject.animal.cat",
+      "Kind": "IsA"
+    },
+    {
+      "ParentId": "subject.animal",
+      "ChildId": "subject.animal.dog",
+      "Kind": "IsA"
+    },
+    {
+      "ParentId": "subject.animal",
+      "ChildId": "subject.animal.bird",
+      "Kind": "IsA"
+    },
+    {
+      "ParentId": "subject.animal",
+      "ChildId": "subject.animal.fish",
+      "Kind": "IsA"
+    },
+    {
+      "ParentId": "subject.animal",
+      "ChildId": "subject.animal.insect",
+      "Kind": "IsA"
+    },
+    {
+      "ParentId": "subject.animal",
+      "ChildId": "subject.animal.livestock",
+      "Kind": "IsA"
+    },
+    {
+      "ParentId": "subject.animal",
+      "ChildId": "subject.animal.wildlife",
+      "Kind": "IsA"
+    },
+    {
+      "ParentId": "subject.plant",
+      "ChildId": "subject.plant.tree",
+      "Kind": "IsA"
+    },
+    {
+      "ParentId": "subject.plant",
+      "ChildId": "subject.plant.potted",
+      "Kind": "IsA"
+    },
+    {
+      "ParentId": "subject.plant",
+      "ChildId": "subject.plant.crop",
+      "Kind": "IsA"
+    },
+    {
+      "ParentId": "scene.forest",
+      "ChildId": "scene.forest.bamboo",
+      "Kind": "IsA"
+    },
+    {
+      "ParentId": "scene.forest",
+      "ChildId": "scene.forest.conifer",
+      "Kind": "IsA"
+    },
+    {
+      "ParentId": "scene.forest",
+      "ChildId": "scene.forest.broadleaf",
+      "Kind": "IsA"
+    },
+    {
+      "ParentId": "scene.mountain",
+      "ChildId": "scene.mountain.peak",
+      "Kind": "IsA"
+    },
+    {
+      "ParentId": "scene.mountain",
+      "ChildId": "scene.mountain.valley",
+      "Kind": "IsA"
+    },
+    {
+      "ParentId": "scene.mountain",
+      "ChildId": "scene.mountain.hill",
+      "Kind": "IsA"
+    },
+    {
+      "ParentId": "scene.mountain",
+      "ChildId": "scene.mountain.rock",
+      "Kind": "IsA"
+    },
+    {
+      "ParentId": "scene.water",
+      "ChildId": "scene.water.river",
+      "Kind": "IsA"
+    },
+    {
+      "ParentId": "scene.water",
+      "ChildId": "scene.water.lake",
+      "Kind": "IsA"
+    },
+    {
+      "ParentId": "scene.water",
+      "ChildId": "scene.water.pond",
+      "Kind": "IsA"
+    },
+    {
+      "ParentId": "scene.water",
+      "ChildId": "scene.water.waterfall",
+      "Kind": "IsA"
+    },
+    {
+      "ParentId": "scene.water",
+      "ChildId": "scene.water.ocean",
+      "Kind": "IsA"
+    },
+    {
+      "ParentId": "nav.nature",
+      "ChildId": "scene.beach",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "scene.coast",
+      "ChildId": "scene.coast.reef",
+      "Kind": "IsA"
+    },
+    {
+      "ParentId": "scene.coast",
+      "ChildId": "scene.coast.harbor",
+      "Kind": "IsA"
+    },
+    {
+      "ParentId": "scene.sky",
+      "ChildId": "scene.sky.cloud",
+      "Kind": "IsA"
+    },
+    {
+      "ParentId": "scene.sky",
+      "ChildId": "scene.sky.stars",
+      "Kind": "IsA"
+    },
+    {
+      "ParentId": "scene.sky",
+      "ChildId": "scene.sky.rainbow",
+      "Kind": "IsA"
+    },
+    {
+      "ParentId": "place.home",
+      "ChildId": "place.home.living_room",
+      "Kind": "IsA"
+    },
+    {
+      "ParentId": "place.home",
+      "ChildId": "place.home.bedroom",
+      "Kind": "IsA"
+    },
+    {
+      "ParentId": "place.home",
+      "ChildId": "place.home.kitchen",
+      "Kind": "IsA"
+    },
+    {
+      "ParentId": "place.home",
+      "ChildId": "place.home.dining_room",
+      "Kind": "IsA"
+    },
+    {
+      "ParentId": "place.home",
+      "ChildId": "place.home.bathroom",
+      "Kind": "IsA"
+    },
+    {
+      "ParentId": "place.home",
+      "ChildId": "place.home.study",
+      "Kind": "IsA"
+    },
+    {
+      "ParentId": "place.home",
+      "ChildId": "place.home.balcony",
+      "Kind": "IsA"
+    },
+    {
+      "ParentId": "place.home",
+      "ChildId": "place.home.courtyard",
+      "Kind": "IsA"
+    },
+    {
+      "ParentId": "object.building",
+      "ChildId": "object.building.residential",
+      "Kind": "IsA"
+    },
+    {
+      "ParentId": "object.building",
+      "ChildId": "object.building.highrise",
+      "Kind": "IsA"
+    },
+    {
+      "ParentId": "object.building",
+      "ChildId": "object.building.historic",
+      "Kind": "IsA"
+    },
+    {
+      "ParentId": "object.building",
+      "ChildId": "object.building.religious",
+      "Kind": "IsA"
+    },
+    {
+      "ParentId": "nav.architecture",
+      "ChildId": "object.building.bridge",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.architecture",
+      "ChildId": "object.building.road",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.architecture",
+      "ChildId": "object.building.street",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.architecture",
+      "ChildId": "object.building.square",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.architecture",
+      "ChildId": "object.building.garden",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.architecture",
+      "ChildId": "object.building.wall",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.architecture",
+      "ChildId": "object.building.tunnel",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.architecture",
+      "ChildId": "object.building.dam",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.architecture",
+      "ChildId": "object.building.pier",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.architecture",
+      "ChildId": "object.building.sculpture",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.architecture",
+      "ChildId": "object.building.monument",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.architecture",
+      "ChildId": "object.building.ride",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "activity.dining",
+      "ChildId": "activity.dining.gathering",
+      "Kind": "IsA"
+    },
+    {
+      "ParentId": "activity.dining",
+      "ChildId": "activity.dining.picnic",
+      "Kind": "IsA"
+    },
+    {
+      "ParentId": "activity.dining",
+      "ChildId": "activity.dining.barbecue",
+      "Kind": "IsA"
+    },
+    {
+      "ParentId": "nav.activity",
+      "ChildId": "activity.running",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.activity",
+      "ChildId": "activity.cycling",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.activity",
+      "ChildId": "activity.swimming",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.activity",
+      "ChildId": "activity.ball_sport",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.activity",
+      "ChildId": "activity.skiing",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.activity",
+      "ChildId": "activity.climbing",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.activity",
+      "ChildId": "activity.performance",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.activity",
+      "ChildId": "activity.dance",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.activity",
+      "ChildId": "activity.instrument",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.activity",
+      "ChildId": "activity.painting",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.event",
+      "ChildId": "event.spring_festival",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.event",
+      "ChildId": "event.mid_autumn",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.event",
+      "ChildId": "event.dragon_boat",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.event",
+      "ChildId": "event.christmas",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "object.food",
+      "ChildId": "object.food.meal",
+      "Kind": "IsA"
+    },
+    {
+      "ParentId": "object.food",
+      "ChildId": "object.food.fruit",
+      "Kind": "IsA"
+    },
+    {
+      "ParentId": "object.food",
+      "ChildId": "object.food.dessert",
+      "Kind": "IsA"
+    },
+    {
+      "ParentId": "object.food",
+      "ChildId": "object.food.drink",
+      "Kind": "IsA"
+    },
+    {
+      "ParentId": "object.vehicle",
+      "ChildId": "object.vehicle.car",
+      "Kind": "IsA"
+    },
+    {
+      "ParentId": "object.vehicle",
+      "ChildId": "object.vehicle.bus",
+      "Kind": "IsA"
+    },
+    {
+      "ParentId": "object.vehicle",
+      "ChildId": "object.vehicle.train",
+      "Kind": "IsA"
+    },
+    {
+      "ParentId": "object.vehicle",
+      "ChildId": "object.vehicle.airplane",
+      "Kind": "IsA"
+    },
+    {
+      "ParentId": "object.vehicle",
+      "ChildId": "object.vehicle.boat",
+      "Kind": "IsA"
+    },
+    {
+      "ParentId": "object.vehicle",
+      "ChildId": "object.vehicle.bicycle",
+      "Kind": "IsA"
+    },
+    {
+      "ParentId": "object.vehicle",
+      "ChildId": "object.vehicle.motorcycle",
+      "Kind": "IsA"
+    },
+    {
+      "ParentId": "scene.coast",
+      "ChildId": "scene.coast.sandy",
+      "Kind": "IsA"
+    },
+    {
+      "ParentId": "subject.people",
+      "ChildId": "subject.group",
+      "Kind": "IsA"
+    },
+    {
+      "ParentId": "subject.people",
+      "ChildId": "subject.portrait",
+      "Kind": "IsA"
+    },
+    {
+      "ParentId": "subject.people",
+      "ChildId": "subject.single",
+      "Kind": "IsA"
+    },
+    {
+      "ParentId": "subject.people",
+      "ChildId": "subject.pair",
+      "Kind": "IsA"
+    },
+    {
+      "ParentId": "subject.people",
+      "ChildId": "subject.selfie",
+      "Kind": "IsA"
+    },
+    {
+      "ParentId": "subject.people",
+      "ChildId": "subject.environmental",
+      "Kind": "IsA"
+    },
+    {
+      "ParentId": "subject.group",
+      "ChildId": "subject.group_portrait",
+      "Kind": "IsA"
+    },
+    {
+      "ParentId": "subject.group",
+      "ChildId": "subject.pair",
+      "Kind": "IsA"
+    },
+    {
+      "ParentId": "scene.woodland",
+      "ChildId": "scene.forest",
+      "Kind": "IsA"
+    },
+    {
+      "ParentId": "activity.hiking",
+      "ChildId": "activity.mountaineering",
+      "Kind": "IsA"
+    },
+    {
+      "ParentId": "nav.event",
+      "ChildId": "activity.camping",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "scene.forest",
+      "ChildId": "activity.camping",
+      "Kind": "Related"
+    }
+  ]
+}

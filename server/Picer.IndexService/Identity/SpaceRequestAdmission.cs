@@ -10,7 +10,13 @@ public sealed class SpaceRequestAdmission
     {
         var category = path == "/api/sync/v2/notifications" ? "notification"
             : path.StartsWith("/api/agent/", StringComparison.Ordinal) ? "agent"
-            : path.Contains("/assets/", StringComparison.Ordinal) ? "media"
+            : path.Contains("/assets/", StringComparison.Ordinal)
+                || path.StartsWith("/api/gateway/v1/thumbs/", StringComparison.Ordinal)
+                || path.StartsWith("/api/gateway/v1/previews/", StringComparison.Ordinal)
+                || path.StartsWith("/api/gateway/v1/face-thumbs/", StringComparison.Ordinal)
+                || path.StartsWith("/api/gateway/v1/video-thumbs/", StringComparison.Ordinal)
+                || path.StartsWith("/api/gateway/v1/video-keyframes/", StringComparison.Ordinal) ? "media"
+            : path.StartsWith("/api/service/v1/classification/v2/", StringComparison.Ordinal) ? "classification"
             : path.StartsWith("/api/sync/", StringComparison.Ordinal) ? "write" : "index";
         var limits = category switch
         {
@@ -18,6 +24,7 @@ public sealed class SpaceRequestAdmission
             "media" => (Node: 32, Space: 8, Device: 4),
             "write" => (Node: 8, Space: 2, Device: 1),
             "notification" => (Node: 64, Space: 16, Device: 1),
+            "classification" => (Node: 32, Space: 8, Device: 4),
             _ => (Node: 64, Space: 12, Device: 6)
         };
         var keys = new[] { category, category + ":s:" + device.SpaceId, category + ":d:" + device.GrantId };

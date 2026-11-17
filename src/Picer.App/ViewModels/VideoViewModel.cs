@@ -169,6 +169,7 @@ public partial class VideoViewModel(VideoRepository repository, VideoIndexServic
 
     private async Task LoadSelectedVideoAsync(VideoItemViewModel selected, CancellationToken cancellationToken)
     {
+        using var foreground = remoteMode ? AppServices.ForegroundReads.Enter() : null;
         var started = Stopwatch.StartNew();
         var metadataLoaded = false;
         try
@@ -183,7 +184,8 @@ public partial class VideoViewModel(VideoRepository repository, VideoIndexServic
                 Timeline: faceTimeline?.WithDatabase(connection).GetTimeline(video.Id),
                 Summary: reader.GetSummary(video.Id),
                 Frames: reader.GetKeyframes(video.Id, existingOnly: !remoteMode).ToArray(),
-                People: peopleService is null ? [] : new PeopleService(connection).GetAll().ToArray());
+                People: peopleService is null ? [] : new PeopleService(connection).GetNames().ToArray(),
+                Checkpoint: connection.GetMirrorCheckpoint());
         }, cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
         if (SelectedVideo?.Record.Id != selected.Record.Id) return;
@@ -193,21 +195,65 @@ public partial class VideoViewModel(VideoRepository repository, VideoIndexServic
         PeopleTimelineText = FormatTimeline(snapshot.Timeline);
         PopulateVideoFaces(snapshot.Timeline ?? [], snapshot.People);
         metadataLoaded = true;
+        if (remoteMode && remoteFrameLoader is null && _services.Gateway is Picer.Core.Gateway.HttpIndexGateway detailsGateway)
+        {
+            var cacheRoot = _services.RemoteVideoCacheRoot ?? AppServices.RemoteDataRoot;
+            var model = faceTimeline?.PreferredModelVersion ?? "legacy-video";
+            var epoch = snapshot.Checkpoint?.Epoch ?? "";
+            foreach (var frame in GetCachedRemoteFrames(snapshot.Frames, snapshot.Video.Id, cacheRoot, _services.RemoteThumbnails, snapshot.Video))
+                Frames.Add(new VideoKeyframeItemViewModel(frame));
+            var details = await Services.VideoDetailsCache.ReadAsync(cacheRoot, snapshot.Video, model, epoch, cancellationToken);
+            if (details is null || details.Revision != snapshot.Checkpoint?.MetadataRevision)
+            {
+                try
+                {
+                    using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                    deadline.CancelAfter(TimeSpan.FromSeconds(8));
+                    var fresh = await detailsGateway.GetVideoDetailsAsync(snapshot.Video.Id, model, deadline.Token);
+                    if (fresh is not null && Services.VideoDetailsCache.Matches(fresh, snapshot.Video, snapshot.Checkpoint?.Epoch ?? fresh.Epoch))
+                    {
+                        details = fresh;
+                        await Services.VideoDetailsCache.SaveAsync(cacheRoot, model, fresh, cancellationToken);
+                    }
+                    else StatusText = "详情尚未同步或索引已变化；当前保留本地缓存，请刷新索引后重试";
+                }
+                catch (Exception exception) when (exception is HttpRequestException or IOException or OperationCanceledException && !cancellationToken.IsCancellationRequested)
+                { StatusText = "远程详情暂不可达，当前显示本地缓存"; }
+            }
+            cancellationToken.ThrowIfCancellationRequested();
+            if (details is not null)
+            {
+                snapshot.Transcript = details.Transcript; snapshot.Summary = details.Summary;
+                snapshot.Frames = details.Frames.ToArray(); snapshot.Timeline = details.Timeline;
+                TranscriptText = ExtractTranscriptText(snapshot.Transcript);
+                SummaryText = snapshot.Summary ?? "服务端尚未生成融合摘要";
+                PeopleTimelineText = FormatTimeline(snapshot.Timeline);
+                PopulateVideoFaces(snapshot.Timeline, snapshot.People);
+            }
+            Frames.Clear();
+        }
         AppLogger.Info($"Video people annotation projection: video={selected.Record.Id}; preferredModel={faceTimeline?.PreferredModelVersion ?? "none"}; resolvedModels={string.Join(',', snapshot.Timeline?.Select(face => face.ModelVersion).Distinct(StringComparer.OrdinalIgnoreCase) ?? [])}; indexedFaces={selected.FaceReview.Total}; displayedFaces={snapshot.Timeline?.Count ?? 0}; analysisStatus={selected.FaceReview.AnalysisStatus ?? "none"}");
         if (remoteMode && remoteFrameLoader is null && _services.Gateway is Picer.Core.Gateway.HttpIndexGateway)
         {
-            var cached = GetCachedRemoteFrames(snapshot.Frames, snapshot.Video.Id, _services.RemoteVideoCacheRoot ?? AppServices.RemoteDataRoot);
+            var cached = GetCachedRemoteFrames(snapshot.Frames, snapshot.Video.Id, _services.RemoteVideoCacheRoot ?? AppServices.RemoteDataRoot, _services.RemoteThumbnails, snapshot.Video);
             foreach (var frame in cached) Frames.Add(new VideoKeyframeItemViewModel(frame));
             var cachedPaths = cached.GroupBy(frame => frame.TimestampSeconds)
                 .ToDictionary(group => group.Key, group => group.First().Path);
             PopulateVideoFaces(snapshot.Timeline?.Select(face => cachedPaths.TryGetValue(face.TimestampSeconds, out var path)
                 ? face with { KeyframePath = path } : face).ToArray() ?? [], snapshot.People);
         }
+        var frameProgressActive = true;
         var frames = remoteMode
             ? await (remoteFrameLoader is not null
                 ? remoteFrameLoader(snapshot.Frames, snapshot.Video.Id, cancellationToken)
-                : MaterializeRemoteFramesAsync(_services, snapshot.Frames, snapshot.Video, cancellationToken))
+                : MaterializeRemoteFramesAsync(_services, snapshot.Frames, snapshot.Video, cancellationToken,
+                    progress: new Progress<VideoKeyframe>(frame =>
+                    {
+                        if (frameProgressActive && !cancellationToken.IsCancellationRequested && SelectedVideo?.Record.Id == selected.Record.Id
+                            && !Frames.Any(item => item.Path == frame.Path)) Frames.Add(new VideoKeyframeItemViewModel(frame));
+                    })))
             : snapshot.Frames;
+        frameProgressActive = false;
         cancellationToken.ThrowIfCancellationRequested();
         if (SelectedVideo?.Record.Id != selected.Record.Id) return;
         AppLogger.Info($"Video keyframes materialized: video={selected.Record.Id}; requested={snapshot.Frames.Length}; available={frames.Count}; elapsedMs={started.ElapsedMilliseconds}");
@@ -252,7 +298,7 @@ public partial class VideoViewModel(VideoRepository repository, VideoIndexServic
         VideoFaces.Clear();
         foreach (var face in faces)
         {
-            var item = new VideoFaceItemViewModel(face);
+            var item = new VideoFaceItemViewModel(face, _services);
             VideoFaces.Add(item);
         }
         ScheduleVideoFaceThumbnails();
@@ -757,10 +803,13 @@ public partial class VideoViewModel(VideoRepository repository, VideoIndexServic
     }
 
     internal static IReadOnlyList<VideoKeyframe> GetCachedRemoteFrames(
-        IReadOnlyList<VideoKeyframe> frames, long videoId, string cacheRoot)
+        IReadOnlyList<VideoKeyframe> frames, long videoId, string cacheRoot,
+        Picer.Core.Gateway.RemoteThumbnailCache? cache = null, VideoRecord? video = null)
     {
         var directory = Path.Combine(cacheRoot, "remote-video-keyframes", videoId.ToString(System.Globalization.CultureInfo.InvariantCulture));
-        return frames.Select((frame, ordinal) => frame with { Path = RemoteFrameCachePath(directory, frame, ordinal) })
+        return frames.Select((frame, ordinal) => frame with { Path = video is not null
+            ? cache?.TryGet(Services.RemoteKeyframeAssets.Key(video, frame)) ?? RemoteFrameCachePath(directory, frame, ordinal)
+            : RemoteFrameCachePath(directory, frame, ordinal) })
             .Where(frame => File.Exists(frame.Path) && new FileInfo(frame.Path).Length > 0).ToArray();
     }
 
@@ -780,7 +829,7 @@ public partial class VideoViewModel(VideoRepository repository, VideoIndexServic
 
     internal static async Task<IReadOnlyList<VideoKeyframe>> MaterializeRemoteFramesAsync(
         ClientServices _services, IReadOnlyList<VideoKeyframe> frames, VideoRecord video,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default, int maximumUsableFrames = int.MaxValue, IProgress<VideoKeyframe>? progress = null)
     {
         if (_services.Gateway is not Picer.Core.Gateway.HttpIndexGateway gateway) return frames;
         var videoId = video.Id;
@@ -789,20 +838,31 @@ public partial class VideoViewModel(VideoRepository repository, VideoIndexServic
         var directory = Path.Combine(_services.RemoteVideoCacheRoot ?? AppServices.RemoteDataRoot, "remote-video-keyframes", videoId.ToString(System.Globalization.CultureInfo.InvariantCulture));
         Directory.CreateDirectory(directory);
         using var concurrency = new SemaphoreSlim(4, 4);
-        var downloads = frames.Select(async (frame, ordinal) =>
+        async Task<VideoKeyframe?> Download(VideoKeyframe frame, int ordinal)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            if (_services.RemoteThumbnails is not null)
+            {
+                try
+                {
+                    var cached = await Services.RemoteKeyframeAssets.GetAsync(_services, video, frame, ordinal, cancellationToken);
+                    return cached is null ? null : frame with { Path = cached };
+                }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception exception) when (exception is IOException or HttpRequestException or InvalidOperationException or UnauthorizedAccessException)
+                { AppLogger.Warn($"Shared keyframe unavailable; video={video.Id}; frame={frame.Id}; type={exception.GetType().Name}"); return null; }
+            }
             // v2 files have passed image decoding before publication. The id
             // and ordinal also disambiguate rounded/equal frame timestamps.
             var target = RemoteFrameCachePath(directory, frame, ordinal);
             if (File.Exists(target) && new FileInfo(target).Length > 0)
-                return (ordinal, Frame: (VideoKeyframe?)(frame with { Path = target }));
+                return frame with { Path = target };
 
             await concurrency.WaitAsync(cancellationToken);
             try
             {
                 if (File.Exists(target) && new FileInfo(target).Length > 0)
-                    return (ordinal, Frame: (VideoKeyframe?)(frame with { Path = target }));
+                    return frame with { Path = target };
                 try
                 {
                     await using var stream = (frame.Id > 0 ? await gateway.OpenVideoKeyframeAsync(frame.Id, cancellationToken) : null)
@@ -810,7 +870,7 @@ public partial class VideoViewModel(VideoRepository repository, VideoIndexServic
                     if (stream is null)
                     {
                         AppLogger.Warn($"Remote keyframe binary unavailable: video={videoId}; frame={frame.Id}; ordinal={ordinal}; timestamp={frame.TimestampSeconds:0.###}");
-                        return (ordinal, Frame: (VideoKeyframe?)null);
+                        return null;
                     }
                     await VideoKeyframeCache.WriteAsync(stream, target, cancellationToken);
                 }
@@ -819,18 +879,21 @@ public partial class VideoViewModel(VideoRepository repository, VideoIndexServic
                     UnauthorizedAccessException or InvalidDataException)
                 {
                     AppLogger.Warn($"Remote keyframe download failed: video={videoId}; frame={frame.Id}; ordinal={ordinal}; errorType={exception.GetType().Name}");
-                    return (ordinal, Frame: (VideoKeyframe?)null);
+                    return null;
                 }
-                return (ordinal, Frame: (VideoKeyframe?)(frame with { Path = target }));
+                return frame with { Path = target };
             }
             finally
             {
                 concurrency.Release();
             }
-        }).ToArray();
-        var result = await Task.WhenAll(downloads);
-        return result.Where(item => item.Frame is not null).OrderBy(item => item.ordinal)
-            .Select(item => item.Frame!).ToArray();
+        }
+        return await VideoFrameSelection.MaterializeAsync(frames, maximumUsableFrames, async (frame, ordinal) =>
+        {
+            var loaded = await Download(frame, ordinal);
+            if (loaded is not null) progress?.Report(loaded);
+            return loaded;
+        }, cancellationToken);
     }
 
     private static string ExtractTranscriptText(string? json)
@@ -915,8 +978,9 @@ public sealed class VideoKeyframeItemViewModel(VideoKeyframe frame)
 
 public sealed record VideoFaceGroupViewModel(string Key, string DisplayName, long? PersonId = null);
 
-public sealed partial class VideoFaceItemViewModel(VideoFaceTimelineRecord record) : ObservableObject
+public sealed partial class VideoFaceItemViewModel(VideoFaceTimelineRecord record, ClientServices? services = null) : ObservableObject
 {
+    private static readonly SemaphoreSlim CropSlots = new(2, 2);
     public VideoFaceTimelineRecord Record { get; } = record;
     public string KeyframePath => Record.KeyframePath;
     public string Timestamp => TimeSpan.FromSeconds(Record.TimestampSeconds).ToString(@"hh\:mm\:ss");
@@ -938,15 +1002,37 @@ public sealed partial class VideoFaceItemViewModel(VideoFaceTimelineRecord recor
     public bool HasThumbnail => Thumbnail is not null;
     public bool ThumbnailLoadAttempted { get; private set; }
 
-    public async Task LoadThumbnailAsync()
+    public async Task LoadThumbnailAsync(CancellationToken cancellationToken = default)
     {
         if (HasThumbnail || IsThumbnailLoading) return;
         IsThumbnailLoading = true;
         ThumbnailLoadAttempted = true;
+        try
+        {
+        var framePath = Record.KeyframePath;
+        if (!File.Exists(framePath) && services is { ServiceMode: true, RemoteThumbnails: not null })
+        {
+            var selected = await UiWork.ReadSnapshotAsync("VideoFace.FrameReference", services.Db, db =>
+            {
+                using var command = db.Command("SELECT reference_id,keyframe_id FROM video_effective_faces WHERE id=$id LIMIT 1");
+                command.Parameters.AddWithValue("$id", Record.FaceId);
+                long videoId, frameId;
+                using (var reader = command.ExecuteReader())
+                { if (!reader.Read()) return (Video: (VideoRecord?)null, Frame: (VideoKeyframe?)null, Ordinal: -1); videoId = reader.GetInt64(0); frameId = reader.GetInt64(1); }
+                var repository = new VideoRepository(db);
+                var frames = repository.GetKeyframes(videoId, existingOnly: false).ToArray();
+                var ordinal = Array.FindIndex(frames, frame => frame.Id == frameId);
+                return (Video: repository.Get(videoId), Frame: ordinal < 0 ? null : frames[ordinal], Ordinal: ordinal);
+            }, cancellationToken);
+            if (selected.Video is not null && selected.Frame is not null)
+                framePath = await Services.RemoteKeyframeAssets.GetAsync(services, selected.Video, selected.Frame, selected.Ordinal,
+                    cancellationToken, prefetch: true) ?? framePath;
+        }
+        await CropSlots.WaitAsync(cancellationToken);
         try { Thumbnail = await Task.Run(() =>
         {
-            if (!File.Exists(Record.KeyframePath)) return null;
-            using var stream = File.OpenRead(Record.KeyframePath);
+            if (!File.Exists(framePath)) return null;
+            using var stream = File.OpenRead(framePath);
             var decoder = BitmapDecoder.Create(stream, BitmapCreateOptions.PreservePixelFormat, BitmapCacheOption.OnLoad);
             var source = decoder.Frames[0];
             var paddingX = Record.Box.Width * .35f;
@@ -957,11 +1043,19 @@ public sealed partial class VideoFaceItemViewModel(VideoFaceTimelineRecord recor
             var right = Math.Min(source.PixelWidth, (int)((Record.Box.X + Record.Box.Width + paddingX) * source.PixelWidth));
             var bottom = Math.Min(source.PixelHeight, (int)((Record.Box.Y + Record.Box.Height + paddingBottom) * source.PixelHeight));
             if (right <= x || bottom <= y) return null;
-            var crop = new CroppedBitmap(source, new Int32Rect(x, y, right - x, bottom - y));
-            crop.Freeze();
-            return (ImageSource)crop;
-        }); }
-        catch (Exception exception) when (exception is IOException or NotSupportedException or ArgumentException or InvalidOperationException or FormatException or System.Runtime.InteropServices.COMException)
+            BitmapSource crop = new CroppedBitmap(source, new Int32Rect(x, y, right - x, bottom - y));
+            var scale = Math.Min(1d, 256d / Math.Max(crop.PixelWidth, crop.PixelHeight));
+            if (scale < 1) crop = new TransformedBitmap(crop, new ScaleTransform(scale, scale));
+            // A CroppedBitmap retains the entire decoded frame. Copy the small crop
+            // so a person gallery cannot retain one full frame per face.
+            var detached = new WriteableBitmap(crop);
+            detached.Freeze();
+            return (ImageSource)detached;
+        }, cancellationToken); }
+        finally { CropSlots.Release(); }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
+        catch (Exception exception) when (exception is IOException or HttpRequestException or NotSupportedException or ArgumentException or InvalidOperationException or FormatException or System.Runtime.InteropServices.COMException)
         {
             AppLogger.Warn($"Video face thumbnail unavailable: face={Record.FaceId}; errorType={exception.GetType().Name}");
         }

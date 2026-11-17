@@ -78,7 +78,7 @@ public sealed partial class CloudVisionRepository(PicerDatabase database)
             SELECT 1 FROM cloud_vision_analyses
             WHERE image_id=$image AND provider=$provider AND model_version=$model
               AND prompt_version=$prompt AND source_file_size=$size
-              AND source_modified_utc=$modified AND location_fingerprint=$location
+              AND picer_same_instant(source_modified_utc,$modified) AND location_fingerprint=$location
               AND status='completed'
             """);
         AddIdentity(command, image, analyzer, locationFingerprint);
@@ -87,11 +87,23 @@ public sealed partial class CloudVisionRepository(PicerDatabase database)
 
     public bool HasCurrentDescription(ImageRecord image)
     {
-        RestoreSharedDescription(image);
+        // This check is also used by read-only GUI snapshots. Shared results can
+        // be reused without materializing a compatibility row for this path.
         using var command = database.Command("""
             SELECT 1 FROM cloud_vision_analyses WHERE image_id=$id AND status='completed'
               AND summary IS NOT NULL AND trim(summary)<>''
-              AND source_file_size=$size AND source_modified_utc=$modified LIMIT 1
+              AND source_file_size=$size AND picer_same_instant(source_modified_utc,$modified)
+            UNION ALL
+            SELECT 1 FROM images i JOIN content_derivatives d
+              ON d.content_sha256=COALESCE(i.content_sha256,i.sha256)
+            WHERE i.id=$id AND i.file_size=$size AND picer_same_instant(i.modified_utc,$modified)
+              AND d.kind='cloud_vision_analyses' AND json_extract(d.payload,'$.status')='completed'
+              AND length(trim(json_extract(d.payload,'$.summary')))>0
+              AND json_extract(d.payload,'$.source_file_size')=i.file_size
+              AND length(json_extract(d.payload,'$.source_modified_utc'))>0
+              AND NOT EXISTS(SELECT 1 FROM cloud_vision_analyses c
+                WHERE c.image_id=i.id AND c.provider=json_extract(d.payload,'$.provider'))
+            LIMIT 1
             """);
         command.Parameters.AddWithValue("$id", image.Id);
         command.Parameters.AddWithValue("$size", image.FileSize);

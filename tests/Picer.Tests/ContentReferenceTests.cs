@@ -75,6 +75,40 @@ public sealed class ContentReferenceTests : IDisposable
     }
 
     [Fact]
+    public void DescriptionChecksInReadSnapshotReuseSharedResultsWithoutWriting()
+    {
+        var first = Add("snapshot/original.jpg");
+        var copy = Add("snapshot/copy.jpg");
+        var repository = new Picer.Core.Vision.CloudVisionRepository(_db);
+        Assert.False(_db.ReadSnapshot(reader => new Picer.Core.Vision.CloudVisionRepository(reader).HasCurrentDescription(first)));
+        using (var insert = _db.Command("""
+            INSERT INTO cloud_vision_analyses(image_id,provider,model_version,prompt_version,source_file_size,source_modified_utc,location_fingerprint,status,summary,result_json,updated_utc)
+            VALUES($id,'test','v1','v1',42,$modified,'','completed','shared description','{}',$modified)
+            """))
+        {
+            insert.Parameters.AddWithValue("$id", first.Id);
+            insert.Parameters.AddWithValue("$modified", first.ModifiedUtc.ToString("o"));
+            insert.ExecuteNonQuery();
+        }
+        _db.ReadSnapshot(reader =>
+        {
+            var readRepository = new Picer.Core.Vision.CloudVisionRepository(reader);
+            Assert.True(readRepository.HasCurrentDescription(first));
+            Assert.True(readRepository.HasCurrentDescription(copy));
+            var changed = reader.GetImage(copy.Id)!;
+            changed.FileSize++;
+            Assert.False(readRepository.HasCurrentDescription(changed));
+            changed.FileSize = copy.FileSize;
+            changed.ModifiedUtc = copy.ModifiedUtc.AddSeconds(1);
+            Assert.False(readRepository.HasCurrentDescription(changed));
+            return true;
+        });
+        Assert.True(repository.HasCurrentDescription(copy));
+        using var rows = _db.Command("SELECT COUNT(*) FROM cloud_vision_analyses");
+        Assert.Equal(1L, rows.ExecuteScalar());
+    }
+
+    [Fact]
     public void ExplicitPurgeKeepsSharedContentUntilLastReferenceIsRemoved()
     {
         var first = Add("a/photo.jpg");

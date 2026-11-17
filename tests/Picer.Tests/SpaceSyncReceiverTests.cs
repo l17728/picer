@@ -452,6 +452,24 @@ public sealed class SpaceSyncReceiverTests : IDisposable
     }
 
     [Fact]
+    public void ClassificationAdmissionDoesNotShareThumbnailOrIndexSlots()
+    {
+        var budget = new SpaceRequestAdmission(); var device = Device();
+        var leases = new List<IDisposable>();
+        try
+        {
+            for (var i = 0; i < 4; i++) leases.Add(Assert.IsAssignableFrom<IDisposable>(budget.TryEnter(device, "/api/gateway/v1/thumbs/1")));
+            Assert.Null(budget.TryEnter(device, "/api/gateway/v1/video-keyframes/1"));
+            for (var i = 0; i < 6; i++) leases.Add(Assert.IsAssignableFrom<IDisposable>(budget.TryEnter(device, "/api/gateway/v1/metadata")));
+            for (var i = 0; i < 4; i++) leases.Add(Assert.IsAssignableFrom<IDisposable>(budget.TryEnter(device, "/api/service/v1/classification/v2/browse")));
+            Assert.Null(budget.TryEnter(device, "/api/service/v1/classification/v2/jobs/latest"));
+        }
+        finally { foreach (var lease in leases) lease.Dispose(); }
+        using var released = budget.TryEnter(device, "/api/service/v1/classification/v2/browse");
+        Assert.NotNull(released);
+    }
+
+    [Fact]
     public void ContentHashRejectionChangeAndRestorationAreDeliveredOnlyToTheOwningPublisher()
     {
         var first = Publisher(Guid.NewGuid().ToString("N"));

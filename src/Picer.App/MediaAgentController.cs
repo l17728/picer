@@ -7,6 +7,27 @@ namespace Picer.App;
 
 internal static class MediaAgentController
 {
+    internal sealed record AccountSourceBinding(string ServiceId, string AccountId, string SpaceId,
+        string OwnerGrantId, string AgentGrantId, Dictionary<long, string> Sources);
+    private static string AccountBindingPath => Path.Combine(AppPaths.DataRoot, "agent-source-binding.json");
+
+    internal static void SaveAccountBinding(AccountSourceBinding binding)
+    {
+        Directory.CreateDirectory(AppPaths.DataRoot);
+        var temporary = AccountBindingPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        try
+        {
+            File.WriteAllText(temporary, JsonSerializer.Serialize(binding));
+            File.Move(temporary, AccountBindingPath, overwrite: true);
+        }
+        finally { if (File.Exists(temporary)) File.Delete(temporary); }
+    }
+
+    internal static AccountSourceBinding? LoadAccountBinding()
+    {
+        if (!File.Exists(AccountBindingPath)) return null;
+        return JsonSerializer.Deserialize<AccountSourceBinding>(File.ReadAllText(AccountBindingPath));
+    }
     private static Process? _process;
     private static readonly string ConfigPath = Path.Combine(AppPaths.DataRoot, "media-agent.json");
 

@@ -1,4 +1,4 @@
-using System.Collections.ObjectModel;
+﻿using System.Collections.ObjectModel;
 using System.IO;
 using System.Diagnostics;
 using System.Windows;
@@ -20,7 +20,7 @@ public partial class ServicePhotoItem : ObservableObject
     public string Path { get; init; } = "";
     public long FileSize { get; init; }
     public string? Sha256 { get; init; }
-    public string MediaBadge => IsVideo ? "视频" : "图片";
+    public string MediaBadge => IsVideo ? "瑙嗛" : "鍥剧墖";
 
     [ObservableProperty]
     private System.Windows.Media.Imaging.BitmapImage? _thumbnail;
@@ -46,6 +46,7 @@ public partial class ServiceBrowseViewModel : ObservableObject
     // The authenticated service also serves mirror/index traffic. Keep visible
     // thumbnail requests below its per-device admission limit.
     private readonly ThumbnailWorkScheduler _thumbnailGate = new(2);
+    private readonly ThumbnailWorkScheduler _cachedThumbnailGate = new(4);
     private readonly ThumbnailRetryTracker _thumbnailRetries = new();
     private sealed class ThumbnailLoad(CancellationToken token, bool visible) : IDisposable
     {
@@ -54,6 +55,7 @@ public partial class ServiceBrowseViewModel : ObservableObject
         public void Dispose() => Stop.Dispose();
     }
     private readonly Dictionary<ServicePhotoItem, ThumbnailLoad> _thumbnailLoads = [];
+    private readonly HashSet<ServicePhotoItem> _deferredThumbnails = [];
     private CancellationTokenSource? _thumbnailPageCts = new();
     private Task? _thumbnailWorker;
     private long _thumbnailRequestTicks;
@@ -99,8 +101,12 @@ public partial class ServiceBrowseViewModel : ObservableObject
         foreach (var (item, work) in _thumbnailLoads.ToArray())
         {
             Volatile.Write(ref work.Visible, visible.Contains(item));
-            if (work.Visible) _services.RemoteThumbnails.Promote(new ImageRecord { Id = item.MediaId, ContentSha256 = item.Sha256 });
-            else work.Stop.Cancel();
+            if (work.Visible) _services.RemoteThumbnails.Promote(new ImageRecord { Id = item.Id, ContentSha256 = item.Sha256 });
+            else
+            {
+                _deferredThumbnails.Add(item);
+                work.Stop.Cancel();
+            }
         }
         _thumbnailGate.RefreshPriorities();
         foreach (var item in visible) _ = LoadThumbnailAsync(item, _thumbnailPageCts?.Token ?? CancellationToken.None);
@@ -122,17 +128,21 @@ public partial class ServiceBrowseViewModel : ObservableObject
                 var first = visible.Count > 0 ? visible.Min() : 0;
                 var span = Math.Clamp(visible.Count, 8, 128);
                 var near = Items.Skip(Math.Max(0, first - span)).Take(span * 3);
-                var ordered = visible.Select(index => index >= 0 && index < Items.Count ? Items[index] : null)
-                    .Concat(near.Where(item => !visible.Contains(Items.IndexOf(item))))
-                    .OfType<ServicePhotoItem>().ToArray();
+                if (_deferredThumbnails.Count > 0)
+                {
+                    var currentItems = Items.ToHashSet();
+                    _deferredThumbnails.RemoveWhere(item => item.HasThumbnail || !currentItems.Contains(item));
+                }
+                var visibleItems = visible.Where(index => index >= 0 && index < Items.Count).Select(index => Items[index]).ToHashSet();
+                var ordered = visibleItems.Concat(near).Concat(_deferredThumbnails).Distinct().ToArray();
                 var now = DateTimeOffset.UtcNow;
-                var pending = ordered.Where(item => !item.IsVideo && !item.HasThumbnail && !item.IsThumbnailLoading
+                var pending = ordered.Where(item => !item.HasThumbnail && !item.IsThumbnailLoading
                         && _thumbnailRetries.CanRetry(item.Id, now))
                     .Take(Math.Max(0, 8 - _thumbnailLoads.Count)).ToArray();
                 if (pending.Length == 0)
                 {
                     if (_thumbnailLoads.Count > 0) { await Task.Delay(80); continue; }
-                    var nextRetry = ordered.Where(item => !item.IsVideo && !item.HasThumbnail && !item.IsThumbnailLoading)
+                    var nextRetry = ordered.Where(item => !item.HasThumbnail && !item.IsThumbnailLoading)
                         .Select(item => _thumbnailRetries.GetRetryAt(item.Id))
                         .Where(retryAt => retryAt is not null)
                         .Select(retryAt => retryAt!.Value)
@@ -144,18 +154,28 @@ public partial class ServiceBrowseViewModel : ObservableObject
                         if (delay > TimeSpan.Zero)
                         {
                             var pageToken = _thumbnailPageCts?.Token ?? CancellationToken.None;
-                            await Task.Delay(delay, pageToken);
+                            // Re-evaluate the viewport promptly even during failure backoff.
+                            await Task.Delay(delay < TimeSpan.FromMilliseconds(250) ? delay : TimeSpan.FromMilliseconds(250), pageToken);
                             continue;
                         }
                     }
                     return;
                 }
                 foreach (var item in pending) _ = LoadThumbnailAsync(item, _thumbnailPageCts?.Token ?? CancellationToken.None,
-                    prefetch: !visible.Contains(Items.IndexOf(item)));
+                    prefetch: !visibleItems.Contains(item));
                 await Task.Delay(40);
             }
         }
-        catch (OperationCanceledException) { }
+        catch (OperationCanceledException)
+        {
+            // A directory switch may replace the page while the old worker is
+            // sleeping in retry backoff. Its cancellation must not strand the new page.
+            if (_thumbnailPageCts?.IsCancellationRequested == false && !_browseLifetime.IsCancellationRequested)
+            {
+                _thumbnailWorker = null;
+                ScheduleThumbnailPrefetch();
+            }
+        }
     }
 
     [RelayCommand]
@@ -163,7 +183,8 @@ public partial class ServiceBrowseViewModel : ObservableObject
     {
         if (item is null) return;
         if (!item.IsVideo && _gateway is HttpIndexGateway remote)
-            await Picer.App.Services.RemotePhotoPreview.OpenAsync(remote, item.MediaId, item.Path, item.Sha256);
+            try { await Picer.App.Services.RemotePhotoPreview.OpenAsync(remote, item.MediaId, item.Path, item.Sha256); }
+            catch (System.Net.Http.HttpRequestException) { await OpenOriginalAsync(item); }
         else await OpenOriginalAsync(item);
     }
 
@@ -183,43 +204,44 @@ public partial class ServiceBrowseViewModel : ObservableObject
 
     private async Task LoadThumbnailAsync(ServicePhotoItem item, CancellationToken cancellationToken, bool prefetch = false)
     {
-        if (item.IsVideo || item.HasThumbnail || item.IsThumbnailLoading || !_thumbnailRetries.CanRetry(item.Id, DateTimeOffset.UtcNow)) return;
+        if (item.HasThumbnail || item.IsThumbnailLoading || !_thumbnailRetries.CanRetry(item.Id, DateTimeOffset.UtcNow)) return;
         item.IsThumbnailLoading = true;
         using var work = new ThumbnailLoad(cancellationToken, !prefetch);
         _thumbnailLoads[item] = work;
+        using var trace = new Picer.Core.Logging.MediaReadTrace("service-gui-thumbnail", item.MediaId);
+        var record = new ImageRecord { Id = item.Id, Path = item.Path, ContentSha256 = item.Sha256 };
         try
         {
-            using var slot = await _thumbnailGate.EnterAsync(() => Volatile.Read(ref work.Visible), work.Stop.Token);
-                var record = new ImageRecord { Id = item.MediaId, Path = item.Path, ContentSha256 = item.Sha256 };
-                var path = _services.RemoteThumbnails.TryGet(record) ?? await _services.RemoteThumbnails.GetOrDownloadAsync(
-                    record, downloadToken => _gateway.OpenThumbnailAsync(item.Id, downloadToken), work.Stop.Token,
-                    prefetch: !Volatile.Read(ref work.Visible));
-                work.Stop.Token.ThrowIfCancellationRequested();
-                if (path is null || !File.Exists(path))
-                {
-                    _thumbnailRetries.RecordFailure(item.Id, DateTimeOffset.UtcNow);
-                    return;
-                }
-                var image = new BitmapImage();
-                image.BeginInit();
-                image.CacheOption = BitmapCacheOption.OnLoad;
-                image.DecodePixelWidth = 256;
-                image.UriSource = new Uri(path, UriKind.Absolute);
-                image.EndInit();
-                image.Freeze();
-                Application.Current.Dispatcher.Invoke(() => item.Thumbnail = image);
-                _thumbnailRetries.RecordSuccess(item.Id);
+            var cached = _services.RemoteThumbnails.TryGet(record);
+            trace.Mark(cached is null ? "disk_miss" : "disk_hit");
+            using var slot = await (cached is null ? _thumbnailGate : _cachedThumbnailGate)
+                .EnterAsync(() => Volatile.Read(ref work.Visible), work.Stop.Token);
+            trace.Mark("admitted");
+            var image = await Picer.App.Services.ThumbnailBitmapLoader.LoadRemoteAsync(_services.RemoteThumbnails,
+                record, downloadToken => item.IsVideo
+                    ? _gateway is IMediaAssetGateway media
+                        ? media.OpenVideoThumbnailAsync(item.MediaId, cancellationToken: downloadToken)
+                        : Task.FromResult<Stream?>(null)
+                    : _gateway.OpenThumbnailAsync(item.MediaId, downloadToken), work.Stop.Token,
+                prefetch: !Volatile.Read(ref work.Visible));
+            work.Stop.Token.ThrowIfCancellationRequested();
+            if (image is null) { _thumbnailRetries.RecordFailure(item.Id, DateTimeOffset.UtcNow); return; }
+            item.Thumbnail = image;
+            trace.Mark("display_notified");
+            _thumbnailRetries.RecordSuccess(item.Id);
         }
         catch (OperationCanceledException)
         {
         }
-        catch (Exception)
+        catch (Exception exception)
         {
+            trace.Failure(exception);
             if (!cancellationToken.IsCancellationRequested)
                 _thumbnailRetries.RecordFailure(item.Id, DateTimeOffset.UtcNow);
         }
         finally
         {
+            trace.Mark(work.Stop.IsCancellationRequested ? "cancelled" : item.HasThumbnail ? "completed" : "empty");
             _thumbnailLoads.Remove(item);
             item.IsThumbnailLoading = false;
             if (work.Visible && work.Stop.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
@@ -227,3 +249,5 @@ public partial class ServiceBrowseViewModel : ObservableObject
         }
     }
 }
+
+

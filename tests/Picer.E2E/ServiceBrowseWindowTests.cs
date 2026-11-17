@@ -14,8 +14,9 @@ namespace Picer.E2E;
 
 public sealed class ServiceBrowseWindowTests
 {
-    private sealed class StubGateway : IIndexGateway
+    internal class StubGateway : IIndexGateway
     {
+        public Func<long, CancellationToken, Task<Stream?>>? ThumbnailSource { get; set; }
         public List<ImageRecord> Records { get; } = Enumerable.Range(0, 5).Select(i => new ImageRecord
         {
             Id = i + 1,
@@ -37,7 +38,7 @@ public sealed class ServiceBrowseWindowTests
             Task.FromResult(Records.FirstOrDefault(record => record.Id == id));
 
         public Task<Stream?> OpenThumbnailAsync(long imageId, CancellationToken cancellationToken = default) =>
-            Task.FromResult<Stream?>(null);
+            ThumbnailSource?.Invoke(imageId, cancellationToken) ?? Task.FromResult<Stream?>(null);
 
         public Task<GatewayVideoPage> ListVideosAsync(long? sourceId = null, int pageSize = 200, string? cursor = null, CancellationToken cancellationToken = default) =>
             Task.FromResult(new GatewayVideoPage(Array.Empty<VideoRecord>(), null, 0));

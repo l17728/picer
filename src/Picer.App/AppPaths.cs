@@ -13,6 +13,18 @@ public static class AppPaths
     public static string ServiceEndpointPath => Path.Combine(BootstrapDirectory, "service-endpoint.json");
     public static string AccountCredentialPath => Path.Combine(BootstrapDirectory, "account-device.bin");
     public static string AgentCredentialPath => Path.Combine(BootstrapDirectory, "agent-device.bin");
+    public static bool RequiresAccountSignIn()
+    {
+        var backend = Picer.Core.Gateway.IndexBackendConfig.Load(BackendConfigPath, ServiceEndpointPath,
+            static cipher => System.Security.Cryptography.ProtectedData.Unprotect(cipher, null, System.Security.Cryptography.DataProtectionScope.CurrentUser));
+        if (!backend.DeviceAuthentication) return false;
+        var store = new Picer.Core.Identity.WindowsDeviceCredentialStore(AccountCredentialPath);
+        if (!store.Exists) return true;
+        try { return store.Load().Session is null; }
+        catch (Exception exception) when (exception is System.Security.Cryptography.CryptographicException or InvalidDataException or JsonException or FileNotFoundException)
+        { return true; }
+    }
+
     public static Picer.Core.Gateway.IndexBackendOptions LoadIndexBackend()
     {
         var backend = Picer.Core.Gateway.IndexBackendConfig.Load(BackendConfigPath, ServiceEndpointPath,

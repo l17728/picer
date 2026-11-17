@@ -9,7 +9,7 @@ namespace Picer.IndexService.Identity;
 public sealed record AuthorizedDevice(string GrantId, string AccountId, string SpaceId, string DeviceId,
     string PublicKey, string Kind, string Scope, long AuthEpoch, long DataEpoch)
 {
-    public bool Allows(string scope) => Scope.Split(' ', StringSplitOptions.RemoveEmptyEntries).Contains(scope, StringComparer.Ordinal);
+    public bool Allows(string scope) => scope.Split(' ', StringSplitOptions.RemoveEmptyEntries).All(required => Scope.Split(' ', StringSplitOptions.RemoveEmptyEntries).Contains(required, StringComparer.Ordinal));
     public long SecurityEpoch { get; init; }
     public long MembershipVersion { get; init; }
 }
@@ -17,9 +17,9 @@ public sealed record RegisteredDevice(string Id, string SpaceId, string Name, st
 
 public sealed partial class AccountStore
 {
-    public const string ViewerScopes = "index.read thumb.read";
-    public const string EditorScopes = "index.read thumb.read index.write";
-    public const string OwnerScopes = EditorScopes + " index.purge source.publish";
+    public const string ViewerScopes = "index.read thumb.read taxonomy.read";
+    public const string EditorScopes = ViewerScopes + " index.write taxonomy.propose";
+    public const string OwnerScopes = EditorScopes + " index.purge source.publish taxonomy.manage";
     public const string AgentScopes = "source.serve";
 
     public string CreateEnrollment(DeviceEnrollmentRequest request)
@@ -197,9 +197,21 @@ public sealed partial class AccountStore
     private void SaveResponse(SqliteConnection connection, SqliteTransaction transaction, string key, string attemptId, DeviceSession response)
     {
         Execute(connection, transaction, "DELETE FROM credential_responses WHERE expires<$now", ("$now", Now));
+        var expires = Now + 30;
+        if (key.StartsWith("refresh:", StringComparison.Ordinal))
+        {
+            // A response can be lost after committing the rotation. Preserve the same
+            // attempt's receipt while its successor can still refresh, including offline
+            // recovery. Only the newest rotation receipt is useful for a device grant.
+            expires = Convert.ToInt64(Scalar(connection, transaction,
+                "SELECT MIN(refresh_expires,absolute_expires) FROM sessions WHERE access_hash=$hash",
+                ("$hash", DeviceAuthorization.Digest(response.AccessToken))));
+            Execute(connection, transaction, "DELETE FROM credential_responses WHERE grant_id=$grant AND request_key LIKE 'refresh:%'",
+                ("$grant", response.GrantId));
+        }
         Execute(connection, transaction, "INSERT INTO credential_responses(request_key,attempt_id,grant_id,protected_response,expires) VALUES($key,$attempt,$grant,$response,$expires)",
             ("$key", key), ("$attempt", attemptId), ("$grant", response.GrantId),
-            ("$response", _responses.Protect(JsonSerializer.Serialize(response, DeviceAuthorization.Json))), ("$expires", Now + 30));
+            ("$response", _responses.Protect(JsonSerializer.Serialize(response, DeviceAuthorization.Json))), ("$expires", expires));
     }
 
     private DeviceSession? ReplayResponse(SqliteConnection connection, SqliteTransaction transaction, string key, string attemptId)
@@ -233,7 +245,9 @@ public sealed partial class AccountStore
         using (var command = Command(connection, transaction, """
             SELECT g.id,g.account_id,g.space_id,g.device_id,g.kind,g.scope,t.family_id,t.security_epoch,t.auth_epoch,t.membership_version,t.absolute_expires,t.revoked
             FROM sessions t JOIN device_grants g ON g.id=t.grant_id
-            WHERE t.refresh_hash=$hash AND g.public_key=$key AND g.state='active' AND t.refresh_expires>$now AND t.absolute_expires>$now
+            WHERE t.refresh_hash=$hash AND g.public_key=$key
+            AND (g.state='active' OR (g.state='pending' AND g.created+300>$now))
+            AND (t.revoked<>0 OR t.refresh_expires>$now) AND t.absolute_expires>$now
             """, ("$hash", hash), ("$key", publicKey), ("$now", Now)))
         using (var reader = command.ExecuteReader())
         {
@@ -253,6 +267,8 @@ public sealed partial class AccountStore
             transaction.Commit(); throw new UnauthorizedAccessException("refresh_replay_detected");
         }
         Execute(connection, transaction, "UPDATE sessions SET revoked=1 WHERE refresh_hash=$hash", ("$hash", hash));
+        Execute(connection, transaction, "UPDATE device_grants SET state='active',activated=$now WHERE id=$id AND state='pending'",
+            ("$now", Now), ("$id", grant));
         var session = CreateSession(connection, transaction, grant, account, space, device, scope, kind, security, auth, membership, family, absolute);
         SaveResponse(connection, transaction, "refresh:" + hash, attemptId, session);
         transaction.Commit(); return session;

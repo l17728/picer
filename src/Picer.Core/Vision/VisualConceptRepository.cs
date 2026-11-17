@@ -30,7 +30,7 @@ public sealed class VisualConceptRepository(PicerDatabase database)
         using var command = database.Command("""
             SELECT 1 FROM vision_analyses
             WHERE image_id=$image AND analyzer=$analyzer AND model_version=$version
-              AND source_file_size=$size AND source_modified_utc=$modified AND status='completed'
+              AND source_file_size=$size AND picer_same_instant(source_modified_utc,$modified) AND status='completed'
             """);
         command.Parameters.AddWithValue("$image", image.Id);
         command.Parameters.AddWithValue("$analyzer", analyzer.AnalyzerName);

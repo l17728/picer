@@ -25,6 +25,7 @@ namespace Picer.App;
 
 public static partial class AppServices
 {
+    internal static readonly ForegroundWorkPriority ForegroundReads = new();
     internal static Stream? OpenPrivateAnalysisInput(string dataRoot, string imagePath)
     {
         var candidate = Path.GetFullPath(imagePath);
@@ -326,6 +327,16 @@ public static partial class AppServices
         return ClipSemantic;
     }
 
+    public static IClipEmbeddingClient? CreateQuestionClipClient()
+    {
+        if (!TryGetAiServiceBackend(out var backend)) return null;
+        var client = CreatePinnedServiceClient(backend, TimeSpan.FromSeconds(10));
+        client.BaseAddress = new Uri(backend.BaseUrl!.TrimEnd('/') + "/api/service/v1/clip/");
+        var session = AccountClient?.Connection.Session;
+        var scope = session is null ? null : DeviceAuthorization.Digest(backend.BaseUrl + ":" + session.SpaceId + ":" + session.GrantId + ":" + session.Scope + ":" + session.AccessToken);
+        return new ServiceClipEmbeddingClient(client, scope);
+    }
+
     private static string ResolveCacheDirectory(StorageConfig config) =>
         config.Cache?.Directory is { Length: > 0 } configured
             ? Path.GetFullPath(configured)
@@ -444,6 +455,7 @@ public static partial class AppServices
             {
                 do
                 {
+                    await ForegroundReads.WaitAsync(cancellationToken).ConfigureAwait(false);
                     var page = await mirrorGateway.ListImagesAsync(source.Id, true, 500, cursor, cancellationToken).ConfigureAwait(false);
                     foreach (var batch in page.Items.Chunk(50))
                     {
@@ -463,6 +475,7 @@ public static partial class AppServices
             {
                 do
                 {
+                    await ForegroundReads.WaitAsync(cancellationToken).ConfigureAwait(false);
                     var page = await mirrorGateway.ListVideosAsync(source.Id, 500, cursor, cancellationToken).ConfigureAwait(false);
                     foreach (var batch in page.Items.Chunk(50))
                     {
@@ -486,6 +499,7 @@ public static partial class AppServices
         {
             // Apply relationships only after all mirrored media rows exist; the
             // foreign keys intentionally protect against partial remote syncs.
+            await ForegroundReads.WaitAsync(cancellationToken).ConfigureAwait(false);
             var httpMirror = mirrorGateway as HttpIndexGateway;
             var metadata = httpMirror is null
                 ? await mirrorGateway.GetMetadataAsync(cancellationToken).ConfigureAwait(false)
@@ -611,6 +625,7 @@ public static partial class AppServices
             await localPublisher.PublishAsync(progress, cancellationToken, localScope).ConfigureAwait(false);
             if (localClient?.Connection.Session?.Scope.Split(' ').Contains("index.read", StringComparer.Ordinal) == true)
                 await localPublisher.PullMetadataChangesAsync(progress, cancellationToken, localScope).ConfigureAwait(false);
+            await localPublisher.PublishClassificationResultsAsync(localScope, progress, cancellationToken).ConfigureAwait(false);
             return null;
         }
         if (SyncClient is null) return null;
@@ -862,6 +877,7 @@ public static partial class AppServices
 
     public static void Shutdown()
     {
+        DescriptionWorker.Dispose();
         StopSpaceNotifications();
         Services.MediaPlayback.Shutdown();
         AppLogger.Info("AppServices 关闭");
@@ -936,7 +952,7 @@ public static partial class AppServices
 
     public static HttpClient CreateClassificationHttpClient()
     {
-        if (!TryGetAiServiceBackend(out var backend)) throw new InvalidOperationException("照片空间尚未配对");
+        if (!TryGetAiServiceBackend(out var backend)) throw new UnauthorizedAccessException("照片空间尚未配对，请完成设备授权。");
         var client = CreatePinnedServiceClient(backend, TimeSpan.FromMinutes(10));
         client.BaseAddress = new Uri(backend.BaseUrl!.TrimEnd('/') + "/api/service/v1/classification/");
         return client;

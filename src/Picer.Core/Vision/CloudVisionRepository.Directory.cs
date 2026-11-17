@@ -22,7 +22,7 @@ public sealed partial class CloudVisionRepository
             using var command = database.Command("""
                 SELECT i.id FROM images i JOIN json_each($ids) requested ON requested.value=i.id
                 WHERE EXISTS(SELECT 1 FROM cloud_vision_analyses c WHERE c.image_id=i.id AND c.status='completed'
-                    AND length(trim(c.summary))>0 AND c.source_file_size=i.file_size AND c.source_modified_utc=i.modified_utc)
+                    AND length(trim(c.summary))>0 AND c.source_file_size=i.file_size AND picer_same_instant(c.source_modified_utc,i.modified_utc))
                 OR EXISTS(SELECT 1 FROM content_derivatives d WHERE d.content_sha256=COALESCE(i.content_sha256,i.sha256)
                     AND d.kind='cloud_vision_analyses' AND json_extract(d.payload,'$.status')='completed'
                     AND length(trim(json_extract(d.payload,'$.summary')))>0

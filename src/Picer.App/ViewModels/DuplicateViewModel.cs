@@ -203,6 +203,7 @@ public partial class DuplicateCandidateItemViewModel : ObservableObject
     public DateTime ModifiedUtc => Record.ModifiedUtc;
     public DateTime? TakenUtc => Record.TakenUtc;
     public object? Thumbnail => _image.Thumbnail;
+    public ImageItemViewModel Preview => _image;
     public string MatchText { get; }
     [ObservableProperty] private DuplicateReviewDecision _decision;
     [ObservableProperty] private bool _isRecommendedKeep;
@@ -218,7 +219,7 @@ public partial class DuplicateCandidateItemViewModel : ObservableObject
     public DuplicateCandidateItemViewModel(ImageRecord record, string algorithm, int similarityPercent, Action changed)
     {
         Record = record;
-        _image = new(record);
+        _image = new(record, services: AppServices.GetClientServices());
         _changed = changed;
         MatchText = $"{algorithm} · {similarityPercent}%";
     }

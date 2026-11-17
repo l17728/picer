@@ -1,4 +1,4 @@
-using System.Collections;
+﻿using System.Collections;
 using System.Collections.Specialized;
 using System.Windows;
 using System.Windows.Controls;
@@ -37,6 +37,8 @@ public partial class PhotoGrid : UserControl
     private HashSet<object> _selectionBeforeDrag = [];
     private Task? _prefetchWorker;
     private readonly HashSet<ImageItemViewModel> _prefetchItems = [];
+    private HashSet<ImageItemViewModel> _visibleItems = [];
+    private readonly HashSet<ImageItemViewModel> _deferredItems = [];
     private long _lastPrefetchRequestTicks;
     private long _lastPrefetchLogTicks;
     private long _lastPrefetchBatchLogTicks;
@@ -80,6 +82,7 @@ public partial class PhotoGrid : UserControl
     private static void OnItemsSourceChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
     {
         var grid = (PhotoGrid)d;
+        grid._deferredItems.Clear();
         if (grid._itemsNotifier is not null) grid._itemsNotifier.CollectionChanged -= grid.Items_CollectionChanged;
         grid._itemsNotifier = e.NewValue as INotifyCollectionChanged;
         if (grid._itemsNotifier is not null) grid._itemsNotifier.CollectionChanged += grid.Items_CollectionChanged;
@@ -95,10 +98,21 @@ public partial class PhotoGrid : UserControl
         var visibleNow = new HashSet<ImageItemViewModel>();
         if (viewport.First >= 0)
             for (var i = viewport.First; i <= viewport.Last && i < List.Items.Count; i++)
-                if (List.Items[i] is ImageItemViewModel item) { visibleNow.Add(item); item.EnsureThumbnailLoad(); }
+                if (List.Items[i] is ImageItemViewModel item) visibleNow.Add(item);
+        foreach (var item in _visibleItems.Except(visibleNow))
+        {
+            if (!item.HasThumbnail) _deferredItems.Add(item);
+            item.PauseThumbnailLoad();
+        }
+        _visibleItems = visibleNow;
+        foreach (var item in visibleNow) item.EnsureThumbnailLoad();
         foreach (var item in _prefetchItems.ToArray())
         {
-            if (!visibleNow.Contains(item)) item.CancelThumbnailPrefetch();
+            if (!visibleNow.Contains(item))
+            {
+                if (!item.HasThumbnail) _deferredItems.Add(item);
+                item.CancelThumbnailPrefetch();
+            }
             if (!item.IsThumbnailLoading || visibleNow.Contains(item)) _prefetchItems.Remove(item);
         }
         Volatile.Write(ref _lastPrefetchRequestTicks, DateTime.UtcNow.Ticks);
@@ -106,7 +120,7 @@ public partial class PhotoGrid : UserControl
         if (now - Volatile.Read(ref _lastPrefetchLogTicks) > TimeSpan.TicksPerSecond)
         {
             Volatile.Write(ref _lastPrefetchLogTicks, now);
-            AppLogger.Info($"Thumbnail prefetch scheduled; items={List.Items.Count}; visible={IsVisible}");
+            AppLogger.Info($"Thumbnail prefetch scheduled; items={List.Items.Count}; visible={IsVisible}; foreground={visibleNow.Count}; deferred={_deferredItems.Count}");
         }
         if (_prefetchWorker is null || _prefetchWorker.IsCompleted)
             _prefetchWorker = PrefetchWhenIdleAsync();
@@ -134,9 +148,14 @@ public partial class PhotoGrid : UserControl
                         if (List.Items[index] is ImageItemViewModel item) visible.Add(item);
                 var span = Math.Clamp(range.Last - range.First + 1, 8, 128);
                 var near = all.Skip(Math.Max(0, range.First - span)).Take(span * 3);
-                var ordered = visible.Concat(near.Where(item => !visible.Contains(item))).ToArray();
+                if (_deferredItems.Count > 0)
+                {
+                    var currentItems = all.ToHashSet();
+                    _deferredItems.RemoveWhere(item => item.HasThumbnail || !currentItems.Contains(item));
+                }
+                var ordered = visible.Concat(near).Concat(_deferredItems).Distinct().ToArray();
                 var available = Math.Max(0, 8 - ordered.Count(item => item.IsThumbnailLoading));
-                var pending = ordered.Where(item => !item.HasThumbnail && !item.IsThumbnailLoading).Take(available).ToArray();
+                var pending = ordered.Where(item => !item.HasThumbnail && !item.IsThumbnailLoading && item.CanRetryThumbnail).Take(available).ToArray();
                 var batchNow = DateTime.UtcNow.Ticks;
                 if (batchNow - Volatile.Read(ref _lastPrefetchBatchLogTicks) > TimeSpan.TicksPerSecond)
                 {
@@ -146,6 +165,7 @@ public partial class PhotoGrid : UserControl
                 if (pending.Length == 0)
                 {
                     if (ordered.Any(item => item.IsThumbnailLoading)) { await Task.Delay(80); continue; }
+                    if (ordered.Any(item => !item.HasThumbnail)) { await Task.Delay(250); continue; }
                     return;
                 }
                 foreach (var item in pending)
@@ -270,6 +290,9 @@ public partial class PhotoGrid : UserControl
         Volatile.Write(ref _lastPrefetchRequestTicks, 0);
         foreach (var item in _prefetchItems) item.CancelThumbnailPrefetch();
         _prefetchItems.Clear();
+        foreach (var item in _visibleItems) item.PauseThumbnailLoad();
+        _visibleItems.Clear();
+        _deferredItems.Clear();
     }
 
     private void PhotoGrid_Loaded(object sender, RoutedEventArgs e) => ScheduleGreedyPrefetch();
@@ -278,7 +301,8 @@ public partial class PhotoGrid : UserControl
 
     private void List_ScrollChanged(object sender, ScrollChangedEventArgs e)
     {
-        if (Math.Abs(e.VerticalChange) > 0.01 || Math.Abs(e.HorizontalChange) > 0.01)
+        if (Math.Abs(e.VerticalChange) > 0.01 || Math.Abs(e.HorizontalChange) > 0.01 ||
+            e.ViewportHeightChange != 0 || e.ViewportWidthChange != 0 || e.ExtentHeightChange != 0)
         {
             var now = DateTime.UtcNow.Ticks;
             if (now - Volatile.Read(ref _lastPrefetchLogTicks) > TimeSpan.TicksPerSecond)
@@ -310,7 +334,12 @@ public partial class PhotoGrid : UserControl
     private void Thumbnail_Loaded(object sender, RoutedEventArgs e)
     {
         if (sender is not FrameworkElement { DataContext: ImageItemViewModel image }) return;
-        image.EnsureThumbnailLoad();
+        if (AppServices.ServiceMode)
+        {
+            ScheduleGreedyPrefetch();
+            if (!_visibleItems.Contains(image)) image.PauseThumbnailLoad();
+        }
+        else image.EnsureThumbnailLoad();
         // Remote thumbnails are persisted by content identity.  Warm roughly
         // one viewport ahead without affecting the UI thread; already-loaded
         // and in-flight items are no-ops, so scrolling cannot duplicate work.

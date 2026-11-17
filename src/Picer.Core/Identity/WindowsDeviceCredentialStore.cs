@@ -33,7 +33,14 @@ public sealed class WindowsDeviceCredentialStore(string path)
         {
             using (var output = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None, 4096, FileOptions.WriteThrough))
             { output.Write(cipher); output.Flush(true); }
-            File.Move(temporary, _path, overwrite: true);
+            for (var attempt = 0; ; attempt++)
+            {
+                try { File.Move(temporary, _path, overwrite: true); break; }
+                catch (Exception exception) when (attempt < 4 && exception is IOException or UnauthorizedAccessException)
+                {
+                    Thread.Sleep(50 * (attempt + 1));
+                }
+            }
         }
         finally { if (File.Exists(temporary)) File.Delete(temporary); }
     }

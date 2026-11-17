@@ -61,7 +61,7 @@ public sealed class VideoRepository(PicerDatabase database)
             WHERE EXISTS(SELECT 1 FROM video_summaries s
                 WHERE s.video_id=v.content_id AND length(trim(s.summary))>0
                   AND s.source_file_size=v.file_size
-                  AND (s.source_modified_utc=v.modified_utc OR EXISTS(
+                  AND (picer_same_instant(s.source_modified_utc,v.modified_utc) OR EXISTS(
                       SELECT 1 FROM video_contents c WHERE c.id=v.content_id AND length(c.sha256)=64)))
             """);
         command.Parameters.AddWithValue("$ids", System.Text.Json.JsonSerializer.Serialize(videos.Select(video => video.Id)));
@@ -158,7 +158,7 @@ public sealed class VideoRepository(PicerDatabase database)
             using var signature = database.Command("""
                 UPDATE video_summaries SET source_file_size=$size,source_modified_utc=$modified
                 WHERE video_id IN (SELECT v.content_id FROM videos v WHERE (v.id=$id OR v.path=$path) AND v.sha256=$sha COLLATE NOCASE
-                    AND video_summaries.source_file_size=v.file_size AND video_summaries.source_modified_utc=v.modified_utc)
+                    AND video_summaries.source_file_size=v.file_size AND picer_same_instant(video_summaries.source_modified_utc,v.modified_utc))
                 """);
             signature.Parameters.AddWithValue("$id", id); signature.Parameters.AddWithValue("$path", path);
             signature.Parameters.AddWithValue("$size", size); signature.Parameters.AddWithValue("$modified", modified.ToUniversalTime().ToString("o"));
@@ -315,12 +315,20 @@ public sealed class VideoRepository(PicerDatabase database)
             SELECT v.id,v.source_id,v.path,v.file_size,v.modified_utc,v.duration_seconds,v.width,v.height,v.taken_utc,v.gps,v.status
             FROM videos v LEFT JOIN video_transcripts tr ON tr.video_id=v.content_id
             LEFT JOIN video_summaries vs ON vs.video_id=v.content_id
-            WHERE v.status='active' AND (v.path LIKE $query OR tr.transcript_json LIKE $query OR vs.result_json LIKE $query)
+            WHERE v.status='active' AND (v.path LIKE $query OR tr.transcript_json LIKE $query OR vs.result_json LIKE $query
+                OR EXISTS (SELECT 1 FROM video_effective_tags vt JOIN tags t ON t.id=vt.tag_id WHERE vt.video_id=v.id AND t.name LIKE $query))
             ORDER BY v.path
             """);
         command.Parameters.AddWithValue("$query","%"+query.Trim()+"%"); using var reader=command.ExecuteReader(); var result=new List<VideoRecord>();
         while(reader.Read()) result.Add(new VideoRecord(reader.GetInt64(0),reader.GetInt64(1),reader.GetString(2),reader.GetInt64(3),DateTime.Parse(reader.GetString(4),null,System.Globalization.DateTimeStyles.RoundtripKind),reader.IsDBNull(5)?null:reader.GetDouble(5),reader.GetInt32(6),reader.GetInt32(7),reader.IsDBNull(8)?null:DateTime.Parse(reader.GetString(8)),reader.IsDBNull(9)?null:reader.GetString(9),reader.GetString(10)));
-        return result;
+        reader.Close();
+        var concepts = Picer.Core.Vision.VisualConceptCatalog.Parse(query).ConceptIds;
+        if (concepts.Count > 0)
+        {
+            var matching = new VideoSearchMetadata(database).Match([], [], concepts);
+            result.AddRange(GetAll().Where(video => matching.Contains(video.Id) && video.Status == "active"));
+        }
+        return result.DistinctBy(video => video.Id).ToArray();
     }
 
     public void SaveProbe(long videoId, VideoProbeResult probe, VideoRecord? expected = null)
@@ -477,7 +485,7 @@ public sealed class VideoRepository(PicerDatabase database)
         if (!IsCurrentContent(video.Id, video)) return false;
         using var command = database.Command("""
             SELECT 1 FROM video_summaries WHERE video_id=$id AND trim(summary)<>''
-              AND source_file_size=$size AND (source_modified_utc=$modified OR EXISTS(SELECT 1 FROM video_contents WHERE id=$id AND length(sha256)=64)) LIMIT 1
+              AND source_file_size=$size AND (picer_same_instant(source_modified_utc,$modified) OR EXISTS(SELECT 1 FROM video_contents WHERE id=$id AND length(sha256)=64)) LIMIT 1
             """);
         command.Parameters.AddWithValue("$id", GetContentId(video.Id));
         command.Parameters.AddWithValue("$size", video.FileSize);

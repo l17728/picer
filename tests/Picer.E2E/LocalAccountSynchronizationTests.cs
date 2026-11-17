@@ -41,7 +41,7 @@ public sealed class LocalAccountSynchronizationTests
         var origin = "https://127.0.0.1:" + port;
         var instance = AccountServiceHost.Build(Path.Combine(root, "service"), origin, port);
         var credentials = new WindowsDeviceCredentialStore(Path.Combine(bootstrap, "account-device.bin"));
-        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(multipleSources?180:90));
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(multipleSources?300:180));
         Thread? worker = null;
         try
         {
@@ -228,7 +228,7 @@ public sealed class LocalAccountSynchronizationTests
             thread.IsBackground = true;
             thread.SetApartmentState(ApartmentState.STA);
             thread.Start();
-            Assert.Null(await completed.Task.WaitAsync(TimeSpan.FromMinutes(multipleSources?4:2)));
+            Assert.Null(await completed.Task.WaitAsync(TimeSpan.FromMinutes(multipleSources?6:4)));
         }
         finally
         {

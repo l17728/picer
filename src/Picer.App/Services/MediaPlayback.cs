@@ -12,7 +12,7 @@ namespace Picer.App.Services;
 
 public static class MediaPlayback
 {
-    private static readonly Lazy<PlayableMediaCache> Cache = new(() => new(Path.Combine(AppPaths.DataRoot, "remote-assets", "playable")));
+    private static readonly Lazy<PlayableMediaCache> Cache = SharedImageAssets.Cache;
     private static readonly CancellationTokenSource ShutdownToken = new();
     private static CancellationTokenSource SessionsStop = new();
     private static readonly HashSet<Task> Sessions = [];
@@ -91,6 +91,12 @@ public static class MediaPlayback
             var extension = Path.GetExtension(originalPath);
             var executable = video ? settings.ResolveExecutable(extension) : "";
             var kind = executable.Length > 0 ? VideoPlayerSettings.Identify(executable) : VideoPlayerKind.Unknown;
+            if (!video)
+            {
+                var cachedImage = await SharedImageAssets.GetAsync(gateway, id, originalPath, hash, false, stop.Token);
+                Launch("", cachedImage, VideoPlayerKind.Unknown)?.Dispose();
+                return;
+            }
             RemoteMediaInfo? info = null;
             if (gateway is IRangeMediaGateway range) info = await range.GetMediaInfoAsync(id, video, stop.Token);
             reader = info?.SupportsStreaming == true ? new ParallelMediaReader((IRangeMediaGateway)gateway, id, video, info, settings.Connections) : null;
@@ -117,7 +123,8 @@ public static class MediaPlayback
             else status.Text = video ? "当前选择使用下载方式，完成后播放。" : "正在读取照片…";
             if (info is { Length: > 21474836480 }) throw new IOException("媒体超过 20 GB 本地缓存容量，请选择流式播放器。");
             var version = info?.SupportsStreaming == true ? info.ETag : Guid.NewGuid().ToString("N");
-            var identity = hash is { Length: 64 } ? hash : $"{(gateway as HttpIndexGateway)?.MediaCacheScope ?? gateway.GetType().Name}:{id}:{video}:{version}";
+            var identity = $"{(gateway as HttpIndexGateway)?.MediaCacheScope ?? gateway.GetType().Name}:video:"
+                + (hash is { Length: 64 } ? hash : $"{id}:{version}");
             var key = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(identity))).ToLowerInvariant();
             var path = await Cache.Value.GetAsync(key, extension, hash, async (target, token) =>
             {

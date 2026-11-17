@@ -41,8 +41,14 @@ public sealed class MediaSearchConstraintTests : IDisposable
         Assert.Equal(_imageId, Assert.Single(tool.Execute(request).Items).Id);
         Assert.Empty(tool.Execute(request with { AutoRelax = false }).Items);
         Assert.Empty(tool.Execute(request with { VisualConceptIds = ["landscape.sea"] }).Items);
+        Assert.Equal(1, IndexSearchEngine.CountMatches(_db, new SearchFilters
+            { VisualConceptIds = ["landscape.mountain"], IncludeSuggestedClassifications = true }));
+        Assert.Equal(0, IndexSearchEngine.CountMatches(_db, new SearchFilters
+            { VisualConceptIds = ["landscape.mountain"], IncludeSuggestedClassifications = false }));
         new VisualConceptRepository(_db).Reject(_imageId, "landscape.mountain");
         Assert.Empty(tool.Execute(request).Items);
+        Assert.Equal(0, IndexSearchEngine.CountMatches(_db, new SearchFilters
+            { VisualConceptIds = ["landscape.mountain"], IncludeSuggestedClassifications = true }));
     }
 
     [Fact]

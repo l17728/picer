@@ -687,6 +687,15 @@ public sealed class PeopleService(PicerDatabase database)
         return people;
     }
 
+    public IReadOnlyList<PersonSummary> GetNames()
+    {
+        using var command = database.Command("SELECT id,display_name FROM people ORDER BY display_name COLLATE NOCASE");
+        using var reader = command.ExecuteReader();
+        var result = new List<PersonSummary>();
+        while (reader.Read()) result.Add(new(reader.GetInt64(0), reader.GetString(1), 0, 0));
+        return result;
+    }
+
     public IReadOnlyList<ConfirmedVideoFaceEmbedding> GetConfirmedVideoFaceEmbeddings(string? modelVersion = null, string? ownerKey = null)
     {
         using var command = database.Command("""

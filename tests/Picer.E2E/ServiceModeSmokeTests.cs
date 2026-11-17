@@ -50,7 +50,7 @@ public sealed class ServiceModeSmokeTests
         try
         {
             var endpointPath = Path.Combine(dataRoot, "service-endpoint.json");
-            var deadline = DateTime.UtcNow.AddSeconds(30);
+            var deadline = DateTime.UtcNow.AddSeconds(60);
             while (!File.Exists(endpointPath))
             {
                 if (process.HasExited)

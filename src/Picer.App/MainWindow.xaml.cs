@@ -1,14 +1,28 @@
-﻿using System.Windows;
+﻿using System.Diagnostics;
+using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Interop;
+using System.IO;
+using System.Net.Http;
+using System.Net.Http.Json;
+using System.Text.Json;
 using Picer.App.ViewModels;
 using Picer.Core.Search;
 using Picer.Core.Logging;
+using Picer.Core.Identity;
+using Picer.Core.Gateway;
 
 namespace Picer.App;
 
 public partial class MainWindow : Window
 {
+    protected override void OnSourceInitialized(EventArgs e)
+    {
+        base.OnSourceInitialized(e);
+        Infrastructure.TaskbarIdentity.Apply(new WindowInteropHelper(this).Handle);
+    }
+
     private void VideoPlayerSettings_Click(object sender, RoutedEventArgs e) => Services.MediaPlayback.Configure();
     private void RepairPhotoIndex_Click(object sender, RoutedEventArgs e)
     {
@@ -39,14 +53,29 @@ public partial class MainWindow : Window
         InitializeComponent();
         
         _mainVm = mainVm;
+        _remoteMode = AppServices.ServiceMode;
+        ApplyRemoteTitle();
         DataContext = mainVm;
     }
 
+    private void ApplyRemoteTitle()
+    {
+        if (!AppServices.ServiceMode) return;
+        var endpoint = AppPaths.LoadIndexBackend().BaseUrl;
+        if (Uri.TryCreate(endpoint, UriKind.Absolute, out var remoteEndpoint))
+            Title = $"Picer - 图片管理（远程：{remoteEndpoint.Host}{(remoteEndpoint.IsDefaultPort ? "" : ":" + remoteEndpoint.Port)}）";
+    }
     private async void MainWindow_Loaded(object sender, RoutedEventArgs e)
     {
         if (_initialized) return;
         _initialized = true;
         AiModelSettingsMenuItem.IsEnabled = !AppServices.ServiceMode;
+        if (_remoteMode)
+        {
+            var endpoint = AppPaths.LoadIndexBackend().BaseUrl;
+            if (Uri.TryCreate(endpoint, UriKind.Absolute, out var remoteEndpoint))
+                Title = $"Picer - 图片管理（远程：{remoteEndpoint.Host}{(remoteEndpoint.IsDefaultPort ? "" : ":" + remoteEndpoint.Port)}）";
+        }
         if (_remoteMode)
         {
             var browse = new Views.ServiceBrowseWindow(AppServices.Gateway, autoLoad: false);
@@ -275,6 +304,140 @@ public partial class MainWindow : Window
         new Views.BackendSettingsWindow { Owner = this }.ShowDialog();
     }
 
+    private async void BootstrapService_Click(object sender, RoutedEventArgs e)
+    {
+        var backup = AppPaths.AgentCredentialPath + ".bootstrap-backup";
+        var accountBackup = AppPaths.AccountCredentialPath + ".bootstrap-backup";
+        var backendBackup = AppPaths.BackendConfigPath + ".bootstrap-backup";
+        var endpointBackup = AppPaths.ServiceEndpointPath + ".bootstrap-backup";
+        var stageSuffix = ".bootstrap-stage-" + Guid.NewGuid().ToString("N");
+        var agentStagePath = AppPaths.AgentCredentialPath + stageSuffix;
+        var accountStagePath = AppPaths.AccountCredentialPath + stageSuffix;
+        var hadBackup = File.Exists(AppPaths.AgentCredentialPath);
+        var hadAccountBackup = File.Exists(AppPaths.AccountCredentialPath);
+        var hadBackendBackup = File.Exists(AppPaths.BackendConfigPath);
+        var hadEndpointBackup = File.Exists(AppPaths.ServiceEndpointPath);
+        if (hadBackup) File.Copy(AppPaths.AgentCredentialPath, backup, true);
+        if (hadAccountBackup) File.Copy(AppPaths.AccountCredentialPath, accountBackup, true);
+        if (hadBackendBackup) File.Copy(AppPaths.BackendConfigPath, backendBackup, true);
+        if (hadEndpointBackup) File.Copy(AppPaths.ServiceEndpointPath, endpointBackup, true);
+        try
+        {
+            var input = new Window { Owner = this, Title = "一键配置新服务", Width = 420, Height = 260, WindowStartupLocation = WindowStartupLocation.CenterOwner };
+            var panel = new StackPanel { Margin = new Thickness(18) };
+            var address = new TextBox { Text = "https://", Margin = new Thickness(0, 0, 0, 8) };
+            var login = new TextBox { Margin = new Thickness(0, 0, 0, 8) };
+            var password = new PasswordBox { Margin = new Thickness(0, 0, 0, 12) };
+            panel.Children.Add(new TextBlock { Text = "服务地址" }); panel.Children.Add(address);
+            panel.Children.Add(new TextBlock { Text = "用户名" }); panel.Children.Add(login);
+            panel.Children.Add(new TextBlock { Text = "密码" }); panel.Children.Add(password);
+            var ok = new Button { Content = "开始配置", IsDefault = true, Padding = new Thickness(12, 5, 12, 5) }; ok.Click += (_, _) => input.DialogResult = true;
+            panel.Children.Add(ok); input.Content = panel;
+            if (input.ShowDialog() != true) return;
+            var origin = DeviceAuthorization.NormalizeOrigin(address.Text);
+            using var discoverHttp = new HttpClient { Timeout = TimeSpan.FromSeconds(20) };
+            var pin = await MediaAgentSettings.DiscoverSpkiAsync(origin, CancellationToken.None);
+            using var secureHttp = new HttpClient(DeviceAccountClient.CreateTransport(Convert.ToBase64String(pin))) { Timeout = TimeSpan.FromSeconds(20) };
+            var discovery = await secureHttp.GetFromJsonAsync<ServiceDiscovery>(origin + "/identity/service", CancellationToken.None) ?? throw new InvalidDataException("service_identity_missing");
+            var roots = AppServices.Db?.GetSources().Select(source => source.Path).ToArray() ?? [];
+            var localRoots = roots.Select(ResolveAccessibleRoot)
+                .Where(path => path is not null)
+                .Select(path => path!)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            var shouldStartLocalAgent = localRoots.Length > 0;
+            var bootstrap = new ServiceBootstrapper(secureHttp);
+            DeviceConnection? agentConnection = null;
+            if (shouldStartLocalAgent)
+            {
+                var store = new WindowsDeviceCredentialStore(agentStagePath);
+                store.Create(discovery, Convert.ToBase64String(pin), Environment.MachineName + " 驻留程序", "agent");
+                using var deviceClient = store.OpenClient();
+                using var key = WindowsDeviceCredentialStore.OpenKey(deviceClient.Connection);
+                var publicKey = DeviceAuthorization.ExportPublicKey(key);
+                var token = await bootstrap.LoginAsync(origin, login.Text, password.Password, publicKey, deviceClient.Connection.DeviceName, CancellationToken.None);
+                var file = await bootstrap.EnrollAsync(origin, token.BootstrapToken, deviceClient.Connection.RequestId, publicKey, deviceClient.Connection.DeviceName, "agent", Convert.ToBase64String(pin), CancellationToken.None);
+                await deviceClient.ImportAsync(DeviceAuthorization.WriteFileDocument(file), CancellationToken.None);
+                agentConnection = deviceClient.Connection;
+            }
+
+            // Configure the GUI device with its own grant as well. The agent
+            // credential is intentionally scoped to source.serve and cannot
+            // be reused for thumbnail/search requests made by the GUI.
+            var accountStore = new WindowsDeviceCredentialStore(accountStagePath);
+            accountStore.Create(discovery, Convert.ToBase64String(pin), Environment.MachineName + " GUI", "gui");
+            using var accountClient = accountStore.OpenClient();
+            using var accountKey = WindowsDeviceCredentialStore.OpenKey(accountClient.Connection);
+            var accountPublicKey = DeviceAuthorization.ExportPublicKey(accountKey);
+            var accountToken = await bootstrap.LoginAsync(origin, login.Text, password.Password, accountPublicKey, accountClient.Connection.DeviceName, CancellationToken.None);
+            var accountFile = await bootstrap.EnrollAsync(origin, accountToken.BootstrapToken, accountClient.Connection.RequestId, accountPublicKey, accountClient.Connection.DeviceName, "gui", Convert.ToBase64String(pin), CancellationToken.None);
+            await accountClient.ImportAsync(DeviceAuthorization.WriteFileDocument(accountFile), CancellationToken.None);
+            var connection = accountClient.Connection;
+            if (shouldStartLocalAgent && agentConnection is not null && !MediaAgentController.Start(agentConnection.Origin, "", agentConnection.SpkiPin, localRoots, agentStagePath))
+                throw new InvalidOperationException("设备认证已保存，但驻留程序启动失败。");
+            using var client = new HttpClient(DeviceAccountClient.CreateTransport(connection.SpkiPin)) { Timeout = TimeSpan.FromSeconds(10) };
+            using var health = await client.GetAsync(connection.Origin + "/health");
+            if (!health.IsSuccessStatusCode) throw new InvalidOperationException("IndexService 健康检查失败。");
+            using var identity = await client.GetAsync(connection.Origin + "/identity/service");
+            if (!identity.IsSuccessStatusCode) throw new InvalidOperationException("IndexService 服务发现检查失败。");
+            if (shouldStartLocalAgent)
+            {
+                using var device = new WindowsDeviceCredentialStore(agentStagePath).OpenClient();
+                using var socket = await device.ConnectWebSocketAsync("api/agent/v1/connect");
+                socket.Abort();
+            }
+            if (shouldStartLocalAgent) File.Move(agentStagePath, AppPaths.AgentCredentialPath, overwrite: true);
+            File.Move(accountStagePath, AppPaths.AccountCredentialPath, overwrite: true);
+            AppPaths.SaveIndexBackendAccount();
+            if (shouldStartLocalAgent && agentConnection is not null && !MediaAgentController.Start(agentConnection.Origin, "", agentConnection.SpkiPin, localRoots, AppPaths.AgentCredentialPath))
+                throw new InvalidOperationException("设备认证已发布，但驻留程序最终启动失败。");
+            if (File.Exists(backup)) File.Delete(backup);
+            if (File.Exists(accountBackup)) File.Delete(accountBackup);
+            if (File.Exists(backendBackup)) File.Delete(backendBackup);
+            if (File.Exists(endpointBackup)) File.Delete(endpointBackup);
+            MessageBox.Show(this, shouldStartLocalAgent
+                ? "服务配置完成，已启动本机驻留程序并连接。"
+                : "服务配置完成，本机没有可访问来源目录，已跳过驻留程序启动，将使用远程在线来源。",
+                "一键配置", MessageBoxButton.OK, MessageBoxImage.Information);
+            // AppServices holds the previous DeviceAccountClient for the
+            // lifetime of the process. Restart automatically so all views,
+            // gateways and caches reopen against the newly paired account.
+            var executable = Environment.ProcessPath;
+            if (!string.IsNullOrWhiteSpace(executable))
+                Process.Start(new ProcessStartInfo(executable) { UseShellExecute = true });
+            Application.Current.Shutdown();
+        }
+        catch (Exception exception)
+        {
+            AppLogger.Error("一键配置新服务失败", exception);
+            if (hadBackup && File.Exists(backup)) File.Copy(backup, AppPaths.AgentCredentialPath, true);
+            else if (!hadBackup && File.Exists(AppPaths.AgentCredentialPath)) File.Delete(AppPaths.AgentCredentialPath);
+            if (hadAccountBackup && File.Exists(accountBackup)) File.Copy(accountBackup, AppPaths.AccountCredentialPath, true);
+            else if (!hadAccountBackup && File.Exists(AppPaths.AccountCredentialPath)) File.Delete(AppPaths.AccountCredentialPath);
+            if (hadBackendBackup && File.Exists(backendBackup)) File.Copy(backendBackup, AppPaths.BackendConfigPath, true);
+            else if (!hadBackendBackup && File.Exists(AppPaths.BackendConfigPath)) File.Delete(AppPaths.BackendConfigPath);
+            if (hadEndpointBackup && File.Exists(endpointBackup)) File.Copy(endpointBackup, AppPaths.ServiceEndpointPath, true);
+            else if (!hadEndpointBackup && File.Exists(AppPaths.ServiceEndpointPath)) File.Delete(AppPaths.ServiceEndpointPath);
+            TryDelete(agentStagePath);
+            TryDelete(accountStagePath);
+            MessageBox.Show(this, "配置失败，已恢复原有设备认证：" + exception.Message, "一键配置", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    private static string? ResolveAccessibleRoot(string path)
+    {
+        if (Directory.Exists(path)) return Path.GetFullPath(path);
+        var normalized = path.Replace('/', '\\');
+        var parts = normalized.Split('\\', StringSplitOptions.RemoveEmptyEntries);
+        var driveShare = parts.FirstOrDefault(part => part.Length == 2 && part[1] == '$');
+        if (driveShare is null) return null;
+        var drive = driveShare[0] + ":\\";
+        var index = normalized.IndexOf("\\" + driveShare + "\\", StringComparison.OrdinalIgnoreCase);
+        if (index < 0) return null;
+        var candidate = Path.GetFullPath(Path.Combine(drive, normalized[(index + driveShare.Length + 2)..]));
+        return Directory.Exists(candidate) ? candidate : null;
+    }
+
     private void ClipSemantic_Click(object sender, RoutedEventArgs e)
     {
         new Views.ClipSemanticWindow(AppServices.EnsureClipSemantic(), AppServices.ClipRepository, AppServices.ClipUnavailableReason)
@@ -283,7 +446,13 @@ public partial class MainWindow : Window
 
     private void PhotoClassification_Click(object sender, RoutedEventArgs e)
     {
-        new Views.PhotoClassificationWindow { Owner = this }.Show();
+        try { new Views.PhotoClassificationWindow { Owner = this }.Show(); }
+        catch (UnauthorizedAccessException)
+        {
+            var connection = new Views.AccountConnectionWindow(AppPaths.AccountCredentialPath, forUpload: false) { Owner = this };
+            if (connection.ShowDialog() == true)
+                MessageBox.Show(this, "设备授权已保存。请重新启动 Picer 后打开照片分类。", "设备授权已更新", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
     }
 
     private void FlorenceValidation_Click(object sender, RoutedEventArgs e)
@@ -683,4 +852,12 @@ public partial class MainWindow : Window
         if (key == Key.Enter) { _ = _mainVm.ResolvePlaceCommand.ExecuteAsync(SearchBox.Text); return true; }
         return false;
     }
+
+    private static void TryDelete(string path)
+    {
+        try { if (File.Exists(path)) File.Delete(path); } catch (IOException) { }
+    }
 }
+
+
+

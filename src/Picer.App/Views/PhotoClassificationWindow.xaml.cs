@@ -1,8 +1,9 @@
-using System.IO;
+﻿using System.IO;
 using System.Net.Http;
 using System.Net.Http.Json;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Media.Imaging;
 using Picer.App.Infrastructure;
 using Picer.Core.Models;
@@ -125,6 +126,26 @@ public partial class PhotoClassificationWindow : Window
         await ClassificationJobCoordinator.CancelAsync();
     }
     private async void Refresh_Click(object sender, RoutedEventArgs e) => await LoadItemsAsync();
+
+    private async void Items_MouseDoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        if (Items.SelectedItem is not ReviewRow row) return;
+        try
+        {
+            if (AppServices.ServiceMode && AppServices.Gateway is Picer.Core.Gateway.HttpIndexGateway remote)
+            {
+                await Services.RemotePhotoPreview.OpenAsync(remote, row.ImageId, row.Path, null);
+                return;
+            }
+            if (!File.Exists(row.Path)) { FeedbackText.Text = "原图文件不存在：" + row.Path; return; }
+            using var stream = File.OpenRead(row.Path);
+            var bitmap = new BitmapImage();
+            bitmap.BeginInit(); bitmap.CacheOption = BitmapCacheOption.OnLoad; bitmap.StreamSource = stream; bitmap.EndInit(); bitmap.Freeze();
+            new PhotoViewerWindow(bitmap, Path.GetFileName(row.Path)) { Owner = this }.Show();
+        }
+        catch (Exception exception) when (exception is IOException or InvalidOperationException)
+        { FeedbackText.Text = "打开原图失败：" + exception.Message; }
+    }
     private void ThresholdMode_Changed(object sender, RoutedEventArgs e)
     {
         if (ClusterThreshold is not null) ClusterThreshold.IsEnabled = AutomaticThreshold.IsChecked != true;

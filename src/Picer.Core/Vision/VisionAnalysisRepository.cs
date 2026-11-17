@@ -233,7 +233,7 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
             WHERE image_id = $image_id AND analyzer = $analyzer
               AND model_version = $model_version
               AND source_file_size = $file_size
-              AND source_modified_utc = $modified_utc
+              AND picer_same_instant(source_modified_utc, $modified_utc)
               AND status = 'completed'
             """);
         command.Parameters.AddWithValue("$image_id", image.Id);

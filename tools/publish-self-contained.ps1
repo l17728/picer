@@ -2,6 +2,7 @@ param(
     [string]$OutputDirectory = '',
     [string]$ServiceOutputDirectory = '',
     [string]$Version = '',
+    [string]$RedistDirectory = '',
     [switch]$SkipArchive
 )
 
@@ -92,13 +93,13 @@ New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
 dotnet publish (Join-Path $repoRoot 'src\Picer.App\Picer.App.csproj') -c Release -r win-x64 --self-contained true -o $OutputDirectory @versionArguments
 if ($LASTEXITCODE -ne 0) { throw 'Self-contained publish failed.' }
 Assert-ReleaseVersion (Join-Path $OutputDirectory 'Picer.App.dll')
-& (Join-Path $PSScriptRoot 'copy-native-prerequisites.ps1') -Destination $OutputDirectory
+& (Join-Path $PSScriptRoot 'copy-native-prerequisites.ps1') -Destination $OutputDirectory -RedistDirectory $RedistDirectory
 $agentOutput = Join-Path $OutputDirectory 'media-agent'
 New-Item -ItemType Directory -Force -Path $agentOutput | Out-Null
 dotnet publish (Join-Path $repoRoot 'src\Picer.MediaAgent\Picer.MediaAgent.csproj') -c Release -r win-x64 --self-contained true -o $agentOutput @versionArguments
 if ($LASTEXITCODE -ne 0) { throw 'Self-contained media agent publish failed.' }
 Assert-ReleaseVersion (Join-Path $agentOutput 'Picer.MediaAgent.dll')
-& (Join-Path $PSScriptRoot 'copy-native-prerequisites.ps1') -Destination $agentOutput
+& (Join-Path $PSScriptRoot 'copy-native-prerequisites.ps1') -Destination $agentOutput -RedistDirectory $RedistDirectory
 $agentDependencies = & (Join-Path $PSScriptRoot 'prepare-installer-dependencies.ps1') -SkipCompiler
 $agentToolDirectory = Join-Path $agentOutput 'tools/ffmpeg'
 New-Item -ItemType Directory -Path $agentToolDirectory -Force | Out-Null
@@ -125,7 +126,7 @@ New-Item -ItemType Directory -Force -Path $ServiceOutputDirectory | Out-Null
 dotnet publish (Join-Path $repoRoot 'server\Picer.IndexService\Picer.IndexService.csproj') -c Release -r win-x64 --self-contained true -o $ServiceOutputDirectory @versionArguments
 if ($LASTEXITCODE -ne 0) { throw 'Index service publish failed.' }
 Assert-ReleaseVersion (Join-Path $ServiceOutputDirectory 'Picer.IndexService.dll')
-& (Join-Path $PSScriptRoot 'copy-native-prerequisites.ps1') -Destination $ServiceOutputDirectory
+& (Join-Path $PSScriptRoot 'copy-native-prerequisites.ps1') -Destination $ServiceOutputDirectory -RedistDirectory $RedistDirectory
 Assert-Runtime (Join-Path $ServiceOutputDirectory 'runtime')
 if (-not (Test-Path -LiteralPath (Join-Path $ServiceOutputDirectory 'Picer.IndexService.exe'))) { throw 'Published index service executable is missing.' }
 

@@ -24,4 +24,8 @@
           CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 
+  <ItemGroup>
+    <EmbeddedResource Include="Classification\presets-v1.json" LogicalName="Picer.Classification.presets-v1.json" />
+  </ItemGroup>
+
 </Project>

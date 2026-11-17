@@ -1,4 +1,5 @@
 using Picer.Core.Indexing;
+using Picer.Core.Identity;
 
 namespace Picer.App.Infrastructure;
 
@@ -19,9 +20,14 @@ internal sealed record DirectoryTreeModel(string Name, string Path)
             var directory = normalized[..slash];
             DirectoryTreeModel? parent = null;
             var offset = directory.StartsWith('/') ? 1 : 0;
+            var hiddenSegments = PublishedMediaPath.TryUnqualify(directory, out _, out var original)
+                ? original.StartsWith(@"\\", StringComparison.Ordinal) ? 4 : 2
+                : 0;
+            var segmentIndex = 0;
             foreach (var component in directory[offset..].Split('/', StringSplitOptions.RemoveEmptyEntries))
             {
                 offset = directory.IndexOf(component, offset, StringComparison.Ordinal) + component.Length;
+                if (segmentIndex++ < hiddenSegments) continue;
                 var prefix = directory[..offset];
                 if (!nodes.TryGetValue(prefix, out var node))
                 {

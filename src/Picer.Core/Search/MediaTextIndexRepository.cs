@@ -24,6 +24,7 @@ public sealed class MediaTextIndexRepository
             $"{image.Id}|{image.FileSize}|{image.ModifiedUtc:o}|{sourceVersion}|{content}")));
         using var ownedTransaction = externalTransaction is null ? _database.BeginTransaction() : null;
         var tx = externalTransaction ?? ownedTransaction!;
+        if (HasFingerprint(image.Id, fingerprint, tx)) return;
         using (var doc = _database.Command("""
             INSERT INTO media_text_documents(media_id,media_type,content,fingerprint,source_version,updated_utc)
             VALUES($id,'photo',$content,$fingerprint,$version,$now)
@@ -49,6 +50,7 @@ public sealed class MediaTextIndexRepository
         var fingerprint = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(
             $"video:{video.Id}|{video.FileSize}|{video.ModifiedUtc:o}|{sourceVersion}|{content}")));
         using var tx = _database.BeginTransaction();
+        if (HasFingerprint(key, fingerprint, tx)) return;
         using (var doc = _database.Command("""
             INSERT INTO media_text_documents(media_id,media_type,content,fingerprint,source_version,updated_utc)
             VALUES($id,'video',$content,$fingerprint,$version,$now)
@@ -167,6 +169,13 @@ public sealed class MediaTextIndexRepository
         doc.Parameters.AddWithValue("$version", sourceVersion);
         doc.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("o"));
         doc.ExecuteNonQuery();
+    }
+
+    private bool HasFingerprint(long id, string fingerprint, Microsoft.Data.Sqlite.SqliteTransaction transaction)
+    {
+        using var query = _database.Command("SELECT fingerprint FROM media_text_documents WHERE media_id=$id AND EXISTS(SELECT 1 FROM media_text_fts WHERE rowid=$id)");
+        query.Transaction = transaction; query.Parameters.AddWithValue("$id", id);
+        return query.ExecuteScalar() as string == fingerprint;
     }
 
     private static ImageRecord ReadImage(Microsoft.Data.Sqlite.SqliteDataReader r) => new()

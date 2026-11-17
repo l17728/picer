@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Windows;
 using Picer.App.Infrastructure;
 using Picer.App.ViewModels;
@@ -9,6 +10,9 @@ namespace Picer.App;
 
 public partial class App : Application
 {
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+    private static extern int SetCurrentProcessExplicitAppUserModelID(string appId);
+
     private MainViewModel? _mainViewModel;
     private readonly CancellationTokenSource _coldStartSyncCts = new();
     private Task? _coldStartSync;
@@ -21,6 +25,10 @@ public partial class App : Application
     {
         var startupTimestamp = Stopwatch.GetTimestamp();
         base.OnStartup(e);
+        // Use one stable shell identity across unpacked builds and the installer.
+        // Set it before the first window is shown so the taskbar can resolve
+        // Picer.App.exe's embedded icon instead of retaining a stale path entry.
+        _ = SetCurrentProcessExplicitAppUserModelID("Picer.Desktop");
 
         var waitIndex = Array.IndexOf(e.Args, "--wait-for-pid");
         if (waitIndex >= 0 && waitIndex + 1 < e.Args.Length && int.TryParse(e.Args[waitIndex + 1], out var previousProcessId))
@@ -58,6 +66,23 @@ public partial class App : Application
 
         try
         {
+            if (AppPaths.RequiresAccountSignIn())
+            {
+                // An unfinished/forgotten pairing is a recoverable startup state,
+                // not a database initialization failure. No service is opened yet.
+                LogInfo("启动等待照片空间连接");
+                var previousShutdownMode = ShutdownMode;
+                ShutdownMode = ShutdownMode.OnExplicitShutdown;
+                bool connected;
+                try
+                {
+                    var connection = new Views.AccountConnectionWindow(AppPaths.AccountCredentialPath, false)
+                    { WindowStartupLocation = WindowStartupLocation.CenterScreen };
+                    connected = connection.ShowDialog() == true;
+                }
+                finally { ShutdownMode = previousShutdownMode; }
+                if (!connected) { Shutdown(0); return; }
+            }
             LogInfo("正在初始化 AppServices...");
             AppServices.Initialize();
             LogInfo($"AppServices 初始化完成；serviceMode={AppServices.ServiceMode}; syncClient={(AppServices.SyncClient is null ? "未配置" : "已配置")}; gateway={AppServices.Gateway.GetType().Name}");
@@ -141,7 +166,11 @@ public partial class App : Application
     {
         try
         {
-            if (AppPaths.LoadIndexBackend().DeviceAuthentication) return;
+            if (AppPaths.LoadIndexBackend().DeviceAuthentication)
+            {
+                StartBoundAccountMediaAgent();
+                return;
+            }
             LogInfo("正在后台同步 MediaAgent 授权源目录并刷新单实例代理");
             var settings = MediaAgentController.Load();
             if (!settings.Enabled || string.IsNullOrWhiteSpace(settings.ServiceIp))
@@ -179,6 +208,29 @@ public partial class App : Application
         {
             LogCrash("远程模式启动 MediaAgent 失败", exception);
         }
+    }
+
+    private static void StartBoundAccountMediaAgent()
+    {
+        var binding = MediaAgentController.LoadAccountBinding();
+        if (binding is null || binding.Sources is null || binding.Sources.Count == 0 ||
+            !File.Exists(AppPaths.AgentCredentialPath) || !File.Exists(AppPaths.AccountCredentialPath)) return;
+        var owner = new Picer.Core.Identity.WindowsDeviceCredentialStore(AppPaths.AccountCredentialPath).Load();
+        var agent = new Picer.Core.Identity.WindowsDeviceCredentialStore(AppPaths.AgentCredentialPath).Load();
+        if (owner.Session is null || agent.Session is null ||
+            owner.ServiceId != binding.ServiceId || agent.ServiceId != binding.ServiceId ||
+            owner.Session.AccountId != binding.AccountId || agent.Session.AccountId != binding.AccountId ||
+            owner.Session.SpaceId != binding.SpaceId || agent.Session.SpaceId != binding.SpaceId ||
+            owner.Session.GrantId != binding.OwnerGrantId || agent.Session.GrantId != binding.AgentGrantId) return;
+        var sources = UiWork.RunDatabaseAsync("MediaAgent.ResolveAccountRoots", AppServices.Db.GetSources)
+            .GetAwaiter().GetResult().ToDictionary(source => source.Id, source => Path.GetFullPath(source.Path));
+        if (binding.Sources.Any(entry => !sources.TryGetValue(entry.Key, out var current) ||
+            !string.Equals(current, entry.Value, StringComparison.OrdinalIgnoreCase))) return;
+        var roots = binding.Sources.Values.Where(Directory.Exists).ToArray();
+        if (roots.Length != binding.Sources.Count) return;
+        if (MediaAgentController.Start(agent.Origin, "", agent.SpkiPin, roots, AppPaths.AgentCredentialPath))
+            LogInfo($"账户来源 MediaAgent 已恢复；roots={roots.Length}");
+        else LogInfo("账户来源 MediaAgent 恢复失败；请检查代理组件和授权状态");
     }
 
     /// <summary>

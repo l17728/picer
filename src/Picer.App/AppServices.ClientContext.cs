@@ -2,9 +2,10 @@ namespace Picer.App;
 
 public static partial class AppServices
 {
-    private static readonly ClientServices ClientContext = new();
     public static ClientServices GetClientServices()
     {
+        // Existing windows retain their own space's gateways and cache partition.
+        var ClientContext = new ClientServices();
         ClientContext.Gateway = Gateway;
         ClientContext.SyncClient = SyncClient;
         ClientContext.ServiceMode = ServiceMode;
@@ -26,6 +27,7 @@ public static partial class AppServices
         ClientContext.VideoSummaries = VideoSummaries;
         ClientContext.TrainingServiceEndpoint = TrainingServiceEndpoint;
         ClientContext.ChatFactory = CreateAiChatClient;
+        ClientContext.ClipFactory = CreateQuestionClipClient;
         ClientContext.VisionFactory = CreateCloudVisionService;
         ClientContext.SceneFactory = CreateSceneGroupSummarizer;
         ClientContext.TranscriptionFactory = CreateVideoTranscriptionService;

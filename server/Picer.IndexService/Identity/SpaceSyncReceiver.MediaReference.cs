@@ -5,9 +5,12 @@ namespace Picer.IndexService.Identity;
 public sealed partial class SpaceSyncReceiver
 {
     public SpaceMediaReference ResolvePublishedMedia(SpaceMediaReferenceRequest request)
+        => ResolvePublishedMediaCore(request, "index.purge");
+
+    private SpaceMediaReference ResolvePublishedMediaCore(SpaceMediaReferenceRequest request, string requiredScope)
     {
         ArgumentNullException.ThrowIfNull(request);
-        if(!device.Allows("index.purge") || request.Kind is not ("image" or "video") || !Guid.TryParseExact(request.GlobalId,"N",out _))
+        if(!device.Allows(requiredScope) || request.Kind is not ("image" or "video") || !Guid.TryParseExact(request.GlobalId,"N",out _))
             throw new UnauthorizedAccessException();
         using var transaction=database.BeginReadTransaction();
         ValidateAdoptionPublisher(request.PublisherId,request.Epoch,request.Scope);

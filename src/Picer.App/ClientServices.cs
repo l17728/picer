@@ -62,6 +62,7 @@ public sealed class ClientServices
     public VideoSummaryService VideoSummaries { get; set; } = default!;
     public string? TrainingServiceEndpoint { get; set; }
     public Func<string, OpenAiCompatibleChatClient?> ChatFactory { get; set; } = _ => null;
+    public Func<IClipEmbeddingClient?> ClipFactory { get; set; } = () => null;
     public Func<string, (CloudVisionAnalysisService Service, OpenAiCompatibleCloudVisionAnalyzer Analyzer, CloudVisionRunPolicy Policy, string ProviderLabel, bool IsLocal)?> VisionFactory { get; set; } = _ => null;
     public Func<ISceneGroupSummarizer?> SceneFactory { get; set; } = () => null;
     public Func<IVideoTranscriptionService?> TranscriptionFactory { get; set; } = () => null;

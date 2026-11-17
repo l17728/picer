@@ -89,11 +89,26 @@ public static class AccountServiceHost
         app.MapMethods("/spaces/{spaceId}/{**path}", ["GET", "HEAD", "POST", "PUT", "DELETE"], async (HttpContext context, string spaceId, string? path) =>
         {
             if (!Guid.TryParseExact(spaceId, "N", out _)) return Results.NotFound();
+            var mediaTraceId = context.Request.Headers["X-Picer-Request-Id"].ToString();
+            using var mediaTrace = Guid.TryParseExact(mediaTraceId, "N", out _) &&
+                (path ?? "").StartsWith("api/gateway/v1/", StringComparison.Ordinal)
+                ? new Picer.Core.Logging.MediaReadTrace("account-proxy", traceId: mediaTraceId) : null;
+            mediaTrace?.Mark("received");
+            context.Response.OnCompleted(() => { mediaTrace?.Mark("response_completed", status: context.Response.StatusCode); return Task.CompletedTask; });
             var (device, accessToken) = AccountIdentityApi.Authenticate(context, accounts, publicOrigin, spaceId);
+            mediaTrace?.Mark("authenticated");
             var relative = "/" + (path ?? "");
+            if (context.Request.Method == "GET" && relative == "/health")
+                return device.Allows("index.read") ? Results.Json(new { status = "ok", protocol = 2, descriptionDelta = 1 }) : Results.StatusCode(403);
             using var admission = app.Services.GetRequiredService<SpaceRequestAdmission>().TryEnter(device, relative);
             if (admission is null) { context.Response.Headers.RetryAfter = "2"; return Results.StatusCode(429); }
             const string snapshotPrefix = "/api/sync/v2/read-snapshots/";
+            if (context.Request.Method == "POST" && relative == "/api/sync/v2/descriptions/changes")
+            {
+                if (!device.Allows("index.read") || device.Kind != "gui") return Results.StatusCode(403);
+                await using var readLease = await pool.AcquireAsync(spaceId, context.RequestAborted);
+                return await app.Services.GetRequiredService<SpaceSyncApi>().ReadDescriptionsAsync(context, readLease.Runtime, device, accessToken);
+            }
             if (context.Request.Method == "POST" && relative == "/api/sync/v2/notifications")
             {
                 if (!device.Allows("index.read") || device.Kind != "gui") return Results.StatusCode(403);
@@ -136,6 +151,8 @@ public static class AccountServiceHost
                 or "/api/sync/v2/catalog-retirements/compact"
                 or "/api/sync/v2/media-reference"
                 or "/api/sync/v2/descriptions"
+                or "/api/sync/v2/descriptions/batch"
+                or "/api/sync/v2/classification-results" or "/api/sync/v2/classification-results/read"
                 or "/api/sync/v2/training-applications"
                 or "/api/sync/v2/catalog-retirements/acknowledge" or "/api/sync/v2/catalog-retirements/completions" or "/api/sync/v2/catalog-retirements/complete")
             {
@@ -146,6 +163,7 @@ public static class AccountServiceHost
             var scope = SpaceRoutePermissions.RequiredScope(context.Request.Method, relative);
             if (scope is null || !device.Allows(scope)) return Results.StatusCode(403);
             await using var lease = await pool.AcquireAsync(spaceId, context.RequestAborted);
+            mediaTrace?.Mark("runtime_acquired");
             if (lease.Runtime.Purging) { context.Response.Headers.RetryAfter = "2"; return Results.StatusCode(503); }
             if (relative == "/api/gateway/v1/changes" || context.Request.Headers.ContainsKey("X-Picer-Read-Snapshot"))
             {
@@ -192,6 +210,11 @@ public static class AccountServiceHost
                             .Add("agentId", agent);
                 }
                 using var request = new HttpRequestMessage(new HttpMethod(context.Request.Method), relative + query);
+                mediaTrace?.Mark("source_resolved");
+                var analysisTrace = context.Request.Headers["X-Picer-Request-Id"].ToString();
+                if (Guid.TryParseExact(analysisTrace, "N", out _)) request.Headers.Add("X-Picer-Request-Id", analysisTrace);
+                if (relative.StartsWith("/api/service/v1/classification/v2/", StringComparison.Ordinal))
+                    request.Headers.Add("X-Picer-Classification-Actor", Convert.ToBase64String(System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(device)));
                 if (context.Request.ContentLength > 0 || context.Request.Headers.TransferEncoding.Count > 0)
                 {
                     request.Content = new StreamContent(context.Request.Body);
@@ -200,6 +223,7 @@ public static class AccountServiceHost
                 foreach (var name in new[] { "Range", "If-Range", "If-Match", "If-None-Match", "If-Modified-Since", "Accept", Picer.Core.Gateway.MetadataTransfer.RequestHeader })
                     if (context.Request.Headers.TryGetValue(name, out var value)) request.Headers.TryAddWithoutValidation(name, value.ToArray());
                 using var response = await lease.Runtime.Client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellation.Token);
+                mediaTrace?.Mark("upstream_headers", response.Content.Headers.ContentLength ?? 0, (int)response.StatusCode);
                 context.Response.StatusCode = (int)response.StatusCode;
                 foreach (var name in new[] { "ETag", "Accept-Ranges", "Content-Range", "Content-Type", "Content-Length", "Last-Modified", "Retry-After", "X-Picer-Media-Streaming", "X-Picer-Analysis-Input", Picer.Core.Gateway.MetadataTransfer.ResponseHeader, "Server-Timing", "Cache-Control" })
                 {
@@ -207,6 +231,7 @@ public static class AccountServiceHost
                         context.Response.Headers[name] = values.ToArray();
                 }
                 if (!HttpMethods.IsHead(context.Request.Method)) await response.Content.CopyToAsync(context.Response.Body, cancellation.Token);
+                mediaTrace?.Mark("body_forwarded");
                 return Results.Empty;
             }
             catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { context.Abort(); return Results.Empty; }
@@ -237,13 +262,15 @@ public static class SpaceRoutePermissions
             path.StartsWith("/api/agent/v1/media/", StringComparison.Ordinal) && path[20..] is { Length: 64 } ticket && ticket.All(Uri.IsHexDigit)))
             return "source.serve";
         if (method == "GET" && path == "/health") return "index.read";
+        if (method == "POST" && path == "/api/sync/v2/descriptions/changes") return "index.read";
         if (method == "GET" && path == "/api/sync/v1/metadata-edits") return "index.read";
         if (method == "POST" && path == "/api/ai/v1/chat/stream") return "analysis.run";
         if (method == "POST" && path == "/api/gateway/v1/analysis-input") return "analysis.run";
         if (method == "POST" && path is "/api/service/v1/clip/text" or "/api/service/v1/clip/image") return "analysis.run";
         if (method == "POST" && path == "/api/service/v1/classification/clustering/settings") return "index.write";
         if (method == "POST" && path == "/api/service/v1/scenes/edit") return "index.write";
-        if (method == "POST" && path == "/api/sync/v2/descriptions") return "index.write";
+        if (method == "POST" && path is "/api/sync/v2/descriptions" or "/api/sync/v2/descriptions/batch") return "index.write";
+        if (method == "POST" && path is "/api/sync/v2/classification-results" or "/api/sync/v2/classification-results/read") return "index.write";
         if (method == "POST" && path == "/api/service/v1/faces/organize") return "index.write";
         if (method == "POST" && path == "/api/service/v1/faces/candidate/remove") return "index.write";
         if (method == "POST" && path == "/api/service/v1/faces/training/apply") return "index.write";
@@ -251,6 +278,14 @@ public static class SpaceRoutePermissions
         if (method == "POST" && path is "/api/service/v1/classification/confirm" or "/api/service/v1/classification/reject"
             or "/api/service/v1/classification/remove" or "/api/service/v1/classification/restore" or "/api/service/v1/classification/correct")
             return "index.write";
+        if (path.StartsWith("/api/service/v1/classification/v2/", StringComparison.Ordinal))
+        {
+            if (method == "GET" || method == "POST" && path.EndsWith("/browse", StringComparison.Ordinal)) return "index.read taxonomy.read";
+            if (method == "POST" && (path.EndsWith("/proposals/review", StringComparison.Ordinal) || path.EndsWith("/taxonomy/edit", StringComparison.Ordinal))) return "taxonomy.manage";
+            if (method == "POST" && (path.EndsWith("/configuration", StringComparison.Ordinal) || path.EndsWith("/decisions", StringComparison.Ordinal))) return "index.write";
+            if (method == "POST" && path.EndsWith("/clusters", StringComparison.Ordinal)) return "analysis.run taxonomy.propose";
+            return method == "POST" ? "analysis.run" : null;
+        }
         if (path.StartsWith("/api/service/v1/classification/", StringComparison.Ordinal))
             return method == "GET" ? "index.read" : method == "POST" ? "analysis.run" : null;
         var serviceParts = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
@@ -263,6 +298,9 @@ public static class SpaceRoutePermissions
         if (method == "GET")
         {
             var videoKeyframeParts = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
+            if (videoKeyframeParts.Length == 6 && videoKeyframeParts[0] == "api" && videoKeyframeParts[1] == "gateway" &&
+                videoKeyframeParts[2] == "v1" && videoKeyframeParts[3] == "videos" && videoKeyframeParts[5] == "details" &&
+                long.TryParse(videoKeyframeParts[4], out var detailsVideoId) && detailsVideoId > 0) return "index.read";
             if (videoKeyframeParts.Length == 5 && videoKeyframeParts[0] == "api" && videoKeyframeParts[1] == "gateway" &&
                 videoKeyframeParts[2] == "v1" && videoKeyframeParts[3] == "video-keyframes" &&
                 long.TryParse(videoKeyframeParts[4], out var keyframeId) && keyframeId > 0) return "media.read";

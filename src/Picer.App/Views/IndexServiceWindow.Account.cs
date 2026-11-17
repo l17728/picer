@@ -89,6 +89,10 @@ public partial class IndexServiceWindow
             new SpaceSourceBindingRequest(publisher, agent.GrantId, scope.SourceIds), cancellationToken);
         response.EnsureSuccessStatusCode();
         var roots = AppServices.Db.GetSources().Where(source => scope.SourceIds.Contains(source.Id)).Select(source => source.Path).ToArray();
+        var selected = AppServices.Db.GetSources().Where(source => scope.SourceIds.Contains(source.Id))
+            .ToDictionary(source => source.Id, source => Path.GetFullPath(source.Path));
+        MediaAgentController.SaveAccountBinding(new MediaAgentController.AccountSourceBinding(
+            gui.Connection.ServiceId, owner.AccountId, owner.SpaceId, owner.GrantId, agent.GrantId, selected));
         if (!MediaAgentController.Start(dialog.Result.Origin, "", dialog.Result.SpkiPin, roots, AppPaths.AgentCredentialPath))
             throw new InvalidOperationException("索引和来源授权已保存，但驻留程序未能启动，请检查安装组件。");
         AgentStatusText.Text = "驻留程序已连接此空间，只向服务提供所选来源目录中的媒体。";

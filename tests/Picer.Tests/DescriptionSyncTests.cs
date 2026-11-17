@@ -41,7 +41,253 @@ public sealed class DescriptionSyncTests
     public void DescriptionUploadRequiresIndexWritePermission()
     {
         Assert.Equal("index.write", Picer.IndexService.Identity.SpaceRoutePermissions.RequiredScope("POST", "/api/sync/v2/descriptions"));
+        Assert.Equal("index.write", Picer.IndexService.Identity.SpaceRoutePermissions.RequiredScope("POST", "/api/sync/v2/descriptions/batch"));
+        Assert.Equal("index.read", Picer.IndexService.Identity.SpaceRoutePermissions.RequiredScope("POST", "/api/sync/v2/descriptions/changes"));
         Assert.Null(Picer.IndexService.Identity.SpaceRoutePermissions.RequiredScope("GET", "/api/sync/v2/descriptions"));
+    }
+
+    [Fact]
+    public async Task AuthorizedHttpBatchAndDeltaPreservePartialSuccessAndRejectReadOnlyWrites()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "picer-description-http-" + Guid.NewGuid().ToString("N"));
+        using var listener = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0);
+        listener.Start(); var port = ((IPEndPoint)listener.LocalEndpoint).Port; listener.Stop();
+        var origin = $"https://127.0.0.1:{port}";
+        var instance = Picer.IndexService.Identity.AccountServiceHost.Build(root, origin, port);
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(90));
+        try
+        {
+            await Picer.IndexService.IndexServiceHost.StartAsync(instance.App);
+            var account = instance.Accounts.Register("description-owner", "description-test-password-123!", "测试空间");
+            var space = Assert.Single(instance.Accounts.ListSpaces(account));
+            using var signing = Picer.IndexService.Identity.IdentitySigningKey.LoadOrCreate(instance.Accounts.Root, instance.Accounts.ServiceId);
+            async Task<Picer.Core.Identity.DeviceAccountClient> Pair(bool editing)
+            {
+                var key = System.Security.Cryptography.ECDsa.Create(System.Security.Cryptography.ECCurve.NamedCurves.nistP256);
+                var id = Guid.NewGuid().ToString("N");
+                instance.Accounts.CreateEnrollment(new(id, Picer.Core.Identity.DeviceAuthorization.ExportPublicKey(key), "fixture", "gui"));
+                var pin = Convert.ToBase64String(Picer.IndexService.ServiceSecurity.ComputeSpkiPin(instance.Certificate));
+                var document = instance.Accounts.ApproveEnrollment(account, id, space.Id, origin, pin, signing, editing, true);
+                var connection = new Picer.Core.Identity.DeviceConnection(origin, instance.Accounts.ServiceId, pin,
+                    Picer.Core.Identity.DeviceAuthorization.ExportPublicKey(signing), "test", id, "fixture", "gui");
+                var client = new Picer.Core.Identity.DeviceAccountClient(connection, key, value => connection = value);
+                await client.ImportAsync(Picer.Core.Identity.DeviceAuthorization.WriteFileDocument(document), deadline.Token);
+                return client;
+            }
+            using var writer = await Pair(true);
+            using var reader = await Pair(false);
+            DescriptionUpload upload;
+            using (var database = new PicerDatabase(Path.Combine(instance.Accounts.SpaceRoot(space.Id), "picer.db")))
+            {
+                var photo = SeedPhoto(database); Save(database, photo);
+                upload = Assert.Single(database.GetDescriptionOutbox());
+            }
+            using (var health = await reader.SpaceClient.GetAsync("health", deadline.Token))
+            {
+                health.EnsureSuccessStatusCode();
+                var data = await health.Content.ReadFromJsonAsync<System.Text.Json.JsonElement>(deadline.Token);
+                Assert.Equal(1, data.GetProperty("descriptionDelta").GetInt32());
+            }
+            var batch = new DescriptionUploadBatch([upload with { OperationId = Guid.NewGuid().ToString("N"), Epoch = "stale" }, upload]);
+            using (var denied = await reader.SpaceClient.PostAsJsonAsync("api/sync/v2/descriptions/batch", batch, deadline.Token))
+                Assert.Equal(HttpStatusCode.Forbidden, denied.StatusCode);
+            using (var accepted = await writer.SpaceClient.PostAsJsonAsync("api/sync/v2/descriptions/batch", batch, deadline.Token))
+            {
+                accepted.EnsureSuccessStatusCode();
+                var receipt = await accepted.Content.ReadFromJsonAsync<DescriptionBatchReceipt>(deadline.Token);
+                Assert.Equal(new[] { "conflict", "accepted" }, receipt!.Items.Select(item => item.Status));
+            }
+            using var changes = await reader.SpaceClient.PostAsJsonAsync("api/sync/v2/descriptions/changes", new DescriptionDeltaRequest(null), deadline.Token);
+            changes.EnsureSuccessStatusCode();
+            var page = await changes.Content.ReadFromJsonAsync<DescriptionDeltaPage>(deadline.Token);
+            Assert.NotEmpty(page!.Entries);
+            using var invalid = await reader.SpaceClient.PostAsJsonAsync("api/sync/v2/descriptions/changes",
+                new DescriptionDeltaRequest(page.Cursor with { Scope = "wrong-grant" }), deadline.Token);
+            Assert.Equal(HttpStatusCode.Conflict, invalid.StatusCode);
+            instance.Accounts.Revoke(account, reader.Connection.Session!.GrantId);
+            using var revoked = await reader.SpaceClient.PostAsJsonAsync("api/sync/v2/descriptions/changes", new DescriptionDeltaRequest(null), deadline.Token);
+            Assert.Contains(revoked.StatusCode, new[] { HttpStatusCode.Unauthorized, HttpStatusCode.Forbidden });
+        }
+        finally
+        {
+            await instance.App.StopAsync(); await instance.App.DisposeAsync(); instance.Certificate.Dispose();
+            if (Directory.Exists(root)) Directory.Delete(root, true);
+        }
+    }
+
+    [Fact]
+    public void DescriptionDeltaReadDoesNotAcquireWriterLock()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "picer-delta-reader-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            using var writer = new PicerDatabase(Path.Combine(root, "index.db"));
+            var photo = SeedPhoto(writer); Save(writer, photo);
+            using var reader = writer.OpenReadOnlyConnection();
+            using var pending = writer.BeginTransaction();
+            using var change = writer.Command("UPDATE images SET width=width+1 WHERE id=$id");
+            change.Transaction = pending; change.Parameters.AddWithValue("$id", photo.Id); change.ExecuteNonQuery();
+            Assert.Single(reader.ReadDescriptionDelta(new(null), "scope").Entries);
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    [Fact]
+    public void BatchAcceptanceKeepsPartialSuccessAndRejectsOperationReuse()
+    {
+        using var db = new PicerDatabase(":memory:"); var image = SeedPhoto(db); Save(db, image);
+        var item = Assert.Single(db.GetDescriptionOutbox());
+        var bad = item with { OperationId = Guid.NewGuid().ToString("N"), Epoch = "stale" };
+        var receipt = db.AcceptDescriptionBatch(new([bad, item]));
+        Assert.Equal(new[] { "conflict", "accepted" }, receipt.Items.Select(x => x.Status));
+        Assert.Equal("accepted", Assert.Single(db.AcceptDescriptionBatch(new([item])).Items).Status);
+        var reused = item with { Photo = item.Photo! with { Summary = "different" } };
+        Assert.Equal("conflict", Assert.Single(db.AcceptDescriptionBatch(new([reused])).Items).Status);
+        Assert.Throws<ArgumentException>(() => db.AcceptDescriptionBatch(new([item, item])));
+    }
+
+    [Fact]
+    public void DescriptionDeltaIsAtomicBoundedAndProtectsAgainstLateLegacySnapshot()
+    {
+        using var server = new PicerDatabase(":memory:"); var image = SeedPhoto(server);
+        using var mirror = new PicerDatabase(":memory:"); SeedPhoto(mirror, Epoch(server));
+        Save(server, image, "first");
+        var page = server.ReadDescriptionDelta(new(null), "scope");
+        Assert.Single(page.Entries);
+        mirror.ApplyDescriptionDelta(page, null);
+        var first = mirror.GetDescriptionDeltaCursor();
+        Save(server, image, "second");
+        var second = server.ReadDescriptionDelta(new(first), "scope");
+        Assert.Single(second.Entries);
+        Assert.Throws<InvalidDataException>(() => mirror.ApplyDescriptionDelta(second with
+            { Entries = [second.Entries[0], second.Entries[0]] }, first));
+        Assert.Equal(first, mirror.GetDescriptionDeltaCursor());
+        Assert.Single(mirror.GetDescriptionVersions());
+        mirror.ApplyDescriptionDelta(second, first);
+        mirror.ReconcileMirroredPhotoMetadata(Empty, true);
+        Assert.Equal(2, mirror.GetDescriptionVersions().Count);
+        Assert.Equal("second", Assert.Single(mirror.GetAllMirroredCloudVisionAnalyses()).Summary);
+        var same = server.ReadDescriptionDelta(new(second.Cursor), "scope");
+        Assert.Empty(same.Entries);
+        mirror.ApplyDescriptionDelta(same, second.Cursor);
+        Assert.Throws<InvalidOperationException>(() => server.ReadDescriptionDelta(new(second.Cursor), "other-scope"));
+        Assert.Throws<InvalidOperationException>(() => mirror.ApplyDescriptionDelta(second, first));
+    }
+
+    [Fact]
+    public void DescriptionDeltaFreezesHighWaterAndPurgesDeletedPayloads()
+    {
+        using var db = new PicerDatabase(":memory:"); var image = SeedPhoto(db);
+        for (var index = 0; index < 23; index++) Save(db, image, "private fixture " + index);
+        var first = db.ReadDescriptionDelta(new(null), "scope");
+        Assert.Equal(20, first.Entries.Count);
+        Save(db, image, "later fixture");
+        var second = db.ReadDescriptionDelta(new(first.Cursor, first.Through), "scope");
+        Assert.Equal(3, second.Entries.Count);
+        Assert.Equal(first.Through, second.Cursor.Sequence);
+        Assert.Single(db.ReadDescriptionDelta(new(second.Cursor), "scope").Entries);
+        using (var remove = db.Command("DELETE FROM images WHERE id=$id"))
+        { remove.Parameters.AddWithValue("$id", image.Id); remove.ExecuteNonQuery(); }
+        using var leaked = db.Command("SELECT COUNT(*) FROM description_changes WHERE payload LIKE '%fixture%'");
+        Assert.Equal(0L, leaked.ExecuteScalar());
+        Assert.All(db.ReadDescriptionDelta(new(null), "scope").Entries, item => Assert.True(item.Deleted));
+    }
+
+    [Fact]
+    public void DeltaConfirmationBeforeLostUploadResponseStillCompletesAfterIdempotentRetry()
+    {
+        using var server = new PicerDatabase(":memory:"); SeedPhoto(server);
+        using var mirror = new PicerDatabase(":memory:"); var image = SeedPhoto(mirror, Epoch(server)); Save(mirror, image);
+        var upload = Assert.Single(mirror.GetDescriptionOutbox());
+        server.AcceptDescriptionUpload(upload);
+        mirror.ApplyDescriptionDelta(server.ReadDescriptionDelta(new(null), "scope"), null);
+        Assert.Equal((1L, 0L), mirror.GetDescriptionSyncCounts());
+        server.AcceptDescriptionUpload(upload);
+        mirror.AcknowledgeDescription(upload.OperationId);
+        Assert.Empty(mirror.GetDescriptionOutbox());
+        mirror.ReconcileMirroredPhotoMetadata(Empty, true);
+        Assert.True(new CloudVisionRepository(mirror).HasCurrentDescription(image));
+    }
+
+    [Fact]
+    public void OutboxSequenceDoesNotReuseDeletedHighWater()
+    {
+        using var db = new PicerDatabase(":memory:"); var image = SeedPhoto(db); Save(db, image, "first");
+        var through = db.DescriptionOutboxHighWater();
+        using (var clear = db.Command("DELETE FROM description_outbox")) clear.ExecuteNonQuery();
+        Save(db, image, "second");
+        Assert.True(db.DescriptionOutboxHighWater() > through);
+        Assert.Empty(db.ReadDescriptionOutboxPage(0, through));
+        Assert.Single(db.ReadDescriptionOutboxPage(through, db.DescriptionOutboxHighWater()));
+    }
+
+    [Fact]
+    public void ExplicitDeltaDeletionCannotBeResurrectedByAnOlderFullSnapshot()
+    {
+        using var server = new PicerDatabase(":memory:"); var image = SeedPhoto(server); Save(server, image);
+        using var mirror = new PicerDatabase(":memory:"); SeedPhoto(mirror, Epoch(server));
+        var first = server.ReadDescriptionDelta(new(null), "scope");
+        mirror.ApplyDescriptionDelta(first, null);
+        var old = Empty with { CloudVisionAnalyses = server.GetAllMirroredCloudVisionAnalyses(), DescriptionVersions = server.GetDescriptionVersions() };
+        using (var delete = server.Command("DELETE FROM cloud_vision_analyses; DELETE FROM description_versions;")) delete.ExecuteNonQuery();
+        mirror.ApplyDescriptionDelta(server.ReadDescriptionDelta(new(first.Cursor), "scope"), first.Cursor);
+        mirror.UpsertMirroredVideoMetadata(old);
+        Assert.Empty(mirror.GetDescriptionVersions());
+        Assert.Empty(mirror.GetAllMirroredCloudVisionAnalyses());
+    }
+
+    [Fact]
+    public void UnchangedSearchDocumentSkipsWritesButRepairsMissingFtsEntry()
+    {
+        using var db = new PicerDatabase(":memory:"); var image = SeedPhoto(db);
+        var repository = new Picer.Core.Search.MediaTextIndexRepository(db);
+        repository.UpsertImage(image, ["fixture"]);
+        using var changes = db.Command("SELECT total_changes()"); var before = changes.ExecuteScalar();
+        repository.UpsertImage(image, ["fixture"]);
+        Assert.Equal(before, changes.ExecuteScalar());
+        using (var remove = db.Command("DELETE FROM media_text_fts WHERE rowid=$id"))
+        { remove.Parameters.AddWithValue("$id", image.Id); remove.ExecuteNonQuery(); }
+        repository.UpsertImage(image, ["fixture"]);
+        using var count = db.Command("SELECT COUNT(*) FROM media_text_fts"); Assert.Equal(1L, count.ExecuteScalar());
+    }
+
+    [Fact]
+    public async Task BatchUploadUsesBoundedPagesAndDoesNotLoseConcurrentArrivals()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "description-batch-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            using var local = new PicerDatabase(Path.Combine(root, "mirror.db"));
+            var image = SeedPhoto(local);
+            for (var index = 0; index < 43; index++) Save(local, image, "version " + index);
+            var calls = 0;
+            using var handler = new Handler(async request =>
+            {
+                calls++;
+                if (request.RequestUri!.AbsolutePath.EndsWith("/batch", StringComparison.Ordinal))
+                {
+                    Assert.True((await request.Content!.ReadAsByteArrayAsync()).Length <= DescriptionUploadBatch.MaxBytes);
+                    var batch = (await request.Content.ReadFromJsonAsync<DescriptionUploadBatch>())!;
+                    Assert.InRange(batch.Items.Count, 1, 20);
+                    return new(HttpStatusCode.OK) { Content = JsonContent.Create(new DescriptionBatchReceipt(
+                        batch.Items.Select(x => new DescriptionBatchItemReceipt(x.OperationId, "accepted")).ToArray())) };
+                }
+                var item = (await request.Content!.ReadFromJsonAsync<DescriptionUpload>())!;
+                Save(local, image, "arrived during upload");
+                var response = new HttpResponseMessage(HttpStatusCode.OK) { Content = JsonContent.Create(new DescriptionUploadReceipt(item.OperationId)) };
+                response.Headers.Add(DescriptionUploadBatch.CapabilityHeader, "1");
+                return response;
+            });
+            using var client = new IndexSyncClient(new HttpClient(handler) { BaseAddress = new Uri("https://fixture.invalid/") }, accountMode: true);
+            await client.PushDescriptionsAsync(local);
+            Assert.Equal(4, calls);
+            Assert.Equal((1L, 43L), local.GetDescriptionSyncCounts());
+            await client.PushDescriptionsAsync(local);
+            Assert.Equal((0L, 44L), local.GetDescriptionSyncCounts());
+        }
+        finally { Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools(); Directory.Delete(root, true); }
     }
 
     [Fact]
@@ -87,9 +333,9 @@ public sealed class DescriptionSyncTests
         Assert.True(new CloudVisionRepository(db).HasCurrentDescription(image));
         db.ReconcileMirroredPhotoMetadata(Empty with { CloudVisionAnalyses = [item.Photo!] }, true);
         Assert.Empty(db.GetDescriptionOutbox());
-        // A subsequent authoritative removal is still respected after confirmation.
+        // Omission, including a late legacy snapshot, is not an explicit deletion.
         db.ReconcileMirroredPhotoMetadata(Empty, true);
-        Assert.False(new CloudVisionRepository(db).HasCurrentDescription(image));
+        Assert.True(new CloudVisionRepository(db).HasCurrentDescription(image));
     }
 
     [Fact]
@@ -283,7 +529,7 @@ public sealed class DescriptionSyncTests
         db.UpsertMirroredVideoMetadata(Empty with { VideoSummaries = [item.Video!] }, authoritative: true);
         Assert.Empty(db.GetDescriptionOutbox());
         db.UpsertMirroredVideoMetadata(Empty, authoritative: true);
-        Assert.False(videos.HasCurrentSummary(video));
+        Assert.True(videos.HasCurrentSummary(video));
     }
 
     [Fact]

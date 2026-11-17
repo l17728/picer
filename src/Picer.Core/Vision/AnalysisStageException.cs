@@ -32,6 +32,7 @@ public sealed class AnalysisStageException(AnalysisStage stage, string errorCode
             _ => exception.GetType().Name
         };
         var retryable = exception is not (ArgumentException or NotSupportedException or UnauthorizedAccessException or FileNotFoundException or DirectoryNotFoundException);
+        if (exception is Microsoft.Data.Sqlite.SqliteException { SqliteErrorCode: 8 }) retryable = false;
         if (exception is System.Net.Http.HttpRequestException { StatusCode: { } statusCode } && (int)statusCode is 400 or 401 or 403 or 404) retryable = false;
         return new(stage, code, retryable, exception);
     }

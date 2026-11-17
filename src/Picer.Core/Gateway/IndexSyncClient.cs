@@ -13,7 +13,7 @@ using Picer.Core.Vision;
 
 namespace Picer.Core.Gateway;
 
-public sealed class IndexSyncClient(HttpClient client, bool accountMode = false, bool canWrite = true,
+public sealed partial class IndexSyncClient(HttpClient client, bool accountMode = false, bool canWrite = true,
     Func<Action, CancellationToken, Task>? databaseWork = null) : IDisposable
 {
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
@@ -21,6 +21,7 @@ public sealed class IndexSyncClient(HttpClient client, bool accountMode = false,
     private readonly SemaphoreSlim _reviewSyncGate = new(1, 1);
     private readonly SemaphoreSlim _metadataSyncGate = new(1, 1);
     private readonly SemaphoreSlim _descriptionSyncGate = new(1, 1);
+    private bool _descriptionBatchSupported;
     private const int MergeBatchSize = 100;
     private HashSet<string> _acknowledgedMetadataOperations = new(StringComparer.Ordinal);
     public IReadOnlySet<string> AcknowledgedMetadataOperations => Volatile.Read(ref _acknowledgedMetadataOperations);
@@ -277,20 +278,64 @@ public sealed class IndexSyncClient(HttpClient client, bool accountMode = false,
         try
         {
             using var independent = database.OpenIndependentConnection();
-            IReadOnlyList<DescriptionUpload> pending = [];
-            await WriteDatabaseAsync(() => pending = independent.GetDescriptionOutbox(pendingOnly: true), cancellationToken).ConfigureAwait(false);
+            long through = 0, after = 0;
+            await WriteDatabaseAsync(() => through = independent.DescriptionOutboxHighWater(), cancellationToken).ConfigureAwait(false);
             var conflicts = 0;
-            foreach (var item in pending)
+            while (after < through)
             {
-                if (item.Epoch != independent.GetMirrorCheckpoint()?.Epoch)
-                { conflicts++; continue; }
-                using var response = await PostMirrorEditAsync("api/sync/v2/descriptions", item, independent, cancellationToken).ConfigureAwait(false);
-                if (response.StatusCode is System.Net.HttpStatusCode.Conflict or System.Net.HttpStatusCode.BadRequest)
-                { conflicts++; continue; }
-                response.EnsureSuccessStatusCode();
-                var receipt = await response.Content.ReadFromJsonAsync<DescriptionUploadReceipt>(Json, cancellationToken).ConfigureAwait(false);
-                if (receipt?.OperationId != item.OperationId) throw new InvalidDataException("description_ack_missing");
-                await WriteDatabaseAsync(() => independent.AcknowledgeDescription(item.OperationId), cancellationToken).ConfigureAwait(false);
+                IReadOnlyList<(long Sequence, DescriptionUpload Item)> page = [];
+                await WriteDatabaseAsync(() => page = independent.ReadDescriptionOutboxPage(after, through), cancellationToken).ConfigureAwait(false);
+                if (page.Count == 0) break;
+                after = page[^1].Sequence;
+                for (var offset = 0; offset < page.Count;)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var item = page[offset].Item;
+                    if (item.Epoch != independent.GetMirrorCheckpoint()?.Epoch) { conflicts++; offset++; continue; }
+                    var batch = new List<DescriptionUpload>();
+                    if (_descriptionBatchSupported)
+                    {
+                        for (var index = offset; index < page.Count; index++)
+                        {
+                            var next = page[index].Item;
+                            if (next.Epoch != item.Epoch) break;
+                            batch.Add(next);
+                            if (JsonSerializer.SerializeToUtf8Bytes(new DescriptionUploadBatch(batch), Json).Length <= DescriptionUploadBatch.MaxBytes) continue;
+                            batch.RemoveAt(batch.Count - 1); break;
+                        }
+                    }
+                    if (batch.Count > 0)
+                    {
+                        using var response = await PostMirrorEditAsync("api/sync/v2/descriptions/batch", new DescriptionUploadBatch(batch), independent, cancellationToken).ConfigureAwait(false);
+                        if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+                        { _descriptionBatchSupported = false; continue; }
+                        response.EnsureSuccessStatusCode();
+                        var receipt = await response.Content.ReadFromJsonAsync<DescriptionBatchReceipt>(Json, cancellationToken).ConfigureAwait(false);
+                        if (receipt?.Items is null || receipt.Items.Count != batch.Count ||
+                            receipt.Items.Select(x => x.OperationId).Distinct(StringComparer.Ordinal).Count() != batch.Count ||
+                            receipt.Items.Any(x => !batch.Any(item => item.OperationId == x.OperationId) || x.Status is not ("accepted" or "conflict" or "rejected" or "retryable")))
+                            throw new InvalidDataException("description_batch_ack_invalid");
+                        await WriteDatabaseAsync(() =>
+                        {
+                            foreach (var result in receipt.Items)
+                                if (result.Status == "accepted") independent.AcknowledgeDescription(result.OperationId);
+                        }, cancellationToken).ConfigureAwait(false);
+                        conflicts += receipt.Items.Count(x => x.Status != "accepted");
+                        offset += batch.Count;
+                    }
+                    else
+                    {
+                        using var response = await PostMirrorEditAsync("api/sync/v2/descriptions", item, independent, cancellationToken).ConfigureAwait(false);
+                        if (response.Headers.TryGetValues(DescriptionUploadBatch.CapabilityHeader, out var values) && values.Contains("1")) _descriptionBatchSupported = true;
+                        offset++;
+                        if (response.StatusCode is System.Net.HttpStatusCode.Conflict or System.Net.HttpStatusCode.BadRequest)
+                        { conflicts++; continue; }
+                        response.EnsureSuccessStatusCode();
+                        var receipt = await response.Content.ReadFromJsonAsync<DescriptionUploadReceipt>(Json, cancellationToken).ConfigureAwait(false);
+                        if (receipt?.OperationId != item.OperationId) throw new InvalidDataException("description_ack_missing");
+                        await WriteDatabaseAsync(() => independent.AcknowledgeDescription(item.OperationId), cancellationToken).ConfigureAwait(false);
+                    }
+                }
             }
             if (conflicts > 0) throw new InvalidOperationException("description_sync_conflicts_pending");
         }

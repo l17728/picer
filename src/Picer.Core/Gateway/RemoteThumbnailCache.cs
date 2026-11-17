@@ -15,7 +15,11 @@ public sealed class RemoteThumbnailCache
     private readonly string _root;
     private readonly object _sync = new();
     private readonly Dictionary<string, Flight> _inFlight = new(StringComparer.OrdinalIgnoreCase);
-    private readonly ThumbnailWorkScheduler _downloads = new();
+    private readonly ThumbnailWorkScheduler _downloads = new(3, 1);
+    public static ImageRecord DerivedRecord(string kind, string versionedIdentity) => new()
+    {
+        ContentSha256 = Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(kind + ":" + versionedIdentity))).ToLowerInvariant()
+    };
     private sealed class Flight
     {
         public readonly TaskCompletionSource<string?> Ready = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -51,6 +55,16 @@ public sealed class RemoteThumbnailCache
         if (!File.Exists(path)) return null;
         try { File.SetLastAccessTimeUtc(path, DateTime.UtcNow); } catch { }
         return path;
+    }
+
+    public void Invalidate(ImageRecord record)
+    {
+        lock (_sync)
+        {
+            try { File.Delete(Path.Combine(_root, GetKey(record) + ".jpg")); }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+        }
     }
 
     public Task<string?> GetOrDownloadAsync(ImageRecord record, Func<Task<Stream?>> openSource,
@@ -103,15 +117,19 @@ public sealed class RemoteThumbnailCache
     private async Task DownloadOwnedAsync(string key, Flight owner,
         Func<CancellationToken, Task<Stream?>> openSource)
     {
+        using var trace = new Picer.Core.Logging.MediaReadTrace("thumbnail-download");
+        trace.Mark("queued");
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(owner.Stop.Token);
-        deadline.CancelAfter(TimeSpan.FromMinutes(2));
         try
         {
             using var slot = await _downloads.EnterAsync(() => Volatile.Read(ref owner.Visible), deadline.Token).ConfigureAwait(false);
+            // Waiting behind the viewport is not a network timeout.
+            deadline.CancelAfter(TimeSpan.FromMinutes(2));
+            trace.Mark("admitted");
             owner.Ready.TrySetResult(await DownloadCoreAsync(key, owner, openSource, deadline.Token).ConfigureAwait(false));
         }
         catch (OperationCanceledException) { owner.Ready.TrySetCanceled(); }
-        catch (Exception exception) { owner.Ready.TrySetException(exception); _ = owner.Ready.Task.Exception; }
+        catch (Exception exception) { trace.Failure(exception); owner.Ready.TrySetException(exception); _ = owner.Ready.Task.Exception; }
         finally
         {
             lock (_sync) if (_inFlight.TryGetValue(key, out var current) && ReferenceEquals(current, owner)) _inFlight.Remove(key);
@@ -122,9 +140,11 @@ public sealed class RemoteThumbnailCache
     private async Task<string?> DownloadCoreAsync(string key, Flight owner,
         Func<CancellationToken, Task<Stream?>> openSource, CancellationToken cancellationToken)
     {
+        using var trace = new Picer.Core.Logging.MediaReadTrace("thumbnail-cache-write");
         var destination = Path.Combine(_root, key + ".jpg");
         if (File.Exists(destination)) return destination;
         await using var source = await openSource(cancellationToken).ConfigureAwait(false);
+        trace.Mark("source_ready");
         if (source is null) return null;
         var temporary = destination + "." + Guid.NewGuid().ToString("N") + ".part";
         try
@@ -133,6 +153,8 @@ public sealed class RemoteThumbnailCache
                 FileShare.None, 128 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan))
             {
                 await source.CopyToAsync(target, cancellationToken).ConfigureAwait(false);
+                if (target.Length == 0) throw new IOException("Empty thumbnail response.");
+                trace.Mark("body_copied", target.Length);
             }
             lock (_sync)
             {
@@ -140,6 +162,7 @@ public sealed class RemoteThumbnailCache
                 if (!_inFlight.TryGetValue(key, out var current) || !ReferenceEquals(current, owner)) throw new OperationCanceledException();
                 if (!File.Exists(destination)) File.Move(temporary, destination);
             }
+            trace.Mark("published");
             return destination;
         }
         finally

@@ -5,6 +5,15 @@ namespace Picer.Tests;
 
 public sealed class AnalysisStageExceptionTests
 {
+    [Fact]
+    public void ReadOnlyDatabaseFailureRequiresRepairBeforeRetry()
+    {
+        var failure = AnalysisStageException.Wrap(AnalysisStage.Preprocess,
+            new Microsoft.Data.Sqlite.SqliteException("private database path", 8));
+        Assert.Equal("SQLite_8_8", failure.ErrorCode);
+        Assert.False(failure.Retryable);
+        Assert.Equal(AnalysisStage.Preprocess, failure.Stage);
+    }
     [Theory]
     [InlineData(HttpStatusCode.BadGateway, true)]
     [InlineData(HttpStatusCode.Unauthorized, false)]

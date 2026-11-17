@@ -17,6 +17,7 @@ public partial class FaceDetailWindow : Window
     private readonly PeopleService _people;
     private readonly long? _initialFaceId;
     private readonly Dictionary<long, Rectangle> _rectangles = [];
+    private readonly CancellationTokenSource _closed = new();
 
     public FaceDetailWindow(ImageRecord image, VisionAnalysisRepository repository, PeopleService people, long? initialFaceId = null)
     {
@@ -25,6 +26,7 @@ public partial class FaceDetailWindow : Window
         _repository = repository;
         _people = people;
         _initialFaceId = initialFaceId;
+        Closed += (_, _) => _closed.Cancel();
         Loaded += async (_, _) => { try { await InitializeAsync(); } catch (Exception exception) { Status.Text = "加载失败：" + exception.Message; } };
     }
 
@@ -40,17 +42,22 @@ public partial class FaceDetailWindow : Window
 
     private async Task LoadPhotoAsync()
     {
+        var path = AppServices.ServiceMode && AppServices.Gateway is Picer.Core.Gateway.IMediaAssetGateway media
+            ? await Services.SharedImageAssets.GetAsync(media, _image.Id, _image.Path, _image.ContentSha256 ?? _image.Sha256, false, _closed.Token)
+            : _image.Path;
         var bitmap = await Task.Run(() =>
         {
+            using var stream = System.IO.File.OpenRead(path);
             var value = new BitmapImage();
             value.BeginInit();
             value.CacheOption = BitmapCacheOption.OnLoad;
             value.DecodePixelWidth = 1600;
-            value.UriSource = new Uri(_image.Path);
+            value.StreamSource = stream;
             value.EndInit();
             value.Freeze();
             return value;
-        });
+        }, _closed.Token);
+        _closed.Token.ThrowIfCancellationRequested();
         Photo.Source = bitmap;
         ImageStage.Width = bitmap.PixelWidth;
         ImageStage.Height = bitmap.PixelHeight;

@@ -229,6 +229,9 @@ public sealed class IndexApiHandlers(PicerDatabase db, ThumbnailService thumbnai
         return independent.ReadMirrorChanges(request);
     }
     public IReadOnlyList<Tag> ListTags() => SemanticEngine.GetTags(db);
+    public VideoDetailsSnapshot? GetVideoDetails(long id, string model) => db.SupportsIndependentReadSnapshots
+        ? db.ReadSnapshot(reader => VideoDetailsSnapshot.Read(reader, id, model))
+        : VideoDetailsSnapshot.Read(db, id, model);
     public IReadOnlyList<Album> ListAlbums() => SemanticEngine.GetAlbums(db);
     public GatewayMetadata GetMetadata(bool includeEmbeddings = true, bool includeFaceModels = true)
         => db.SupportsIndependentReadSnapshots
@@ -585,7 +588,8 @@ public static class IndexServiceHost
         });
     }
 
-    public static IndexServiceInstance Build(string dataRoot, int port = 8445, string? bearerToken = null, bool isolatedSpace = false)
+    public static IndexServiceInstance Build(string dataRoot, int port = 8445, string? bearerToken = null, bool isolatedSpace = false,
+        Picer.Core.Classification.ClassificationAuthorization? classificationAuthorization = null)
     {
         Directory.CreateDirectory(dataRoot);
         if (!isolatedSpace) AppLogger.Initialize(Path.Combine(dataRoot, "logs"));
@@ -851,9 +855,15 @@ async function load(){const [c,g]=await Promise.all([fetch('/api/service/v1/capa
         // boxes, albums and video metadata become available quickly; vectors
         // remain available to an explicit trusted caller when needed.
         app.MapGet("/api/gateway/v1/metadata", (HttpContext context, bool includeEmbeddings = false, bool includeFaceModels = false) => MetadataTransferResults.Create(context, handlers.GetMetadata(includeEmbeddings, includeFaceModels)));
-        app.MapGet("/api/gateway/v1/thumbs/{id:long}", async (long id, string? agentId, CancellationToken cancellationToken) =>
+        app.MapGet("/api/gateway/v1/videos/{id:long}/details", (long id, string? model) =>
+            handlers.GetVideoDetails(id, model ?? "legacy-video") is { } details ? Results.Json(details) : Results.NotFound());
+        app.MapGet("/api/gateway/v1/thumbs/{id:long}", async (long id, string? agentId, HttpContext context, CancellationToken cancellationToken) =>
         {
+            using var trace = new Picer.Core.Logging.MediaReadTrace("service-thumbnail", id, context.Request.Headers["X-Picer-Request-Id"].ToString());
+            trace.Mark("received");
+            context.Response.OnCompleted(() => { trace.Mark("response_completed", context.Response.ContentLength ?? 0, context.Response.StatusCode); return Task.CompletedTask; });
             var stream = await handlers.OpenThumbnailAsync(id, cancellationToken);
+            trace.Mark(stream is null ? "local_cache_miss" : "local_cache_hit");
             if (stream is null)
             {
                 var image = await handlers.GetAsync(id, cancellationToken);
@@ -862,6 +872,7 @@ async function load(){const [c,g]=await Promise.all([fetch('/api/service/v1/capa
                     var key = $"photo:{agentId}:{image.Sha256 ?? image.Path}:{image.FileSize}:{image.ModifiedUtc.Ticks}:256";
                     var bytes = await mediaPreviews.GetAsync(key, token => MediaAssetResults.PreviewAsync(agents, agentId, IndexApiHandlers.NormalizeAgentPath(image.Path), 256, token), cancellationToken);
                     stream = new MemoryStream(bytes, writable: false);
+                    trace.Mark("preview_ready", bytes.Length);
                 }
             }
             return stream is null ? Results.NotFound() : Results.Stream(stream, "image/jpeg");
@@ -887,13 +898,21 @@ async function load(){const [c,g]=await Promise.all([fetch('/api/service/v1/capa
             if (agents.OnlineCount == 0) return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
             try
             {
+                var inputStarted = System.Diagnostics.Stopwatch.GetTimestamp();
                 await using var stream = await agents.OpenMediaAsync(agentId, IndexApiHandlers.NormalizeAgentPath(image.Path), 1280, token,
                     sourceFingerprint: request.Source);
                 if (stream is null) return Results.StatusCode(StatusCodes.Status501NotImplemented);
+                var sourceReadyMs = (long)System.Diagnostics.Stopwatch.GetElapsedTime(inputStarted).TotalMilliseconds;
                 if (stream.Length is <= 0 or > 8 * 1024 * 1024) throw new InvalidDataException("photo_analysis_input_too_large");
                 using var output = new MemoryStream();
+                var copyStarted = System.Diagnostics.Stopwatch.GetTimestamp();
                 await stream.CopyToAsync(output, token);
+                var copyMs = (long)System.Diagnostics.Stopwatch.GetElapsedTime(copyStarted).TotalMilliseconds;
                 if (!Matches(connection.GetImage(request.ImageId))) return Results.StatusCode(StatusCodes.Status409Conflict);
+                var totalInputMs = (long)System.Diagnostics.Stopwatch.GetElapsedTime(inputStarted).TotalMilliseconds;
+                var outputBytes = output.Length;
+                var sourceBytes = Math.Max(1L, image.FileSize);
+                AppLogger.Info($"Photo analysis input metrics; imageId={request.ImageId}; sourceBytes={sourceBytes}; preparedBytes={outputBytes}; compressionRatio={(double)outputBytes / sourceBytes:0.0000}; sourceReadyMs={sourceReadyMs}; copyMs={copyMs}; totalMs={totalInputMs}; throughputKbps={(outputBytes / 1024d) / Math.Max(0.001, copyMs / 1000d):0.0}");
                 context.Response.Headers["X-Picer-Analysis-Input"] = "verified-v1";
                 return Results.File(output.ToArray(), "image/jpeg");
             }
@@ -1258,12 +1277,17 @@ async function load(){const [c,g]=await Promise.all([fetch('/api/service/v1/capa
             if (hash is not { Length: 64 } || hash.Any(value => !Uri.IsHexDigit(value)))
                 return Results.BadRequest(new { error = "clip_content_hash_invalid" });
             using var lookup = db.Command("""
-                SELECT path FROM images WHERE status='active' AND lower(COALESCE(content_sha256,sha256))=$hash
+                SELECT path,id FROM images WHERE status='active' AND lower(COALESCE(content_sha256,sha256))=$hash
                 ORDER BY id LIMIT 1
                 """);
             lookup.Parameters.AddWithValue("$hash", hash);
-            var storedPath = lookup.ExecuteScalar() as string;
-            if (storedPath is null) return Results.NotFound(new { error = "clip_image_not_found" });
+            string storedPath; long imageId;
+            using (var row = lookup.ExecuteReader())
+            {
+                if (!row.Read()) return Results.NotFound(new { error = "clip_image_not_found" });
+                storedPath = row.GetString(0); imageId = row.GetInt64(1);
+            }
+            if (isolatedSpace) agentId = Identity.SpaceSourceRouting.Resolve(db, $"/api/gateway/v1/thumbs/{imageId}") ?? "unbound-source";
             try
             {
                 var payload = await agents.RequestTaskAsync(agentId, "clip.image",
@@ -1277,6 +1301,7 @@ async function load(){const [c,g]=await Promise.all([fetch('/api/service/v1/capa
         });
         app.MapGet("/api/service/v1/classification/latest", () =>
             Results.Ok(new ClassificationProjectionService(db).GetLatestRun()));
+        ClassificationV2Endpoints.Map(app, db, agents, isolatedSpace, classificationAuthorization);
         app.MapPost("/api/service/v1/scenes/edit", (SceneDescriptionMutation request) =>
         {
             using var sceneDatabase=db.OpenIndependentConnection();
@@ -1630,7 +1655,7 @@ async function load(){const [c,g]=await Promise.all([fetch('/api/service/v1/capa
         app.MapPost("/api/ai/v1/chat/stream", async (HttpRequest request, HttpResponse response, string? agentId, CancellationToken cancellationToken) =>
         {
             var requestId = request.Headers["X-Picer-Request-Id"].ToString();
-            if (string.IsNullOrWhiteSpace(requestId)) requestId = Guid.NewGuid().ToString("N");
+            if (!Guid.TryParseExact(requestId, "N", out _)) requestId = Guid.NewGuid().ToString("N");
             var started = Stopwatch.StartNew();
             using var buffer = new MemoryStream();
             await request.Body.CopyToAsync(buffer, cancellationToken);
@@ -1645,10 +1670,13 @@ async function load(){const [c,g]=await Promise.all([fetch('/api/service/v1/capa
                 {
                     await response.Body.WriteAsync(chunk, cancellationToken);
                     await response.Body.FlushAsync(cancellationToken);
-                }, cancellationToken);
+                }, cancellationToken, requestId);
                 AppLogger.Info($"AI proxy completed; requestId={requestId}; elapsedMs={started.ElapsedMilliseconds}");
             }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                AppLogger.Info($"AI proxy caller cancelled; requestId={requestId}; elapsedMs={started.ElapsedMilliseconds}");
+            }
             catch (Exception exception)
             {
                 AppLogger.Warn($"AI stream proxy failed; requestId={requestId}; elapsedMs={started.ElapsedMilliseconds}; onlineAgents={agents.OnlineCount}; exception={exception.GetType().Name}; inner={(exception.InnerException?.GetType().Name ?? "none")}; message={exception.Message}");

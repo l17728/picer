@@ -13,13 +13,17 @@ public static class MediaFileSession
         MediaReadLeasePool? leases = null, string? expectedETag = null, bool keepLease = false,
         MediaWire.SourceFingerprint? sourceFingerprint = null)
     {
+        using var trace = new Picer.Core.Logging.MediaReadTrace("agent-file-session");
         var timer = Stopwatch.StartNew();
         var path = MediaSourceIdentity.ResolveAllowed(requestedPath, roots);
+        trace.Mark("path_authorized");
         using var operation = Picer.Core.Video.VideoOperationLifetime.Begin(path, token);
         token = operation.Token;
         await using var source = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 128 * 1024, FileOptions.RandomAccess);
+        trace.Mark("file_opened", source.Length);
         using var lease = previewSize == 0 && leases is not null ? leases.Acquire(path, expectedETag) : null;
         var etag = lease?.ETag ?? MediaSourceIdentity.GetETag(source);
+        trace.Mark("identity_ready");
         MediaSourceIdentity.ResolveAllowed(path, roots);
         MemoryStream? preview = null;
         long decodeMs = 0, encodeMs = 0;
@@ -44,12 +48,14 @@ public static class MediaFileSession
                     {
                     var stage = Stopwatch.StartNew();
                     using var image = RasterImage.Load(source);
+                    trace.Mark("decoded");
                     decodeMs = stage.ElapsedMilliseconds;
                     stage.Restart();
                     if (image.Width > previewSize || image.Height > previewSize) image.ResizeToFit(previewSize, previewSize);
                     using var output = new MemoryStream();
                     image.StripMetadata();
                     image.SaveAsJpeg(output, previewSize == 1280 ? 82 : 75);
+                    trace.Mark("resized_encoded", output.Length);
                     encodeMs = stage.ElapsedMilliseconds;
                     ct.ThrowIfCancellationRequested();
                     return output.ToArray();
@@ -62,6 +68,7 @@ public static class MediaFileSession
             }
             var prepareMs = timer.ElapsedMilliseconds;
             await MediaWire.SendJsonAsync(socket, new MediaWire.Metadata(input.Length, contentType, etag), token);
+            trace.Mark("metadata_sent", input.Length);
             long total = 0, readMs = 0, sendMs = 0;
             var block = new byte[MediaWire.BlockSize];
             while (socket.State == WebSocketState.Open)

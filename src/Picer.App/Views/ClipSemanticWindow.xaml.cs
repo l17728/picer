@@ -57,7 +57,8 @@ public partial class ClipSemanticWindow : Window
     private sealed class ResultRow
     {
         private readonly string? _explanation;
-        public ResultRow(ClipSearchHit hit, string? explanation = null) { Hit = hit; _explanation = explanation; }
+        public ResultRow(ClipSearchHit hit, string? explanation = null) { Hit = hit; _explanation = explanation; Preview = new(hit.Image, services: AppServices.GetClientServices()); }
+        public Picer.App.ViewModels.ImageItemViewModel Preview { get; }
         public ClipSearchHit Hit { get; } public int Rank => Hit.Rank; public string Path => Hit.Image.Path; public string PreviewPath => File.Exists(Hit.Image.ThumbPath) ? Hit.Image.ThumbPath! : Hit.Image.Path;
         public string ScoreText => Hit.Score.ToString("F3"); public string Explanation => _explanation ?? $"中文查询与图片语义向量相似度 {Hit.Score:F3}"; public bool? Relevant { get; set; }
     }

@@ -7,6 +7,29 @@ namespace Picer.Tests.Gateway;
 public sealed class RemoteThumbnailCacheTests
 {
     [Fact]
+    public async Task EmptyResponseIsNotPublishedAndNextRequestCanRecover()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "picer-thumb-empty-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var cache = new RemoteThumbnailCache(root);
+            var record = new ImageRecord { Id = 55 };
+            await Assert.ThrowsAsync<IOException>(() => cache.GetOrDownloadAsync(record,
+                () => Task.FromResult<Stream?>(new MemoryStream())));
+            Assert.Null(cache.TryGet(record));
+            Assert.Empty(Directory.EnumerateFiles(root));
+            var path = await cache.GetOrDownloadAsync(record,
+                () => Task.FromResult<Stream?>(new MemoryStream([1, 2, 3])));
+            Assert.NotNull(path);
+            Assert.Equal(path, new RemoteThumbnailCache(root).TryGet(record));
+            cache.Invalidate(record);
+            Assert.Null(cache.TryGet(record));
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    [Fact]
     public async Task ViewportBypassesQueuedPrefetchAndPromotionUsesReservedCapacity()
     {
         var scheduler = new ThumbnailWorkScheduler(2, 1);

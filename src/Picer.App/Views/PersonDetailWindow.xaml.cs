@@ -114,7 +114,7 @@ public partial class PersonDetailWindow : Window
 
     private async void Photos_DoubleClick(object sender, MouseButtonEventArgs e)
     {
-        if (Photos.SelectedItem is not PersonPhotoItem item || !File.Exists(item.Record.Path)) return;
+        if (Photos.SelectedItem is not PersonPhotoItem item || !AppServices.ServiceMode && !File.Exists(item.Record.Path)) return;
         // Keep the face that was double-clicked as the active overlay.  Previously
         // the detail window was opened without an initial face id and always
         // selected the first face in the source image, which made navigation jump
@@ -132,7 +132,8 @@ public partial class PersonDetailWindow : Window
 
     private sealed class PersonPhotoItem
     {
-        public PersonPhotoItem(ImageRecord record) => Record = record;
+        public PersonPhotoItem(ImageRecord record) { Record = record; Preview = new(record, services: AppServices.GetClientServices()); }
+        public Picer.App.ViewModels.ImageItemViewModel Preview { get; }
         public ImageRecord Record { get; }
         public string ThumbPath => File.Exists(Record.ThumbPath) ? Record.ThumbPath! : Record.Path;
         public string FileName => Path.GetFileName(Record.Path);

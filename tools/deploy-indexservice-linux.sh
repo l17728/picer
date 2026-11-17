@@ -26,6 +26,19 @@ if (( standalone == 0 )); then
 fi
 [[ $EUID -eq 0 ]] || { echo 'run this installer as root' >&2; exit 2; }
 
+os_id=unknown
+os_like=unknown
+if [[ -r /etc/os-release ]]; then
+    . /etc/os-release
+    os_id=${ID:-unknown}; os_like=${ID_LIKE:-unknown}
+fi
+case "$os_id:$os_like" in
+    ubuntu:*|debian:*|*:debian*) package_manager=apt-get; dependency_packages=(unzip python3 psmisc curl util-linux);;
+    almalinux:*|rocky:*|rhel:*|centos:*|anolis:*|alinux:*|*:rhel*|*:fedora*) package_manager=dnf; dependency_packages=(unzip python3 psmisc curl util-linux);;
+    *) echo "unsupported Linux distribution: id=$os_id like=$os_like" >&2; exit 2;;
+esac
+echo "Detected Linux distribution: id=$os_id like=$os_like packageManager=$package_manager"
+
 install_dir=/opt/picer-index
 service=picer-index.service
 timer=picer-index-health.timer
@@ -96,11 +109,16 @@ cleanup() {
 trap cleanup EXIT
 
 [[ -f "$archive" ]] || { echo "package not found: $archive" >&2; exit 2; }
-command -v unzip >/dev/null
-command -v sha256sum >/dev/null
-command -v curl >/dev/null
-command -v python3 >/dev/null
-command -v fuser >/dev/null
+missing=()
+for command_name in unzip sha256sum curl python3 fuser flock systemctl; do command -v "$command_name" >/dev/null 2>&1 || missing+=("$command_name"); done
+if (( ${#missing[@]} > 0 )); then
+    if [[ ${PICER_AUTO_INSTALL_DEPS:-0} == 1 ]]; then
+        "$package_manager" install -y "${dependency_packages[@]}"
+    else
+        echo "missing dependencies: ${missing[*]}; rerun with PICER_AUTO_INSTALL_DEPS=1 to install using $package_manager" >&2
+        exit 2
+    fi
+fi
 [[ ! -e "$stage" && ! -e "$backup" ]] || { echo 'deployment ID already used; create a fresh package' >&2; exit 2; }
 [[ ! -e "$data_root/picer.db.migration.pending.json" ]] || { echo 'recover the interrupted previous migration before deploying' >&2; exit 2; }
 systemctl cat "$service" >/dev/null
@@ -170,10 +188,19 @@ mv -f "$new_manifest" "$install_dir/deployment.json"
 # Migrate every existing tenant while the listener and all writers are stopped.
 # The public health endpoint alone would leave lazy-opened spaces unchecked.
 service_user=$(systemctl show "$service" -p User --value)
+prepare_log="/tmp/picer-index-prepare-$deployment_id.log"
 if [[ -z "$service_user" || "$service_user" == root ]]; then
-    PICER_INDEX_DATA_ROOT="$data_root" timeout 1800 "$install_dir/Picer.IndexService" --prepare-index-upgrade
+    if ! PICER_INDEX_DATA_ROOT="$data_root" timeout 1800 "$install_dir/Picer.IndexService" --prepare-index-upgrade >"$prepare_log" 2>&1; then
+        echo "Schema preparation failed; log=$prepare_log" >&2
+        tail -200 "$prepare_log" >&2 || true
+        exit 4
+    fi
 else
-    runuser -u "$service_user" -- env PICER_INDEX_DATA_ROOT="$data_root" timeout 1800 "$install_dir/Picer.IndexService" --prepare-index-upgrade
+    if ! runuser -u "$service_user" -- env PICER_INDEX_DATA_ROOT="$data_root" timeout 1800 "$install_dir/Picer.IndexService" --prepare-index-upgrade >"$prepare_log" 2>&1; then
+        echo "Schema preparation failed; log=$prepare_log" >&2
+        tail -200 "$prepare_log" >&2 || true
+        exit 4
+    fi
 fi
 database_copy capacity
 systemctl start "$service"

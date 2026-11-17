@@ -49,17 +49,23 @@ internal sealed partial class AgentConnectionRegistry
     public async Task<SocketMediaStream?> OpenMediaAsync(string? agentId, string path, int previewSize, CancellationToken token, string? expectedETag = null, bool keepLease = false,
         MediaWire.SourceFingerprint? sourceFingerprint = null, bool keyframe = false)
     {
+        using var trace = new Picer.Core.Logging.MediaReadTrace("service-media-admission");
         var admission = keyframe ? _keyframeAdmission : previewSize == 1280 ? _analysisAdmission : previewSize > 0 ? _previewAdmission : _mediaAdmission;
-        if (!await admission.WaitAsync(0, token)) throw new MediaChannelBusyException();
+        if (!await admission.WaitAsync(0, token)) { trace.Mark("rejected_busy", status: 503); throw new MediaChannelBusyException(); }
+        trace.Mark("admitted");
         try { return await OpenMediaCoreAsync(agentId, path, previewSize, token, expectedETag, keepLease, sourceFingerprint, keyframe); }
+        catch (Exception exception) { trace.Failure(exception); throw; }
         finally { admission.Release(); }
     }
 
     private async Task<SocketMediaStream?> OpenMediaCoreAsync(string? agentId, string path, int previewSize, CancellationToken token, string? expectedETag, bool keepLease,
         MediaWire.SourceFingerprint? sourceFingerprint, bool keyframe)
     {
+        using var trace = new Picer.Core.Logging.MediaReadTrace("service-media-channel");
+        trace.Mark("received");
         if (string.IsNullOrWhiteSpace(agentId) && _sessions.Count > 1) throw new IOException("media_agent_selection_required");
         var session = await WaitForSessionAsync(agentId, token);
+        trace.Mark("agent_ready");
         if (session is null || !session.Capabilities.Contains(MediaWire.Capability)) return null;
         if (previewSize == 1280 && !session.Capabilities.Contains(MediaWire.AnalysisInputCapability)) return null;
         var slots = keyframe ? _keyframeSlots : previewSize == 1280 ? _analysisSlots : previewSize > 0 ? _previewSlots : _mediaSlots;
@@ -96,15 +102,18 @@ internal sealed partial class AgentConnectionRegistry
         }
         finally { if (!keyframe && previewSize == 0) Interlocked.Decrement(ref _mediaWaiters); }
         var ticket = Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(32)).ToLowerInvariant();
+        trace.Mark("slot_admitted");
         var lease = new MediaLease(session.AgentId);
         _media[ticket] = lease;
         var transferred = false;
         WebSocket? socket = null;
         try
         {
-            await session.SendAsync(new { type = "media.open", requestId = ticket, path, previewSize, expectedETag, keepLease, sourceFingerprint, keyframe }, deadline.Token);
+            await session.SendAsync(new { type = "media.open", requestId = ticket, path, previewSize, expectedETag, keepLease, sourceFingerprint, keyframe, traceId = trace.Id }, deadline.Token);
             socket = await lease.Connected.Task.WaitAsync(deadline.Token);
+            trace.Mark("agent_socket_connected");
             var metadata = ValidateMediaMetadata(await MediaWire.ReceiveJsonAsync<MediaWire.Metadata>(socket, deadline.Token));
+            trace.Mark("metadata_ready");
             SocketMediaStream result;
             if (reusable)
             {

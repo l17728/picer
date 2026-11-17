@@ -138,7 +138,7 @@ internal sealed partial class AgentConnectionRegistry
     }
 
     public async Task StreamAiAsync(string? agentId, ReadOnlyMemory<byte> payload,
-        Func<ReadOnlyMemory<byte>, Task> onChunk, CancellationToken cancellationToken)
+        Func<ReadOnlyMemory<byte>, Task> onChunk, CancellationToken cancellationToken, string? traceId = null)
     {
         var session = await WaitForSessionAsync(agentId, cancellationToken);
         if (session is null && _strictRouting && string.IsNullOrWhiteSpace(agentId))
@@ -152,7 +152,7 @@ internal sealed partial class AgentConnectionRegistry
             else if (eligible.Length > 1) throw new InvalidOperationException("ai_agent_selection_required");
         }
         if (session is null) throw new InvalidOperationException("media_agent_offline");
-        await session.StreamAiAsync(payload, onChunk, cancellationToken);
+        await session.StreamAiAsync(payload, onChunk, cancellationToken, traceId);
     }
 
     public async Task BroadcastConfigAsync(JsonElement config, CancellationToken cancellationToken = default)
@@ -364,9 +364,10 @@ internal sealed partial class AgentConnectionRegistry
         }
 
         public async Task StreamAiAsync(ReadOnlyMemory<byte> payload, Func<ReadOnlyMemory<byte>, Task> onChunk,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken, string? traceId = null)
         {
             var requestId = Guid.NewGuid().ToString("N");
+            if (Guid.TryParseExact(traceId, "N", out _)) AppLogger.Info($"AI proxy dispatch; traceId={traceId}; requestId={requestId}");
             var channel = Channel.CreateBounded<AiMessage>(new BoundedChannelOptions(32) { FullMode = BoundedChannelFullMode.Wait, SingleReader = true, SingleWriter = true });
             _aiPending[requestId] = channel;
             try
@@ -377,7 +378,16 @@ internal sealed partial class AgentConnectionRegistry
             finally
             {
                 _aiPending.TryRemove(requestId, out _);
-                try { await SendAsync(new { type = "ai.cancel", requestId }, CancellationToken.None); } catch { }
+                using var cancelDeadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                try
+                {
+                    await SendAsync(new { type = "ai.cancel", requestId }, cancelDeadline.Token);
+                    AppLogger.Info($"AI proxy cancel forwarded; requestId={requestId}; callerCancelled={cancellationToken.IsCancellationRequested}");
+                }
+                catch (Exception exception)
+                {
+                    AppLogger.Warn($"AI proxy cancel forwarding incomplete; requestId={requestId}; errorType={exception.GetType().Name}");
+                }
             }
         }
 

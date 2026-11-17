@@ -42,7 +42,7 @@ public sealed partial class PicerDatabase
             SELECT v.id,v.source_id,v.path,v.file_size,v.modified_utc,v.duration_seconds,v.width,v.height,v.taken_utc,v.gps,v.status,
                 v.sha256,v.person_analysis_status,v.person_analyzed_utc,
                 EXISTS(SELECT 1 FROM video_summaries s WHERE s.video_id=v.content_id AND length(trim(s.summary))>0
-                    AND s.source_file_size=v.file_size AND (s.source_modified_utc=v.modified_utc OR length(v.sha256)=64))
+                    AND s.source_file_size=v.file_size AND (picer_same_instant(s.source_modified_utc,v.modified_utc) OR length(v.sha256)=64))
             FROM videos v WHERE v.status='active' AND replace(v.path,char(92),'/') LIKE $prefix ESCAPE '!' ORDER BY v.path COLLATE NOCASE
             """);
         command.Parameters.AddWithValue("$prefix", DirectoryLikePattern(directory));

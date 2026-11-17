@@ -58,6 +58,24 @@ public sealed class AccountPortalTests
             }
             var dashboard = await http.GetStringAsync("/account");
             Assert.Contains("家庭照片", WebUtility.HtmlDecode(dashboard));
+            using (var logout = await Submit(http, "/account/logout", dashboard, new()))
+                Assert.Equal(HttpStatusCode.Redirect, logout.StatusCode);
+            var login = await http.GetStringAsync("/account/login?request=" + requestId);
+            using (var failed = await Submit(http, "/account/login", login, new()
+            { ["login"] = "example", ["password"] = "wrong-password", ["request"] = requestId }))
+            {
+                Assert.Equal(HttpStatusCode.Unauthorized, failed.StatusCode);
+                var retry = Regex.Match(await failed.Content.ReadAsStringAsync(), "href='([^']+)'", RegexOptions.None, TimeSpan.FromSeconds(1));
+                Assert.True(retry.Success);
+                Assert.Equal("/account/login?request=" + requestId, WebUtility.HtmlDecode(retry.Groups[1].Value));
+                login = await http.GetStringAsync(WebUtility.HtmlDecode(retry.Groups[1].Value));
+            }
+            using (var signedIn = await Submit(http, "/account/login", login, new()
+            { ["login"] = "example", ["password"] = "example-password-123!", ["request"] = requestId }))
+            {
+                Assert.Equal(HttpStatusCode.Redirect, signedIn.StatusCode);
+                Assert.Equal("/account/approve?request=" + requestId, signedIn.Headers.Location?.OriginalString);
+            }
             var approval = await http.GetStringAsync("/account/approve?request=" + requestId);
             var spaceMatch = Regex.Match(approval, "<option value='([a-f0-9]{32})'>", RegexOptions.None, TimeSpan.FromSeconds(1));
             Assert.True(spaceMatch.Success);

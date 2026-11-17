@@ -23,6 +23,7 @@ public sealed class DirectoryMediaDescriptionWindow : Window
     private readonly CancellationTokenSource _lifetime = new();
     private readonly ComboBox _concurrency = new() { ItemsSource = new[] { 1, 2, 3, 4 }, SelectedItem = 2, Width = 70, Margin = new Thickness(8, 0, 0, 0) };
     private CancellationTokenSource? _cancellation;
+    private DescriptionRunLifetime? _run;
     private DirectoryMediaDescriptionPlan? _plan;
 
     public DirectoryMediaDescriptionWindow(bool loadOnShow = true)
@@ -57,8 +58,8 @@ public sealed class DirectoryMediaDescriptionWindow : Window
         _tree.SelectedItemChanged += async (_, args) => await PreviewAsync(args.NewValue);
         _start.Click += async (_, _) => await StartAsync();
         _retry.Click += async (_, _) => await StartAsync(retryOnly: true);
-        _cancel.Click += (_, _) => _cancellation?.Cancel();
-        Closing += (_, e) => { if (_cancellation is not null) { _cancellation.Cancel(); e.Cancel = true; _status.Text = "正在取消，已完成描述将保留；结束后可关闭窗口。"; } };
+        _cancel.Click += async (_, _) => await RequestCancelAsync("button");
+        Closing += async (_, e) => { if (_cancellation is not null) { e.Cancel = true; await RequestCancelAsync("window_close"); } };
         Closed += (_, _) => _lifetime.Cancel();
         if (loadOnShow) Loaded += async (_, _) =>
         {
@@ -80,6 +81,15 @@ public sealed class DirectoryMediaDescriptionWindow : Window
     internal TreeView DirectoryTree => _tree;
     internal Button StartButton => _start;
     internal string StatusMessage => _status.Text;
+
+    private async Task RequestCancelAsync(string source)
+    {
+        if (_run is not { } run || _cancellation is not { } cancellation || !run.RequestCancellation()) return;
+        _cancel.IsEnabled = false;
+        _status.Text = "正在取消，已完成描述会保留；正在等待当前工作安全退出，结束后可关闭窗口。";
+        Picer.Core.Logging.AnalysisDiagnosticLog.Info($"Directory description cancel_requested; runId={run.Id}; source={source}");
+        await run.ObserveAsync(() => cancellation.CancelAsync(), "cancel_callbacks");
+    }
 
     private async Task RefreshSyncStatusAsync(CancellationToken token)
     {
@@ -152,6 +162,8 @@ public sealed class DirectoryMediaDescriptionWindow : Window
             return;
         }
         var taskStage = AnalysisStage.Preprocess;
+        var run = new DescriptionRunLifetime();
+        _run = run;
         var pendingDescriptionSync = 0;
         CancellationTokenSource? descriptionSyncCancellation = null;
         Task descriptionSyncTask = Task.CompletedTask;
@@ -162,7 +174,7 @@ public sealed class DirectoryMediaDescriptionWindow : Window
         void FlushDescriptionSync()
         {
             if (Interlocked.Exchange(ref pendingDescriptionSync, 0) > 0)
-                AppServices.QueueImmediateRemoteSync("directory media description batch");
+                AppServices.QueueDescriptionSync();
         }
         (CloudVisionAnalysisService Service, OpenAiCompatibleCloudVisionAnalyzer Analyzer, CloudVisionRunPolicy Policy, string ProviderLabel, bool IsLocal)? photo = null, video = null;
         try
@@ -181,13 +193,14 @@ public sealed class DirectoryMediaDescriptionWindow : Window
                     while (await timer.WaitForNextTickAsync(descriptionSyncCancellation.Token).ConfigureAwait(false))
                     {
                         FlushDescriptionSync();
-                        await RefreshSyncStatusAsync(descriptionSyncCancellation.Token).ConfigureAwait(false);
+                        await run.ObserveAsync(() => RefreshSyncStatusAsync(descriptionSyncCancellation.Token), "status_refresh").ConfigureAwait(false);
                     }
                 }
                 catch (OperationCanceledException) when (descriptionSyncCancellation.IsCancellationRequested) { }
             }, descriptionSyncCancellation.Token);
             _status.Text = "准备边发现边描述…";
-            await RefreshSyncStatusAsync(token);
+            await run.ObserveAsync(() => RefreshSyncStatusAsync(token), "status_refresh");
+            token.ThrowIfCancellationRequested();
             photo = AppServices.CreateCloudVisionService(AiFeatureIds.PhotoAnalysis);
             video = AppServices.CreateCloudVisionService(AiFeatureIds.VideoSummary);
             if (photo is null && video is null)
@@ -196,10 +209,13 @@ public sealed class DirectoryMediaDescriptionWindow : Window
             if (MessageBox.Show(this, $"{modelText}\n\n将处理所选目录及全部子目录中的照片和视频，边发现边描述，数量持续更新。已有结果跳过；云端模型可能产生费用。\n\n是否开始？",
                 "确认目录媒体描述", MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No) != MessageBoxResult.Yes) return;
             ICloudVisionAnalyzer? photoAnalyzer = photo?.Analyzer;
+            var photoAssets = AppServices.ServiceMode ? AppServices.Gateway as IMediaAssetGateway : null;
+            using var preparedInputs = photoAnalyzer is not null && photoAssets is not null
+                ? new PreparedPhotoInputs(photoAssets, Path.Combine(AppPaths.DataRoot, "description-input", "prefetch")) : null;
             if (photoAnalyzer is not null)
                 photoAnalyzer = new MediaDescriptionBatch.PhotoInputAnalyzer(photoAnalyzer, Path.Combine(AppPaths.DataRoot, "description-input"),
                     AppServices.ServiceMode ? AppServices.Gateway as IMediaAssetGateway
-                        ?? throw new InvalidOperationException("索引服务未提供原图读取接口。") : null);
+                        ?? throw new InvalidOperationException("索引服务未提供原图读取接口。") : null, preparedInputs);
             var photoService = photoAnalyzer is null ? null : new CloudVisionAnalysisService(AppServices.CloudVisionRepository,
                 photoAnalyzer, AppServices.Geocoder, AppServices.People,
                 databaseWork: (work, ct) => UiWork.RunDatabaseAsync(work, ct), allowConcurrent: photo?.IsLocal == true);
@@ -223,15 +239,21 @@ public sealed class DirectoryMediaDescriptionWindow : Window
                 catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
                 catch (DescriptionBudgetExceededException) { throw; }
                 catch (AnalysisBudgetExceededException) { throw; }
-                catch (Exception exception) { throw AnalysisStageException.Wrap(exception is Microsoft.Data.Sqlite.SqliteException ? AnalysisStage.Save : AnalysisStage.Preprocess, exception); }
+                catch (Exception exception) { throw AnalysisStageException.Wrap(AnalysisStage.Preprocess, exception); }
             }, async (item, ct) =>
             {
                 var stage = AnalysisStage.Preprocess;
                 try
                 {
                 if (video is null) throw new AnalysisStageException(AnalysisStage.Model, "model_not_configured", false);
-                if (await UiWork.ReadSnapshotAsync("Descriptions.VideoState", AppServices.Db, reader => new Picer.Core.Video.VideoRepository(reader).HasCurrentSummary(item), ct)) return true;
-                var frames = await UiWork.ReadSnapshotAsync("Descriptions.VideoState", AppServices.Db, reader => new Picer.Core.Video.VideoRepository(reader).GetKeyframes(item.Id, existingOnly: !AppServices.ServiceMode), ct);
+                var state = await UiWork.ReadSnapshotAsync("Descriptions.VideoStateAndFrames", AppServices.Db, reader =>
+                {
+                    var repository = new Picer.Core.Video.VideoRepository(reader);
+                    var current = repository.HasCurrentSummary(item);
+                    return (Current: current, Frames: current ? [] : repository.GetKeyframes(item.Id, existingOnly: !AppServices.ServiceMode));
+                }, ct);
+                if (state.Current) return true;
+                var frames = state.Frames;
                 if (frames.Count == 0)
                 {
                     var backend = AppPaths.LoadIndexBackend();
@@ -243,7 +265,7 @@ public sealed class DirectoryMediaDescriptionWindow : Window
                     await UiWork.RunDatabaseAsync(() => AppServices.Videos.SaveKeyframes(item.Id, frames, item), ct);
                 }
                 stage = AnalysisStage.Preprocess;
-                if (AppServices.ServiceMode) frames = await VideoViewModel.MaterializeRemoteFramesAsync(AppServices.GetClientServices(), frames, item.Id, ct);
+                if (AppServices.ServiceMode) frames = await VideoViewModel.MaterializeRemoteFramesAsync(AppServices.GetClientServices(), frames, item, ct, maximumUsableFrames: 12);
                 stage = AnalysisStage.Model;
                 await AppServices.VideoSummaries.AnalyzeAsync(item, video!.Value.Analyzer, frames, ct, video.Value.Policy);
                 stage = AnalysisStage.Save;
@@ -253,16 +275,24 @@ public sealed class DirectoryMediaDescriptionWindow : Window
                 catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
                 catch (AnalysisBudgetExceededException) { throw; }
                 catch (Exception exception) { throw AnalysisStageException.Wrap(stage, exception); }
-            });
+            }, prefetchPhoto: preparedInputs is null ? null : preparedInputs.PrepareAsync);
             var concurrency = photo?.IsLocal == true ? (int)(_concurrency.SelectedItem ?? 2) : 1;
             var videoConcurrency = video?.IsLocal == true ? (int)(_concurrency.SelectedItem ?? 2) : 1;
             taskStage = AnalysisStage.Model;
             var discovery = DirectoryDescriptionDiscovery.DiscoverAsync(AppServices.Db, plan.Directory, retryPaths, token);
-            await runner.RunStreamingAsync(discovery, new Progress<string>(value => _status.Text = value), token, concurrency, videoConcurrency,
-                new Progress<MediaDescriptionFailure>(failure => _failures.Add(failure)));
+            await runner.RunStreamingAsync(discovery, run.CaptureProgress(new Progress<string>(value =>
+            {
+                if (ReferenceEquals(_run, run) && run.AcceptsProgress) _status.Text = value;
+            })), token, concurrency, videoConcurrency,
+                new Progress<MediaDescriptionFailure>(failure =>
+                {
+                    if (ReferenceEquals(_run, run) && !run.Terminal) _failures.Add(failure);
+                }), runId: run.Id);
+            run.CloseProgress();
             FlushDescriptionSync();
-            _status.Text += "；处理结束，失败项可再次运行。";
-            await RefreshSyncStatusAsync(token);
+            _status.Text = run.LatestProgress + "；处理结束，失败项可再次运行。";
+            await run.ObserveAsync(() => RefreshSyncStatusAsync(token), "status_refresh");
+            token.ThrowIfCancellationRequested();
         }
         catch (OperationCanceledException) when (_cancellation?.IsCancellationRequested == true) { _status.Text = "已取消；完成的照片和视频描述已保留，再次开始会自动跳过。"; }
         catch (DescriptionBudgetExceededException exception) { _status.Text = exception.Message; }
@@ -272,24 +302,33 @@ public sealed class DirectoryMediaDescriptionWindow : Window
         {
             var failure = AnalysisStageException.Wrap(taskStage, exception);
             _failures.Add(new(false, 0, plan.Directory, failure.ErrorCode, failure.Stage, failure.Retryable));
-            Picer.Core.Logging.AppLogger.Warn($"Directory description run failed; stage={failure.Stage}; errorType={exception.GetType().Name}; code={failure.ErrorCode}; retryable={failure.Retryable}");
+            Picer.Core.Logging.AnalysisDiagnosticLog.Warn($"Directory description run failed; stage={failure.Stage}; errorType={exception.GetType().Name}; code={failure.ErrorCode}; retryable={failure.Retryable}");
             _status.Text = $"描述任务未完成，错误代码：{failure.ErrorCode}。请查看失败清单并按提示重试。";
         }
         finally
         {
-            if (descriptionSyncCancellation is not null)
+            await run.FinishAsync(async () =>
             {
-                await descriptionSyncCancellation.CancelAsync();
-                try { await descriptionSyncTask; } catch (OperationCanceledException) { }
-                descriptionSyncCancellation.Dispose();
-            }
-            FlushDescriptionSync();
-            photo?.Analyzer.Dispose(); video?.Analyzer.Dispose();
-            _cancellation?.Dispose(); _cancellation = null;
-            _tree.IsEnabled = true; _cancel.IsEnabled = false;
-            _concurrency.IsEnabled = true;
-            _start.IsEnabled = _plan is not null;
-            _retry.IsEnabled = _failures.Any(failure => failure.Retryable);
+                if (descriptionSyncCancellation is not null)
+                    await run.ObserveAsync(() => descriptionSyncCancellation.CancelAsync(), "status_cancel");
+                await descriptionSyncTask;
+            }, () =>
+            {
+                run.Cleanup(FlushDescriptionSync, "sync_wakeup");
+                run.Cleanup(() => descriptionSyncCancellation?.Dispose(), "status_dispose");
+                run.Cleanup(() => photo?.Analyzer.Dispose(), "photo_dispose");
+                run.Cleanup(() => video?.Analyzer.Dispose(), "video_dispose");
+                run.Cleanup(() => _cancellation?.Dispose(), "token_dispose");
+            }, () =>
+            {
+                _cancellation = null;
+                _run = null;
+                _tree.IsEnabled = true; _cancel.IsEnabled = false;
+                _concurrency.IsEnabled = true;
+                _start.IsEnabled = _plan is not null;
+                _retry.IsEnabled = _failures.Any(failure => failure.Retryable);
+            });
+            Picer.Core.Logging.AnalysisDiagnosticLog.Info($"Directory description cleanup_completed; runId={run.Id}; cancelled={run.Cancelling}");
         }
     }
 }

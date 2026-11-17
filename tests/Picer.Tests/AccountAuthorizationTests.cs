@@ -66,6 +66,21 @@ public sealed class AccountAuthorizationTests : IDisposable
     }
 
     [Fact]
+    public void ClassificationCommitRequiresCurrentAuthorizationAndRequestedScope()
+    {
+        var entry = Enroll(true);
+        var actor = Assert.IsType<AuthorizedDevice>(_store.Authorize(entry.Session.AccessToken, PublicKey));
+        var writes = 0;
+        _store.ExecuteAuthorizedBackgroundWrite(actor, () => writes++, "index.write");
+        Assert.Equal(1, writes);
+        Assert.False(actor.Allows("analysis.run"));
+        Assert.Throws<UnauthorizedAccessException>(() => _store.ExecuteAuthorizedBackgroundWrite(actor, () => writes++, "analysis.run"));
+        _store.Revoke(entry.Account, entry.Session.GrantId);
+        Assert.Throws<UnauthorizedAccessException>(() => _store.ExecuteAuthorizedBackgroundWrite(actor, () => writes++, "index.write"));
+        Assert.Equal(1, writes);
+    }
+
+    [Fact]
     public void RefreshRetryIsIdempotentAndReuseRevokesFamily()
     {
         var entry = Enroll();
@@ -77,6 +92,42 @@ public sealed class AccountAuthorizationTests : IDisposable
         Assert.NotNull(_store.Authorize(refreshed.AccessToken, PublicKey));
         Assert.Throws<UnauthorizedAccessException>(() => _store.Refresh(entry.Session.RefreshToken, PublicKey, Guid.NewGuid().ToString("N")));
         Assert.Null(_store.Authorize(refreshed.AccessToken, PublicKey));
+    }
+
+    [Theory]
+    [InlineData(31)]
+    [InlineData(86400)]
+    public void LostRefreshResponseSurvivesTimeoutAndOfflineRecovery(int seconds)
+    {
+        var entry = Enroll();
+        var attempt = Guid.NewGuid().ToString("N");
+        var rotated = _store.Refresh(entry.Session.RefreshToken, PublicKey, attempt);
+        _clock.Advance(TimeSpan.FromSeconds(seconds));
+        var recovered = new AccountStore(_root, _clock).Refresh(entry.Session.RefreshToken, PublicKey, attempt);
+        Assert.Equal(rotated, recovered);
+        var current = _store.Refresh(recovered.RefreshToken, PublicKey, Guid.NewGuid().ToString("N"));
+        Assert.NotNull(_store.Authorize(current.AccessToken, PublicKey));
+    }
+
+    [Fact]
+    public void DelayedRefreshWithDifferentAttemptStillRevokesFamily()
+    {
+        var entry = Enroll();
+        var rotated = _store.Refresh(entry.Session.RefreshToken, PublicKey, Guid.NewGuid().ToString("N"));
+        _clock.Advance(TimeSpan.FromSeconds(31));
+        Assert.Throws<UnauthorizedAccessException>(() => _store.Refresh(entry.Session.RefreshToken, PublicKey, Guid.NewGuid().ToString("N")));
+        Assert.Null(_store.Authorize(rotated.AccessToken, PublicKey));
+    }
+
+    [Fact]
+    public void DelayedRefreshReceiptCannotRestoreExplicitlyRevokedDevice()
+    {
+        var entry = Enroll();
+        var attempt = Guid.NewGuid().ToString("N");
+        _store.Refresh(entry.Session.RefreshToken, PublicKey, attempt);
+        _clock.Advance(TimeSpan.FromSeconds(31));
+        _store.Revoke(entry.Account, entry.Session.GrantId);
+        Assert.Throws<UnauthorizedAccessException>(() => _store.Refresh(entry.Session.RefreshToken, PublicKey, attempt));
     }
 
     [Fact]
@@ -197,6 +248,15 @@ public sealed class AccountAuthorizationTests : IDisposable
         Assert.Equal("media.read", SpaceRoutePermissions.RequiredScope("GET", "/api/gateway/v1/video-keyframes/by-video/528/0"));
         Assert.Null(SpaceRoutePermissions.RequiredScope("POST", "/api/gateway/v1/video-keyframes/123"));
         Assert.Null(SpaceRoutePermissions.RequiredScope("GET", "/api/gateway/v1/video-keyframes/by-video/0/0"));
+    }
+
+    [Fact]
+    public void SelectedVideoDetailsRequireIndexReadWithoutOpeningOtherNestedRoutes()
+    {
+        Assert.Equal("index.read", SpaceRoutePermissions.RequiredScope("GET", "/api/gateway/v1/videos/123/details"));
+        Assert.Null(SpaceRoutePermissions.RequiredScope("POST", "/api/gateway/v1/videos/123/details"));
+        Assert.Null(SpaceRoutePermissions.RequiredScope("GET", "/api/gateway/v1/videos/0/details"));
+        Assert.Null(SpaceRoutePermissions.RequiredScope("GET", "/api/gateway/v1/videos/123/unknown"));
     }
 
     [Fact]

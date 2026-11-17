@@ -70,8 +70,8 @@ Name: "autostart"; Description: "登录 Windows 后自动运行驻留代理"; Fl
 Source: "{#Payload}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{group}\{#ProductTitle}"; Filename: "{app}\{#PrimaryExe}"; WorkingDir: "{app}"
-Name: "{autodesktop}\{#ProductTitle}"; Filename: "{app}\{#PrimaryExe}"; WorkingDir: "{app}"; Tasks: desktopicon
+Name: "{group}\{#ProductTitle}"; Filename: "{app}\{#PrimaryExe}"; WorkingDir: "{app}"; IconFilename: "{app}\{#PrimaryExe}"; AppUserModelID: "{#ProductId}"
+Name: "{autodesktop}\{#ProductTitle}"; Filename: "{app}\{#PrimaryExe}"; WorkingDir: "{app}"; IconFilename: "{app}\{#PrimaryExe}"; AppUserModelID: "{#ProductId}"; Tasks: desktopicon
 #if ProductKind == "agent"
 Name: "{userstartup}\Picer 媒体驻留代理"; Filename: "{app}\{#PrimaryExe}"; WorkingDir: "{app}"; Tasks: autostart
 #endif

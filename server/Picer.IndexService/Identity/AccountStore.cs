@@ -255,6 +255,17 @@ public sealed partial class AccountStore
         transaction.Commit();
     }
 
+    public void ExecuteAuthorizedBackgroundWrite(AuthorizedDevice expected, Action action, string requiredScope = "analysis.run")
+    {
+        _authorizationFence.EnterReadLock();
+        try
+        {
+            if (!expected.Allows(requiredScope) || !IsAuthorizationCurrent(expected)) throw new UnauthorizedAccessException("classification_authorization_revoked");
+            action();
+        }
+        finally { _authorizationFence.ExitReadLock(); }
+    }
+
     public T ExecuteAuthorizedWrite<T>(AuthorizedDevice expected, string token, Func<AuthorizedDevice, T> action)
     {
         _authorizationFence.EnterReadLock();

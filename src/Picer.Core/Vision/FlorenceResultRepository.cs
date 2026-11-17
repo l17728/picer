@@ -17,7 +17,7 @@ public sealed class FlorenceResultRepository(PicerDatabase database)
         using var command = database.Command("""
             SELECT i.id FROM images i WHERE i.status='active' AND NOT EXISTS (
                 SELECT 1 FROM florence_image_results f WHERE f.image_id=i.id AND f.task=$task
-                AND f.model_version=$model AND f.source_file_size=i.file_size AND f.source_modified_utc=i.modified_utc)
+                AND f.model_version=$model AND f.source_file_size=i.file_size AND picer_same_instant(f.source_modified_utc,i.modified_utc))
             ORDER BY i.id
             """);
         command.Parameters.AddWithValue("$task", task); command.Parameters.AddWithValue("$model", modelVersion);
@@ -27,7 +27,7 @@ public sealed class FlorenceResultRepository(PicerDatabase database)
     }
     public bool IsCurrent(ImageRecord image, string task, string modelVersion)
     {
-        using var command = database.Command("SELECT COUNT(*) FROM florence_image_results WHERE image_id=$id AND task=$task AND model_version=$model AND source_file_size=$size AND source_modified_utc=$modified");
+        using var command = database.Command("SELECT COUNT(*) FROM florence_image_results WHERE image_id=$id AND task=$task AND model_version=$model AND source_file_size=$size AND picer_same_instant(source_modified_utc,$modified)");
         command.Parameters.AddWithValue("$id", image.Id); command.Parameters.AddWithValue("$task", task); command.Parameters.AddWithValue("$model", modelVersion);
         command.Parameters.AddWithValue("$size", image.FileSize); command.Parameters.AddWithValue("$modified", image.ModifiedUtc.ToString("O"));
         return Convert.ToInt32(command.ExecuteScalar()) > 0;

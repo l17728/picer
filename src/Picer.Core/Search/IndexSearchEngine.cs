@@ -1,4 +1,4 @@
-using Microsoft.Data.Sqlite;
+﻿using Microsoft.Data.Sqlite;
 using Picer.Core.Data;
 using Picer.Core.Diagnostics;
 using Picer.Core.Models;
@@ -171,7 +171,7 @@ public static class IndexSearchEngine
         }
         if (filters.PersonId is > 0)
         {
-            conditions.Add("EXISTS (SELECT 1 FROM detected_faces pf JOIN face_person_assignments pa ON pa.face_id=pf.id WHERE pf.image_id=t.id AND pa.person_id=$personId AND pa.state='confirmed')");
+            conditions.Add("t.id IN (SELECT pf.image_id FROM detected_faces pf JOIN face_person_assignments pa ON pa.face_id=pf.id WHERE pa.person_id=$personId AND pa.state='confirmed')");
             parameters.Add(("personId", filters.PersonId.Value));
         }
         AddVisualConceptConditions(filters, conditions, parameters);
@@ -229,44 +229,8 @@ public static class IndexSearchEngine
         var conditions = new List<string>();
         var parameters = new List<(string Name, object Value)>();
 
-        if (!string.IsNullOrWhiteSpace(filters.Query))
-            AddTextCondition(filters.Query, conditions, parameters,
-                includeAuxiliary: HasAuxiliaryText(connection));
-        AddGeoConditions(filters, conditions, parameters);
-        if (filters.SourceId.HasValue && filters.SourceId.Value > 0)
-        {
-            conditions.Add("t.source_id = $sourceId");
-            parameters.Add(("sourceId", filters.SourceId.Value));
-        }
-        if (!filters.IncludeMissing)
-            conditions.Add("t.status = 'active'");
-        if (filters.TakenAfter.HasValue)
-        {
-            conditions.Add("t.taken_utc >= $takenAfter");
-            parameters.Add(("takenAfter", Fmt(filters.TakenAfter.Value)));
-        }
-        if (filters.TakenBefore.HasValue)
-        {
-            conditions.Add("t.taken_utc <= $takenBefore");
-            parameters.Add(("takenBefore", Fmt(filters.TakenBefore.Value)));
-        }
-        AddTimeOfDayCondition(filters, conditions);
-        AddIfInt(conditions, parameters, "t.width >= $minW", filters.MinWidth, "minW");
-        AddIfInt(conditions, parameters, "t.width <= $maxW", filters.MaxWidth, "maxW");
-        AddIfInt(conditions, parameters, "t.height >= $minH", filters.MinHeight, "minH");
-        AddIfInt(conditions, parameters, "t.height <= $maxH", filters.MaxHeight, "maxH");
-        AddIfLong(conditions, parameters, "t.file_size >= $minFS", filters.MinFileSize, "minFS");
-        AddIfLong(conditions, parameters, "t.file_size <= $maxFS", filters.MaxFileSize, "maxFS");
-        if (!string.IsNullOrEmpty(filters.CameraBrand))
-        {
-            conditions.Add("LOWER(t.camera) LIKE $cam");
-            parameters.Add(("cam", "%" + filters.CameraBrand.ToLowerInvariant() + "%"));
-        }
-        if (filters.TagId is > 0)
-        {
-            conditions.Add("EXISTS (SELECT 1 FROM image_tags it WHERE it.image_id = t.id AND it.tag_id = $tagId)");
-            parameters.Add(("tagId", filters.TagId.Value));
-        }
+        AddFilterConditions(filters, conditions, parameters,
+            includeAuxiliaryText: HasAuxiliaryText(connection));
 
         var whereClause = conditions.Count > 0 ? "WHERE " + string.Join(" AND ", conditions) : "";
         var sql = $"SELECT COUNT(*) FROM {FromClause(filters)} {whereClause}";
@@ -310,7 +274,7 @@ public static class IndexSearchEngine
         }
         if (filters.PersonId is > 0)
         {
-            conditions.Add("EXISTS (SELECT 1 FROM detected_faces pf JOIN face_person_assignments pa ON pa.face_id=pf.id WHERE pf.image_id=t.id AND pa.person_id=$personId AND pa.state='confirmed')");
+            conditions.Add("t.id IN (SELECT pf.image_id FROM detected_faces pf JOIN face_person_assignments pa ON pa.face_id=pf.id WHERE pa.person_id=$personId AND pa.state='confirmed')");
             parameters.Add(("personId", filters.PersonId.Value));
         }
         AddVisualConceptConditions(filters, conditions, parameters);
@@ -351,17 +315,19 @@ public static class IndexSearchEngine
         else
             conditions.Add("""
                 (t.id IN (SELECT rowid FROM images_fts WHERE images_fts MATCH $ftsQuery)
-                 OR EXISTS (SELECT 1 FROM cloud_vision_analyses cv
-                            WHERE cv.image_id=t.id AND cv.status='completed'
+                 OR t.id IN (SELECT cv.image_id FROM cloud_vision_analyses cv
+                            WHERE cv.status='completed'
                               AND (cv.summary LIKE $cloudQuery OR cv.result_json LIKE $cloudQuery))
-                 OR EXISTS (SELECT 1 FROM florence_image_results fr
-                            WHERE fr.image_id=t.id AND fr.state='accepted' AND fr.result_text LIKE $cloudQuery)
-                 OR EXISTS (SELECT 1 FROM image_locations il
-                            WHERE il.image_id=t.id AND il.search_text LIKE $cloudQuery)
-                 OR EXISTS (SELECT 1 FROM image_tags it JOIN tags tag ON tag.id=it.tag_id
-                            WHERE it.image_id=t.id AND tag.name LIKE $cloudQuery)
-                 OR EXISTS (SELECT 1 FROM scene_group_descriptions sg, json_each(sg.image_ids_json) member
-                            WHERE member.value=t.id AND sg.state='accepted' AND sg.provider<>'picer-local-layout'
+                 OR t.id IN (SELECT fr.image_id FROM florence_image_results fr
+                            WHERE fr.state='accepted' AND fr.result_text LIKE $cloudQuery)
+                 OR t.id IN (SELECT il.image_id FROM image_locations il
+                            WHERE il.search_text LIKE $cloudQuery)
+                 OR t.id IN (SELECT it.image_id FROM image_tags it JOIN tags tag ON tag.id=it.tag_id
+                            WHERE tag.name LIKE $cloudQuery)
+                 OR t.id IN (SELECT ai.image_id FROM album_images ai JOIN albums album ON album.id=ai.album_id
+                            WHERE album.name LIKE $cloudQuery OR album.description LIKE $cloudQuery)
+                 OR t.id IN (SELECT CAST(member.value AS INTEGER) FROM scene_group_descriptions sg, json_each(sg.image_ids_json) member
+                            WHERE sg.state='accepted' AND sg.provider<>'picer-local-layout'
                               AND (sg.scene_name LIKE $cloudQuery OR sg.summary LIKE $cloudQuery OR sg.search_terms_json LIKE $cloudQuery))
                  OR t.id IN (SELECT rowid FROM media_text_fts WHERE media_text_fts MATCH $ftsQuery))
                 """);
@@ -377,6 +343,7 @@ public static class IndexSearchEngine
                 OR EXISTS(SELECT 1 FROM florence_image_results WHERE state='accepted')
                 OR EXISTS(SELECT 1 FROM image_locations WHERE search_text IS NOT NULL AND search_text <> '')
                 OR EXISTS(SELECT 1 FROM image_tags)
+                OR EXISTS(SELECT 1 FROM album_images)
                 OR EXISTS(SELECT 1 FROM scene_group_descriptions WHERE state='accepted')
                 OR EXISTS(SELECT 1 FROM media_text_fts)
             """;

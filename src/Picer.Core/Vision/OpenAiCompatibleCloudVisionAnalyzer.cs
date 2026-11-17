@@ -48,8 +48,10 @@ public sealed class OpenAiCompatibleCloudVisionAnalyzer : ICloudVisionAnalyzer, 
 
     public async Task<CloudVisionResult> AnalyzeAsync(CloudVisionRequest request, CancellationToken cancellationToken)
     {
+        var traceId = AnalysisTrace.Current ?? Guid.NewGuid().ToString("N");
+        var timer = System.Diagnostics.Stopwatch.StartNew();
         var imageDataUrl = await CreateSanitizedImageDataUrlAsync(request.Image, cancellationToken).ConfigureAwait(false);
-        AppLogger.Info($"Photo analysis image preprocessing completed; imageId={request.Image.Id}");
+        AppLogger.Info($"Photo analysis image preprocessing completed; requestId={traceId}; imageId={request.Image.Id}; elapsedMs={timer.ElapsedMilliseconds}");
         var contextJson = JsonSerializer.Serialize(new
         {
             location = request.Location,
@@ -77,14 +79,18 @@ public sealed class OpenAiCompatibleCloudVisionAnalyzer : ICloudVisionAnalyzer, 
             }
         };
         using var message = new HttpRequestMessage(HttpMethod.Post, _options.Endpoint);
+        message.Headers.Add("X-Picer-Request-Id", traceId);
         if (!string.IsNullOrWhiteSpace(_options.ApiKey))
             message.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _options.ApiKey);
         message.Content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
-        AppLogger.Info($"Photo analysis model request started; provider={_options.Provider}; model={_options.Model}");
+        var networkStarted = timer.ElapsedMilliseconds;
+        AppLogger.Info($"Photo analysis model request started; requestId={traceId}");
         using var response = await _client.SendAsync(message, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
-        AppLogger.Info($"Photo analysis model response received; status={(int)response.StatusCode}");
+        var headersReceived = timer.ElapsedMilliseconds;
+        AppLogger.Info($"Photo analysis model response headers; requestId={traceId}; status={(int)response.StatusCode}; headersMs={headersReceived - networkStarted}");
         response.EnsureSuccessStatusCode();
         var responseText = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+        AppLogger.Info($"Photo analysis model response completed; requestId={traceId}; bodyMs={timer.ElapsedMilliseconds - headersReceived}; networkMs={timer.ElapsedMilliseconds - networkStarted}; bytes={Encoding.UTF8.GetByteCount(responseText)}; elapsedMs={timer.ElapsedMilliseconds}");
         using var envelope = TryParseJson(responseText);
         var content = envelope is not null
             ? envelope.RootElement.GetProperty("choices")[0].GetProperty("message").GetProperty("content").GetString()
@@ -167,6 +173,8 @@ public sealed class OpenAiCompatibleCloudVisionAnalyzer : ICloudVisionAnalyzer, 
 
     private async Task<string> CreateSanitizedImageDataUrlAsync(ImageRecord imageRecord, CancellationToken cancellationToken)
     {
+        var step = "input_open";
+        var timer = System.Diagnostics.Stopwatch.StartNew();
         try
         {
             await using var source = _imageStreamFactory is null
@@ -180,12 +188,15 @@ public sealed class OpenAiCompatibleCloudVisionAnalyzer : ICloudVisionAnalyzer, 
             Stream decodeSource = source;
             if (buffered is not null)
             {
+                step = "input_buffer";
                 await source.CopyToAsync(buffered, cancellationToken).ConfigureAwait(false);
                 AppLogger.Info($"Photo analysis input buffered; imageId={imageRecord.Id}; bytes={buffered.Length}");
                 buffered.Position = 0;
                 decodeSource = buffered;
             }
+            step = "image_decode";
             using var image = await RasterImage.LoadAsync(decodeSource, cancellationToken).ConfigureAwait(false);
+            step = "image_resize";
             if (Math.Max(image.Width, image.Height) > _options.MaximumImageEdge)
             {
                 var scale = (double)_options.MaximumImageEdge / Math.Max(image.Width, image.Height);
@@ -193,13 +204,20 @@ public sealed class OpenAiCompatibleCloudVisionAnalyzer : ICloudVisionAnalyzer, 
                     Math.Max(1, (int)(image.Height * scale)));
             }
             image.StripMetadata();
+            step = "image_encode";
             await using var output = new MemoryStream();
             await image.SaveAsJpegAsync(output, 82, cancellationToken).ConfigureAwait(false);
             return "data:image/jpeg;base64," + Convert.ToBase64String(output.ToArray());
         }
-        catch (Exception exception) when (exception is not OperationCanceledException)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            AppLogger.Warn($"Photo analysis preprocessing failed; imageId={imageRecord.Id}; type={exception.GetType().Name}; inner={exception.InnerException?.GetType().Name ?? "none"}; hresult=0x{exception.HResult:X8}");
+            AppLogger.Info($"Photo preprocessing cancelled; attemptId={AnalysisTrace.Current ?? "none"}; imageId={imageRecord.Id}; step={step}; elapsedMs={timer.ElapsedMilliseconds}");
+            throw;
+        }
+        catch (Exception exception)
+        {
+            AnalysisFailureDiagnostics.Record(step, imageRecord.Id, exception, cancellationToken.IsCancellationRequested);
+            AppLogger.Warn($"Photo preprocessing failed; attemptId={AnalysisTrace.Current ?? "none"}; imageId={imageRecord.Id}; step={step}; elapsedMs={timer.ElapsedMilliseconds}");
             throw;
         }
     }

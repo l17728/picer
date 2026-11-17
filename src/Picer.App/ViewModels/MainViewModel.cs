@@ -1,4 +1,4 @@
-using System.Collections.ObjectModel;
+﻿using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.IO;
 using System.Net.Http;
@@ -90,7 +90,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private string _searchQuery = "";
 
     [ObservableProperty]
-    private bool _includeSuggestedClassifications;
+    private bool _includeSuggestedClassifications = true;
 
     [ObservableProperty]
     private bool _isQuestionMode;
@@ -372,7 +372,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _searchDebounce.Stop();
         if (string.IsNullOrWhiteSpace(value))
         {
-            if (IncludeSuggestedClassifications) IncludeSuggestedClassifications = false;
             _ = ApplySearchAndFilterAsync();
         }
         else
@@ -382,11 +381,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
     }
     partial void OnIncludeSuggestedClassificationsChanged(bool value) => _ = ApplySearchAndFilterAsync();
-    partial void OnAiQuestionInputChanged(string value)
-    {
-        if (string.IsNullOrWhiteSpace(value) && IncludeSuggestedClassifications)
-            IncludeSuggestedClassifications = false;
-    }
     partial void OnIsQuestionModeChanged(bool value)
     {
         if (value && string.IsNullOrWhiteSpace(QuestionAnswerText))
@@ -544,6 +538,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _searchCts?.Cancel();
         _aiQuestionCts?.Cancel();
         _aiQuestionCts?.Dispose();
+        _aiQuestionCts = null;
         var cts = _searchCts = new CancellationTokenSource();
         var version = Interlocked.Increment(ref _searchVersion);
         var sourceId = SelectedSource is null || SelectedSource.IsAll ? (long?)null : SelectedSource.SourceId;
@@ -646,9 +641,23 @@ public partial class MainViewModel : ObservableObject, IDisposable
         try
         {
             StatusText = "AI 问答：正在理解问题…";
+            var finalApplied = false;
             var progress = new Progress<(string Stage, int Percent)>(value =>
             {
+                if (version != _searchVersion || token.IsCancellationRequested || finalApplied) return;
                 ProgressValue = value.Percent; StatusText = $"AI 问答：{value.Stage}（{value.Percent}%）";
+            });
+            var previews = new Progress<AiMediaAnswer>(candidate =>
+            {
+                if (version != _searchVersion || token.IsCancellationRequested || finalApplied) return;
+                QuestionAnswerText = "## 索引候选（正在补充语义结果）\n\n" + candidate.ConfirmedMarkdown;
+                MatchedCount = candidate.Photos.Count;
+                _searchCursor = null; HasMoreResults = false;
+                Images.Clear(); _searchLoadedRecords.Clear(); _searchLoadedRecords.AddRange(candidate.Photos);
+                foreach (var photo in candidate.Photos) Images.Add(new ImageItemViewModel(photo, token, _services) { RecallEvidence = candidate.PhotoRecallSource(photo.Id) });
+                AiVideoResults.Clear();
+                foreach (var video in candidate.Videos) AiVideoResults.Add(new AiVideoResultViewModel(video));
+                OnPropertyChanged(nameof(TotalCount)); OnPropertyChanged(nameof(ResultsSummary));
             });
             AppLogger.Info($"AiQuestion started; includeVideos={includeVideos}; queryLength={question.Length}");
             // AiMediaRetrievalService performs synchronous SQLite work before
@@ -657,40 +666,26 @@ public partial class MainViewModel : ObservableObject, IDisposable
             var answer = await Task.Run(async () =>
             {
                 using var queryDatabase = _db.OpenIndependentConnection();
+                using var classifications = new ClassificationV2Client();
                 var service = new AiMediaRetrievalService(queryDatabase, new Picer.Core.People.PeopleService(queryDatabase),
-                    new VideoRepository(queryDatabase), new CloudVisionRepository(queryDatabase), chat);
+                    new VideoRepository(queryDatabase), new CloudVisionRepository(queryDatabase), chat,
+                    semanticRecall: new AiSemanticRecall(_db, _services.ClipFactory), classificationSource: classifications.RetrievalEvidence);
                 return await service.AskAsync(question, includeVideos, DateTime.Today, progress, token,
-                    includeSuggestedClassifications);
+                    includeSuggestedClassifications, previews);
             }, token);
             if (version != _searchVersion || token.IsCancellationRequested) return;
+            finalApplied = true;
             QuestionAnswerText = answer.Markdown;
-            // Stream only the clearly labelled explanation; verified results remain immutable.
-            if (answer.Photos.Count + answer.Videos.Count > 0 && !string.IsNullOrWhiteSpace(answer.AiExplanation))
-            {
-                StatusText = "AI 问答：正在流式生成解释，程序确认结果已保留…";
-                var streamed = new System.Text.StringBuilder();
-                try
-                {
-                    await foreach (var chunk in chat.StreamAsync(
-                        "你只整理给定的 AI 解释材料。它不是检索证据；不得新增媒体、人物、地点或数量，不得重写程序确认结果。不确定的判断必须保留不确定性。直接输出中文解释。",
-                        answer.AiExplanation, 900, token))
-                    {
-                        if (version != _searchVersion || token.IsCancellationRequested) return;
-                        streamed.Append(chunk);
-                        QuestionAnswerText = AiMediaAnswer.ComposeMarkdown(answer.ConfirmedMarkdown, streamed.ToString());
-                        await Dispatcher.Yield(DispatcherPriority.Background);
-                    }
-                }
-                catch (Exception streamException) when (streamException is HttpRequestException or InvalidDataException)
-                {
-                    AppLogger.Warn($"AiQuestion explanation stream fallback: {streamException.GetType().Name}");
-                    QuestionAnswerText = answer.Markdown;
-                }
-            }
+            // Present verified media immediately; do not ask a second model to rewrite the explanation.
             MatchedCount = answer.Photos.Count;
             _searchCursor = null; HasMoreResults = false;
             Images.Clear(); _searchLoadedRecords.Clear(); _searchLoadedRecords.AddRange(answer.Photos);
             var photoItems = await BuildBurstAwareItemsAsync(answer.Photos, token);
+            foreach (var item in photoItems)
+            {
+                item.RecallEvidence = answer.PhotoRecallSource(item.Id);
+                foreach (var member in item.BurstMembers) member.RecallEvidence = answer.PhotoRecallSource(member.Id);
+            }
             await UiWork.AddInBatchesAsync(photoItems, Images.Add, batchSize: 8, cancellationToken: token);
             AiVideoResults.Clear();
             foreach (var video in answer.Videos) AiVideoResults.Add(new AiVideoResultViewModel(video));
@@ -1230,7 +1225,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private void ClearSearch()
     {
         SearchQuery = "";
-        IncludeSuggestedClassifications = false;
+        IncludeSuggestedClassifications = true;
         _searchDebounce.Stop();
         _ = ApplySearchAndFilterAsync();
     }

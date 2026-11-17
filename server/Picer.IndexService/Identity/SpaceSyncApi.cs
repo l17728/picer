@@ -4,7 +4,7 @@ using Picer.Core.Data;
 
 namespace Picer.IndexService.Identity;
 
-public sealed class SpaceSyncApi(AccountStore accounts) : IDisposable
+public sealed partial class SpaceSyncApi(AccountStore accounts) : IDisposable
 {
     private readonly SemaphoreSlim _admission = new(4, 4);
     public async Task<IResult> WaitForNotificationAsync(HttpContext context, SpaceRuntimePool.Runtime runtime, AuthorizedDevice device, string accessToken)
@@ -115,21 +115,27 @@ public sealed class SpaceSyncApi(AccountStore accounts) : IDisposable
         {
             using var intake = CancellationTokenSource.CreateLinkedTokenSource(context.RequestAborted);
             intake.CancelAfter(TimeSpan.FromSeconds(30));
-            var payload = await ReadAsync(context, intake.Token);
+            var payload = await ReadAsync(context, intake.Token,
+                path == "/api/sync/v2/descriptions/batch" ? DescriptionUploadBatch.MaxBytes : 8 * 1024 * 1024);
             await runtime.MutationGate.WaitAsync(intake.Token);
             try { return accounts.ExecuteAuthorizedWrite(device, accessToken, current =>
             {
                 using var database = runtime.OpenDatabase();
-                if (path == "/api/sync/v2/descriptions")
+                if (path is "/api/sync/v2/descriptions" or "/api/sync/v2/descriptions/batch")
                 {
                     if (current.Kind != "gui") return Results.StatusCode(403);
-                    return Results.Json(database.AcceptDescriptionUpload(DeviceAuthorization.ReadDocument<DescriptionUpload>(payload)));
+                    context.Response.Headers[DescriptionUploadBatch.CapabilityHeader] = "1";
+                    if (path == "/api/sync/v2/descriptions/batch")
+                        return Results.Json(database.AcceptDescriptionBatch(DeviceAuthorization.ReadDocument<DescriptionUploadBatch>(payload, DescriptionUploadBatch.MaxBytes)));
+                    return Results.Json(database.AcceptDescriptionUpload(DeviceAuthorization.ReadDocument<DescriptionUpload>(payload, 8 * 1024 * 1024)));
                 }
                 if (path is "/api/sync/v1/metadata-edits" or "/api/sync/v1/face-review-decisions")
                     return ApplyMirrorEdit(context, path, payload, database);
                 var receiver = new SpaceSyncReceiver(database, current);
                 return path switch
                 {
+                    "/api/sync/v2/classification-results" => Results.Json(receiver.ImportClassification(DeviceAuthorization.ReadDocument<Picer.Core.Classification.ClassificationTransfer>(payload))),
+                    "/api/sync/v2/classification-results/read" => Results.Json(receiver.ReadClassificationReceipt(DeviceAuthorization.ReadDocument<Picer.Core.Classification.ClassificationTransferRead>(payload))),
                     "/api/sync/v2/publishers" => (IResult)Results.Json(receiver.Register(DeviceAuthorization.ReadDocument<SpacePublisherRequest>(payload))),
                     "/api/sync/v2/media-reference" => Results.Json(receiver.ResolvePublishedMedia(DeviceAuthorization.ReadDocument<SpaceMediaReferenceRequest>(payload))),
                     "/api/sync/v2/rebaseline" => Results.Json(receiver.Rebaseline(DeviceAuthorization.ReadDocument<SpaceRebaselineRequest>(payload))),
@@ -163,7 +169,7 @@ public sealed class SpaceSyncApi(AccountStore accounts) : IDisposable
             }); }
             finally { runtime.MutationGate.Release(); }
         }
-        catch (InvalidOperationException exception) when (exception.Message is "space_epoch_reset_required" or "publisher_epoch_reset_required" or
+        catch (InvalidOperationException exception) when (exception.Message.StartsWith("classification_", StringComparison.Ordinal) || exception.Message is "space_epoch_reset_required" or "publisher_epoch_reset_required" or
             "sync_sequence_gap" or "sync_sequence_conflict" or "space_fenced" or "identity_adoption_conflict" or "too_many_active_inspections" or "inspection_receipt_conflict" or "video_ownership_review_changed" or "video_ownership_review_missing" or
             "metadata_conflict_changed" or "metadata_conflict_missing" or "metadata_conflict_resolution_changed" or "metadata_conflict_entity_unavailable" or
             "video_face_ownership_review_changed" or "video_face_review_geometry_changed" or "video_face_missing" or "video_content_changed" or "video_source_ownership_ambiguous" or

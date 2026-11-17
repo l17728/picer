@@ -28,7 +28,7 @@ public sealed partial class PicerDatabase
     {
         var size = version.Photo?.SourceFileSize ?? version.Video?.SourceFileSize;
         var modified = version.Photo?.SourceModifiedUtc ?? version.Video?.SourceModifiedUtc;
-        if (!DateTimeOffset.TryParse(modified, out var timestamp)) return false;
+        if (!SourceTimestamp.TryParse(modified, out var timestamp)) return false;
         if (version.Kind == "image" && version.Photo is { Status: "completed" } photo && version.Video is null && photo.ImageId == version.MediaId)
         {
             var image = GetImage(version.MediaId);
@@ -55,6 +55,7 @@ public sealed partial class PicerDatabase
             var canonical = CanonicalDescriptionVideo(video);
             version = CreateDescriptionVersion("video", canonical.VideoId, version.Sha256, null, canonical);
         }
+        if (IsDescriptionTombstoned(version.VersionId)) return;
         using var command = Command("INSERT OR IGNORE INTO description_versions VALUES($version,$kind,$id,$epoch,$payload)");
         command.Parameters.AddWithValue("$version", version.VersionId);
         command.Parameters.AddWithValue("$kind", version.Kind);
@@ -64,12 +65,14 @@ public sealed partial class PicerDatabase
         command.ExecuteNonQuery();
     }
 
-    public IReadOnlyList<DescriptionVersion> GetDescriptionVersions()
+    public IReadOnlyList<DescriptionVersion> GetDescriptionVersions(IReadOnlySet<long>? imageIds = null, IReadOnlySet<long>? videoIds = null)
     {
         var versions = new List<DescriptionVersion>();
-        using (var command = Command("SELECT payload FROM description_versions WHERE epoch=$epoch ORDER BY version_id"))
+        using (var command = Command("SELECT payload FROM description_versions WHERE epoch=$epoch AND ($images IS NULL OR kind='image' AND media_id IN (SELECT value FROM json_each($images)) OR kind='video' AND media_id IN (SELECT value FROM json_each($videos))) ORDER BY version_id"))
         {
             command.Parameters.AddWithValue("$epoch", DescriptionEpoch());
+            command.Parameters.AddWithValue("$images", imageIds is null ? DBNull.Value : JsonSerializer.Serialize(imageIds));
+            command.Parameters.AddWithValue("$videos", videoIds is null ? DBNull.Value : JsonSerializer.Serialize(videoIds));
             using var rows = command.ExecuteReader();
             while (rows.Read()) versions.Add(JsonSerializer.Deserialize<DescriptionVersion>(rows.GetString(0))!);
         }
@@ -77,15 +80,16 @@ public sealed partial class PicerDatabase
         // have no history rows until the next write. Include those current rows
         // in the read contract so a new client does not invent a local-only
         // version merely by receiving an older server's persisted description.
-        foreach (var photo in GetAllMirroredCloudVisionAnalyses())
+        foreach (var photo in imageIds is null ? GetAllMirroredCloudVisionAnalyses() : imageIds.SelectMany(id => GetAllMirroredCloudVisionAnalyses(id, null)))
         {
             var image = GetImage(photo.ImageId);
             versions.Add(CreateDescriptionVersion("image", photo.ImageId, image?.ContentSha256 ?? image?.Sha256, photo, null));
         }
         var repository = new VideoRepository(this);
-        foreach (var video in GetAllMirroredVideoSummaries())
+        foreach (var video in videoIds is null ? GetAllMirroredVideoSummaries() : videoIds.SelectMany(id => GetAllMirroredVideoSummaries(repository.GetContentId(id))))
             versions.Add(CreateDescriptionVersion("video", video.VideoId, repository.Get(video.VideoId)?.Sha256, null, video));
-        return versions.Where(IsCurrentDescriptionVersion).DistinctBy(version => version.VersionId)
+        var tombstones = ReadDescriptionTombstones();
+        return versions.Where(IsCurrentDescriptionVersion).Where(version => !tombstones.Contains(version.VersionId)).DistinctBy(version => version.VersionId)
             .OrderBy(version => version.VersionId, StringComparer.Ordinal).ToArray();
     }
 
@@ -132,7 +136,7 @@ public sealed partial class PicerDatabase
     }
 
     private static DateTimeOffset DescriptionTime(DescriptionVersion version) =>
-        DateTimeOffset.TryParse(version.Photo?.UpdatedUtc ?? version.Video?.UpdatedUtc, out var time) ? time : DateTimeOffset.MinValue;
+        SourceTimestamp.TryParse(version.Photo?.UpdatedUtc ?? version.Video?.UpdatedUtc, out var time) ? time : DateTimeOffset.MinValue;
 
     private GatewayVideoSummary CanonicalDescriptionVideo(GatewayVideoSummary video)
     {
@@ -146,7 +150,13 @@ public sealed partial class PicerDatabase
     {
         var image = GetImage(imageId);
         var description = new Picer.Core.Vision.CloudVisionRepository(this).GetLatestCompleted(imageId);
-        if (image is null || description is null) return;
+        if (image is null) return;
+        if (description is null)
+        {
+            new Picer.Core.Search.MediaTextIndexRepository(this).UpsertImage(image,
+                [image.Path, image.Camera, image.Gps, image.TakenUtc?.ToString("O")], "index", transaction);
+            return;
+        }
         var active = description.Value;
         var result = active.Result;
         new Picer.Core.Search.MediaTextIndexRepository(this).UpsertImage(image,

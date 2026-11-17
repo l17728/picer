@@ -22,6 +22,9 @@ internal sealed partial class AgentApplication
     {
         using var foreground = _maintenanceActivity.EnterForeground();
         var id = request.GetProperty("requestId").GetString()!;
+        using var trace = new Picer.Core.Logging.MediaReadTrace("agent-media", traceId:
+            request.TryGetProperty("traceId", out var traceValue) && traceValue.ValueKind == JsonValueKind.String ? traceValue.GetString() : null);
+        trace.Mark("received");
         var size = request.GetProperty("previewSize").GetInt32();
         var keyframe = request.TryGetProperty("keyframe", out var keyframeValue) && keyframeValue.ValueKind == JsonValueKind.True;
         var gate = keyframe ? _keyframeReaders : size == 1280 ? _analysisReaders : size > 0 ? _previewReaders : _mediaReaders;
@@ -34,6 +37,7 @@ internal sealed partial class AgentApplication
             using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
             deadline.CancelAfter(TimeSpan.FromMinutes(2));
             await gate.WaitAsync(deadline.Token); entered = true;
+            trace.Mark("slot_admitted");
             var queueMs = elapsed.ElapsedMilliseconds;
             if (_accountClient is { } account) socket = await account.ConnectWebSocketAsync("api/agent/v1/media/" + id, deadline.Token);
             else
@@ -44,9 +48,10 @@ internal sealed partial class AgentApplication
                 var endpoint = new UriBuilder(settings.ServiceUrl) { Scheme = "wss", Path = "/api/agent/v1/media/" + id };
                 await socket.ConnectAsync(endpoint.Uri, deadline.Token);
             }
+            trace.Mark("socket_connected");
             await MediaFileSession.ServeAsync(socket, request.GetProperty("path").GetString()!, _roots, size,
                 Mime(request.GetProperty("path").GetString()!), _mediaPreviews,
-                metrics => Log($"media block; requestId={id}; queueMs={queueMs}; {metrics}"), token, _mediaLeases,
+                metrics => Picer.Core.Logging.AnalysisDiagnosticLog.Info($"media block; trace={trace.Id}; queueMs={queueMs}; {metrics}"), token, _mediaLeases,
                 request.TryGetProperty("expectedETag", out var expected) && expected.ValueKind == JsonValueKind.String ? expected.GetString() : null,
                 request.TryGetProperty("keepLease", out var keep) && keep.GetBoolean(),
                 request.TryGetProperty("sourceFingerprint", out var fingerprint) && fingerprint.ValueKind == JsonValueKind.Object
@@ -54,7 +59,7 @@ internal sealed partial class AgentApplication
         }
         catch (Exception exception) when (exception is IOException or InvalidDataException or UnauthorizedAccessException or OperationCanceledException or WebSocketException or ArgumentException)
         {
-            Log($"media closed; requestId={id}; elapsedMs={elapsed.ElapsedMilliseconds}; reason={exception.GetType().Name}");
+            trace.Failure(exception);
             if (socket?.State == WebSocketState.Open)
             {
                 try { using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(2)); await MediaWire.SendJsonAsync(socket, new MediaWire.Metadata(0, "", "", exception is MediaSourceChangedException ? "media_source_changed" : "media_source_unavailable"), stop.Token); }
