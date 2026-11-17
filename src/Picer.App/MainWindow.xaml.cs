@@ -436,7 +436,7 @@ public partial class MainWindow : Window
 
     private void PhotoClassification_Click(object sender, RoutedEventArgs e)
     {
-        try { new Views.PhotoClassificationWindow { Owner = this }.Show(); }
+        try { new Views.ClassificationBrowserWindow { Owner = this }.Show(); }
         catch (UnauthorizedAccessException)
         {
             var connection = new Views.AccountConnectionWindow(AppPaths.AccountCredentialPath, forUpload: false) { Owner = this };
@@ -848,6 +848,7 @@ public partial class MainWindow : Window
         try { if (File.Exists(path)) File.Delete(path); } catch (IOException) { }
     }
 }
+
 
 
 

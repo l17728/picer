@@ -1,5 +1,7 @@
 # AGENTS.md
 
+工程提交、构建和 GUI 基线规则见 [docs/ENGINEERING_MEMORY.md](docs/ENGINEERING_MEMORY.md)，每次功能完成后必须提交、推送并记录正式构建路径。
+
 Picer's GUI and MediaAgent are Windows x64 .NET 8 applications; IndexService and ModelServer also ship Linux x64 binaries. Product UI and docs under `docs/` (including `docs/SDD.md`, the architecture spec) are written in Chinese; E2E tests assert on Chinese UI strings. Current capabilities and paused acceptance work are recorded in `docs/CURRENT_CAPABILITIES_2026-10-09.md` and `docs/DEVELOPMENT_PLAN.md`; dated reports preserve historical evidence, not current task assignments.
 
 ## Projects
