@@ -36,7 +36,6 @@ public partial class MainWindow : Window
     private readonly MainViewModel _mainVm;
     private bool _initialized;
     private readonly bool _remoteMode;
-    private ServiceBrowseViewModel? _remoteBrowseViewModel;
     private Views.ServiceBrowseWindow? _remoteBrowseWindow;
 
     public MainWindow()
@@ -79,6 +78,7 @@ public partial class MainWindow : Window
         if (_remoteMode)
         {
             var browse = new Views.ServiceBrowseWindow(AppServices.Gateway, autoLoad: false) { Owner = this };
+            _remoteBrowseWindow = browse;
             browse.Show();
             return;
         }
@@ -436,7 +436,7 @@ public partial class MainWindow : Window
 
     private void PhotoClassification_Click(object sender, RoutedEventArgs e)
     {
-        try { new Views.PhotoClassificationWindow { Owner = this }.Show(); }
+        try { new Views.ClassificationBrowserWindow { Owner = this }.Show(); }
         catch (UnauthorizedAccessException)
         {
             var connection = new Views.AccountConnectionWindow(AppPaths.AccountCredentialPath, forUpload: false) { Owner = this };
