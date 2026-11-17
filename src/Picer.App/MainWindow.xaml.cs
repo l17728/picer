@@ -78,18 +78,8 @@ public partial class MainWindow : Window
         }
         if (_remoteMode)
         {
-            var browse = new Views.ServiceBrowseWindow(AppServices.Gateway, autoLoad: false);
-            _remoteBrowseViewModel = browse.ViewModel;
-            _remoteBrowseWindow = browse;
-            LocalToolbar.Visibility = Visibility.Collapsed;
-            if (browse.Content is FrameworkElement content)
-            {
-                content.DataContext = _remoteBrowseViewModel;
-                RemoteContent.Content = content;
-                RemoteContent.Visibility = Visibility.Visible;
-                MainTabs.Visibility = Visibility.Collapsed;
-            }
-            await _remoteBrowseViewModel.SearchAsync();
+            var browse = new Views.ServiceBrowseWindow(AppServices.Gateway, autoLoad: false) { Owner = this };
+            browse.Show();
             return;
         }
         await _mainVm.InitializeAsync();
