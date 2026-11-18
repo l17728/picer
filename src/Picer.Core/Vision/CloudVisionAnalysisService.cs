@@ -84,9 +84,14 @@ public sealed class CloudVisionAnalysisService(
                     else
                     {
                         var requestId = Guid.NewGuid().ToString("N");
-                        var reserved = false;
-                        await DatabaseAsync(() => reserved = repository.Billing.TryReserve(requestId,
-                            runPolicy.EstimatedRequestCostYuan, runPolicy.DailyBudgetYuan, runPolicy.MonthlyBudgetYuan), cancellationToken).ConfigureAwait(false);
+                        // Local model requests have no external charge and do not
+                        // need a budget reservation. This also prevents a stale
+                        // reservation from producing a misleading cloud-budget
+                        // message when the selected provider is local.
+                        var reserved = runPolicy.EstimatedRequestCostYuan <= 0m;
+                        if (!reserved)
+                            await DatabaseAsync(() => reserved = repository.Billing.TryReserve(requestId,
+                                runPolicy.EstimatedRequestCostYuan, runPolicy.DailyBudgetYuan, runPolicy.MonthlyBudgetYuan), cancellationToken).ConfigureAwait(false);
                         if (!reserved) { budgetBlocked = batch.Count - progressCount; break; }
                         var failureStage = AnalysisStage.Save;
                         try

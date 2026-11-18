@@ -40,7 +40,6 @@ internal sealed class MediaDescriptionBatch(
         var failed = 0;
         var count = 0;
         var reportGate = new object();
-        var serviceFailures = 0;
         var discovered = 0;
         var skipped = initialSkipped;
         runId ??= Guid.NewGuid().ToString("N");
@@ -70,7 +69,7 @@ internal sealed class MediaDescriptionBatch(
             Interlocked.Increment(ref active);
             try
             {
-                if (await work()) { Interlocked.Increment(ref completed); Interlocked.Exchange(ref serviceFailures, 0);
+                if (await work()) { Interlocked.Increment(ref completed);
                     Core.Logging.AnalysisDiagnosticLog.Info($"Directory description item completed or reused; runId={runId}; attemptId={attemptId}; kind={kind}; mediaId={id}; elapsedMs={ElapsedMilliseconds(started)}"); }
                 else { Interlocked.Increment(ref failed); failures?.Report(new(kind == "video", id, path, "analysis_not_completed")); Core.Logging.AnalysisDiagnosticLog.Warn($"Directory description item failed; runId={runId}; attemptId={attemptId}; kind={kind}; mediaId={id}; stage=Unknown; errorType=NoResult; innerTypes=none; code=analysis_not_completed; retryable=true; elapsedMs={ElapsedMilliseconds(started)}"); }
             }
@@ -87,10 +86,8 @@ internal sealed class MediaDescriptionBatch(
                 var detail = exception as AnalysisStageException ?? AnalysisStageException.Wrap(AnalysisStage.Model, exception);
                 failures?.Report(new(kind == "video", id, path, detail.ErrorCode, detail.Stage, detail.Retryable));
                 Core.Logging.AnalysisDiagnosticLog.Warn($"Directory description item failed; runId={runId}; attemptId={attemptId}; kind={kind}; mediaId={id}; stage={detail.Stage}; errorType={SafeType(exception)}; innerTypes={SafeInnerTypes(exception)}; code={SafeCode(detail.ErrorCode)}; retryable={detail.Retryable}; elapsedMs={ElapsedMilliseconds(started)}");
-                if (detail.ErrorCode is "HTTP_401" or "HTTP_403" or "model_not_configured" ||
-                    IsServiceFailure(detail.ErrorCode) && Interlocked.Increment(ref serviceFailures) >= 6)
+                if (detail.ErrorCode is "HTTP_401" or "HTTP_403" or "model_not_configured")
                     throw new DescriptionServiceUnavailableException();
-                if (!IsServiceFailure(detail.ErrorCode)) Interlocked.Exchange(ref serviceFailures, 0);
             }
             finally { Interlocked.Decrement(ref active); }
             Interlocked.Increment(ref count); Report();
