@@ -10,7 +10,7 @@ namespace Picer.App.Infrastructure;
 internal sealed class PreparedPhotoInputs(IMediaAssetGateway assets, string root) : IDisposable
 {
     private sealed record Entry(string? Path, Exception? Error, bool Persistent = false);
-    private readonly SemaphoreSlim _slots = new(3, 3);
+    private readonly SemaphoreSlim _slots = new(2, 2);
     private readonly ConcurrentDictionary<ImageRecord, Entry> _entries = new(ReferenceEqualityComparer.Instance);
     public async Task<IDisposable?> PrepareAsync(ImageRecord image, CancellationToken token)
     {

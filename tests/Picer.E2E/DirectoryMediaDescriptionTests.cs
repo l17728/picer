@@ -385,7 +385,7 @@ public sealed class DirectoryMediaDescriptionTests
     }
 
     [Fact]
-    public async Task UnavailableServiceStopsBatchWithoutFailingEveryRemainingPhoto()
+    public async Task TransientServiceFailuresDoNotStopRemainingPhotos()
     {
         var attempted = 0;
         var plan = new DirectoryMediaDescriptionPlan("D:/media", 100, 0,
@@ -395,8 +395,8 @@ public sealed class DirectoryMediaDescriptionTests
             Interlocked.Increment(ref attempted);
             throw new AnalysisStageException(AnalysisStage.Preprocess, "HTTP_503", true);
         }, (_, _) => Task.FromResult(true));
-        await Assert.ThrowsAsync<DescriptionServiceUnavailableException>(() => runner.RunAsync(plan, new Capture([]), CancellationToken.None, photoConcurrency: 2));
-        Assert.InRange(attempted, 6, 7);
+        await runner.RunAsync(plan, new Capture([]), CancellationToken.None, photoConcurrency: 2);
+        Assert.Equal(100, attempted);
     }
 
     [Fact]
