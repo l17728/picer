@@ -863,7 +863,13 @@ async function load(){const [c,g]=await Promise.all([fetch('/api/service/v1/capa
             using var trace = new Picer.Core.Logging.MediaReadTrace("service-thumbnail", id, context.Request.Headers["X-Picer-Request-Id"].ToString());
             trace.Mark("received");
             context.Response.OnCompleted(() => { trace.Mark("response_completed", context.Response.ContentLength ?? 0, context.Response.StatusCode); return Task.CompletedTask; });
-            var stream = await handlers.OpenThumbnailAsync(id, cancellationToken);
+            Stream? stream;
+            try { stream = await handlers.OpenThumbnailAsync(id, cancellationToken); }
+            catch (Exception exception) when (exception is IOException or TimeoutException or WebSocketException or InvalidOperationException)
+            {
+                AppLogger.Warn($"Thumbnail media request failed; imageId={id}; agentSelected={(agentId is null ? "none" : "yes")}; errorType={exception.GetType().Name}; message={exception.Message}");
+                return Results.Json(new { error = "thumbnail_media_unavailable", errorType = exception.GetType().Name }, statusCode: StatusCodes.Status503ServiceUnavailable);
+            }
             trace.Mark(stream is null ? "local_cache_miss" : "local_cache_hit");
             if (stream is null)
             {
@@ -884,7 +890,13 @@ async function load(){const [c,g]=await Promise.all([fetch('/api/service/v1/capa
             var image = await handlers.GetAsync(id, cancellationToken);
             if (image is null) return Results.NotFound();
             var key = $"photo:{agentId}:{image.Sha256 ?? image.Path}:{image.FileSize}:{image.ModifiedUtc.Ticks}:1600";
-            var bytes = await mediaPreviews.GetAsync(key, token => MediaAssetResults.PreviewAsync(agents, agentId, IndexApiHandlers.NormalizeAgentPath(image.Path), 1600, token), cancellationToken);
+            byte[] bytes;
+            try { bytes = await mediaPreviews.GetAsync(key, token => MediaAssetResults.PreviewAsync(agents, agentId, IndexApiHandlers.NormalizeAgentPath(image.Path), 1600, token), cancellationToken); }
+            catch (Exception exception) when (exception is IOException or TimeoutException or WebSocketException or InvalidOperationException)
+            {
+                AppLogger.Warn($"Photo preview request failed; imageId={id}; agentSelected={(agentId is null ? "none" : "yes")}; errorType={exception.GetType().Name}; message={exception.Message}");
+                return Results.Json(new { error = "photo_preview_unavailable", errorType = exception.GetType().Name }, statusCode: StatusCodes.Status503ServiceUnavailable);
+            }
             return Results.File(bytes, "image/jpeg");
         });
         app.MapPost("/api/gateway/v1/analysis-input", async (MediaWire.AnalysisInputRequest request, string? agentId, HttpContext context, CancellationToken token) =>

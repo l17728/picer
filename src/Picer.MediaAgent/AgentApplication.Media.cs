@@ -29,6 +29,8 @@ internal sealed partial class AgentApplication
         var keyframe = request.TryGetProperty("keyframe", out var keyframeValue) && keyframeValue.ValueKind == JsonValueKind.True;
         var gate = keyframe ? _keyframeReaders : size == 1280 ? _analysisReaders : size > 0 ? _previewReaders : _mediaReaders;
         var elapsed = Stopwatch.StartNew();
+        var requestedPath = request.GetProperty("path").GetString() ?? "";
+        Log($"media request received; requestId={id}; size={size}; keyframe={keyframe}; pathChars={requestedPath.Length}");
         var entered = false;
         ClientWebSocket? socket = null;
         try
@@ -60,6 +62,7 @@ internal sealed partial class AgentApplication
         catch (Exception exception) when (exception is IOException or InvalidDataException or UnauthorizedAccessException or OperationCanceledException or WebSocketException or ArgumentException)
         {
             trace.Failure(exception);
+            Log($"media request failed; requestId={id}; errorType={exception.GetType().Name}; message={exception.Message}; elapsedMs={elapsed.ElapsedMilliseconds}");
             if (socket?.State == WebSocketState.Open)
             {
                 try { using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(2)); await MediaWire.SendJsonAsync(socket, new MediaWire.Metadata(0, "", "", exception is MediaSourceChangedException ? "media_source_changed" : "media_source_unavailable"), stop.Token); }
