@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Encodings.Web;
+using Microsoft.Data.Sqlite;
 using Picer.Core.Geocoding;
 using Picer.Core.Models;
 using Picer.Core.Search;
@@ -25,8 +26,34 @@ public sealed class CloudVisionAnalysisService(
     {
         if (databaseWork is not null) { await databaseWork(work, token).ConfigureAwait(false); return; }
         await _singleWorker.WaitAsync(token).ConfigureAwait(false);
-        try { work(); } finally { _singleWorker.Release(); }
+        try
+        {
+            // Model calls may overlap, but their short SQLite state transitions
+            // can meet an unrelated writer (sync, face projection, or UI edit).
+            // Retry only SQLite's transient busy/locked errors while keeping the
+            // model request outside this gate. This prevents a temporary writer
+            // collision from being reported as an AI failure.
+            for (var attempt = 0; ; attempt++)
+            {
+                try
+                {
+                    work();
+                    return;
+                }
+                catch (SqliteException exception) when (IsTransientWriteConflict(exception) && attempt < 6)
+                {
+                    var delay = TimeSpan.FromMilliseconds(Math.Min(8000, 250 * (1 << attempt)));
+                    Logging.AnalysisDiagnosticLog.Info($"Analysis database write retry; operation=photo_state_or_save; attempt={attempt + 1}; delayMs={(int)delay.TotalMilliseconds}; sqlite={exception.SqliteErrorCode}_{exception.SqliteExtendedErrorCode}");
+                    token.ThrowIfCancellationRequested();
+                    await Task.Delay(delay, token).ConfigureAwait(false);
+                }
+            }
+        }
+        finally { _singleWorker.Release(); }
     }
+
+    private static bool IsTransientWriteConflict(SqliteException exception)
+        => exception.SqliteErrorCode is 5 or 6;
     private readonly SemaphoreSlim _serialRun = new(1, 1);
 
     public async Task<CloudVisionBatchResult> AnalyzeAsync(
