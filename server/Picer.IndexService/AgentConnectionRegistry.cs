@@ -435,6 +435,7 @@ internal sealed partial class AgentConnectionRegistry
             catch (AggregateException) { AppLogger.Warn("MediaAgent disconnect callback failed; closing remaining requests"); }
             SafeAbort(Socket);
             foreach (var pending in _pending.Values) pending.TrySetCanceled();
+            foreach (var pending in _previewPending.Values) pending.TrySetCanceled();
             foreach (var pending in _taskPending.Values) pending.TrySetCanceled();
             foreach (var stream in _taskStreams.Values) stream.Writer.TryComplete(new IOException("media_agent_disconnected"));
             foreach (var pending in _aiPending.Values) pending.Writer.TryComplete(new IOException("media_agent_disconnected"));
