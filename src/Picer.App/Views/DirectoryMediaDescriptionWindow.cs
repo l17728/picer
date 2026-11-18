@@ -218,7 +218,10 @@ public sealed class DirectoryMediaDescriptionWindow : Window
                         ?? throw new InvalidOperationException("索引服务未提供原图读取接口。") : null, preparedInputs);
             var photoService = photoAnalyzer is null ? null : new CloudVisionAnalysisService(AppServices.CloudVisionRepository,
                 photoAnalyzer, AppServices.Geocoder, AppServices.People,
-                databaseWork: null, allowConcurrent: true);
+                // PicerDatabase owns a shared SQLite connection. Keep every
+                // state transition on the application's database gate while
+                // leaving the model HTTP call outside it for true overlap.
+                databaseWork: (work, ct) => UiWork.RunDatabaseAsync(work, ct), allowConcurrent: true);
             var runner = new MediaDescriptionBatch(async (image, ct) =>
             {
                 try
