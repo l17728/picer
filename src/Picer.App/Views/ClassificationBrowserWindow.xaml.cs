@@ -86,7 +86,9 @@ public partial class ClassificationBrowserWindow : Window
         LabelTree.Items.Clear();
         foreach (var group in _taxonomy.Labels.Where(x => x.Active).GroupBy(x => x.Dimension).OrderBy(x => x.Key))
         {
-            var root = new TreeViewItem { Header = group.Key, IsExpanded = true, Tag = null };
+            var groupIds = group.Where(x => x.Assignable && !x.Id.StartsWith("nav.", StringComparison.Ordinal))
+                .Select(x => x.Id).Distinct(StringComparer.Ordinal).ToArray();
+            var root = new TreeViewItem { Header = group.Key, IsExpanded = true, Tag = groupIds };
             var people = group.Where(x => x.Id.StartsWith("person.confirmed.", StringComparison.Ordinal)).OrderBy(x => x.Name).ToArray();
             if (people.Length > 0)
             {
