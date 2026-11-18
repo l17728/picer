@@ -1,4 +1,4 @@
-using System.Collections.Concurrent;
+﻿using System.Collections.Concurrent;
 using System.Net.WebSockets;
 using Picer.Core.Gateway;
 
@@ -65,6 +65,15 @@ internal sealed partial class AgentConnectionRegistry
         trace.Mark("received");
         if (string.IsNullOrWhiteSpace(agentId) && _sessions.Count > 1) throw new IOException("media_agent_selection_required");
         var session = await WaitForSessionAsync(agentId, token);
+        // An isolated space has its own registry and normally contains one source agent.
+        // A stale source grant must not strand media reads after the agent reconnects.
+        if (session is null && _strictRouting)
+        {
+            var eligible = _sessions.Values
+                .Where(candidate => candidate.Capabilities.Contains(MediaWire.Capability))
+                .Take(2).ToArray();
+            if (eligible.Length == 1) session = eligible[0];
+        }
         trace.Mark("agent_ready");
         if (session is null || !session.Capabilities.Contains(MediaWire.Capability)) return null;
         if (previewSize == 1280 && !session.Capabilities.Contains(MediaWire.AnalysisInputCapability)) return null;
