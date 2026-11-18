@@ -345,8 +345,8 @@ public partial class PhotoClassificationWindow : Window
             // mirrored image record has it after metadata sync.
             var identity = await UiWork.ReadSnapshotAsync("Classification.ThumbnailIdentity", AppServices.Db,
                 db => db.GetImage(row.ImageId), _previewCancellation.Token);
-            var record = identity is { } image
-                ? image
+            var record = identity is { } identityRecord
+                ? identityRecord
                 : new ImageRecord { Id = row.ImageId, Path = row.Path };
             var path = AppServices.RemoteThumbnails.TryGet(record) ?? await AppServices.RemoteThumbnails.GetOrDownloadAsync(
                 record, token => AppServices.Gateway.OpenThumbnailAsync(row.ImageId, token), _previewCancellation.Token);
