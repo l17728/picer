@@ -66,7 +66,17 @@ internal sealed partial class AgentApplication : IDisposable
     private readonly ConcurrentDictionary<string, CancellationTokenSource> _taskRequests = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, string> _runtimeConfig = new(StringComparer.OrdinalIgnoreCase);
     private readonly PersistentPreviewCache _persistentPreviews = new();
-    private readonly HttpClient _modelClient = new() { Timeout = TimeSpan.FromMinutes(10) };
+    // Keep the local model transport warm across requests. The model process is
+    // resident; only the request body and response stream are per invocation.
+    private readonly HttpClient _modelClient = new(new SocketsHttpHandler
+    {
+        AllowAutoRedirect = false,
+        UseCookies = false,
+        MaxConnectionsPerServer = 4,
+        PooledConnectionLifetime = TimeSpan.FromMinutes(10),
+        PooledConnectionIdleTimeout = TimeSpan.FromMinutes(2),
+        ConnectTimeout = TimeSpan.FromSeconds(10)
+    }) { Timeout = Timeout.InfiniteTimeSpan };
     private Task? _loop;
     private static readonly string LogPath = Path.Combine(Path.GetTempPath(), "picer-media-agent.log");
     private static readonly string[] SupportedVideoFaceModelPriority =

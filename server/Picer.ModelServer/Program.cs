@@ -29,7 +29,12 @@ builder.Services.AddSingleton<ClipEmbeddingService>();
 builder.Services.AddSingleton(_ => new ModelInferenceRelay(new HttpClient(new SocketsHttpHandler
 {
     AllowAutoRedirect = false, UseCookies = false, MaxConnectionsPerServer = 8,
-    PooledConnectionLifetime = TimeSpan.FromMinutes(10), ConnectTimeout = TimeSpan.FromSeconds(10)
+    // Keep the upstream model connection pool warm. A model request must not
+    // pay a TCP/TLS handshake for every image, while a finite lifetime still
+    // lets DNS and endpoint changes take effect without restarting ModelServer.
+    PooledConnectionLifetime = TimeSpan.FromMinutes(10),
+    PooledConnectionIdleTimeout = TimeSpan.FromMinutes(2),
+    ConnectTimeout = TimeSpan.FromSeconds(10)
 }) { Timeout = Timeout.InfiniteTimeSpan }));
 var app = builder.Build();
 
