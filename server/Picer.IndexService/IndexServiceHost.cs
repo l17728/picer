@@ -859,6 +859,7 @@ async function load(){const [c,g]=await Promise.all([fetch('/api/service/v1/capa
             handlers.GetVideoDetails(id, model ?? "legacy-video") is { } details ? Results.Json(details) : Results.NotFound());
         app.MapGet("/api/gateway/v1/thumbs/{id:long}", async (long id, string? agentId, HttpContext context, CancellationToken cancellationToken) =>
         {
+            if (isolatedSpace) agentId = Identity.SpaceSourceRouting.Resolve(db, $"/api/gateway/v1/thumbs/{id}") ?? agentId;
             using var trace = new Picer.Core.Logging.MediaReadTrace("service-thumbnail", id, context.Request.Headers["X-Picer-Request-Id"].ToString());
             trace.Mark("received");
             context.Response.OnCompleted(() => { trace.Mark("response_completed", context.Response.ContentLength ?? 0, context.Response.StatusCode); return Task.CompletedTask; });
@@ -879,6 +880,7 @@ async function load(){const [c,g]=await Promise.all([fetch('/api/service/v1/capa
         });
         app.MapGet("/api/gateway/v1/previews/{id:long}", async (long id, string? agentId, CancellationToken cancellationToken) =>
         {
+            if (isolatedSpace) agentId = Identity.SpaceSourceRouting.Resolve(db, $"/api/gateway/v1/previews/{id}") ?? agentId;
             var image = await handlers.GetAsync(id, cancellationToken);
             if (image is null) return Results.NotFound();
             var key = $"photo:{agentId}:{image.Sha256 ?? image.Path}:{image.FileSize}:{image.ModifiedUtc.Ticks}:1600";
@@ -1088,6 +1090,7 @@ async function load(){const [c,g]=await Promise.all([fetch('/api/service/v1/capa
         {
             var record = await handlers.GetAsync(id, cancellationToken);
             if (record is null) return Results.NotFound();
+            if (isolatedSpace) agentId = Identity.SpaceSourceRouting.Resolve(db, $"/api/gateway/v1/assets/images/{id}") ?? agentId;
             return await MediaAssetResults.OpenAsync(agents, context, agentId, IndexApiHandlers.NormalizeAgentPath(record.Path));
         });
         app.MapMethods("/api/gateway/v1/assets/videos/{id:long}", ["GET", "HEAD"], async (long id, string? agentId, HttpContext context, CancellationToken cancellationToken) =>
