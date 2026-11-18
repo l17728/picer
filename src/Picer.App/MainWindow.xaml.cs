@@ -36,7 +36,6 @@ public partial class MainWindow : Window
     private readonly MainViewModel _mainVm;
     private bool _initialized;
     private readonly bool _remoteMode;
-    private Views.ServiceBrowseWindow? _remoteBrowseWindow;
 
     public MainWindow()
     {
@@ -77,9 +76,8 @@ public partial class MainWindow : Window
         }
         if (_remoteMode)
         {
-            var browse = new Views.ServiceBrowseWindow(AppServices.Gateway, autoLoad: false) { Owner = this };
-            _remoteBrowseWindow = browse;
-            browse.Show();
+            // The main window already contains the remote directory/search tabs.
+            // Do not open a second empty ServiceBrowseWindow at startup.
             return;
         }
         await _mainVm.InitializeAsync();
@@ -817,7 +815,7 @@ public partial class MainWindow : Window
         }
         if (_remoteMode)
         {
-            e.Handled = _remoteBrowseWindow?.HandleShortcut(e.Key, Keyboard.Modifiers) == true;
+            e.Handled = HandleLocalShortcut(e.Key, Keyboard.Modifiers);
             return;
         }
         e.Handled = HandleLocalShortcut(e.Key, Keyboard.Modifiers);

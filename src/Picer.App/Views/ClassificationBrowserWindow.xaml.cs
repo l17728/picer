@@ -19,6 +19,7 @@ public partial class ClassificationBrowserWindow : Window
     private ClassificationTaxonomySnapshot? _taxonomy;
     private ClassificationBrowseResult? _browse;
     private string? _selectedLabelId;
+    private IReadOnlyList<string> _selectedFilterIds = Array.Empty<string>();
     private readonly ObservableCollection<PhotoRow> _rows = new();
     private bool _loadingMore;
 
@@ -48,9 +49,9 @@ public partial class ClassificationBrowserWindow : Window
     private Task<ClassificationBrowseResult> BrowsePage(string? cursor)
     {
         var filter = new ClassificationFilter(
-            string.IsNullOrWhiteSpace(_selectedLabelId)
+            _selectedFilterIds.Count == 0
                 ? Array.Empty<ClassificationFilterGroup>()
-                : new[] { new ClassificationFilterGroup(ClassificationMatchMode.Any, new[] { _selectedLabelId! }) },
+                : new[] { new ClassificationFilterGroup(ClassificationMatchMode.Any, _selectedFilterIds) },
             Array.Empty<string>());
         return _client.Browse(new ClassificationBrowseRequest(filter,
             IncludeSuggestions.IsChecked == true, IncludeLegacy.IsChecked == true, Cursor: cursor), _closed.Token);
@@ -86,14 +87,27 @@ public partial class ClassificationBrowserWindow : Window
         foreach (var group in _taxonomy.Labels.Where(x => x.Active).GroupBy(x => x.Dimension).OrderBy(x => x.Key))
         {
             var root = new TreeViewItem { Header = group.Key, IsExpanded = true, Tag = null };
-            foreach (var label in group.OrderBy(x => x.Name)) root.Items.Add(new TreeViewItem { Header = label.Name, Tag = label.Id });
+            var people = group.Where(x => x.Id.StartsWith("person.confirmed.", StringComparison.Ordinal)).OrderBy(x => x.Name).ToArray();
+            if (people.Length > 0)
+            {
+                var named = new TreeViewItem { Header = "已命名人物", Tag = people.Select(x => x.Id).ToArray(), IsExpanded = true };
+                foreach (var label in people) named.Items.Add(new TreeViewItem { Header = label.Name, Tag = new[] { label.Id } });
+                root.Items.Add(named);
+            }
+            foreach (var label in group.Where(x => !x.Id.StartsWith("person.confirmed.", StringComparison.Ordinal)).OrderBy(x => x.Name))
+                root.Items.Add(new TreeViewItem { Header = label.Name, Tag = new[] { label.Id } });
             LabelTree.Items.Add(root);
         }
     }
 
     private async void LabelTree_SelectedItemChanged(object sender, RoutedPropertyChangedEventArgs<object> e)
     {
-        if (e.NewValue is TreeViewItem { Tag: string id }) { _selectedLabelId = id; await RefreshAsync(); }
+        if (e.NewValue is TreeViewItem { Tag: string[] ids })
+        {
+            _selectedFilterIds = ids;
+            _selectedLabelId = ids.Length == 1 ? ids[0] : null;
+            await RefreshAsync();
+        }
     }
     private async void FilterChanged(object sender, RoutedEventArgs e) { if (IsLoaded) await RefreshAsync(); }
     private async void Refresh_Click(object sender, RoutedEventArgs e) => await RefreshAsync();
