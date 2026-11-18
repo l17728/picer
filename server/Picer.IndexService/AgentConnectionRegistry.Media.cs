@@ -64,7 +64,18 @@ internal sealed partial class AgentConnectionRegistry
         using var trace = new Picer.Core.Logging.MediaReadTrace("service-media-channel");
         trace.Mark("received");
         if (string.IsNullOrWhiteSpace(agentId) && _sessions.Count > 1) throw new IOException("media_agent_selection_required");
-        var session = await WaitForSessionAsync(agentId, token);
+        AgentSession? session = null;
+        // In an isolated space there is normally one media-capable agent. Use
+        // it immediately when the source record carries a stale grant id;
+        // waiting for the retry window here adds 2.5 seconds to every image.
+        if (_strictRouting)
+        {
+            var immediate = _sessions.Values
+                .Where(candidate => candidate.Capabilities.Contains(MediaWire.Capability))
+                .Take(2).ToArray();
+            if (immediate.Length == 1) session = immediate[0];
+        }
+        session ??= await WaitForSessionAsync(agentId, token);
         // An isolated space has its own registry and normally contains one source agent.
         // A stale source grant must not strand media reads after the agent reconnects.
         if (session is null && _strictRouting)
