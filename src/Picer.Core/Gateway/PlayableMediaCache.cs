@@ -1,4 +1,6 @@
 using System.Security.Cryptography;
+using System.Diagnostics;
+using Picer.Core.Logging;
 using Picer.Core.Video;
 
 namespace Picer.Core.Gateway;
@@ -33,15 +35,27 @@ public sealed class PlayableMediaCache
         var destination = Path.Combine(_root, key.ToLowerInvariant() + extension.ToLowerInvariant());
         using var operation = VideoOperationLifetime.Begin(_root, token);
         token = operation.Token;
-        if (TryGet(destination)) return destination;
+        var started = Stopwatch.StartNew();
+        var kind = extension.Equals(".jpg", StringComparison.OrdinalIgnoreCase) ? "preview" : "original";
+        if (TryGet(destination))
+        {
+            AppLogger.Info($"Media asset cache hit; kind={kind}; elapsedMs={started.ElapsedMilliseconds}");
+            return destination;
+        }
         using var keyLease = await _keys.EnterAsync(destination, token).ConfigureAwait(false);
-        if (TryGet(destination)) return destination;
+        if (TryGet(destination))
+        {
+            AppLogger.Info($"Media asset cache hit after coalescing; kind={kind}; elapsedMs={started.ElapsedMilliseconds}");
+            return destination;
+        }
+        var queuedMs = started.ElapsedMilliseconds;
         await _downloads.WaitAsync(token).ConfigureAwait(false);
         try
         {
             var temporary = destination + "." + Guid.NewGuid().ToString("N") + ".tmp";
             try
             {
+                var downloadStarted = Stopwatch.StartNew();
                 await Task.Run(() => download(temporary, token), token).ConfigureAwait(false);
                 var size = new FileInfo(temporary).Length;
                 if (size > _limit) throw new IOException("媒体超过本地缓存容量。");
@@ -65,6 +79,7 @@ public sealed class PlayableMediaCache
                     File.Move(temporary, destination, true);
                     _files[destination] = (size, DateTime.UtcNow); _bytes += size;
                 }
+                AppLogger.Info($"Media asset cache populated; kind={kind}; bytes={size}; queueMs={queuedMs}; downloadMs={downloadStarted.ElapsedMilliseconds}; totalMs={started.ElapsedMilliseconds}");
                 return destination;
             }
             finally { if (File.Exists(temporary)) File.Delete(temporary); }
