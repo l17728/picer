@@ -65,6 +65,7 @@ internal sealed partial class AgentApplication : IDisposable
     private readonly ConcurrentDictionary<string, CancellationTokenSource> _aiRequests = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, CancellationTokenSource> _taskRequests = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, string> _runtimeConfig = new(StringComparer.OrdinalIgnoreCase);
+    private readonly PersistentPreviewCache _persistentPreviews = new();
     private readonly HttpClient _modelClient = new() { Timeout = TimeSpan.FromMinutes(10) };
     private Task? _loop;
     private static readonly string LogPath = Path.Combine(Path.GetTempPath(), "picer-media-agent.log");
@@ -411,12 +412,20 @@ internal sealed partial class AgentApplication : IDisposable
             var fullPath = ResolveConfiguredPath(requestedPath);
             if (!_roots.Any(root => fullPath.StartsWith(root.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)))
                 throw new UnauthorizedAccessException("preview path is outside configured roots");
+            if (_persistentPreviews.TryGet(fullPath, size) is { Length: > 0 } cached)
+            {
+                await SendAsync(socket, new { type = "media.preview.response", requestId, contentType = "image/jpeg", contentBase64 = Convert.ToBase64String(cached) }, cancellationToken);
+                Log($"media preview cache hit; requestId={requestId}; size={size}; bytes={cached.Length}; elapsedMs={started.ElapsedMilliseconds}");
+                return;
+            }
             using var input = File.OpenRead(fullPath);
             using var image = RasterImage.Load(input);
             if (image.Width > size || image.Height > size) image.ResizeToFit(size, size);
             using var output = new MemoryStream();
             image.StripMetadata(); image.SaveAsJpeg(output, 75);
-            await SendAsync(socket, new { type = "media.preview.response", requestId, contentType = "image/jpeg", contentBase64 = Convert.ToBase64String(output.ToArray()) }, cancellationToken);
+            var bytes = output.ToArray();
+            _persistentPreviews.Put(fullPath, size, bytes);
+            await SendAsync(socket, new { type = "media.preview.response", requestId, contentType = "image/jpeg", contentBase64 = Convert.ToBase64String(bytes) }, cancellationToken);
             Log($"media preview completed; requestId={requestId}; size={size}; bytes={output.Length}; elapsedMs={started.ElapsedMilliseconds}");
         }
         catch (Exception exception) when (exception is IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException)
