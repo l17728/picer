@@ -3,6 +3,7 @@ using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Channels;
+using Picer.Core.Gateway;
 using Picer.Core.Logging;
 
 namespace Picer.IndexService;
@@ -75,6 +76,10 @@ internal sealed partial class AgentConnectionRegistry
                 {
                     session.Complete(root);
                 }
+                else if (type == "media.preview.response")
+                {
+                    session.CompletePreview(root);
+                }
                 else if (type is "task.result" or "task.error")
                 {
                     session.CompleteTask(root);
@@ -135,6 +140,17 @@ internal sealed partial class AgentConnectionRegistry
             session = _sessions.Values.Single();
         if (session is null) return null;
         return await session.RequestAsync(path, cancellationToken);
+    }
+
+    public async Task<byte[]?> RequestPreviewAsync(string? agentId, string path, int size, CancellationToken cancellationToken)
+    {
+        var session = await WaitForSessionAsync(agentId, cancellationToken);
+        if (session is null && _strictRouting)
+        {
+            var eligible = _sessions.Values.Where(candidate => candidate.Capabilities.Contains(MediaWire.Capability)).Take(2).ToArray();
+            if (eligible.Length == 1) session = eligible[0];
+        }
+        return session is null || !session.Capabilities.Contains(MediaWire.Capability) ? null : await session.RequestPreviewAsync(path, size, cancellationToken);
     }
 
     public async Task StreamAiAsync(string? agentId, ReadOnlyMemory<byte> payload,
@@ -233,6 +249,7 @@ internal sealed partial class AgentConnectionRegistry
         public CancellationToken Disconnected => _disconnected.Token;
         private readonly SemaphoreSlim _sendLock = new(1, 1);
         private readonly ConcurrentDictionary<string, TaskCompletionSource<(string, byte[])?>> _pending = new();
+        private readonly ConcurrentDictionary<string, TaskCompletionSource<byte[]?>> _previewPending = new();
         private readonly ConcurrentDictionary<string, TaskCompletionSource<string?>> _taskPending = new();
         private readonly ConcurrentDictionary<string, Channel<byte[]>> _taskStreams = new();
         private readonly ConcurrentDictionary<string, Channel<AiMessage>> _aiPending = new();
@@ -284,6 +301,26 @@ internal sealed partial class AgentConnectionRegistry
             if (root.TryGetProperty("error", out var error)) { completion.TrySetException(new IOException(error.GetString())); return; }
             var content = Convert.FromBase64String(root.GetProperty("contentBase64").GetString() ?? "");
             completion.TrySetResult((root.GetProperty("contentType").GetString() ?? "application/octet-stream", content));
+        }
+
+        public async Task<byte[]?> RequestPreviewAsync(string path, int size, CancellationToken cancellationToken)
+        {
+            var requestId = Guid.NewGuid().ToString("N");
+            var completion = new TaskCompletionSource<byte[]?>(TaskCreationOptions.RunContinuationsAsynchronously);
+            _previewPending[requestId] = completion;
+            try
+            {
+                await SendAsync(new { type = "media.preview", requestId, path, size }, cancellationToken);
+                return await completion.Task.WaitAsync(TimeSpan.FromMinutes(2), cancellationToken);
+            }
+            finally { _previewPending.TryRemove(requestId, out _); }
+        }
+
+        public void CompletePreview(JsonElement root)
+        {
+            if (!root.TryGetProperty("requestId", out var id) || !_previewPending.TryGetValue(id.GetString() ?? "", out var completion)) return;
+            if (root.TryGetProperty("error", out var error)) { completion.TrySetException(new IOException(error.GetString())); return; }
+            completion.TrySetResult(Convert.FromBase64String(root.GetProperty("contentBase64").GetString() ?? ""));
         }
 
         public void CompleteTask(JsonElement root)

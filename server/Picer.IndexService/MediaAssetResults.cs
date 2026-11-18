@@ -8,6 +8,16 @@ internal static class MediaAssetResults
 {
     public static async Task<byte[]> PreviewAsync(AgentConnectionRegistry agents, string? agentId, string path, int size, CancellationToken token)
     {
+        byte[]? persistent = null;
+        try
+        {
+            persistent = await agents.RequestPreviewAsync(agentId, path, size, token);
+        }
+        catch (Exception exception) when (exception is IOException or TimeoutException or System.Net.WebSockets.WebSocketException)
+        {
+            AppLogger.Info($"Persistent media preview fell back; path={path}; errorType={exception.GetType().Name}");
+        }
+        if (persistent is { Length: > 0 }) return persistent;
         await using var stream = await agents.OpenMediaAsync(agentId, path, size, token);
         if (stream is not null)
         {

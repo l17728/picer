@@ -1,4 +1,5 @@
-﻿using Picer.Core.Gateway;
+using Picer.Core.Gateway;
+using Picer.Core.Imaging;
 using System.Net.WebSockets;
 using System.Net.Http;
 using System.IO;
@@ -261,6 +262,10 @@ internal sealed partial class AgentApplication : IDisposable
                     requests.RemoveAll(task => task.IsCompleted);
                     requests.Add(ServeAssetAsync(socket, root, cancellationToken));
                     break;
+                case "media.preview":
+                    requests.RemoveAll(task => task.IsCompleted);
+                    requests.Add(ServePreviewAsync(socket, root, cancellationToken));
+                    break;
                 case "ai.open":
                     requests.RemoveAll(task => task.IsCompleted);
                     requests.Add(ServeAiAsync(socket, root, cancellationToken));
@@ -389,6 +394,35 @@ internal sealed partial class AgentApplication : IDisposable
         {
             Log($"asset failed; requestId={requestId}; errorType={exception.GetType().Name}; elapsedMs={started.ElapsedMilliseconds}");
             await SendAsync(socket, new { type = "asset.response", requestId, error = exception.Message }, cancellationToken);
+        }
+    }
+
+    private async Task ServePreviewAsync(ClientWebSocket socket, JsonElement request, CancellationToken cancellationToken)
+    {
+        using var foreground = _maintenanceActivity.EnterForeground();
+        var requestId = request.TryGetProperty("requestId", out var id) ? id.GetString() : null;
+        var requestedPath = request.TryGetProperty("path", out var path) ? path.GetString() : null;
+        var size = request.TryGetProperty("size", out var sizeValue) ? sizeValue.GetInt32() : 256;
+        if (string.IsNullOrWhiteSpace(requestId) || string.IsNullOrWhiteSpace(requestedPath)) return;
+        var started = System.Diagnostics.Stopwatch.StartNew();
+        try
+        {
+            if (size is not (256 or 1600)) throw new InvalidDataException("media_preview_size_invalid");
+            var fullPath = ResolveConfiguredPath(requestedPath);
+            if (!_roots.Any(root => fullPath.StartsWith(root.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)))
+                throw new UnauthorizedAccessException("preview path is outside configured roots");
+            using var input = File.OpenRead(fullPath);
+            using var image = RasterImage.Load(input);
+            if (image.Width > size || image.Height > size) image.ResizeToFit(size, size);
+            using var output = new MemoryStream();
+            image.StripMetadata(); image.SaveAsJpeg(output, 75);
+            await SendAsync(socket, new { type = "media.preview.response", requestId, contentType = "image/jpeg", contentBase64 = Convert.ToBase64String(output.ToArray()) }, cancellationToken);
+            Log($"media preview completed; requestId={requestId}; size={size}; bytes={output.Length}; elapsedMs={started.ElapsedMilliseconds}");
+        }
+        catch (Exception exception) when (exception is IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException)
+        {
+            Log($"media preview failed; requestId={requestId}; errorType={exception.GetType().Name}; elapsedMs={started.ElapsedMilliseconds}");
+            await SendAsync(socket, new { type = "media.preview.response", requestId, error = exception.Message }, cancellationToken);
         }
     }
 
@@ -1087,5 +1121,3 @@ internal sealed partial class AgentApplication : IDisposable
         else _ = _loop.ContinueWith(_ => ReleaseConnectionResources(), TaskScheduler.Default);
     }
 }
-
-
