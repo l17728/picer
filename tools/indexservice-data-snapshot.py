@@ -10,6 +10,14 @@ import shutil
 import sqlite3
 import subprocess
 
+try:
+    from contextlib import nullcontext
+except ImportError:  # Python 3.6 on the deployment host
+    class nullcontext:
+        def __init__(self, value=None): self.value = value
+        def __enter__(self): return self.value
+        def __exit__(self, *args): return False
+
 
 def safe(root, relative):
     path = root / relative
@@ -54,7 +62,8 @@ def assert_closed(root, names):
         for suffix in ('', '-wal', '-shm', '.access'):
             path = safe(root, name + suffix)
             if path.exists():
-                result = subprocess.run(['fuser', str(path)], capture_output=True)
+                # Python 3.6 on the deployed host has no capture_output parameter.
+                result = subprocess.run(['fuser', str(path)], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 if result.returncode != 1:
                     raise RuntimeError('database_open_or_inspection_failed')
 
@@ -67,7 +76,7 @@ def schema(path):
 def copy_file(source, target, locked=None):
     target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     temporary = target.with_name(target.name + '.deploy-tmp')
-    with (contextlib.nullcontext(locked) if locked else source.open('rb')) as incoming, temporary.open('xb') as outgoing:
+    with (nullcontext(locked) if locked else source.open('rb')) as incoming, temporary.open('xb') as outgoing:
         incoming.seek(0)
         shutil.copyfileobj(incoming, outgoing)
         outgoing.flush()
