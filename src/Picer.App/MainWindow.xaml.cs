@@ -78,6 +78,8 @@ public partial class MainWindow : Window
         {
             // The main window already contains the remote directory/search tabs.
             // Do not open a second empty ServiceBrowseWindow at startup.
+            if (_mainVm is not null)
+                await _mainVm.InitializeAsync();
             return;
         }
         await _mainVm.InitializeAsync();
