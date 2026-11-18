@@ -340,7 +340,14 @@ public partial class PhotoClassificationWindow : Window
         row.PreviewLoading = true;
         try
         {
-            var record = new ImageRecord { Id = row.ImageId };
+            // Reuse the same content-addressed key as every other remote
+            // thumbnail view. The review endpoint may omit the hash, but the
+            // mirrored image record has it after metadata sync.
+            var identity = await UiWork.ReadSnapshotAsync("Classification.ThumbnailIdentity", AppServices.Db,
+                db => db.GetImage(row.ImageId), _previewCancellation.Token);
+            var record = identity is { } image
+                ? image
+                : new ImageRecord { Id = row.ImageId, Path = row.Path };
             var path = AppServices.RemoteThumbnails.TryGet(record) ?? await AppServices.RemoteThumbnails.GetOrDownloadAsync(
                 record, token => AppServices.Gateway.OpenThumbnailAsync(row.ImageId, token), _previewCancellation.Token);
             if (path is not null && File.Exists(path))
