@@ -44,7 +44,7 @@ public static class AccountIdentityApi
             var space = store.ListSpaces(accountId).FirstOrDefault()
                 ?? throw new UnauthorizedAccessException("account_space_missing");
             var document = store.ApproveEnrollment(accountId, requestId, space.Id, origin, spkiPin, signingKey,
-                allowEditing: request.ClientKind == "gui", allowMedia: request.ClientKind == "gui", allowAnalysis: false);
+                allowEditing: request.ClientKind == "gui", allowMedia: request.ClientKind == "gui", allowAnalysis: request.ClientKind == "gui");
             return Results.Bytes(DeviceAuthorization.WriteFileDocument(document), "application/json");
         }).RequireRateLimiting("account-work");
 
