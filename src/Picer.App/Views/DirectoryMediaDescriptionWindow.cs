@@ -218,7 +218,7 @@ public sealed class DirectoryMediaDescriptionWindow : Window
                         ?? throw new InvalidOperationException("索引服务未提供原图读取接口。") : null, preparedInputs);
             var photoService = photoAnalyzer is null ? null : new CloudVisionAnalysisService(AppServices.CloudVisionRepository,
                 photoAnalyzer, AppServices.Geocoder, AppServices.People,
-                databaseWork: (work, ct) => UiWork.RunDatabaseAsync(work, ct), allowConcurrent: true);
+                databaseWork: (work, ct) => UiWork.RunDatabaseAsync(work, ct), allowConcurrent: false);
             var runner = new MediaDescriptionBatch(async (image, ct) =>
             {
                 try
@@ -276,10 +276,7 @@ public sealed class DirectoryMediaDescriptionWindow : Window
                 catch (AnalysisBudgetExceededException) { throw; }
                 catch (Exception exception) { throw AnalysisStageException.Wrap(stage, exception); }
             }, prefetchPhoto: preparedInputs is null ? null : preparedInputs.PrepareAsync);
-            // The remote model endpoint is the dominant latency. Keep two requests
-            // in flight so image preparation and inference overlap without creating
-            // an unbounded burst or changing the user-selected local concurrency.
-            var concurrency = photo is null ? 1 : photo.Value.IsLocal ? (int)(_concurrency.SelectedItem ?? 2) : 2;
+            var concurrency = photo?.IsLocal == true ? (int)(_concurrency.SelectedItem ?? 2) : 1;
             var videoConcurrency = video?.IsLocal == true ? (int)(_concurrency.SelectedItem ?? 2) : 1;
             taskStage = AnalysisStage.Model;
             var discovery = DirectoryDescriptionDiscovery.DiscoverAsync(AppServices.Db, plan.Directory, retryPaths, token);
