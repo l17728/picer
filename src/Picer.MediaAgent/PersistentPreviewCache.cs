@@ -6,6 +6,7 @@ namespace Picer.MediaAgent;
 /// <summary>Source-side disk cache for generated previews.</summary>
 internal sealed class PersistentPreviewCache
 {
+    private const long MaxBytes = 512L * 1024 * 1024;
     private readonly string _root = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "Picer", "media-agent", "previews");
@@ -38,9 +39,23 @@ internal sealed class PersistentPreviewCache
             var temporary = destination + "." + Guid.NewGuid().ToString("N") + ".part";
             File.WriteAllBytes(temporary, bytes.ToArray());
             File.Move(temporary, destination, overwrite: false);
+            Trim();
         }
         catch (IOException) { }
         catch (UnauthorizedAccessException) { }
+    }
+
+    private void Trim()
+    {
+        var files = Directory.EnumerateFiles(_root, "*.jpg").Select(path => new FileInfo(path))
+            .OrderBy(file => file.LastAccessTimeUtc).ToList();
+        long total = files.Sum(file => file.Length);
+        foreach (var file in files)
+        {
+            if (total <= MaxBytes) break;
+            try { total -= file.Length; file.Delete(); } catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+        }
     }
 
     private static string Key(string path, int size, long length, DateTime lastWriteUtc)
