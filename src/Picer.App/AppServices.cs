@@ -634,7 +634,8 @@ public static partial class AppServices
     }
 
     /// <summary>Runs the one-time synchronization required before changing index authority.</summary>
-    public static async Task SyncBeforeIndexModeSwitchAsync(bool targetServiceMode, CancellationToken cancellationToken = default)
+    public static async Task SyncBeforeIndexModeSwitchAsync(bool targetServiceMode, CancellationToken cancellationToken = default,
+        string? targetBaseUrl = null, string? targetToken = null, byte[]? targetSpkiPin = null)
     {
         if (targetServiceMode == ServiceMode) return;
         var transaction = new IndexModeSwitchTransaction(
@@ -642,18 +643,34 @@ public static partial class AppServices
             targetServiceMode ? IndexBackendConfig.ServiceMode : IndexBackendConfig.LocalMode);
         transaction.Begin();
         transaction.BeginSync();
+        IndexSyncClient? oneTimeClient = null;
+        IIndexGateway? oneTimeGateway = null;
         try
         {
             if (targetServiceMode)
             {
                 if (SyncClient is null && _localSpacePublisher is null)
                     throw new InvalidOperationException("index_mode_switch_sync_unconfigured");
-                await SyncLocalChangesToRemoteAsync(cancellationToken).ConfigureAwait(false);
-                if (SyncGateway is not null && _localSpacePublisher is null)
+                if (_localSpacePublisher is null && targetBaseUrl is not null && targetToken is not null && targetSpkiPin is not null)
+                {
+                    oneTimeClient = IndexSyncClient.Create(targetBaseUrl, targetToken, targetSpkiPin,
+                        databaseWork: (work, ct) => UiWork.RunDatabaseAsync(work, ct));
+                    oneTimeGateway = new HttpIndexGateway(targetBaseUrl, targetToken, targetSpkiPin);
+                    await oneTimeClient.PushDescriptionsAsync(Db, cancellationToken).ConfigureAwait(false);
+                    await oneTimeClient.PushMetadataEditsAsync(Db, cancellationToken).ConfigureAwait(false);
+                    await oneTimeClient.PushFaceReviewDecisionsAsync(Db, cancellationToken).ConfigureAwait(false);
+                    var checkpoint = Path.Combine(AppPaths.DataRoot, "index-sync-checkpoint.json");
+                    await oneTimeClient.PushIncrementalAsync(Db, checkpoint, cancellationToken: cancellationToken).ConfigureAwait(false);
+                    await oneTimeClient.PushDirectoryClassificationAsync(
+                        new DirectoryClassificationPreferences(AppPaths.DirectoryClassificationSettingsPath).Snapshot(), cancellationToken).ConfigureAwait(false);
+                }
+                else
+                    await SyncLocalChangesToRemoteAsync(cancellationToken).ConfigureAwait(false);
+                if (oneTimeGateway is not null || (SyncGateway is not null && _localSpacePublisher is null))
                 {
                     var local = await UiWork.RunDatabaseAsync("IndexModeSwitch.LocalSnapshot",
                         () => IndexConsistencySnapshotBuilder.CaptureLocal(Db), cancellationToken).ConfigureAwait(false);
-                    var remote = await IndexConsistencySnapshotBuilder.CaptureRemoteAsync(SyncGateway, cancellationToken).ConfigureAwait(false);
+                    var remote = await IndexConsistencySnapshotBuilder.CaptureRemoteAsync(oneTimeGateway ?? SyncGateway!, cancellationToken).ConfigureAwait(false);
                     if (!local.Matches(remote, requireNoPendingWrites: true))
                         throw new InvalidOperationException("index_mode_switch_consistency_mismatch");
                 }
@@ -678,6 +695,11 @@ public static partial class AppServices
         {
             transaction.Fail(exception is HttpRequestException ? "index_mode_switch_sync_unavailable" : "index_mode_switch_sync_failed");
             throw;
+        }
+        finally
+        {
+            oneTimeGateway?.Dispose();
+            oneTimeClient?.Dispose();
         }
     }
 
