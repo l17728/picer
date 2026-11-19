@@ -32,11 +32,11 @@ IndexService 已存在以 `space_id` 为核心的多租户授权和运行时隔�
 - 新增 `IndexModeSwitchTransaction`，强制执行 Begin → Syncing → 一致性通过 → Switched → Cleanup 的顺序。
 - 新增 `IndexConsistencySnapshotBuilder`：采集 epoch、媒体/元数据 revision、媒体数量、媒体摘要、元数据摘要和待写队列，并在切换前比较本地与远端证据。
 - `BackendSettingsWindow` 只有在切换闸门完成后才写入新配置并重启；配置失败不会覆盖当前配置。
-- 验证：`IndexConsistencySnapshotTests`、`IndexModeSwitchTransactionTests`、`IndexBackendConfigTests` 共 12 项通过；Release GUI 构建路径为 `src/Picer.App/bin/Release/net8.0-windows/win-x64/Picer.App.exe`，构建日志为 `artifacts/build-index-consistency-gate-20261119.log`。
+- 验证：`IndexConsistencySnapshotTests`、`IndexModeSwitchTransactionTests`、`IndexBackendConfigTests` 及相关切换配置回归共 13 项通过；Release GUI 构建路径为 `src/Picer.App/bin/Release/net8.0-windows/win-x64/Picer.App.exe`，构建日志为 `artifacts/build-relay-switch-final-20261119.log`。
 
 ### 后续必须保持的验收边界
 
-服务索引被取消后不做持续同步；再次切回服务模式时仍必须执行且仅执行本次切换所需的一次完整同步，并通过一致性闸门后才允许切换。
+服务索引被取消后不做持续同步；再次切回服务模式时仍必须执行且仅执行本次切换所需的一次完整同步，并通过一致性闸门后才允许切换。只有实际发生本地/服务模式变化才进入切换事务；同一模式重复保存不会伪造切换，也不会额外同步。
 
 - 目标服务地址现在在切换同步前先通过已验证连接确定；不会把一次性同步发送到旧的配对端点。
 - 一致性通过后增加只读探针：目录、标签、相册、空搜索和首张缩略图读取；探针失败会阻止切换。
