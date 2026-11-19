@@ -29,6 +29,7 @@ public sealed class IndexBackendConfigTests : IDisposable
         File.WriteAllText(EndpointPath, """{"url":"https://127.0.0.1:8445","spkiPin":"AAEC","tokenCipher":"AAEC","pipeName":"picer-x"}""");
         var options = IndexBackendConfig.Load(BackendPath, EndpointPath);
         Assert.Equal(IndexBackendConfig.LocalMode, options.Mode);
+        Assert.False(options.ContinuousSync);
     }
 
     [Fact]

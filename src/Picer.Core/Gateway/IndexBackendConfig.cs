@@ -41,7 +41,10 @@ public static class IndexBackendConfig
         }
 
         if (!string.Equals(mode, ServiceMode, StringComparison.OrdinalIgnoreCase))
-            return new IndexBackendOptions(LocalMode, null, null, null, ContinuousSync: continuousSync);
+            // Local index mode is authoritative on this machine. Continuous
+            // server synchronization is opt-in only for an explicit mode
+            // switch transaction, never a background side effect of local mode.
+            return new IndexBackendOptions(LocalMode, null, null, null, ContinuousSync: false);
 
         if (deviceAuthentication) return new IndexBackendOptions(ServiceMode, null, null, null, DeviceAuthentication: true);
 
