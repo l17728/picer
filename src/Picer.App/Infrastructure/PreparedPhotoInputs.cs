@@ -34,17 +34,19 @@ internal sealed class PreparedPhotoInputs(IMediaAssetGateway assets, string root
             if (stream is null) entry = new(null, null);
             else
             {
-                await using var file = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None, 65536, true);
-                var buffer = new byte[65536]; long total = 0;
-                int read;
-                while ((read = await stream.ReadAsync(buffer, token).ConfigureAwait(false)) > 0)
                 {
-                    total += read;
-                    if (total > 8 * 1024 * 1024) throw new InvalidDataException("prepared_photo_too_large");
-                    await file.WriteAsync(buffer.AsMemory(0, read), token).ConfigureAwait(false);
+                    await using var file = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None, 65536, true);
+                    var buffer = new byte[65536]; long total = 0;
+                    int read;
+                    while ((read = await stream.ReadAsync(buffer, token).ConfigureAwait(false)) > 0)
+                    {
+                        total += read;
+                        if (total > 8 * 1024 * 1024) throw new InvalidDataException("prepared_photo_too_large");
+                        await file.WriteAsync(buffer.AsMemory(0, read), token).ConfigureAwait(false);
+                    }
+                    if (total == 0) throw new InvalidDataException("prepared_photo_empty");
+                    trace.Mark("prepared", total);
                 }
-                if (total == 0) throw new InvalidDataException("prepared_photo_empty");
-                trace.Mark("prepared", total);
                 if (cachePath is not null)
                 {
                     Directory.CreateDirectory(Path.GetDirectoryName(cachePath)!);
