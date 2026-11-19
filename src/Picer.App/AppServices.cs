@@ -538,9 +538,11 @@ public static partial class AppServices
             // Face rows are part of the mirrored index, not local-only state. They
             // must be applied before assignments so the same people/faces are
             // visible in the remote client and can be searched there.
-            if (incremental.Supported)
+            if (incremental.Supported && !IsDescriptionRunning)
                 await UiWork.RunDatabaseAsync("RemoteMirror.ReconcileRelationships", () =>
                     Db.ReconcileMirroredPhotoMetadata(metadata, authoritativeCatalog: ServiceMode && incremental.Supported), cancellationToken).ConfigureAwait(false);
+            else if (incremental.Supported)
+                Picer.Core.Logging.AnalysisDiagnosticLog.Info("Remote mirror relationship reconcile deferred while directory description is running");
             await UiWork.RunDatabaseAsync("RemoteMirror.FaceState", () =>
             {
                 using var transaction = Db.BeginTransaction();
