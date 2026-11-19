@@ -114,6 +114,7 @@ public sealed class NamedPipeIndexServer : IDisposable
                 "thumb" => await ThumbnailElementAsync(imageRequest.Id, cancellationToken),
                 "search" => JsonSerializer.SerializeToElement(await _handlers.SearchAsync(new GatewaySearchRequest(searchRequest.Filters, searchRequest.PageSize, searchRequest.Cursor), cancellationToken)),
                 "sources" => JsonSerializer.SerializeToElement(_handlers.ListSources()),
+                "directories" => JsonSerializer.SerializeToElement(await _handlers.ListDirectoriesAsync(cancellationToken)),
                 "tags" => JsonSerializer.SerializeToElement(_handlers.ListTags()),
                 "albums" => JsonSerializer.SerializeToElement(_handlers.ListAlbums()),
                 "metadata" => JsonSerializer.SerializeToElement(_handlers.GetMetadata()),

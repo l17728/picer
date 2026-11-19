@@ -105,6 +105,9 @@ public sealed class PipeIndexGateway : IIndexGateway, IDisposable
     public async Task<IReadOnlyList<SourceFolder>> ListSourcesAsync(CancellationToken cancellationToken = default) =>
         await CallAsync<IReadOnlyList<SourceFolder>>("sources", null, cancellationToken) ?? [];
 
+    public async Task<IReadOnlyList<GatewayDirectorySummary>> ListDirectoriesAsync(CancellationToken cancellationToken = default) =>
+        await CallAsync<IReadOnlyList<GatewayDirectorySummary>>("directories", null, cancellationToken) ?? [];
+
     public async Task<IReadOnlyList<Tag>> ListTagsAsync(CancellationToken cancellationToken = default) =>
         await CallAsync<IReadOnlyList<Tag>>("tags", null, cancellationToken) ?? [];
 
