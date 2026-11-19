@@ -142,7 +142,7 @@ public partial class App : Application
             // SyncClient is an optional publisher helper and can be absent when
             // a read-only endpoint was configured, but that must not disable
             // remote metadata refresh (video people/keyframes included).
-            if (AppServices.ServiceMode || AppServices.SyncClient is not null || AppServices.LocalSpaceSyncConfigured)
+            if (AppServices.ContinuousSyncEnabled && (AppServices.ServiceMode || AppServices.SyncClient is not null || AppServices.LocalSpaceSyncConfigured))
                 _coldStartSync = Task.Run(() => ColdStartSynchronizationAsync(_coldStartSyncCts.Token));
             // A remote client is a read/mirror consumer. Publishing the local
             // evaluation snapshot here needlessly scans thousands of faces and
@@ -272,6 +272,7 @@ public partial class App : Application
 
     private async Task<bool> SyncReplicationInBackgroundAsync(CancellationToken cancellationToken)
     {
+        if (!AppServices.ContinuousSyncEnabled) return true;
         // Publish the local user's committed changes once. The publisher
         // checkpoint makes this idempotent; unchanged media/metadata produces
         // no network writes. Notification reconnect backoff never schedules a

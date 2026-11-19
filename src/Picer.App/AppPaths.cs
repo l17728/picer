@@ -49,7 +49,7 @@ public static class AppPaths
     public static void SaveIndexBackendLocal()
     {
         Directory.CreateDirectory(BootstrapDirectory);
-        File.WriteAllText(BackendConfigPath, "{\"mode\":\"local\"}");
+        File.WriteAllText(BackendConfigPath, "{\"mode\":\"local\",\"syncPolicy\":\"switch-only\"}");
     }
 
     public static void SaveIndexBackendService(string ip)

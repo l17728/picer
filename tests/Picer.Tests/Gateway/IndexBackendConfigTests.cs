@@ -32,6 +32,14 @@ public sealed class IndexBackendConfigTests : IDisposable
     }
 
     [Fact]
+    public void LocalMode_SwitchOnlyPolicyDisablesContinuousSync()
+    {
+        File.WriteAllText(BackendPath, "{\"mode\":\"local\",\"syncPolicy\":\"switch-only\"}");
+        var options = IndexBackendConfig.Load(BackendPath, EndpointPath);
+        Assert.False(options.ContinuousSync);
+    }
+
+    [Fact]
     public void ServiceMode_ResolvesEndpointFields()
     {
         File.WriteAllText(BackendPath, """{"mode":"service"}""");
@@ -44,6 +52,7 @@ public sealed class IndexBackendConfigTests : IDisposable
         Assert.Equal("picer-test-pipe", options.PipeName);
         Assert.Equal("tok", options.Token);
         Assert.Equal([1, 2, 3, 4], options.SpkiPin);
+        Assert.True(options.ContinuousSync);
     }
 
     [Fact]

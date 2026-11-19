@@ -73,6 +73,7 @@ public static partial class AppServices
         }
     }
     public static bool ServiceMode { get; private set; }
+    public static bool ContinuousSyncEnabled { get; private set; } = true;
     private static DeviceAccountClient? AccountClient { get; set; }
     public static string RemoteDataRoot { get; private set; } = AppPaths.DataRoot;
     public static PicerDatabase Db { get; private set; } = null!;
@@ -121,6 +122,7 @@ public static partial class AppServices
 
         var backend = AppPaths.LoadIndexBackend();
         ServiceMode = backend.Mode == IndexBackendConfig.ServiceMode;
+        ContinuousSyncEnabled = ServiceMode || backend.ContinuousSync;
         if (backend.DeviceAuthentication)
             AccountClient = new WindowsDeviceCredentialStore(AppPaths.AccountCredentialPath).OpenClient();
         if (ServiceMode && backend.BaseUrl is { Length: > 0 } serviceUrl)
@@ -663,6 +665,7 @@ public static partial class AppServices
     /// In local mode this is active only when the user paired a remote IndexService.</summary>
     public static void QueueImmediateRemoteSync(string reason)
     {
+        if (!ContinuousSyncEnabled) return;
         if (SyncClient is null && _localSpacePublisher is null) return;
         // A vector/media upload may already be in flight for minutes. Manual
         // review decisions have their own serialized small request path.

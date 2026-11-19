@@ -4,14 +4,14 @@ using System.Text.Json;
 namespace Picer.Core.Gateway;
 
 public sealed record IndexBackendOptions(string Mode, string? BaseUrl, byte[]? SpkiPin, string? Token, string? PipeName = null,
-    bool DeviceAuthentication = false, string? CachePartition = null);
+    bool DeviceAuthentication = false, string? CachePartition = null, bool ContinuousSync = true);
 
 public static class IndexBackendConfig
 {
     public const string LocalMode = "local";
     public const string ServiceMode = "service";
 
-    private sealed record BackendFile(string? Mode, string? BaseUrl, string? IndexServiceIp, string? Authentication);
+    private sealed record BackendFile(string? Mode, string? BaseUrl, string? IndexServiceIp, string? Authentication, string? SyncPolicy);
     private sealed record EndpointFile(string Url, string SpkiPin, string TokenCipher, string? PipeName);
 
     private static readonly JsonSerializerOptions Json = new() { PropertyNameCaseInsensitive = true };
@@ -21,6 +21,7 @@ public static class IndexBackendConfig
         string? mode = null;
         string? baseUrlOverride = null;
         var deviceAuthentication = false;
+        var continuousSync = true;
         try
         {
             if (File.Exists(backendJsonPath))
@@ -28,6 +29,7 @@ public static class IndexBackendConfig
                 var backend = JsonSerializer.Deserialize<BackendFile>(File.ReadAllText(backendJsonPath), Json);
                 mode = backend?.Mode;
                 deviceAuthentication = backend?.Authentication == "device";
+                continuousSync = !string.Equals(backend?.SyncPolicy, "switch-only", StringComparison.OrdinalIgnoreCase);
                 baseUrlOverride = string.IsNullOrWhiteSpace(backend?.IndexServiceIp)
                     ? backend?.BaseUrl
                     : BuildIndexServiceUrl(backend.IndexServiceIp);
@@ -35,11 +37,11 @@ public static class IndexBackendConfig
         }
         catch
         {
-            return new IndexBackendOptions(LocalMode, null, null, null);
+            return new IndexBackendOptions(LocalMode, null, null, null, ContinuousSync: false);
         }
 
         if (!string.Equals(mode, ServiceMode, StringComparison.OrdinalIgnoreCase))
-            return new IndexBackendOptions(LocalMode, null, null, null);
+            return new IndexBackendOptions(LocalMode, null, null, null, ContinuousSync: continuousSync);
 
         if (deviceAuthentication) return new IndexBackendOptions(ServiceMode, null, null, null, DeviceAuthentication: true);
 
@@ -68,7 +70,8 @@ public static class IndexBackendConfig
         }
 
         var baseUrl = string.IsNullOrWhiteSpace(baseUrlOverride) ? endpoint.Url : baseUrlOverride;
-        return new IndexBackendOptions(ServiceMode, baseUrl, Convert.FromBase64String(endpoint.SpkiPin), token, endpoint.PipeName);
+        return new IndexBackendOptions(ServiceMode, baseUrl, Convert.FromBase64String(endpoint.SpkiPin), token, endpoint.PipeName,
+            ContinuousSync: continuousSync);
     }
 
     /// <summary>Loads a paired endpoint for the local-mode background sync publisher.</summary>

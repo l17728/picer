@@ -23,7 +23,7 @@ public static partial class AppServices
         _spaceNotificationRefresh = refresh ?? _spaceNotificationRefresh;
         var client = SpaceSynchronizationClient;
         var account=ServiceMode ? AccountClient : _localSpacePublisherClient;
-        if (client is null || account is null || !ServiceMode && !LocalSpaceSyncConfigured) return;
+        if (!ContinuousSyncEnabled || client is null || account is null || !ServiceMode && !LocalSpaceSyncConfigured) return;
         string? library = null;
         if (!ServiceMode)
         {
@@ -60,7 +60,7 @@ public static partial class AppServices
     public static async Task<SpaceNotification?> CaptureSpaceNotificationBaselineAsync(CancellationToken token)
     {
         var client=SpaceSynchronizationClient;
-        if (client is null || !ServiceMode && !LocalSpaceSyncConfigured) return null;
+        if (!ContinuousSyncEnabled || client is null || !ServiceMode && !LocalSpaceSyncConfigured) return null;
         string? library=null;
         if (!ServiceMode)
         {
