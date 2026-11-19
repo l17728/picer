@@ -673,6 +673,7 @@ public static partial class AppServices
                     var remote = await IndexConsistencySnapshotBuilder.CaptureRemoteAsync(oneTimeGateway ?? SyncGateway!, cancellationToken).ConfigureAwait(false);
                     if (!local.Matches(remote, requireNoPendingWrites: true))
                         throw new InvalidOperationException("index_mode_switch_consistency_mismatch");
+                    await IndexConsistencySnapshotBuilder.ProbeReadPathAsync(oneTimeGateway ?? SyncGateway!, cancellationToken).ConfigureAwait(false);
                 }
             }
             else
@@ -686,6 +687,7 @@ public static partial class AppServices
                 var remote = await IndexConsistencySnapshotBuilder.CaptureRemoteAsync(mirrorGateway, cancellationToken).ConfigureAwait(false);
                 if (!local.Matches(remote, requireNoPendingWrites: false))
                     throw new InvalidOperationException("index_mode_switch_consistency_mismatch");
+                await IndexConsistencySnapshotBuilder.ProbeReadPathAsync(mirrorGateway, cancellationToken).ConfigureAwait(false);
             }
             transaction.MarkSyncAndConsistencyPassed();
             transaction.MarkSwitched();

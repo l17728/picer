@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using Picer.Core.Data;
 using Picer.Core.Models;
+using Picer.Core.Search;
 using Picer.Core.Video;
 
 namespace Picer.Core.Gateway;
@@ -76,6 +77,21 @@ public static class IndexConsistencySnapshotBuilder
         return new(revision.Epoch, revision.Through, revision.MetadataRevision,
             images.Count, videos.Count, Digest(images.Select(MediaKey).Concat(videos.Select(MediaKey))),
             DigestMetadata(metadata), 0, 0);
+    }
+
+    /// <summary>Read-only probes used as the final gate before changing authority.</summary>
+    public static async Task ProbeReadPathAsync(IIndexGateway gateway, CancellationToken cancellationToken = default)
+    {
+        await gateway.ListDirectoriesAsync(cancellationToken).ConfigureAwait(false);
+        await gateway.ListTagsAsync(cancellationToken).ConfigureAwait(false);
+        await gateway.ListAlbumsAsync(cancellationToken).ConfigureAwait(false);
+        var page = await gateway.SearchAsync(new SearchFilters { IncludeMissing = true }, 1, null, cancellationToken).ConfigureAwait(false);
+        if (page.Items.Count == 0) return;
+        await using var thumbnail = await gateway.OpenThumbnailAsync(page.Items[0].Id, cancellationToken).ConfigureAwait(false);
+        if (thumbnail is null) throw new InvalidDataException("index_mode_switch_thumbnail_probe_failed");
+        var buffer = new byte[1];
+        if (await thumbnail.ReadAsync(buffer, cancellationToken).ConfigureAwait(false) != 1)
+            throw new InvalidDataException("index_mode_switch_thumbnail_probe_empty");
     }
 
     private static string MediaKey(ImageRecord image) =>
