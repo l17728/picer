@@ -13,6 +13,7 @@ public static class AppPaths
     public static string ServiceEndpointPath => Path.Combine(BootstrapDirectory, "service-endpoint.json");
     public static string AccountCredentialPath => Path.Combine(BootstrapDirectory, "account-device.bin");
     public static string AgentCredentialPath => Path.Combine(BootstrapDirectory, "agent-device.bin");
+    private static string RemoteMirrorCleanupPath => Path.Combine(BootstrapDirectory, "pending-remote-mirror-cleanup.json");
     public static bool RequiresAccountSignIn()
     {
         var backend = Picer.Core.Gateway.IndexBackendConfig.Load(BackendConfigPath, ServiceEndpointPath,
@@ -51,6 +52,44 @@ public static class AppPaths
         Directory.CreateDirectory(BootstrapDirectory);
         File.WriteAllText(BackendConfigPath, "{\"mode\":\"local\",\"syncPolicy\":\"switch-only\"}");
     }
+
+    public static void ScheduleRemoteMirrorCleanup(string root)
+    {
+        var resolved = Path.GetFullPath(root);
+        var dataRoot = Path.GetFullPath(DataRoot).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        if (!string.Equals(resolved, dataRoot, StringComparison.OrdinalIgnoreCase) &&
+            !resolved.StartsWith(dataRoot + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("remote_mirror_cleanup_outside_data_root");
+        Directory.CreateDirectory(BootstrapDirectory);
+        File.WriteAllText(RemoteMirrorCleanupPath, JsonSerializer.Serialize(new { root = resolved }));
+    }
+
+    public static void CleanupScheduledRemoteMirror()
+    {
+        if (!File.Exists(RemoteMirrorCleanupPath)) return;
+        try
+        {
+            var document = JsonSerializer.Deserialize<PendingMirrorCleanup>(File.ReadAllText(RemoteMirrorCleanupPath));
+            var root = document?.Root is { Length: > 0 } value ? Path.GetFullPath(value) : null;
+            var dataRoot = Path.GetFullPath(DataRoot).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            if (root is null || (!string.Equals(root, dataRoot, StringComparison.OrdinalIgnoreCase) &&
+                !root.StartsWith(dataRoot + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))) return;
+            foreach (var file in new[] { "remote-mirror.db", "remote-mirror.db-wal", "remote-mirror.db-shm", "remote-geocoding-cache.json" })
+                DeleteFile(Path.Combine(root, file));
+            foreach (var directory in new[] { "remote-cache", "remote-thumbs", "remote-face-thumbs", "remote-video-summary-cache" })
+                DeleteDirectory(Path.Combine(root, directory));
+            File.Delete(RemoteMirrorCleanupPath);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or JsonException)
+        {
+            // Leave the marker for the next startup; a failed cleanup must not
+            // prevent the local index from opening.
+        }
+    }
+
+    private static void DeleteFile(string path) { if (File.Exists(path)) File.Delete(path); }
+    private static void DeleteDirectory(string path) { if (Directory.Exists(path)) Directory.Delete(path, recursive: true); }
+    private sealed record PendingMirrorCleanup(string Root);
 
     public static void SaveIndexBackendService(string ip)
     {

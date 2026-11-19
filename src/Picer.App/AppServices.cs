@@ -199,6 +199,7 @@ public static partial class AppServices
         }
 
         Db = new PicerDatabase(AppPaths.DbPath);
+        AppPaths.CleanupScheduledRemoteMirror();
         InitializeLocalSpacePublisher();
 
         // Local mode remains offline by default. When an IndexService endpoint

@@ -125,7 +125,12 @@ public partial class BackendSettingsWindow : Window
             {
                 verifiedConnection!.Save(AppPaths.BackendConfigPath, AppPaths.ServiceEndpointPath);
             }
-            else AppPaths.SaveIndexBackendLocal();
+            else
+            {
+                AppPaths.SaveIndexBackendLocal();
+                if (AppServices.ServiceMode)
+                    AppPaths.ScheduleRemoteMirrorCleanup(AppServices.RemoteDataRoot);
+            }
             Process.Start(new ProcessStartInfo(processPath, $"--wait-for-pid {Environment.ProcessId}") { UseShellExecute = true });
             Application.Current.Shutdown();
         }
