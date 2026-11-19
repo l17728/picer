@@ -509,6 +509,7 @@ public sealed partial class IndexSyncClient(HttpClient client, bool accountMode 
                     request.CloudVisionAnalyses, request.SceneGroupDescriptions, request.FaceReviewStates,
                     request.FaceCandidateClusters, request.FaceCandidateMembers, request.FaceTrainingArtifacts,
                     request.FacePersonPrototypes, request.FacePersonPolicies, request.FaceModelSettings)
+                { DescriptionVersions = database.GetDescriptionVersions() }
             };
         }
         finally { client.Dispose(); }
