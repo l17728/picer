@@ -73,7 +73,24 @@ public static class MediaFileSession
             var block = new byte[MediaWire.BlockSize];
             while (socket.State == WebSocketState.Open)
             {
-                var request = await MediaWire.ReceiveJsonAsync<MediaWire.ReadRequest>(socket, token);
+                MediaWire.ReadRequest request;
+                try
+                {
+                    request = await MediaWire.ReceiveJsonAsync<MediaWire.ReadRequest>(socket, token);
+                }
+                catch (WebSocketException) when (total > 0 && socket.State is WebSocketState.Closed or WebSocketState.CloseReceived or WebSocketState.Aborted)
+                {
+                    // The HTTP gateway disposes the one-shot stream after it
+                    // has copied the requested bytes. Treat that peer close as
+                    // normal completion instead of reporting an agent failure.
+                    trace.Mark("closed_after_data", total);
+                    break;
+                }
+                catch (IOException) when (total > 0 && socket.State is WebSocketState.Closed or WebSocketState.CloseReceived or WebSocketState.Aborted)
+                {
+                    trace.Mark("closed_after_data", total);
+                    break;
+                }
                 // A pooled transport must revalidate a revoked lease before every reuse/read.
                 using var validLease = lease is not null ? leases!.Acquire(path, lease.ETag) : null;
                 if (request.Offset == 0 && request.Count == 0)
