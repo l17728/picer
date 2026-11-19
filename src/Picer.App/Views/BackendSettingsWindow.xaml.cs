@@ -95,11 +95,19 @@ public partial class BackendSettingsWindow : Window
         finally { _probe = null; VerifyButton.IsEnabled = SaveButton.IsEnabled = true; }
     }
 
-    private void Save_Click(object sender, RoutedEventArgs e)
+    private async void Save_Click(object sender, RoutedEventArgs e)
     {
         try
         {
             var processPath = Environment.ProcessPath ?? throw new InvalidOperationException("无法定位当前程序。");
+            var targetServiceMode = RemoteModeBox.IsChecked == true;
+            if (targetServiceMode != AppServices.ServiceMode)
+            {
+                SaveButton.IsEnabled = false;
+                ErrorText.Text = "正在执行索引切换前的一次性同步和一致性检查，失败将保留当前模式。";
+                using var switchTimeout = new CancellationTokenSource(TimeSpan.FromMinutes(10));
+                await AppServices.SyncBeforeIndexModeSwitchAsync(targetServiceMode, switchTimeout.Token);
+            }
             if (RemoteModeBox.IsChecked == true && _accountVerified)
                 AppPaths.SaveIndexBackendAccount();
             else if (RemoteModeBox.IsChecked == true)
@@ -115,6 +123,8 @@ public partial class BackendSettingsWindow : Window
             Application.Current.Shutdown();
         }
         catch (ArgumentException error) { ErrorText.Text = error.Message; }
+        catch (OperationCanceledException) { ErrorText.Text = "索引切换已取消，当前模式保持不变。"; SaveButton.IsEnabled = true; }
+        catch (InvalidOperationException error) { ErrorText.Text = $"索引切换失败：{error.Message}，当前模式保持不变。"; SaveButton.IsEnabled = true; }
         catch { ErrorText.Text = "保存或重启失败，请检查配置目录权限后重试。"; }
     }
 }

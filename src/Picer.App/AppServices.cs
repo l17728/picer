@@ -633,6 +633,38 @@ public static partial class AppServices
         finally { RemoteMirrorGate.Release(); }
     }
 
+    /// <summary>Runs the one-time synchronization required before changing index authority.</summary>
+    public static async Task SyncBeforeIndexModeSwitchAsync(bool targetServiceMode, CancellationToken cancellationToken = default)
+    {
+        if (targetServiceMode == ServiceMode) return;
+        var transaction = new IndexModeSwitchTransaction(
+            ServiceMode ? IndexBackendConfig.ServiceMode : IndexBackendConfig.LocalMode,
+            targetServiceMode ? IndexBackendConfig.ServiceMode : IndexBackendConfig.LocalMode);
+        transaction.Begin();
+        transaction.BeginSync();
+        try
+        {
+            if (targetServiceMode)
+            {
+                if (SyncClient is null && _localSpacePublisher is null)
+                    throw new InvalidOperationException("index_mode_switch_sync_unconfigured");
+                await SyncLocalChangesToRemoteAsync(cancellationToken).ConfigureAwait(false);
+            }
+            else
+            {
+                await SyncRemoteMirrorAsync(cancellationToken, requireMetadataSync: true).ConfigureAwait(false);
+            }
+            transaction.MarkSyncAndConsistencyPassed();
+            transaction.MarkSwitched();
+            transaction.MarkCleanupCompleted();
+        }
+        catch (Exception exception)
+        {
+            transaction.Fail(exception is HttpRequestException ? "index_mode_switch_sync_unavailable" : "index_mode_switch_sync_failed");
+            throw;
+        }
+    }
+
     private static async Task<IndexSyncClient.IndexSyncResult?> SyncLocalChangesToRemoteCoreAsync(
         CancellationToken cancellationToken = default, IProgress<string>? progress = null)
     {
