@@ -19,6 +19,11 @@ public static partial class AppServices
         try { await client.PushDescriptionsAsync(Db, token).ConfigureAwait(false); }
         catch (InvalidOperationException exception) when (exception.Message == "description_sync_conflicts_pending")
         { Picer.Core.Logging.AnalysisDiagnosticLog.Warn("Description sync conflicts retained; accepted results will be confirmed"); }
+        if (IsDescriptionRunning)
+        {
+            Picer.Core.Logging.AnalysisDiagnosticLog.Info("Description mirror pull deferred while directory description is running");
+            return;
+        }
         await RemoteMirrorGate.WaitAsync(token).ConfigureAwait(false);
         try
         {

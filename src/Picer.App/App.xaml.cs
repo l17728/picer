@@ -294,6 +294,11 @@ public partial class App : Application
 
     private async Task SyncRemoteMirrorInBackgroundAsync(CancellationToken cancellationToken = default)
     {
+        if (AppServices.IsDescriptionRunning)
+        {
+            LogInfo("Remote mirror sync deferred while directory description is running");
+            return;
+        }
         try
         {
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);

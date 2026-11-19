@@ -163,7 +163,10 @@ public sealed class DirectoryMediaDescriptionWindow : Window
         }
         var taskStage = AnalysisStage.Preprocess;
         var run = new DescriptionRunLifetime();
+        using var descriptionActivity = AppServices.EnterDescriptionRun();
         _run = run;
+        var generatedDescriptions = 0;
+        var reusedDescriptions = 0;
         var pendingDescriptionSync = 0;
         CancellationTokenSource? descriptionSyncCancellation = null;
         Task descriptionSyncTask = Task.CompletedTask;
@@ -227,7 +230,11 @@ public sealed class DirectoryMediaDescriptionWindow : Window
                 try
                 {
                 if (photoService is null) throw new AnalysisStageException(AnalysisStage.Model, "model_not_configured", false);
-                if (await UiWork.ReadSnapshotAsync("Descriptions.PhotoState", AppServices.Db, reader => new Picer.Core.Vision.CloudVisionRepository(reader).HasCurrentDescription(image), ct)) return true;
+                if (await UiWork.ReadSnapshotAsync("Descriptions.PhotoState", AppServices.Db, reader => new Picer.Core.Vision.CloudVisionRepository(reader).HasCurrentDescription(image), ct))
+                {
+                    Interlocked.Increment(ref reusedDescriptions);
+                    return true;
+                }
                 var result = await photoService!.AnalyzeAsync([(image, (IReadOnlyList<VisualConceptScore>)[], "directory-requested")],
                     cancellationToken: ct, runPolicy: photo!.Value.Policy with { MaximumImagesPerRun = 1 });
                 if (result.BudgetBlocked > 0) throw new DescriptionBudgetExceededException();
@@ -236,7 +243,12 @@ public sealed class DirectoryMediaDescriptionWindow : Window
                     var detail = await UiWork.ReadSnapshotAsync("Descriptions.PhotoState", AppServices.Db, reader => new Picer.Core.Vision.CloudVisionRepository(reader).GetFailureDetail(image.Id, photo!.Value.Analyzer.Provider), ct);
                     throw AnalysisStageException.FromStored(detail);
                 }
-                if (result.Completed > 0) RecordDescriptionWrite();
+                if (result.Completed > 0)
+                {
+                    Interlocked.Increment(ref generatedDescriptions);
+                    RecordDescriptionWrite();
+                }
+                else if (result.Skipped > 0) Interlocked.Increment(ref reusedDescriptions);
                 return result.Completed + result.Skipped > 0;
                 }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
@@ -255,7 +267,11 @@ public sealed class DirectoryMediaDescriptionWindow : Window
                     var current = repository.HasCurrentSummary(item);
                     return (Current: current, Frames: current ? [] : repository.GetKeyframes(item.Id, existingOnly: !AppServices.ServiceMode));
                 }, ct);
-                if (state.Current) return true;
+                if (state.Current)
+                {
+                    Interlocked.Increment(ref reusedDescriptions);
+                    return true;
+                }
                 var frames = state.Frames;
                 if (frames.Count == 0)
                 {
@@ -272,6 +288,7 @@ public sealed class DirectoryMediaDescriptionWindow : Window
                 stage = AnalysisStage.Model;
                 await AppServices.VideoSummaries.AnalyzeAsync(item, video!.Value.Analyzer, frames, ct, video.Value.Policy);
                 stage = AnalysisStage.Save;
+                Interlocked.Increment(ref generatedDescriptions);
                 RecordDescriptionWrite();
                 return true;
                 }
@@ -285,7 +302,8 @@ public sealed class DirectoryMediaDescriptionWindow : Window
             var discovery = DirectoryDescriptionDiscovery.DiscoverAsync(AppServices.Db, plan.Directory, retryPaths, token);
             await runner.RunStreamingAsync(discovery, run.CaptureProgress(new Progress<string>(value =>
             {
-                if (ReferenceEquals(_run, run) && run.AcceptsProgress) _status.Text = value;
+                if (ReferenceEquals(_run, run) && run.AcceptsProgress)
+                    _status.Text = $"{value}；新生成 {Volatile.Read(ref generatedDescriptions)}，复用 {Volatile.Read(ref reusedDescriptions)}";
             })), token, concurrency, videoConcurrency,
                 new Progress<MediaDescriptionFailure>(failure =>
                 {

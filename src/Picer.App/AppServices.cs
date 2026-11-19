@@ -49,6 +49,7 @@ public static partial class AppServices
     private static bool _remoteMediaBootstrapped;
     private static int _remoteSyncRequested;
     private static int _remoteSyncWorkerRunning;
+    private static int _descriptionRunCount;
     private static DeviceAccountClient? _localSpacePublisherClient;
     private static SpaceSyncPublisher? _localSpacePublisher;
     private static SpaceUploadScope? _localSpaceUploadScope;
@@ -56,6 +57,21 @@ public static partial class AppServices
     private static IIndexGateway? SyncGateway { get; set; }
     public static IndexSyncClient? SyncClient { get; private set; }
     public static bool LocalSpaceSyncConfigured => !ServiceMode && _localSpacePublisher is not null && _localSpaceUploadScope is not null;
+    public static bool IsDescriptionRunning => Volatile.Read(ref _descriptionRunCount) > 0;
+    internal static IDisposable EnterDescriptionRun()
+    {
+        Interlocked.Increment(ref _descriptionRunCount);
+        return new DescriptionRunLease();
+    }
+    private sealed class DescriptionRunLease : IDisposable
+    {
+        private int _released;
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _released, 1) == 0)
+                Interlocked.Decrement(ref _descriptionRunCount);
+        }
+    }
     public static bool ServiceMode { get; private set; }
     private static DeviceAccountClient? AccountClient { get; set; }
     public static string RemoteDataRoot { get; private set; } = AppPaths.DataRoot;
