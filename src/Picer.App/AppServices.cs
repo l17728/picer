@@ -657,8 +657,6 @@ public static partial class AppServices
                         databaseWork: (work, ct) => UiWork.RunDatabaseAsync(work, ct));
                     oneTimeGateway = new HttpIndexGateway(targetBaseUrl, targetToken, targetSpkiPin);
                     await oneTimeClient.PushDescriptionsAsync(Db, cancellationToken).ConfigureAwait(false);
-                    await oneTimeClient.PushMetadataEditsAsync(Db, cancellationToken).ConfigureAwait(false);
-                    await oneTimeClient.PushFaceReviewDecisionsAsync(Db, cancellationToken).ConfigureAwait(false);
                     var checkpoint = Path.Combine(AppPaths.DataRoot, "index-sync-checkpoint.json");
                     await oneTimeClient.PushIncrementalAsync(Db, checkpoint, cancellationToken: cancellationToken).ConfigureAwait(false);
                     await oneTimeClient.PushDirectoryClassificationAsync(
