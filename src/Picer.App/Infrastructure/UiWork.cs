@@ -42,6 +42,8 @@ internal static class UiWork
     public static async Task<T> RunDatabaseAsync<T>(string operation, Func<T> work, CancellationToken cancellationToken = default)
     {
         if (operation.StartsWith("RemoteMirror.", StringComparison.Ordinal) || operation.StartsWith("RemoteVideos.", StringComparison.Ordinal))
+            await WaitForDescriptionIdleAsync(cancellationToken).ConfigureAwait(false);
+        if (operation.StartsWith("RemoteMirror.", StringComparison.Ordinal) || operation.StartsWith("RemoteVideos.", StringComparison.Ordinal))
             await AppServices.ForegroundReads.WaitAsync(cancellationToken).ConfigureAwait(false);
         var stopwatch = Stopwatch.StartNew();
         await DatabaseGate.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -57,6 +59,8 @@ internal static class UiWork
 
     public static async Task RunDatabaseAsync(string operation, Action work, CancellationToken cancellationToken = default)
     {
+        if (operation.StartsWith("RemoteMirror.", StringComparison.Ordinal) || operation.StartsWith("RemoteVideos.", StringComparison.Ordinal))
+            await WaitForDescriptionIdleAsync(cancellationToken).ConfigureAwait(false);
         if (operation.StartsWith("RemoteMirror.", StringComparison.Ordinal) || operation.StartsWith("RemoteVideos.", StringComparison.Ordinal))
             await AppServices.ForegroundReads.WaitAsync(cancellationToken).ConfigureAwait(false);
         var stopwatch = Stopwatch.StartNew();
@@ -74,6 +78,14 @@ internal static class UiWork
     {
         if (queueMilliseconds >= 100 || executionMilliseconds >= 100)
             AppLogger.Info($"DatabaseWork {operation}: queue={queueMilliseconds} ms; execute={executionMilliseconds} ms");
+    }
+
+    private static async Task WaitForDescriptionIdleAsync(CancellationToken cancellationToken)
+    {
+        if (!AppServices.IsDescriptionRunning) return;
+        AppLogger.Info("Remote mirror database work deferred while directory description is running");
+        while (AppServices.IsDescriptionRunning)
+            await Task.Delay(250, cancellationToken).ConfigureAwait(false);
     }
 
     public static async Task RunDatabaseAsync(Action work, CancellationToken cancellationToken = default)
