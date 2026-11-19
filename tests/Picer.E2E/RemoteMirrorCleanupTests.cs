@@ -36,4 +36,25 @@ public sealed class RemoteMirrorCleanupTests
             if (Directory.Exists(root)) Directory.Delete(root, true);
         }
     }
+
+    [Fact]
+    public void CleanupRejectsPathOutsideDataRoot()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "picer-mirror-cleanup-root-" + Guid.NewGuid().ToString("N"));
+        var bootstrap = Path.Combine(root, "bootstrap");
+        var oldData = Environment.GetEnvironmentVariable("PICER_DATA_ROOT");
+        var oldBootstrap = Environment.GetEnvironmentVariable("PICER_BOOTSTRAP_ROOT");
+        try
+        {
+            Environment.SetEnvironmentVariable("PICER_DATA_ROOT", root);
+            Environment.SetEnvironmentVariable("PICER_BOOTSTRAP_ROOT", bootstrap);
+            Assert.Throws<InvalidOperationException>(() => AppPaths.ScheduleRemoteMirrorCleanup(Path.GetTempPath()));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("PICER_DATA_ROOT", oldData);
+            Environment.SetEnvironmentVariable("PICER_BOOTSTRAP_ROOT", oldBootstrap);
+            if (Directory.Exists(root)) Directory.Delete(root, true);
+        }
+    }
 }
