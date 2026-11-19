@@ -48,3 +48,10 @@ IndexService 已存在以 `space_id` 为核心的多租户授权和运行时隔�
 - `RemoteMirrorCleanupTests` 验证清理会删除远程镜像文件和缓存，但保留本地 `picer.db`；清理标记解析失败或删除失败时保留标记，下一次启动重试。
 - 清理路径安全测试同时覆盖正常清理和越界路径拒绝（`RemoteMirrorCleanupTests` 2/2）。
 - 远程 GUI 主窗口标题现在显示 `远程：服务地址`，用于确认当前连接的服务器，不再只显示“远程”。
+
+## 最终构建验收记录
+
+- `dotnet build picer.sln -c Debug --no-restore --warnaserror`：0 警告、0 错误。
+- 切换/配置/一致性/pipe 探针测试：13/13 通过。
+- 远程镜像清理 E2E：2/2 通过。
+- 正式 GUI：`src/Picer.App/bin/Release/net8.0-windows/win-x64/Picer.App.exe`，Release 构建日志：`artifacts/build-relay-switch-final-20261119.log`。
