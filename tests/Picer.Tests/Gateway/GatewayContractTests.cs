@@ -194,6 +194,14 @@ public sealed class GatewayContractTests(GatewayServiceFixture fixture) : IClass
     }
 
     [Fact]
+    public async Task PipeDirectoryEndpointSupportsSwitchReadProbe()
+    {
+        using var gateway = fixture.CreateGateway("pipe");
+        var directories = await gateway.ListDirectoriesAsync();
+        Assert.NotNull(directories);
+    }
+
+    [Fact]
     public async Task FaceReviewDecisionEndpoint_AcknowledgesAndProtectsAgainstOldSnapshots()
     {
         using var isolated = new GatewayServiceFixture();
