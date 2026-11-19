@@ -649,10 +649,26 @@ public static partial class AppServices
                 if (SyncClient is null && _localSpacePublisher is null)
                     throw new InvalidOperationException("index_mode_switch_sync_unconfigured");
                 await SyncLocalChangesToRemoteAsync(cancellationToken).ConfigureAwait(false);
+                if (SyncGateway is not null && _localSpacePublisher is null)
+                {
+                    var local = await UiWork.RunDatabaseAsync("IndexModeSwitch.LocalSnapshot",
+                        () => IndexConsistencySnapshotBuilder.CaptureLocal(Db), cancellationToken).ConfigureAwait(false);
+                    var remote = await IndexConsistencySnapshotBuilder.CaptureRemoteAsync(SyncGateway, cancellationToken).ConfigureAwait(false);
+                    if (!local.Matches(remote, requireNoPendingWrites: true))
+                        throw new InvalidOperationException("index_mode_switch_consistency_mismatch");
+                }
             }
             else
             {
                 await SyncRemoteMirrorAsync(cancellationToken, requireMetadataSync: true).ConfigureAwait(false);
+                var mirrorGateway = SyncGateway ?? Gateway;
+                if (mirrorGateway is null)
+                    throw new InvalidOperationException("index_mode_switch_gateway_unavailable");
+                var local = await UiWork.RunDatabaseAsync("IndexModeSwitch.LocalMirrorSnapshot",
+                    () => IndexConsistencySnapshotBuilder.CaptureLocal(Db), cancellationToken).ConfigureAwait(false);
+                var remote = await IndexConsistencySnapshotBuilder.CaptureRemoteAsync(mirrorGateway, cancellationToken).ConfigureAwait(false);
+                if (!local.Matches(remote, requireNoPendingWrites: false))
+                    throw new InvalidOperationException("index_mode_switch_consistency_mismatch");
             }
             transaction.MarkSyncAndConsistencyPassed();
             transaction.MarkSwitched();

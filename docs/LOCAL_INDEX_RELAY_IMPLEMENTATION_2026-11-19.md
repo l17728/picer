@@ -1,4 +1,4 @@
-# 本机索引 Relay 重构启动记录（2026-11-19）
+﻿# 本机索引 Relay 重构启动记录（2026-11-19）
 
 本文档使用 UTF-8 编码。专项设计以 `LOCAL_INDEX_RELAY_SDD_2026-11-19.md` 为准，验收以 `LOCAL_INDEX_RELAY_E2E_2026-11-19.md` 的 RELAY-01 至 RELAY-40 为准；全局数据安全和数据库约束继续遵守 `docs/SDD.md`。
 
@@ -24,3 +24,16 @@ IndexService 已存在以 `space_id` 为核心的多租户授权和运行时隔�
 - 数据库不加密，媒体文件内容自动选择高性能加密算法；
 - 模式切换失败不得删除远程索引；
 - 每阶段完成后必须独立提交并推送。
+
+## 2026-11-19 实施进度：模式切换一致性闸门
+
+- 本地模式 `SyncPolicy=switch-only`，不启动持续索引同步、通知监听或后台发布循环。
+- 服务模式保留持续同步；切换模式前执行一次完整同步，取消、超时、认证失败或一致性不匹配均保持原模式，不执行远端删除。
+- 新增 `IndexModeSwitchTransaction`，强制执行 Begin → Syncing → 一致性通过 → Switched → Cleanup 的顺序。
+- 新增 `IndexConsistencySnapshotBuilder`：采集 epoch、媒体/元数据 revision、媒体数量、媒体摘要、元数据摘要和待写队列，并在切换前比较本地与远端证据。
+- `BackendSettingsWindow` 只有在切换闸门完成后才写入新配置并重启；配置失败不会覆盖当前配置。
+- 验证：`IndexConsistencySnapshotTests`、`IndexModeSwitchTransactionTests`、`IndexBackendConfigTests` 共 12 项通过；Release GUI 构建路径为 `src/Picer.App/bin/Release/net8.0-windows/win-x64/Picer.App.exe`，构建日志为 `artifacts/build-index-consistency-gate-20261119.log`。
+
+### 后续必须保持的验收边界
+
+服务索引被取消后不做持续同步；再次切回服务模式时仍必须执行且仅执行本次切换所需的一次完整同步，并通过一致性闸门后才允许切换。

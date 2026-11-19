@@ -495,6 +495,25 @@ public sealed partial class IndexSyncClient(HttpClient client, bool accountMode 
             faceTrainingArtifacts, facePersonPrototypes, facePersonPolicies, faceModelSettings);
     }
 
+    /// <summary>Builds the canonical metadata projection used by switch consistency checks.</summary>
+    public static GatewayMetadata BuildMetadataSnapshot(PicerDatabase database)
+    {
+        var client = new IndexSyncClient(new HttpClient());
+        try
+        {
+            return client.BuildMetadataRequest(database) switch
+            {
+                var request => new GatewayMetadata(request.AlbumImages, request.ImageTags, request.Locations,
+                    request.Faces ?? [], request.FaceAssignments ?? [], request.VideoKeyframes ?? [],
+                    request.VideoTranscripts ?? [], request.VideoSummaries ?? [], request.VideoFaces,
+                    request.CloudVisionAnalyses, request.SceneGroupDescriptions, request.FaceReviewStates,
+                    request.FaceCandidateClusters, request.FaceCandidateMembers, request.FaceTrainingArtifacts,
+                    request.FacePersonPrototypes, request.FacePersonPolicies, request.FaceModelSettings)
+            };
+        }
+        finally { client.Dispose(); }
+    }
+
     private static string Fingerprint<T>(T value)
     {
         var bytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(value, Json));
