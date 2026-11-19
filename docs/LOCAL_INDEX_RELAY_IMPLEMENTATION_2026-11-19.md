@@ -55,3 +55,7 @@ IndexService 已存在以 `space_id` 为核心的多租户授权和运行时隔�
 - 切换/配置/一致性/pipe 探针测试：13/13 通过。
 - 远程镜像清理 E2E：2/2 通过。
 - 正式 GUI：`src/Picer.App/bin/Release/net8.0-windows/win-x64/Picer.App.exe`，Release 构建日志：`artifacts/build-relay-switch-final-20261119.log`。
+
+### 当前测试边界
+
+切换相关定向测试、`SpaceSyncReceiverTests` 全类和配对/镜像清理 E2E 均可重复通过；整套 `Picer.Tests` 并行运行时在已通过 88 项后出现测试主机 90 秒无活动超时，生成 hang dump，未将该次运行记为全套通过。该现象属于测试运行器/测试隔离问题，不能替代切换功能的定向验收，也不能据此声称整仓测试已全绿。
