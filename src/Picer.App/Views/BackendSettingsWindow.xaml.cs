@@ -101,6 +101,14 @@ public partial class BackendSettingsWindow : Window
         {
             var processPath = Environment.ProcessPath ?? throw new InvalidOperationException("无法定位当前程序。");
             var targetServiceMode = RemoteModeBox.IsChecked == true;
+            ServiceConnectionSetup? verifiedConnection = null;
+            if (targetServiceMode && !_accountVerified)
+            {
+                verifiedConnection = ReadConnection();
+                if (_verified is null || verifiedConnection.BaseUrl != _verified.BaseUrl || verifiedConnection.Token != _verified.Token ||
+                    !verifiedConnection.SpkiPin.SequenceEqual(_verified.SpkiPin))
+                    throw new InvalidOperationException("请先验证当前填写的连接信息；修改后需要重新验证。");
+            }
             if (targetServiceMode != AppServices.ServiceMode)
             {
                 SaveButton.IsEnabled = false;
@@ -112,11 +120,7 @@ public partial class BackendSettingsWindow : Window
                 AppPaths.SaveIndexBackendAccount();
             else if (RemoteModeBox.IsChecked == true)
             {
-                var connection = ReadConnection();
-                if (_verified is null || connection.BaseUrl != _verified.BaseUrl || connection.Token != _verified.Token ||
-                    !connection.SpkiPin.SequenceEqual(_verified.SpkiPin))
-                { ErrorText.Text = "请先验证当前填写的连接信息；修改后需要重新验证。"; return; }
-                connection.Save(AppPaths.BackendConfigPath, AppPaths.ServiceEndpointPath);
+                verifiedConnection!.Save(AppPaths.BackendConfigPath, AppPaths.ServiceEndpointPath);
             }
             else AppPaths.SaveIndexBackendLocal();
             Process.Start(new ProcessStartInfo(processPath, $"--wait-for-pid {Environment.ProcessId}") { UseShellExecute = true });
