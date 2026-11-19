@@ -73,6 +73,7 @@ public static partial class AppServices
         }
     }
     public static bool ServiceMode { get; private set; }
+    public static string? ServiceAddress { get; private set; }
     public static bool ContinuousSyncEnabled { get; private set; } = true;
     private static DeviceAccountClient? AccountClient { get; set; }
     public static string RemoteDataRoot { get; private set; } = AppPaths.DataRoot;
@@ -122,6 +123,7 @@ public static partial class AppServices
 
         var backend = AppPaths.LoadIndexBackend();
         ServiceMode = backend.Mode == IndexBackendConfig.ServiceMode;
+        ServiceAddress = ServiceMode ? backend.BaseUrl : null;
         ContinuousSyncEnabled = ServiceMode || backend.ContinuousSync;
         if (backend.DeviceAuthentication)
             AccountClient = new WindowsDeviceCredentialStore(AppPaths.AccountCredentialPath).OpenClient();

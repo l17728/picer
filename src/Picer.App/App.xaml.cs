@@ -127,7 +127,9 @@ public partial class App : Application
 
             LogInfo("正在创建 MainWindow...");
             var window = new MainWindow(_mainViewModel);
-            window.Title = AppServices.ServiceMode ? "Picer - 图片管理（远程）" : "Picer - 图片管理（本地）";
+            window.Title = AppServices.ServiceMode
+                ? $"Picer - 图片管理（远程：{AppServices.ServiceAddress ?? "服务"}）"
+                : "Picer - 图片管理（本地）";
             MainWindow = window;
             window.Show();
             if (AppServices.ServiceMode)
