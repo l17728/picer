@@ -114,6 +114,8 @@ public partial class BackendSettingsWindow : Window
                 SaveButton.IsEnabled = false;
                 ErrorText.Text = "正在执行索引切换前的一次性同步和一致性检查，失败将保留当前模式。";
                 using var switchTimeout = new CancellationTokenSource(TimeSpan.FromMinutes(10));
+                if (targetServiceMode && _accountVerified)
+                    await AppServices.RefreshLocalSpacePublisherConfigurationAsync(switchTimeout.Token);
                 await AppServices.SyncBeforeIndexModeSwitchAsync(targetServiceMode, switchTimeout.Token,
                     verifiedConnection?.BaseUrl, verifiedConnection?.Token, verifiedConnection?.SpkiPin);
             }
