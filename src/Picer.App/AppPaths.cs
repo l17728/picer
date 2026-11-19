@@ -69,7 +69,8 @@ public static class AppPaths
         if (!File.Exists(RemoteMirrorCleanupPath)) return;
         try
         {
-            var document = JsonSerializer.Deserialize<PendingMirrorCleanup>(File.ReadAllText(RemoteMirrorCleanupPath));
+            var document = JsonSerializer.Deserialize<PendingMirrorCleanup>(File.ReadAllText(RemoteMirrorCleanupPath),
+                new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
             var root = document?.Root is { Length: > 0 } value ? Path.GetFullPath(value) : null;
             var dataRoot = Path.GetFullPath(DataRoot).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
             if (root is null || (!string.Equals(root, dataRoot, StringComparison.OrdinalIgnoreCase) &&
