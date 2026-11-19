@@ -53,3 +53,10 @@
 | RELAY-40 | 原图删除边界 | Web 或 GUI 删除索引不会删除原图；删除原图必须经过现有授权文件操作和确认 |
 
 每个用例均需记录设备 ID、来源模式、请求 ID、耗时、结果码和缓存命中状态；日志不得记录隐私字段。
+
+## 当前实现证据（2026-11-19）
+
+- RELAY-11/23：`IndexBackendConfigTests` 和启动同步条件验证本地模式关闭持续同步。
+- RELAY-24/26/28/29：`IndexModeSwitchTransactionTests`、`IndexConsistencySnapshotTests` 及 `AppServices.SyncBeforeIndexModeSwitchAsync` 覆盖一次同步、revision/媒体/元数据/描述版本/待提交队列校验、目录/标签/相册/搜索/缩略图探针和失败保留原模式。
+- 目标服务地址在同步前完成证书、令牌校验；一次性同步不会重复提交元数据和人物审核写入。
+- 其余 RELAY 条目仍须通过真实 Relay/账号空间 E2E 逐项验收，单元测试通过不能替代这些验收。
