@@ -649,7 +649,8 @@ public static partial class AppServices
         {
             if (targetServiceMode)
             {
-                if (SyncClient is null && _localSpacePublisher is null)
+                if (SyncClient is null && _localSpacePublisher is null &&
+                    (targetBaseUrl is null || targetToken is null || targetSpkiPin is null))
                     throw new InvalidOperationException("index_mode_switch_sync_unconfigured");
                 if (_localSpacePublisher is null && targetBaseUrl is not null && targetToken is not null && targetSpkiPin is not null)
                 {
