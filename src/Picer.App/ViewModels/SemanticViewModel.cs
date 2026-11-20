@@ -145,16 +145,12 @@ public partial class SemanticViewModel : ObservableObject
         {
             var name = NewTagName;
             var imageIds = _selectedImageIds.ToArray();
-            var tag = await UiWork.RunDatabaseAsync(() =>
-            {
-                var created = SemanticEngine.AddTag(_db, name);
-                foreach (var imageId in imageIds) SemanticEngine.AssignTag(_db, imageId, created.Id);
-                return created;
-            });
+            var (tag, album) = await UiWork.RunDatabaseAsync(() => SemanticEngine.AddTagWithAlbum(_db, name, imageIds));
 
-            Tags.Add(new TagItemViewModel(tag));
+            if (Tags.All(item => item.Tag.Id != tag.Id)) Tags.Add(new TagItemViewModel(tag));
+            if (Albums.All(item => item.Album.Id != album.Id)) Albums.Add(new AlbumItemViewModel(album));
             NewTagName = "";
-            StatusText = $"已为 {_selectedImageIds.Count} 张图片添加用户标签：{tag.Name}";
+            StatusText = $"已为 {imageIds.Length} 张图片添加用户标签：{tag.Name}（同名相册已同步到“我的相册”）";
             _changed?.Invoke();
         }
         catch (Exception ex) when (ex.Message.Contains("UNIQUE"))
@@ -186,15 +182,20 @@ public partial class SemanticViewModel : ObservableObject
         if (SelectedTag is null)
             return;
 
-        var result = MessageBox.Show($"确定删除标签 '{SelectedTag.Tag.Name}' 吗？", 
+        var selected = SelectedTag;
+        var linkedAlbumName = SemanticEngine.FindAlbumByName(_db, selected.Tag.Name) is { Description: SemanticEngine.TagAlbumDescription } ? selected.Tag.Name : null;
+        var confirmation = linkedAlbumName is null
+            ? $"确定删除标签 '{selected.Tag.Name}' 吗？"
+            : $"确定删除标签 '{selected.Tag.Name}' 吗？同名相册“{linkedAlbumName}”及其图片关联也会一并删除。";;
+        var result = MessageBox.Show(confirmation,
             "删除标签", MessageBoxButton.YesNo, MessageBoxImage.Question);
         if (result != MessageBoxResult.Yes)
             return;
 
-        var selected = SelectedTag;
-        await UiWork.RunDatabaseAsync(() => SemanticEngine.DeleteTag(_db, selected.Tag.Id));
+        var albumDeleted = await UiWork.RunDatabaseAsync(() => SemanticEngine.DeleteTagWithLinkedAlbum(_db, selected.Tag.Id));
         Tags.Remove(selected);
-        StatusText = "标签已删除";
+        if (albumDeleted) LoadAlbums();
+        StatusText = albumDeleted ? $"标签及同名相册已删除：{selected.Tag.Name}" : "标签已删除";
         _changed?.Invoke();
     }
 
@@ -267,14 +268,10 @@ public partial class SemanticViewModel : ObservableObject
     private async Task AcceptSuggestionAsync(string tagName)
     {
         var imageId = CurrentImageId;
-        var tag = await UiWork.RunDatabaseAsync(() =>
-        {
-            var existing = SemanticEngine.GetTags(_db).FirstOrDefault(t => t.Name == tagName);
-            if (existing is null && imageId > 0) existing = SemanticEngine.AddTag(_db, tagName);
-            if (existing is not null && imageId > 0) SemanticEngine.AssignTag(_db, imageId, existing.Id);
-            return existing;
-        });
+        var (tag, album) = await UiWork.RunDatabaseAsync(() =>
+            SemanticEngine.AddTagWithAlbum(_db, tagName, imageId > 0 ? [imageId] : []));
         if (tag is not null && Tags.All(item => item.Tag.Id != tag.Id)) Tags.Add(new TagItemViewModel(tag));
+        if (Albums.All(item => item.Album.Id != album.Id)) Albums.Add(new AlbumItemViewModel(album));
 
         StatusText = $"已接受建议并标记: {tagName}";
         Suggestions.Remove(Suggestions.First(item => item.TagName == tagName));

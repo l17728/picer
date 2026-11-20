@@ -159,13 +159,15 @@ public sealed class DesktopSmokeTests
                 WaitForDirectTreeItemNames(tree!, 4, TimeSpan.FromSeconds(8)));
 
             AssertDirectChildren(tree, "photos", new[] { "archive" });
-            AssertDirectChildren(tree, "我的相册", new[] { "回归相册" });
+            // The seeded user tag gets a same-named album via startup backfill; albums are
+            // ordered by creation time descending, so the newest tag album comes first.
+            AssertDirectChildren(tree, "我的相册", new[] { "海滨之行", "回归相册" });
             AssertDirectChildren(tree, "光锥之内", new[] { "2024年01月" });
             AssertDirectChildren(tree, "太阳系第三行星（地球）", new[] { "未知位置", "中国" });
             AssertDirectChildren(tree, "中国", new[] { "陕西省" });
             AssertDirectChildren(tree, "陕西省", new[] { "西安市" });
 
-            foreach (var nodeName in new[] { "photos", "我的相册", "光锥之内", "2024年01月" })
+            foreach (var nodeName in new[] { "photos", "我的相册", "海滨之行", "光锥之内", "2024年01月" })
             {
                 var node = WaitForTreeItem(tree!, nodeName, TimeSpan.FromSeconds(8));
                 Assert.True(node is not null, $"目录树中未出现节点：{nodeName}");
@@ -795,10 +797,12 @@ public sealed class DesktopSmokeTests
         })).ToArray();
         var regular = SemanticEngine.AddAlbum(db, "回归相册");
         var timeline = SemanticEngine.AddAlbum(db, "2024年01月", "时间线相册（自动生成）");
+        var travelTag = SemanticEngine.AddTag(db, "海滨之行");
         foreach (var image in records)
         {
             SemanticEngine.AddToAlbum(db, regular.Id, image.Id);
             SemanticEngine.AddToAlbum(db, timeline.Id, image.Id);
+            SemanticEngine.AssignTag(db, image.Id, travelTag.Id);
         }
         db.SetImageLocation(records[0].Id,
             new LocationHierarchyChoice("中国 / 陕西省 / 西安市", "中国", "陕西省", "西安市"));

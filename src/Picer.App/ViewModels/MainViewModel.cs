@@ -283,6 +283,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
         await ReloadSourcesAsync();
         await ApplySearchAndFilterAsync();
         await LoadLookupValuesAsync();
+        var tagAlbumsCreated = await UiWork.RunDatabaseAsync(() => SemanticEngine.BackfillTagAlbums(_db));
+        if (tagAlbumsCreated > 0)
+            AppLogger.Info($"Tag album backfill created {tagAlbumsCreated} user-tag albums");
         await LoadDirectoryTreeAsync();
         // Load the persisted video mirror immediately in both modes. In
         // service mode the authoritative refresh runs in the background and

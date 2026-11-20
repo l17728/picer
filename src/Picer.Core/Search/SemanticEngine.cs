@@ -192,6 +192,123 @@ public static class SemanticEngine
 
     #endregion
 
+    #region Tag Albums
+
+    /// <summary>
+    /// Marker description for albums that mirror a user tag. Only albums carrying this
+    /// description are removed together with their tag; manually created or camera
+    /// albums that happen to share the tag name are left untouched.
+    /// </summary>
+    public const string TagAlbumDescription = "用户标签相册（自动同步）";
+
+    private const string CameraAlbumDescription = "按相机品牌自动创建";
+    private const string CameraAlbumPrefix = "相机: ";
+
+    public static Tag? FindTag(PicerDatabase db, string name)
+    {
+        using var cmd = db.Command("SELECT id, name, created_utc FROM tags WHERE name = $n");
+        cmd.Parameters.AddWithValue("$n", name);
+        using var reader = cmd.ExecuteReader();
+        return reader.Read() ? new Tag { Id = reader.GetInt64(0), Name = reader.GetString(1), CreatedUtc = Parse(reader.GetString(2)) } : null;
+    }
+
+    public static Album? FindAlbumByName(PicerDatabase db, string name)
+    {
+        using var cmd = db.Command("SELECT id, name, creator_id, created_utc, description FROM albums WHERE name = $n");
+        cmd.Parameters.AddWithValue("$n", name);
+        using var reader = cmd.ExecuteReader();
+        if (!reader.Read()) return null;
+        return new Album
+        {
+            Id = reader.GetInt64(0),
+            Name = reader.GetString(1),
+            CreatorId = reader.IsDBNull(2) ? (long?)null : reader.GetInt64(2),
+            CreatedUtc = Parse(reader.GetString(3)),
+            Description = reader.IsDBNull(4) ? null : reader.GetString(4)
+        };
+    }
+
+    /// <summary>
+    /// Creates (or reuses) a user tag and its same-named album, then applies both to the
+    /// given images so the tag is visible under "我的相册" in directory browsing. An existing
+    /// album with the same name is reused as-is and only gains membership.
+    /// </summary>
+    public static (Tag Tag, Album Album) AddTagWithAlbum(PicerDatabase db, string name, IReadOnlyCollection<long> imageIds)
+    {
+        var tag = FindTag(db, name) ?? AddTag(db, name);
+        var album = FindAlbumByName(db, name) ?? AddAlbum(db, name, TagAlbumDescription);
+        foreach (var imageId in imageIds)
+        {
+            AssignTag(db, imageId, tag.Id);
+            AddToAlbum(db, album.Id, imageId);
+        }
+        return (tag, album);
+    }
+
+    /// <summary>
+    /// Deletes a tag together with its linked user-tag album (identified by
+    /// <see cref="TagAlbumDescription"/>). Returns whether a linked album was removed;
+    /// same-named manual or camera albums always survive.
+    /// </summary>
+    public static bool DeleteTagWithLinkedAlbum(PicerDatabase db, long tagId)
+    {
+        var tag = GetTags(db).FirstOrDefault(item => item.Id == tagId);
+        if (tag is null) return false;
+        DeleteTag(db, tagId);
+        var album = FindAlbumByName(db, tag.Name);
+        if (album is null || !string.Equals(album.Description, TagAlbumDescription, StringComparison.Ordinal)) return false;
+        DeleteAlbum(db, album.Id);
+        return true;
+    }
+
+    /// <summary>
+    /// Ensures every existing tag has a same-named album mirroring its image membership.
+    /// Camera-brand tags created by <see cref="AutoCreateCameraAlbums"/> are reconciled with
+    /// their existing "相机: X" album instead of creating a duplicate. Returns the number of
+    /// albums created; repeated runs are incremental no-ops.
+    /// </summary>
+    public static int BackfillTagAlbums(PicerDatabase db)
+    {
+        var created = 0;
+        foreach (var tag in GetTags(db))
+        {
+            var album = FindAlbumByName(db, tag.Name) ?? TryFindCameraAlbumForTag(db, tag.Name);
+            if (album is null)
+            {
+                album = AddAlbum(db, tag.Name, TagAlbumDescription);
+                created++;
+            }
+            foreach (var imageId in GetTagImageIds(db, tag.Id))
+                AddToAlbum(db, album.Id, imageId);
+        }
+        return created;
+    }
+
+    private static Album? TryFindCameraAlbumForTag(PicerDatabase db, string tagName)
+    {
+        foreach (var album in GetAlbums(db))
+        {
+            if (!string.Equals(album.Description, CameraAlbumDescription, StringComparison.Ordinal)) continue;
+            if (!album.Name.StartsWith(CameraAlbumPrefix, StringComparison.Ordinal)) continue;
+            var brand = album.Name[CameraAlbumPrefix.Length..];
+            if (string.Equals(tagName, brand.ToLowerInvariant().Replace(" ", "_"), StringComparison.Ordinal))
+                return album;
+        }
+        return null;
+    }
+
+    private static List<long> GetTagImageIds(PicerDatabase db, long tagId)
+    {
+        using var cmd = db.Command("SELECT it.image_id FROM image_tags it JOIN images i ON i.id = it.image_id WHERE it.tag_id = $id");
+        cmd.Parameters.AddWithValue("$id", tagId);
+        var ids = new List<long>();
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read()) ids.Add(reader.GetInt64(0));
+        return ids;
+    }
+
+    #endregion
+
     #region Auto Classification
 
     /// <summary>
