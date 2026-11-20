@@ -26,6 +26,9 @@ dotnet test tests/Picer.E2E/Picer.E2E.csproj -c Debug --no-build --no-restore --
 - CI builds with `--warnaserror`: fix warnings, never suppress new ones.
 - All projects target x64 (`PlatformTarget`); native ONNX DirectML/OpenCV requires it — do not change.
 - `Directory.Build.props/targets` remove OpenCvSharp's analyzer (built for newer Roslyn than the pinned SDK 8) and suppress CS9057. Leave as is.
+- Prefer `tools/run-picer-tests.ps1` for full local suite runs: it serializes via a global mutex because two concurrent full-suite hosts contend for the same temporary SQLite/ONNX resources and look like hangs.
+- CI also has a non-.NET `deployment-safety` job: `bash -n tools/deploy-indexservice-linux.sh` and `python3 -m unittest discover -s tests/deployment`. Changes to deploy scripts or `tests/deployment/*.py` can break CI without any build involvement.
+- On trusted `main` pushes (not PRs), CI runs `tools/Picer.ServiceProbe` against a live service using `PICER_LIVE_SERVICE_*` secrets — failures there won't reproduce locally without those secrets.
 
 ## RuntimeComponent tests and offline runtime
 
@@ -48,7 +51,7 @@ For face-model tests alone, `tools/Picer.VisionProbe/download-models.ps1` fetche
 
 - Indexing, search, and analysis must never modify, move, or delete original files. All destructive file operations go through `IUserAuthorizedFileOperation` (recycle bin), re-verifying path/size/mtime/hash at execution time; that flow removes the index record only after verified recycle success. Separately authorized index-only purge removes the selected reference and its owned data without deleting originals; shared content survives until its last reference is removed. Missing files never trigger automatic index purge.
 - Destructive flows follow the state machine `Detected -> Reviewed -> Confirmed -> Executing -> Verified -> Completed/PartiallyFailed`. Candidates/suggestions never auto-confirm.
-- SQLite schema changes are chained `PRAGMA user_version` migrations in `src/Picer.Core/Data/PicerDatabase.cs` (currently up to v94 in the unpublished candidate; deployed databases may be older). Migrations require a whole-file backup of `picer.db` + WAL + SHM with all writers closed; `DatabaseMigrationSafety` enforces staged migration and recoverable publication.
+- SQLite schema changes are chained `PRAGMA user_version` migrations in `src/Picer.Core/Data/PicerDatabase.cs` (`CurrentSchemaVersion`, currently 94 in the unpublished candidate; deployed databases may be older). Migrations require a whole-file backup of `picer.db` + WAL + SHM with all writers closed; `DatabaseMigrationSafety` enforces staged migration and recoverable publication.
 - Privacy: SQL must be parameterized; never log credentials, face embeddings, person names/aliases, or AI question text. Remote/cloud features are opt-in and independently authorized; the full flow must work offline.
 - Vision embeddings/thresholds are per model version and must never be compared or mixed across versions.
 
