@@ -49,3 +49,11 @@
 - 远端镜像经同步导入的标签同样在下一次启动回填时补建相册;回填经 `AddToAlbum` 记录 `album-link` 编辑,会随既有同步机制外发。
 - 删除联动只认标记描述;同名手动相册会存活(有意为之,避免误删用户手工相册)。
 - 未修改 `AddTag`/`DeleteTag` 原语,既有目录退休/同步测试语义不变。
+
+## 正式构建记录
+
+- Commit:`980ee34`(feat: sync user tags to same-named albums under directory browsing)
+- 构建:`dotnet build src/Picer.App/Picer.App.csproj -c Release --warnaserror`,0 警告 0 错误(Release 自包含 win-x64;注意 `RuntimeIdentifier` 仅在 Release 配置生效,还原/构建需带 `-c Release`)
+- 产物:`src/Picer.App/bin/Release/net8.0-windows/win-x64/Picer.App.exe`
+- SHA-256:`a74adb8090348f384b6e4e72f6879def328acdb3225cd5357691daebc670f38c`
+- 构建时间:2026-11-20 18:39
