@@ -319,7 +319,7 @@ internal sealed partial class AgentApplication : IDisposable
 
     private string[] BuildCapabilities()
     {
-        var capabilities = new List<string> { "originalRead", "videoRead", "range", "ai.proxy", "directory.media", Picer.Core.Gateway.MediaWire.Capability, Picer.Core.Gateway.MediaWire.ReuseCapability, Picer.Core.Gateway.MediaWire.AnalysisInputCapability };
+        var capabilities = new List<string> { "originalRead", "videoRead", "range", "ai.proxy", "directory.media", Picer.Core.Gateway.MediaWire.Capability, Picer.Core.Gateway.MediaWire.ReuseCapability, Picer.Core.Gateway.MediaWire.AnalysisInputCapability, Picer.Core.Gateway.MediaWire.PreviewCapability };
         capabilities.Add(Picer.Core.Indexing.MediaConsistencyVerifier.Capability);
         var ffmpeg = Setting("PICER_FFMPEG_PATH");
         if (!string.IsNullOrWhiteSpace(ffmpeg) && File.Exists(ffmpeg) && File.Exists(Path.Combine(Path.GetDirectoryName(ffmpeg)!, "ffprobe.exe")))

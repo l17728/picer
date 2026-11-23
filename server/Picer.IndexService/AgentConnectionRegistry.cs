@@ -150,7 +150,10 @@ internal sealed partial class AgentConnectionRegistry
             var eligible = _sessions.Values.Where(candidate => candidate.Capabilities.Contains(MediaWire.Capability)).Take(2).ToArray();
             if (eligible.Length == 1) session = eligible[0];
         }
-        return session is null || !session.Capabilities.Contains(MediaWire.Capability) ? null : await session.RequestPreviewAsync(path, size, cancellationToken);
+        // A resident program built before the persistent preview protocol advertises
+        // media.binary.v1 without media.preview.v1 and never answers media.preview;
+        // sending it anyway holds every thumbnail for the full preview timeout.
+        return session is null || !session.Capabilities.Contains(MediaWire.PreviewCapability) ? null : await session.RequestPreviewAsync(path, size, cancellationToken);
     }
 
     public async Task StreamAiAsync(string? agentId, ReadOnlyMemory<byte> payload,

@@ -10,6 +10,9 @@ public static class MediaWire
     public const string Capability = "media.binary.v1";
     public const string ReuseCapability = "media.reuse.v1";
     public const string AnalysisInputCapability = "media.analysis-input.v1";
+    /// <summary>Previews are answered over the resident control socket (`media.preview`). A program built before
+    /// this protocol still advertises <see cref="Capability"/> and never replies, so the service must check this bit.</summary>
+    public const string PreviewCapability = "media.preview.v1";
     public sealed record SourceFingerprint(long Length, DateTime ModifiedUtc, string? Sha256);
     public sealed record AnalysisInputRequest(long ImageId, SourceFingerprint Source);
     public sealed record Metadata(long Length, string ContentType, string ETag, string? Error = null);

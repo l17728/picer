@@ -446,8 +446,10 @@ public sealed class MediaStreamingTests
         finally { File.Delete(path); }
     }
 
-    [Fact]
-    public async Task SourceThumbnail_TransfersOnlyResizedPixels_AndCoalescesRequests()
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task SourceThumbnail_TransfersOnlyResizedPixels_AndCoalescesRequests(bool persistentPreview)
     {
         using var fixture = new GatewayServiceFixture();
         var path = Path.Combine(fixture.Root, "large-image.bmp");
@@ -455,7 +457,9 @@ public sealed class MediaStreamingTests
         var record = new Picer.Core.Models.ImageRecord { SourceId = fixture.SourceId, Path = @"Z:\remote-test\large-image.bmp", FileSize = new FileInfo(path).Length, ModifiedUtc = DateTime.UtcNow, Width = 3000, Height = 2000 };
         fixture.Db.UpsertImage(record);
         var id = fixture.Db.GetImages(fixture.SourceId).Single(item => item.Path == record.Path).Id;
-        await using var agent = await TestAgent.StartAsync(fixture);
+        // persistentPreview=false models a resident program built before media.preview.v1: the
+        // service must fall back to the preview media channel instead of waiting for a reply.
+        await using var agent = await TestAgent.StartAsync(fixture, persistentPreview: persistentPreview);
         using var client = CreateClient(fixture);
         var results = await Task.WhenAll(Enumerable.Range(0, 8).Select(_ => client.GetByteArrayAsync($"api/gateway/v1/thumbs/{id}")));
         foreach (var bytes in results)
@@ -464,7 +468,14 @@ public sealed class MediaStreamingTests
             using var image = RasterImage.Load(input);
             Assert.InRange(image.Width, 1, 256); Assert.InRange(image.Height, 1, 256);
         }
-        Assert.Equal(1, agent.MediaConnections);
+        if (persistentPreview)
+        {
+            Assert.Equal(1, agent.PreviewRequests); Assert.Equal(0, agent.MediaConnections);
+        }
+        else
+        {
+            Assert.Equal(0, agent.PreviewRequests); Assert.Equal(1, agent.MediaConnections);
+        }
         Assert.InRange(agent.BytesRead, 1, 64 * 1024);
     }
 
@@ -506,8 +517,10 @@ public sealed class MediaStreamingTests
         Assert.Equal(4, calls);
     }
 
-    [Fact]
-    public async Task SaturatedOriginalReaders_LeavePreviewChannelAvailable()
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task SaturatedOriginalReaders_LeavePreviewChannelAvailable(bool persistentPreview)
     {
         using var fixture = new GatewayServiceFixture();
         var path = Path.Combine(fixture.Root, "busy.mp4");
@@ -516,7 +529,7 @@ public sealed class MediaStreamingTests
         var record = new Picer.Core.Models.ImageRecord { SourceId = fixture.SourceId, Path = @"Z:\remote-test\img0.png", FileSize = 10, ModifiedUtc = DateTime.UtcNow };
         fixture.Db.UpsertImage(record);
         var id = fixture.Db.GetImages(fixture.SourceId).Single(item => item.Path == record.Path).Id;
-        await using var agent = await TestAgent.StartAsync(fixture);
+        await using var agent = await TestAgent.StartAsync(fixture, persistentPreview: persistentPreview);
         using var client = CreateClient(fixture);
         var responses = new List<HttpResponseMessage>();
         try
@@ -528,6 +541,10 @@ public sealed class MediaStreamingTests
             Assert.Equal(2, image.Width);
         }
         finally { foreach (var response in responses) response.Dispose(); }
+        // A current agent answers on its resident control socket while every original slot is busy;
+        // an older one is served by the separate preview media channel, which the originals never occupy.
+        Assert.Equal(4 + (persistentPreview ? 0 : 1), agent.MediaConnections);
+        Assert.Equal(persistentPreview ? 1 : 0, agent.PreviewRequests);
         await agent.WaitForIdleAsync();
     }
 
@@ -599,7 +616,13 @@ public sealed class MediaStreamingTests
         public int MediaConnections => _connections;
         public int OriginalRequests;
         public bool StallMedia;
-        public static async Task<TestAgent> StartAsync(GatewayServiceFixture fixture, bool binary = true, bool reuse = true, bool analysis = true)
+        public int PreviewRequests => _previews;
+        private int _previews;
+        private readonly SemaphoreSlim _sendGate = new(1, 1);
+        /// <param name="persistentPreview">Advertise and answer <c>media.preview.v1</c> like the shipped agent.
+        /// <c>false</c> models a resident program built before that protocol.</param>
+        public static async Task<TestAgent> StartAsync(GatewayServiceFixture fixture, bool binary = true, bool reuse = true, bool analysis = true,
+            bool persistentPreview = true)
         {
             var agent = new TestAgent(fixture);
             agent.Configure(agent._control);
@@ -608,6 +631,7 @@ public sealed class MediaStreamingTests
             if (binary) capabilities.Add(MediaWire.Capability);
             if (binary && reuse) capabilities.Add(MediaWire.ReuseCapability);
             if (binary && analysis) capabilities.Add(MediaWire.AnalysisInputCapability);
+            if (binary && persistentPreview) capabilities.Add(MediaWire.PreviewCapability);
             await MediaWire.SendJsonAsync(agent._control, new { type = "agent.register", agentId = "binary-test", capabilities }, agent._stop.Token);
             await MediaWire.ReceiveJsonAsync<JsonElement>(agent._control, agent._stop.Token);
             agent._loop = agent.LoopAsync(); return agent;
@@ -629,6 +653,7 @@ public sealed class MediaStreamingTests
                     {
                         case "asset.open": Interlocked.Increment(ref OriginalRequests); break;
                         case "media.open": _requests.Add(ServeAsync(request)); break;
+                        case "media.preview": _requests.Add(ServePreviewAsync(request)); break;
                         case "media.release": _leases.Release(request.GetProperty("etag").GetString()!); break;
                         case "media.keepalive": _leases.Touch(request.GetProperty("etag").GetString()!); break;
                     }
@@ -662,6 +687,39 @@ public sealed class MediaStreamingTests
             catch (Exception exception) when (exception is IOException or WebSocketException or OperationCanceledException) { }
             finally { Interlocked.Decrement(ref _active); }
         }
+        // Mirrors the shipped agent: the preview is answered on the resident control socket, so no
+        // media connection is opened and only the resized image crosses the wire. Failures are
+        // reported with an error response so the service can fall back instead of waiting.
+        private async Task ServePreviewAsync(JsonElement request)
+        {
+            var requestId = request.GetProperty("requestId").GetString();
+            Interlocked.Increment(ref _previews);
+            try
+            {
+                var requestedPath = request.GetProperty("path").GetString()!;
+                if (!File.Exists(requestedPath)) requestedPath = Path.Combine(fixture.Root, Path.GetFileName(requestedPath));
+                using var input = File.OpenRead(requestedPath);
+                Interlocked.Add(ref _bytes, input.Length);
+                using var image = RasterImage.Load(input);
+                var size = request.GetProperty("size").GetInt32();
+                if (image.Width > size || image.Height > size) image.ResizeToFit(size, size);
+                using var output = new MemoryStream();
+                image.SaveAsJpeg(output);
+                await SendControlAsync(new { type = "media.preview.response", requestId, contentType = "image/jpeg", contentBase64 = Convert.ToBase64String(output.ToArray()) });
+            }
+            catch (Exception exception) when (exception is IOException or WebSocketException or OperationCanceledException
+                or KeyNotFoundException or ArgumentException or UnauthorizedAccessException or InvalidOperationException)
+            {
+                try { await SendControlAsync(new { type = "media.preview.response", requestId, error = exception.Message }); }
+                catch (Exception sendFailure) when (sendFailure is IOException or WebSocketException or OperationCanceledException or ObjectDisposedException) { }
+            }
+        }
+        private async Task SendControlAsync(object value)
+        {
+            await _sendGate.WaitAsync(_stop.Token);
+            try { await MediaWire.SendJsonAsync(_control, value, _stop.Token); }
+            finally { _sendGate.Release(); }
+        }
         public async Task WaitForIdleAsync()
         {
             var deadline = Stopwatch.StartNew();
@@ -674,7 +732,7 @@ public sealed class MediaStreamingTests
             if (_loop is not null) await _loop;
             await Task.WhenAll(_requests);
             _leases.Dispose();
-            _control.Dispose(); _stop.Dispose();
+            _control.Dispose(); _stop.Dispose(); _sendGate.Dispose();
         }
     }
 }
