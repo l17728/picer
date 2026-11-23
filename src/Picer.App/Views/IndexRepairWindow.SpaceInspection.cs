@@ -41,13 +41,13 @@ public sealed partial class IndexRepairWindow
                 {
                     var job = (await File.ReadAllTextAsync(path,_spaceInspectionReadCancellation.Token)).Trim();
                     if (Guid.TryParseExact(job,"N",out _))
-                    { _spaceInspectionJob=job; _spaceInspectionRequestPending=true; await RefreshSpaceInspectionAsync(); }
+                    { _spaceInspectionJob=job; _spaceInspectionRequestPending=true; await RefreshSpaceInspectionAsync(); if (_spaceInspectionActive) StartInspectionListener(); }
                 }
             }
             catch (OperationCanceledException) { }
             catch (IOException) { _spaceInspectionStatus.Text="上次巡检记录无法读取，可重新发起。"; }
         };
-        Closing += (_,_) => { _spaceInspectionClosed=true; _spaceInspectionTimer.Stop(); _spaceInspectionReadCancellation.Cancel(); };
+        Closing += (_,_) => { _spaceInspectionClosed=true; _spaceInspectionTimer.Stop(); _spaceInspectionReadCancellation.Cancel(); StopInspectionListener(); };
         Closed += (_,_) => _spaceInspectionReadCancellation.Dispose();
     }
 
@@ -59,6 +59,9 @@ public sealed partial class IndexRepairWindow
         var jobId=_spaceInspectionRequestPending && _spaceInspectionJob is { } existing ? existing : Guid.NewGuid().ToString("N");
         _spaceInspectionJob=jobId;
         _spaceInspectionActive=true; _spaceInspectionRequestPending=true; _spaceInspectionTimer.Start();
+        // Without continuous synchronization nothing is listening for the request yet, so the
+        // listener must be running before the job is created.
+        StartInspectionListener();
         if (SpaceInspectionCheckpoint is { } path)
             await File.WriteAllTextAsync(path,jobId,token);
         var job=await new SpaceInspectionClient(client).CreateAsync(jobId,token);
@@ -115,6 +118,20 @@ public sealed partial class IndexRepairWindow
         })+(DateTime.TryParse(target.LastSuccessUtc,out var success) ? " · 最近成功 "+success.ToLocalTime().ToString("MM-dd HH:mm") : " · 尚无成功回执")).ToArray();
         _cancel.IsEnabled=_cancellation is not null || _spaceInspectionActive;
         if (_spaceInspectionActive) _spaceInspectionTimer.Start(); else _spaceInspectionTimer.Stop();
+        if (!_spaceInspectionActive) StopInspectionListener();
+    }
+
+    // Local index mode keeps no standing notification connection. The listener that executes this
+    // device's part of a space inspection is started on demand and stopped as soon as no inspection
+    // is active, so it never turns into background synchronization.
+    private void StartInspectionListener()
+    {
+        if (!AppServices.ContinuousSyncEnabled) AppServices.StartSpaceNotifications(forInspection:true);
+    }
+
+    private void StopInspectionListener()
+    {
+        if (!AppServices.ContinuousSyncEnabled) _ = AppServices.StopSpaceNotificationsAsync();
     }
 
     private async Task CancelSpaceInspectionAsync()

@@ -15,7 +15,7 @@ public static partial class AppServices
     private static Func<Task>? _spaceNotificationRefresh;
     public static HttpClient? SpaceSynchronizationClient => ServiceMode ? AccountClient?.SpaceClient : _localSpacePublisherClient?.SpaceClient;
 
-    public static void StartSpaceNotifications(Func<Task>? refresh = null, SpaceNotification? baseline = null)
+    public static void StartSpaceNotifications(Func<Task>? refresh = null, SpaceNotification? baseline = null, bool forInspection = false)
     {
         lock (SpaceNotificationGate)
         {
@@ -23,7 +23,10 @@ public static partial class AppServices
         _spaceNotificationRefresh = refresh ?? _spaceNotificationRefresh;
         var client = SpaceSynchronizationClient;
         var account=ServiceMode ? AccountClient : _localSpacePublisherClient;
-        if (!ContinuousSyncEnabled || client is null || account is null || !ServiceMode && !LocalSpaceSyncConfigured) return;
+        // Local index mode keeps no standing notification connection: change notices must never
+        // synchronize there. A space inspection is an explicit request dispatched over the same
+        // channel, so its listener is started for that inspection only.
+        if (!(ContinuousSyncEnabled || forInspection) || client is null || account is null || !ServiceMode && !LocalSpaceSyncConfigured) return;
         string? library = null;
         if (!ServiceMode)
         {
@@ -110,7 +113,7 @@ public static partial class AppServices
                 if (response.StatusCode == HttpStatusCode.Conflict && library is not null)
                 {
                     var error = await response.Content.ReadFromJsonAsync<NotificationError>(DeviceAuthorization.Json,token).ConfigureAwait(false);
-                    if (error?.Error == "source_not_registered")
+                    if (error?.Error == "source_not_registered" && ContinuousSyncEnabled)
                     {
                         await SyncLocalChangesToRemoteAsync(token).ConfigureAwait(false);
                         continue;
@@ -148,10 +151,15 @@ public static partial class AppServices
                         var inspection=await Index.InspectReferencesAsync(scope.SourceIds,scope.Photos,scope.Videos,pass.Token).ConfigureAwait(false);
                         sourcePathsAvailable=inspection.Complete;
                     }
-                    if (library is null)
-                        await SyncRemoteMirrorAsync(pass.Token,requireMetadataSync:true,refreshMedia:true,publishPendingEdits:false).ConfigureAwait(false);
-                    else
-                        await SyncLocalChangesToRemoteAsync(pass.Token).ConfigureAwait(false);
+                    // Local index mode (no continuous synchronization) only ever acts on an inspection
+                    // request; a change notice is acknowledged without touching either index.
+                    if (notice.InspectionTargets.Count > 0 || ContinuousSyncEnabled)
+                    {
+                        if (library is null)
+                            await SyncRemoteMirrorAsync(pass.Token,requireMetadataSync:true,refreshMedia:true,publishPendingEdits:false).ConfigureAwait(false);
+                        else
+                            await SyncLocalChangesToRemoteAsync(pass.Token).ConfigureAwait(false);
+                    }
                     if (notice.InspectionTargets.Count > 0)
                     {
                         using var database = Db.OpenIndependentConnection();
@@ -168,7 +176,7 @@ public static partial class AppServices
                             await ReportInspectionAsync(client,notice,target,result,pass.Token,result=="completed" ? null :
                                 !sourcePathsAvailable ? "source_paths_unavailable" : pendingIdentities>0 ? "pending_identity_adoptions" : "metadata_conflicts_pending").ConfigureAwait(false);
                     }
-                    if (_spaceNotificationRefresh is { } refresh) await refresh().ConfigureAwait(false);
+                    if ((notice.InspectionTargets.Count > 0 || ContinuousSyncEnabled) && _spaceNotificationRefresh is { } refresh) await refresh().ConfigureAwait(false);
                     after = notice.Revision; epoch = notice.Epoch;
                     failures = 0;
                 }

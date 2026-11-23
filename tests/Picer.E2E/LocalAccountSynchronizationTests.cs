@@ -27,7 +27,7 @@ public sealed class LocalAccountSynchronizationTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task LocalModePublishesAndDownloadsThroughItsOwnPairedAccount(bool multipleSources)
+    public async Task LocalModePublishesThroughItsOwnPairedAccountWithoutContinuousSync(bool multipleSources)
     {
         var root = Path.Combine(Path.GetTempPath(), "picer-local-account-sync-" + Guid.NewGuid().ToString("N"));
         var localRoot = Path.Combine(root, "local");
@@ -112,26 +112,39 @@ public sealed class LocalAccountSynchronizationTests
                     Assert.True(AppServices.LocalSpaceSyncConfigured);
                     Assert.Null(AppServices.SyncClient); // No remote browsing client or legacy token publisher.
                     await AppServices.SyncLocalChangesToRemoteAsync(deadline.Token);
-                    var baseline=await AppServices.CaptureSpaceNotificationBaselineAsync(deadline.Token);
-                    Assert.NotNull(baseline);
-                    AppServices.StartSpaceNotifications(baseline:baseline);
+                    // Local index mode is authoritative on this machine and never runs continuous
+                    // synchronization (LOCAL_INDEX_RELAY_SDD_2026-11-19 §3/§6): there is no notification
+                    // baseline, and a change written in the space is not merged into the local index.
+                    Assert.False(AppServices.ContinuousSyncEnabled);
+                    Assert.Null(await AppServices.CaptureSpaceNotificationBaselineAsync(deadline.Token));
+                    long remoteImageId;
+                    string? remoteDescriptionUpdatedUtc;
                     using (var remote = new PicerDatabase(Path.Combine(instance.Accounts.SpaceRoot(space.Id), "picer.db")))
                     {
                         var image = Assert.Single(remote.GetImages(includeMissing: true));
+                        remoteImageId = image.Id;
                         Assert.Equal("本机初始描述", Assert.Single(remote.GetAllMirroredCloudVisionAnalyses()).Summary);
+                        using (var original = remote.Command("SELECT updated_utc FROM cloud_vision_analyses WHERE image_id=$image"))
+                        {
+                            original.Parameters.AddWithValue("$image", image.Id);
+                            remoteDescriptionUpdatedUtc = original.ExecuteScalar() as string;
+                        }
                         using var edit = remote.Command("UPDATE cloud_vision_analyses SET summary='照片空间修改后的描述',updated_utc=$updated WHERE image_id=$image");
                         edit.Parameters.AddWithValue("$image", image.Id);
                         edit.Parameters.AddWithValue("$updated", DateTime.UtcNow.AddMinutes(1).ToString("O"));
                         edit.ExecuteNonQuery();
                     }
-                    while (true)
+                    await Task.Delay(TimeSpan.FromSeconds(2), deadline.Token);
+                    Assert.Equal("本机初始描述", Assert.Single(AppServices.Db.GetAllMirroredCloudVisionAnalyses()).Summary);
+                    // Put the space back as the explicit upload left it, so the inspection below does not
+                    // measure a copy this test deliberately diverged.
+                    using (var remote = new PicerDatabase(Path.Combine(instance.Accounts.SpaceRoot(space.Id), "picer.db")))
                     {
-                        deadline.Token.ThrowIfCancellationRequested();
-                        using var localRead=AppServices.Db.OpenIndependentConnection();
-                        if (Assert.Single(localRead.GetAllMirroredCloudVisionAnalyses()).Summary=="照片空间修改后的描述") break;
-                        await Task.Delay(100,deadline.Token);
+                        using var restore = remote.Command("UPDATE cloud_vision_analyses SET summary='本机初始描述',updated_utc=$updated WHERE image_id=$image");
+                        restore.Parameters.AddWithValue("$image", remoteImageId);
+                        restore.Parameters.AddWithValue("$updated", (object?)remoteDescriptionUpdatedUtc ?? DBNull.Value);
+                        restore.ExecuteNonQuery();
                     }
-                    Assert.Equal("照片空间修改后的描述", Assert.Single(AppServices.Db.GetAllMirroredCloudVisionAnalyses()).Summary);
                     Assert.Equal(sourceId, Assert.Single(AppServices.Db.GetImages(includeMissing: true)).SourceId);
                     using var requester=credentials.OpenClient();
                     var oldAccess=requester.Connection.Session!.AccessToken;
