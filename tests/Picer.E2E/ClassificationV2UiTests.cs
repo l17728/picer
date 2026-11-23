@@ -56,6 +56,18 @@ public sealed class ClassificationV2UiTests
                     new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.TreeItem))
                 .Cast<AutomationElement>().Any(item => item.Current.Name.Contains('（')), TimeSpan.FromSeconds(10)),
                 "分类树节点未显示照片计数");
+            // Selecting a node only changes the photo list: the tree must keep exactly the same
+            // nodes in the same order, and the clicked node stays selected.
+            var treeBefore = DescendantNames(window, ControlType.TreeItem);
+            Assert.NotEmpty(treeBefore);
+            var firstNode = window.FindFirst(TreeScope.Descendants,
+                new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.TreeItem));
+            Assert.NotNull(firstNode);
+            ((SelectionItemPattern)firstNode!.GetCurrentPattern(SelectionItemPattern.Pattern)).Select();
+            Thread.Sleep(1500);
+            Assert.Equal(treeBefore, DescendantNames(window, ControlType.TreeItem));
+            Assert.True(((SelectionItemPattern)firstNode.GetCurrentPattern(SelectionItemPattern.Pattern)).Current.IsSelected,
+                "点击后分类节点失去了选中状态");
             Assert.NotNull(Wait(() => window.FindFirst(TreeScope.Descendants, new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.List))));
             var suggestions = Wait(() => window.FindFirst(TreeScope.Descendants, new AndCondition(
                 new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.CheckBox),

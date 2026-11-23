@@ -22,6 +22,7 @@ public partial class ClassificationBrowserWindow : Window
     private IReadOnlyList<string> _selectedFilterIds = Array.Empty<string>();
     private readonly ObservableCollection<PhotoRow> _rows = new();
     private bool _loadingMore;
+    private bool _restoringSelection;
 
     public ClassificationBrowserWindow()
     {
@@ -30,13 +31,16 @@ public partial class ClassificationBrowserWindow : Window
         Closed += (_, _) => { _closed.Cancel(); _client.Dispose(); _closed.Dispose(); };
     }
 
-    private async Task RefreshAsync()
+    // rebuildTree: the taxonomy and the per-label counts do not depend on which node is selected,
+    // so selecting a node only reloads the photo list. The tree is rebuilt only when its nodes or
+    // counts can have changed (first load, filter toggles, refresh, decisions, scan).
+    private async Task RefreshAsync(bool rebuildTree = true)
     {
         try
         {
             _browse = await BrowsePage(null);
             _taxonomy = _browse.Taxonomy;
-            BuildLabelTree();
+            if (rebuildTree) BuildLabelTree();
             _rows.Clear();
             foreach (var photo in _browse.Photos) _rows.Add(new PhotoRow(photo, _taxonomy, _closed.Token));
             Photos.ItemsSource = _rows;
@@ -83,6 +87,12 @@ public partial class ClassificationBrowserWindow : Window
     private void BuildLabelTree()
     {
         if (_taxonomy is null) return;
+        // A rebuild must never undo what the user did to the tree: remember which nodes were
+        // expanded or collapsed and which one was selected, then put that state back.
+        var wasExpanded = new Dictionary<string, bool>(StringComparer.Ordinal);
+        foreach (var item in TreeNodes())
+            if (item.Tag is string[] ids) wasExpanded[string.Join("|", ids)] = item.IsExpanded;
+        var selectedKey = LabelTree.SelectedItem is TreeViewItem { Tag: string[] selectedIds } ? string.Join("|", selectedIds) : null;
         LabelTree.Items.Clear();
         var counts = _browse?.Counts;
         // A node stays visible while it is selected even if its count drops to zero, so a live
@@ -127,18 +137,41 @@ public partial class ClassificationBrowserWindow : Window
                 roots.Add(root);
             }
         foreach (var root in roots) LabelTree.Items.Add(root);
+        foreach (var item in TreeNodes())
+            if (item.Tag is string[] ids && wasExpanded.TryGetValue(string.Join("|", ids), out var expanded)) item.IsExpanded = expanded;
+        if (selectedKey is not null)
+        {
+            var selected = TreeNodes().FirstOrDefault(item => item.Tag is string[] ids && string.Join("|", ids) == selectedKey);
+            if (selected is not null)
+            {
+                // Re-selecting raises SelectedItemChanged; the photo list is reloaded right after this.
+                _restoringSelection = true;
+                try { selected.IsSelected = true; }
+                finally { _restoringSelection = false; }
+            }
+        }
         return;
 
         string Header(ClassificationLabel label) => $"{label.Name}（{counts?.GetValueOrDefault(label.Id) ?? 0}）";
     }
 
+    private IEnumerable<TreeViewItem> TreeNodes() => LabelTree.Items.OfType<TreeViewItem>().SelectMany(SelfAndDescendants);
+    private static IEnumerable<TreeViewItem> SelfAndDescendants(TreeViewItem node)
+    {
+        yield return node;
+        foreach (var child in node.Items.OfType<TreeViewItem>())
+            foreach (var descendant in SelfAndDescendants(child)) yield return descendant;
+    }
+
     private async void LabelTree_SelectedItemChanged(object sender, RoutedPropertyChangedEventArgs<object> e)
     {
+        if (_restoringSelection) return;
         if (e.NewValue is TreeViewItem { Tag: string[] ids })
         {
             _selectedFilterIds = ids;
             _selectedLabelId = ids.Length == 1 ? ids[0] : null;
-            await RefreshAsync();
+            // Selecting a node only changes which photos are listed; the tree stays exactly as it is.
+            await RefreshAsync(rebuildTree: false);
         }
     }
     private async void FilterChanged(object sender, RoutedEventArgs e) { if (IsLoaded) await RefreshAsync(); }
