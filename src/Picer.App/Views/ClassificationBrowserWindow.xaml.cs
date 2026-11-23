@@ -84,22 +84,52 @@ public partial class ClassificationBrowserWindow : Window
     {
         if (_taxonomy is null) return;
         LabelTree.Items.Clear();
+        var counts = _browse?.Counts;
+        // A node stays visible while it is selected even if its count drops to zero, so a live
+        // selection never disappears from under the user.
+        bool VisibleLeaf(ClassificationLabel label) =>
+            counts is null || label.Id == _selectedLabelId || _selectedFilterIds.Contains(label.Id) || counts.GetValueOrDefault(label.Id) > 0;
+        var roots = new List<TreeViewItem>();
         foreach (var group in _taxonomy.Labels.Where(x => x.Active).GroupBy(x => x.Dimension).OrderBy(x => x.Key))
         {
             var groupIds = group.Where(x => x.Assignable && !x.Id.StartsWith("nav.", StringComparison.Ordinal))
                 .Select(x => x.Id).Distinct(StringComparer.Ordinal).ToArray();
-            var root = new TreeViewItem { Header = group.Key, IsExpanded = true, Tag = groupIds };
-            var people = group.Where(x => x.Id.StartsWith("person.confirmed.", StringComparison.Ordinal)).OrderBy(x => x.Name).ToArray();
+            var dimensionCount = counts?.GetValueOrDefault(ClassificationCountKeys.Dimension(group.Key)) ?? 0;
+            if (counts is not null && dimensionCount == 0 && !groupIds.Any(_selectedFilterIds.Contains)) continue;
+            var root = new TreeViewItem { Header = $"{group.Key}（{dimensionCount}）", IsExpanded = true, Tag = groupIds };
+            var people = group.Where(x => x.Id.StartsWith("person.confirmed.", StringComparison.Ordinal)).OrderBy(x => x.Name)
+                .Where(VisibleLeaf).ToArray();
             if (people.Length > 0)
             {
-                var named = new TreeViewItem { Header = "已命名人物", Tag = people.Select(x => x.Id).ToArray(), IsExpanded = true };
-                foreach (var label in people) named.Items.Add(new TreeViewItem { Header = label.Name, Tag = new[] { label.Id } });
+                var named = new TreeViewItem
+                {
+                    Header = $"已命名人物（{counts?.GetValueOrDefault(ClassificationCountKeys.NamedPeople) ?? 0}）",
+                    Tag = people.Select(x => x.Id).ToArray(), IsExpanded = true
+                };
+                foreach (var label in people)
+                    named.Items.Add(new TreeViewItem { Header = Header(label), Tag = new[] { label.Id } });
                 root.Items.Add(named);
             }
-            foreach (var label in group.Where(x => !x.Id.StartsWith("person.confirmed.", StringComparison.Ordinal)).OrderBy(x => x.Name))
-                root.Items.Add(new TreeViewItem { Header = label.Name, Tag = new[] { label.Id } });
-            LabelTree.Items.Add(root);
+            foreach (var label in group.Where(x => !x.Id.StartsWith("person.confirmed.", StringComparison.Ordinal)).OrderBy(x => x.Name).Where(VisibleLeaf))
+                root.Items.Add(new TreeViewItem { Header = Header(label), Tag = new[] { label.Id } });
+            roots.Add(root);
         }
+        // When nothing has been classified yet, show the full taxonomy with zero counts instead
+        // of an empty tree that looks broken.
+        if (roots.Count == 0 && counts is not null)
+            foreach (var group in _taxonomy.Labels.Where(x => x.Active).GroupBy(x => x.Dimension).OrderBy(x => x.Key))
+            {
+                var groupIds = group.Where(x => x.Assignable && !x.Id.StartsWith("nav.", StringComparison.Ordinal))
+                    .Select(x => x.Id).Distinct(StringComparer.Ordinal).ToArray();
+                var root = new TreeViewItem { Header = $"{group.Key}（0）", IsExpanded = true, Tag = groupIds };
+                foreach (var label in group.Where(x => !x.Id.StartsWith("person.confirmed.", StringComparison.Ordinal)).OrderBy(x => x.Name))
+                    root.Items.Add(new TreeViewItem { Header = Header(label), Tag = new[] { label.Id } });
+                roots.Add(root);
+            }
+        foreach (var root in roots) LabelTree.Items.Add(root);
+        return;
+
+        string Header(ClassificationLabel label) => $"{label.Name}（{counts?.GetValueOrDefault(label.Id) ?? 0}）";
     }
 
     private async void LabelTree_SelectedItemChanged(object sender, RoutedPropertyChangedEventArgs<object> e)

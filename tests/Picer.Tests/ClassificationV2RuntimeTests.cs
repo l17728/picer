@@ -189,6 +189,34 @@ public sealed class ClassificationV2RuntimeTests : IDisposable
     }
 
     [Fact]
+    public void BrowseCountsIncludeDeduplicatedDimensionAggregates()
+    {
+        Add("labelled.jpg");
+        Add("untouched.jpg");
+        using var cache = new ClassificationBrowseCache(_db);
+        Start();
+        var lease = _repo.Claim()!;
+        Assert.True(_repo.Publish(lease, Result(lease, "subject.people", "scene.forest", "scene.forest.conifer")));
+        var after = cache.Browse(new(new([], [])));
+        Assert.Equal(1, after.Counts["scene.forest"]);
+        Assert.Equal(1, after.Counts["scene.forest.conifer"]);
+        var scene = after.Taxonomy.Labels.Single(x => x.Id == "scene.forest");
+        // forest and its child both label the same photo; the dimension aggregate must count that
+        // photo once, and a dimension without any photo must not appear with a positive count.
+        Assert.Equal(1, after.Counts[ClassificationCountKeys.Dimension(scene.Dimension)]);
+        Assert.Equal(0, after.Counts.GetValueOrDefault(ClassificationCountKeys.NamedPeople));
+        var labelled = new[] { "subject.people", "scene.forest", "scene.forest.conifer" };
+        var labelledDimensions = new HashSet<string>(after.Taxonomy.Labels.Where(x => labelled.Contains(x.Id)).Select(x => x.Dimension), StringComparer.Ordinal);
+        Assert.Subset(labelledDimensions, new HashSet<string>(new[] { scene.Dimension }));
+        var untouchedDimension = after.Taxonomy.Labels.Select(x => x.Dimension).Distinct(StringComparer.Ordinal)
+            .FirstOrDefault(dimension => !labelledDimensions.Contains(dimension));
+        if (untouchedDimension is not null)
+            Assert.Equal(0, after.Counts.GetValueOrDefault(ClassificationCountKeys.Dimension(untouchedDimension)));
+        var confirmedOnly = cache.Browse(new(new([], []), IncludeSuggestions: false));
+        Assert.All(confirmedOnly.Counts.Values, count => Assert.Equal(0, count));
+    }
+
+    [Fact]
     public void FullLifecyclePersistsSuccessAndUnchangedScanSkipsModelWork()
     {
         Add("photo.jpg");

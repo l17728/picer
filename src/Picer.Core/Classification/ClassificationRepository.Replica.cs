@@ -115,14 +115,28 @@ public sealed partial class ClassificationRepository
                 if (!ancestors.TryGetValue(child, out var parents)) ancestors[child] = parents = [];
                 parents.Add(parent.Id);
             }
+        var aggregates = new Dictionary<string, int>(StringComparer.Ordinal);
         foreach (var photo in photos)
         {
             if (photo.LabelIds.Count == 0) continue;
             var counted = new HashSet<string>(StringComparer.Ordinal);
+            var dimensions = new HashSet<string>(StringComparer.Ordinal);
+            var namedPeople = false;
             foreach (var label in photo.LabelIds)
+            {
+                if (graph.Labels.TryGetValue(label, out var definition)) dimensions.Add(definition.Dimension);
+                namedPeople |= label.StartsWith("person.confirmed.", StringComparison.Ordinal);
                 if (ancestors.TryGetValue(label, out var parents)) counted.UnionWith(parents);
+            }
             foreach (var parent in counted) counts[parent]++;
+            // Deduplicated aggregates for tree group nodes: several labels of one dimension (for
+            // example several named people on one photo) must not add up to more than one photo.
+            foreach (var dimension in dimensions)
+                aggregates[ClassificationCountKeys.Dimension(dimension)] = aggregates.GetValueOrDefault(ClassificationCountKeys.Dimension(dimension)) + 1;
+            if (namedPeople)
+                aggregates[ClassificationCountKeys.NamedPeople] = aggregates.GetValueOrDefault(ClassificationCountKeys.NamedPeople) + 1;
         }
+        foreach (var pair in aggregates) counts[pair.Key] = pair.Value;
         return counts;
     }
 }

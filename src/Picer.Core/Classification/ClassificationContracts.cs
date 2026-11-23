@@ -46,6 +46,15 @@ public sealed record ClassificationDecision(string OperationId, string Epoch, st
 public sealed record ClassificationBrowseResult(string Snapshot, ClassificationTaxonomySnapshot Taxonomy,
     ClassificationCoverage Coverage, IReadOnlyDictionary<string, int> Counts, int Matched,
     IReadOnlyList<ClassificationPhoto> Photos, string? NextCursor, bool IsOffline = false);
+/// <summary>Besides one entry per label id, <see cref="ClassificationBrowseResult.Counts"/> carries aggregate
+/// entries under these reserved keys. Aggregate counts are deduplicated: a photo with several labels of one
+/// dimension counts once for that dimension, and once for the named-people group.</summary>
+public static class ClassificationCountKeys
+{
+    public const string DimensionPrefix = "dimension:";
+    public const string NamedPeople = "group:named-people";
+    public static string Dimension(string dimension) => DimensionPrefix + dimension;
+}
 public sealed record ClassificationOutboxItem(string OperationId, string Route, string Payload, string State, long Sequence = 0);
 public sealed record ClassificationProposal(string Id, string OwnerKey, long Revision, string State,
     ClassificationProposalDraft Draft, IReadOnlyList<long> ImageIds, IReadOnlyDictionary<long, string>? InputFingerprints = null);

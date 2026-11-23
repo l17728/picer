@@ -50,6 +50,12 @@ public sealed class ClassificationV2UiTests
                 new PropertyCondition(AutomationElement.NameProperty, "照片分类与审核"),
                 new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Window))));
             Assert.NotNull(Wait(() => window.FindFirst(TreeScope.Descendants, new PropertyCondition(AutomationElement.NameProperty, "分类树"))));
+            // Every tree node carries its photo count; a library without classifications falls
+            // back to showing the whole taxonomy with zero counts instead of an empty tree.
+            Assert.True(SpinWait.SpinUntil(() => window.FindAll(TreeScope.Descendants,
+                    new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.TreeItem))
+                .Cast<AutomationElement>().Any(item => item.Current.Name.Contains('（')), TimeSpan.FromSeconds(10)),
+                "分类树节点未显示照片计数");
             Assert.NotNull(Wait(() => window.FindFirst(TreeScope.Descendants, new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.List))));
             var suggestions = Wait(() => window.FindFirst(TreeScope.Descendants, new AndCondition(
                 new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.CheckBox),
@@ -65,9 +71,16 @@ public sealed class ClassificationV2UiTests
                 new PropertyCondition(AutomationElement.NameProperty, "增量扫描"))));
             ((InvokePattern)scan.GetCurrentPattern(InvokePattern.Pattern)).Invoke();
             // "增量扫描" only builds a plan: nothing is labelled and no model job is created.
-            Assert.True(SpinWait.SpinUntil(() => DescendantNames(window, ControlType.Text)
-                .Any(name => name.StartsWith("扫描计划：", StringComparison.Ordinal)), TimeSpan.FromSeconds(20)),
-                "增量扫描后未出现扫描计划反馈");
+            // The plan runs over the local service and can be slow while the suite loads other
+            // app instances, so wait generously and surface the window text on failure.
+            var scanFeedback = string.Empty;
+            Assert.True(SpinWait.SpinUntil(() =>
+            {
+                scanFeedback = DescendantNames(window, ControlType.Text).FirstOrDefault(name =>
+                    name.StartsWith("扫描计划：", StringComparison.Ordinal) || name.StartsWith("扫描失败：", StringComparison.Ordinal)) ?? "";
+                return scanFeedback.Length > 0;
+            }, TimeSpan.FromSeconds(45)), $"增量扫描后未出现反馈；窗口文本：{scanFeedback}");
+            Assert.StartsWith("扫描计划：", scanFeedback, StringComparison.Ordinal);
             using var verification = new PicerDatabase(Path.Combine(root, "picer.db"));
             using var jobs = verification.Command("SELECT COUNT(*) FROM classification_v2_jobs");
             Assert.Equal(0L, jobs.ExecuteScalar());
