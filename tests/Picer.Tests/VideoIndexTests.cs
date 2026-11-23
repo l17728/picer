@@ -21,6 +21,23 @@ public sealed class VideoIndexTests : IDisposable
     }
 
     [Fact]
+    public void RegeneratingKeyframesResetsPersonAnalysisStatus()
+    {
+        var source = _database.AddSource(_root);
+        var path = Path.Combine(_root, "regen.mp4");
+        File.WriteAllBytes(path, [1, 2, 3]);
+        var repository = new VideoRepository(_database);
+        var video = repository.Upsert(source.Id, path);
+        repository.SaveKeyframes(video.Id, [new VideoKeyframe(0, "frame-1.jpg")]);
+        repository.SavePersonAnalysisStatus(video.Id, "completed");
+        Assert.Equal("completed", Assert.Single(repository.GetAll()).PersonAnalysisStatus);
+        // Regenerating keyframes cascade-deletes the faces that referenced them, so the
+        // completed marker must go with them or the UI keeps claiming a vanished analysis.
+        repository.SaveKeyframes(video.Id, [new VideoKeyframe(0, "frame-2.jpg")]);
+        Assert.Null(Assert.Single(repository.GetAll()).PersonAnalysisStatus);
+    }
+
+    [Fact]
     public async Task VideoIndex_FindsSupportedFilesWithoutModifyingThem()
     {
         _database.AddSource(_root);

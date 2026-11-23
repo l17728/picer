@@ -347,6 +347,11 @@ public sealed class VideoRepository(PicerDatabase database)
         if (expected is not null && !IsCurrentContent(videoId, expected)) throw new InvalidOperationException("video_content_changed");
         using (var clear = database.Command("DELETE FROM video_keyframes WHERE video_id=$video"))
         { clear.Transaction = transaction; clear.Parameters.AddWithValue("$video", GetContentId(videoId)); clear.ExecuteNonQuery(); }
+        // Regenerating keyframes cascade-deletes the faces that referenced them; the completed
+        // marker must go with them or the UI keeps claiming an analysis whose result is gone.
+        using (var reset = database.Command(
+            "UPDATE videos SET person_analysis_status=NULL,person_analyzed_utc=NULL WHERE content_id=(SELECT content_id FROM videos WHERE id=$id)"))
+        { reset.Transaction = transaction; reset.Parameters.AddWithValue("$id", videoId); reset.ExecuteNonQuery(); }
         foreach (var frame in frames)
         {
             using var insert = frame.Id > 0

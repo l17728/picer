@@ -292,9 +292,17 @@ public static class SpaceRoutePermissions
         if (serviceParts.Length == 5 && serviceParts[0] == "api" && serviceParts[1] == "service" &&
             serviceParts[2] == "v1" && long.TryParse(serviceParts[4], out var serviceMediaId) && serviceMediaId > 0)
         {
-            if (method == "GET" && serviceParts[3] == "video-probe") return "media.read";
-            if (method == "POST" && serviceParts[3] is "video-keyframes" or "video-transcribe") return "analysis.run";
+            if (method == "GET" && serviceParts[3] is "video-probe" or "video-audio") return "media.read";
+            if (method == "POST" && serviceParts[3] is "video-keyframes" or "video-transcribe" or "video-people") return "analysis.run";
         }
+        // The standalone token-mode service always served these AI/model routes. Without an
+        // explicit mapping every unmatched POST falls through to null and the account host
+        // answers 403, which silently disabled video people analysis, voice, VL and the
+        // training relay for account-mode deployments.
+        if (method == "POST" && path is "/api/service/v1/asr" or "/api/service/v1/tts" or "/api/service/v1/tts/stream"
+            or "/api/service/v1/vl" or "/api/service/v1/vl/stream") return "analysis.run";
+        if (method == "POST" && path.StartsWith("/api/service/v1/face/", StringComparison.Ordinal)) return "analysis.run";
+        if (path.StartsWith("/api/service/v1/training/api/face-training/", StringComparison.Ordinal)) return "analysis.run";
         if (method == "GET")
         {
             var videoKeyframeParts = path.Split('/', StringSplitOptions.RemoveEmptyEntries);

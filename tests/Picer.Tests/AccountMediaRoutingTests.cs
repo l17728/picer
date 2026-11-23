@@ -17,6 +17,50 @@ namespace Picer.Tests;
 public sealed class AccountMediaRoutingTests
 {
     [Fact]
+    public async Task VideoPeopleAnalysisPassesScopeOnlyWithAnalysisGrant()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "picer-account-analysis-" + Guid.NewGuid().ToString("N"));
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start(); var port = ((IPEndPoint)listener.LocalEndpoint).Port; listener.Stop();
+        var origin = $"https://127.0.0.1:{port}";
+        var instance = AccountServiceHost.Build(Path.Combine(root, "service"), origin, port);
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+        try
+        {
+            await IndexServiceHost.StartAsync(instance.App);
+            var account = instance.Accounts.Register("analysis-owner", "analysis-owner-password-123!", "分析空间");
+            var space = Assert.Single(instance.Accounts.ListSpaces(account));
+            using var signing = IdentitySigningKey.LoadOrCreate(instance.Accounts.Root, instance.Accounts.ServiceId);
+            var pin = Convert.ToBase64String(ServiceSecurity.ComputeSpkiPin(instance.Certificate));
+            async Task<DeviceAccountClient> Pair(bool allowAnalysis)
+            {
+                var key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+                var requestId = Guid.NewGuid().ToString("N");
+                instance.Accounts.CreateEnrollment(new(requestId, DeviceAuthorization.ExportPublicKey(key), "gui", "gui"));
+                var document = instance.Accounts.ApproveEnrollment(account, requestId, space.Id, origin, pin, signing, true, true, allowAnalysis);
+                var connection = new DeviceConnection(origin, instance.Accounts.ServiceId, pin, DeviceAuthorization.ExportPublicKey(signing), "test", requestId, "gui", "gui");
+                var client = new DeviceAccountClient(connection, key, value => connection = value);
+                await client.ImportAsync(DeviceAuthorization.WriteFileDocument(document), deadline.Token);
+                return client;
+            }
+            using var plain = await Pair(false);
+            using var analyst = await Pair(true);
+            // Without the grant the account host rejects the route before any handler runs.
+            using var denied = await plain.SpaceClient.PostAsync("api/service/v1/video-people/1", content: null, deadline.Token);
+            Assert.Equal(HttpStatusCode.Forbidden, denied.StatusCode);
+            // With the grant the scope check passes; the unknown video yields 404, never 403.
+            using var allowed = await analyst.SpaceClient.PostAsync("api/service/v1/video-people/1", content: null, deadline.Token);
+            Assert.NotEqual(HttpStatusCode.Forbidden, allowed.StatusCode);
+            Assert.Equal(HttpStatusCode.NotFound, allowed.StatusCode);
+        }
+        finally
+        {
+            await instance.App.StopAsync(); await instance.App.DisposeAsync(); instance.Certificate.Dispose();
+            if (Directory.Exists(root)) Directory.Delete(root, true);
+        }
+    }
+
+    [Fact]
     public async Task MediaUsesBoundSourceDespiteCallerAgentOverrideAndRevocationClosesSocket()
     {
         var root = Path.Combine(Path.GetTempPath(), "picer-account-media-" + Guid.NewGuid().ToString("N"));

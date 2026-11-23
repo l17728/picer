@@ -147,6 +147,15 @@ public sealed class IndexApiHandlers(PicerDatabase db, ThumbnailService thumbnai
             clear.Parameters.AddWithValue("$video", new VideoContentRepository(connection).GetContentId(videoId));
             clear.ExecuteNonQuery();
         }
+        // Regenerating keyframes cascade-deletes the faces that referenced them; the completed
+        // marker must go with them or the UI keeps claiming an analysis whose result is gone.
+        using (var reset = connection.Command(
+            "UPDATE videos SET person_analysis_status=NULL,person_analyzed_utc=NULL WHERE content_id=(SELECT content_id FROM videos WHERE id=$id)"))
+        {
+            reset.Transaction = transaction;
+            reset.Parameters.AddWithValue("$id", videoId);
+            reset.ExecuteNonQuery();
+        }
         var saved = new List<VideoKeyframe>(frames.Count);
         foreach (var frame in frames)
         {

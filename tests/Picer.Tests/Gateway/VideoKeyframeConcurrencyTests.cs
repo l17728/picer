@@ -9,6 +9,28 @@ namespace Picer.Tests;
 public sealed class VideoKeyframeConcurrencyTests
 {
     [Fact]
+    public void GeneratedKeyframeRegenerationResetsPersonAnalysisStatus()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "picer-keyframe-reset-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            using var database = new PicerDatabase(Path.Combine(root, "index.db"));
+            var media = Path.Combine(root, "video.mp4"); File.WriteAllBytes(media, [1, 2, 3]);
+            var repository = new VideoRepository(database);
+            var video = repository.Upsert(database.AddSource(root).Id, media);
+            repository.SavePersonAnalysisStatus(video.Id, "completed");
+            Assert.Equal("completed", Assert.Single(repository.GetAll()).PersonAnalysisStatus);
+            var handlers = new IndexApiHandlers(database, new ThumbnailService(Path.Combine(root, "thumbs")), repository);
+            // Saving generated frames replaces the keyframes; the cascade that deletes their
+            // faces must also clear the analysis marker for every reference of that content.
+            handlers.SaveGeneratedKeyframes(video.Id, [new VideoKeyframe(0, "synthetic-frame.jpg")]);
+            Assert.Null(Assert.Single(repository.GetAll()).PersonAnalysisStatus);
+        }
+        finally { SqliteConnection.ClearAllPools(); Directory.Delete(root, true); }
+    }
+
+    [Fact]
     public async Task KeyframeSaveUsesIndependentConnectionDuringAnotherRequestTransaction()
     {
         var root = Path.Combine(Path.GetTempPath(), "picer-keyframe-concurrency-" + Guid.NewGuid().ToString("N"));
