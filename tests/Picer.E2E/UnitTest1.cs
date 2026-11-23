@@ -329,8 +329,10 @@ public sealed class DesktopSmokeTests
             Assert.NotNull(window.FindFirst(TreeScope.Descendants,
                 new PropertyCondition(AutomationElement.NameProperty, "添加文件夹")));
             AssertMenuEntries(window, "文件菜单", "添加文件夹", "存储设置", "删除所选", "备份与恢复");
+            // "中文语义检索" is the shipped menu label (docs/USER_GUIDE.md); "语义索引管理与诊断"
+            // is only the title of the ClipSemanticWindow it opens.
             AssertMenuEntries(window, "AI 功能菜单", "AI 模型设置", "描述选中照片", "任务中心",
-                "语义索引管理与诊断", "照片分类与审核…", "Florence 运行验证", "描述目录中的照片和视频…", "继续目录描述任务…");
+                "中文语义检索", "照片分类与审核…", "Florence 运行验证", "描述目录中的照片和视频…", "继续目录描述任务…");
             AssertMenuEntries(window, "工具菜单", "增量更新索引", "检查缺失", "查找重复", "运行组件", "诊断中心", "扫描视频");
             Assert.Contains("Picer", window.Current.Name);
             var tabs = window.FindAll(TreeScope.Descendants,

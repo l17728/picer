@@ -43,24 +43,31 @@ public sealed class ClassificationV2UiTests
                     new PropertyCondition(AutomationElement.AutomationIdProperty, "PhotoClassificationMenu")));
             });
             ((InvokePattern)open.GetCurrentPattern(InvokePattern.Pattern)).Invoke();
+            // The shipped classification GUI is ClassificationBrowserWindow (title "照片分类与审核"),
+            // which hosts ClassificationV2Client; its controls are addressed by their visible labels.
             var window = Wait(() => AutomationElement.RootElement.FindFirst(TreeScope.Descendants, new AndCondition(
-                new PropertyCondition(AutomationElement.ProcessIdProperty, process.Id), new PropertyCondition(AutomationElement.AutomationIdProperty, "ClassificationV2Window"))));
-            var rootLabel = Wait(() => window.FindFirst(TreeScope.Descendants, new PropertyCondition(AutomationElement.AutomationIdProperty, "nav.nature")));
-            var setup = Wait(() => window.FindFirst(TreeScope.Descendants, new PropertyCondition(AutomationElement.AutomationIdProperty, "ClassificationV2SetupStatus")));
-            Assert.Contains("未启用", setup.Current.Name);
-            var toggle = (TogglePattern)rootLabel.GetCurrentPattern(TogglePattern.Pattern);
-            Assert.Equal(ToggleState.Off, toggle.Current.ToggleState);
+                new PropertyCondition(AutomationElement.ProcessIdProperty, process.Id),
+                new PropertyCondition(AutomationElement.NameProperty, "照片分类与审核"),
+                new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Window))));
+            Assert.NotNull(Wait(() => window.FindFirst(TreeScope.Descendants, new PropertyCondition(AutomationElement.NameProperty, "分类树"))));
+            Assert.NotNull(Wait(() => window.FindFirst(TreeScope.Descendants, new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.List))));
+            var suggestions = Wait(() => window.FindFirst(TreeScope.Descendants, new AndCondition(
+                new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.CheckBox),
+                new PropertyCondition(AutomationElement.NameProperty, "包含待确认建议"))));
+            var toggle = (TogglePattern)suggestions.GetCurrentPattern(TogglePattern.Pattern);
+            Assert.Equal(ToggleState.On, toggle.Current.ToggleState);
+            toggle.Toggle();
+            Assert.True(SpinWait.SpinUntil(() => toggle.Current.ToggleState == ToggleState.Off, TimeSpan.FromSeconds(10)));
             toggle.Toggle();
             Assert.True(SpinWait.SpinUntil(() => toggle.Current.ToggleState == ToggleState.On, TimeSpan.FromSeconds(10)));
-            toggle.Toggle();
-            var scan = Wait(() => window.FindFirst(TreeScope.Descendants, new PropertyCondition(AutomationElement.AutomationIdProperty, "ClassificationV2Scan")));
+            var scan = Wait(() => window.FindFirst(TreeScope.Descendants, new AndCondition(
+                new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Button),
+                new PropertyCondition(AutomationElement.NameProperty, "增量扫描"))));
             ((InvokePattern)scan.GetCurrentPattern(InvokePattern.Pattern)).Invoke();
-            Assert.True(SpinWait.SpinUntil(() =>
-            {
-                var status = window.FindFirst(TreeScope.Descendants, new PropertyCondition(AutomationElement.AutomationIdProperty, "ClassificationV2Status"));
-                return status?.Current.Name.Contains("扫描完成（尚未开始打标）", StringComparison.Ordinal) == true;
-            }, TimeSpan.FromSeconds(20)));
-            Assert.NotNull(window.FindFirst(TreeScope.Descendants, new PropertyCondition(AutomationElement.AutomationIdProperty, "ClassificationV2Photos")));
+            // "增量扫描" only builds a plan: nothing is labelled and no model job is created.
+            Assert.True(SpinWait.SpinUntil(() => DescendantNames(window, ControlType.Text)
+                .Any(name => name.StartsWith("扫描计划：", StringComparison.Ordinal)), TimeSpan.FromSeconds(20)),
+                "增量扫描后未出现扫描计划反馈");
             using var verification = new PicerDatabase(Path.Combine(root, "picer.db"));
             using var jobs = verification.Command("SELECT COUNT(*) FROM classification_v2_jobs");
             Assert.Equal(0L, jobs.ExecuteScalar());
@@ -70,6 +77,16 @@ public sealed class ClassificationV2UiTests
             if (!process.HasExited) { process.CloseMainWindow(); if (!process.WaitForExit(5000)) process.Kill(true); }
             try { Directory.Delete(root, true); } catch (IOException) { }
         }
+    }
+
+    private static IEnumerable<string> DescendantNames(AutomationElement root, ControlType controlType)
+    {
+        try
+        {
+            return root.FindAll(TreeScope.Descendants, new PropertyCondition(AutomationElement.ControlTypeProperty, controlType))
+                .Cast<AutomationElement>().Select(element => element.Current.Name).ToArray();
+        }
+        catch (ElementNotAvailableException) { return []; }
     }
 
     private static AutomationElement Wait(Func<AutomationElement?> find)
