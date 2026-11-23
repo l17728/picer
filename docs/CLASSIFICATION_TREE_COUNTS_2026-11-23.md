@@ -33,3 +33,11 @@
 
 - 隐藏空节点后，无法直接看到"还有哪些分类可用"；需要向空分类归档时，先在照片详情/决策流程中选择分类（或临时关闭再打开筛选开关触发重算）。若后续觉得不便，可加"显示空分类"开关。
 - 分组节点的计数是"该维度下有照片的数量"，不是子节点计数之和（去重语义）。
+
+## 正式 Release 构建与运行验收（2026-11-23）
+
+- Commit：`3719a06`
+- 构建：关闭正在运行的 GUI 后 `dotnet clean` + `dotnet build src/Picer.App/Picer.App.csproj -c Release --warnaserror`，0 警告 0 错误。注意：GUI 从该输出目录运行时会锁定其中的 DLL，构建报 MSB3026/MSB3027"文件被 Picer.App 锁定"——这不是代码错误，须先关闭 GUI 再构建。
+- 产物：`D:\picer\src\Picer.App\bin\Release\net8.0-windows\win-x64\Picer.App.exe`
+- SHA-256：`851d7d48d413582087c943b2d2704fb84222f51f343bbdeb01523ec6b6006b3d`
+- 运行验收：进程路径与产物核对一致。
