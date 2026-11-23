@@ -29,6 +29,8 @@ dotnet test tests/Picer.E2E/Picer.E2E.csproj -c Debug --no-build --no-restore --
 - Prefer `tools/run-picer-tests.ps1` for full local suite runs: it serializes via a global mutex because two concurrent full-suite hosts contend for the same temporary SQLite/ONNX resources and look like hangs.
 - CI also has a non-.NET `deployment-safety` job: `bash -n tools/deploy-indexservice-linux.sh` and `python3 -m unittest discover -s tests/deployment`. Changes to deploy scripts or `tests/deployment/*.py` can break CI without any build involvement.
 - On trusted `main` pushes (not PRs), CI runs `tools/Picer.ServiceProbe` against a live service using `PICER_LIVE_SERVICE_*` secrets — failures there won't reproduce locally without those secrets.
+- `Picer.App` sets `RuntimeIdentifier=win-x64` only for `Configuration=Release`: build the app with `-c Release` (letting restore run) or you get NETSDK1047, and `bin/Release/net8.0-windows/win-x64/Picer.App.exe` stays a stale binary.
+- Local full-suite wall time: `Picer.Tests` ≈ 2.5 h, `Picer.E2E` ≈ 7 min. Run focused filters first; a 30 s `HttpClient.Timeout` in gateway tests usually means the test agent never answered a request, not a slow machine.
 
 ## RuntimeComponent tests and offline runtime
 

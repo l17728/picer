@@ -17,3 +17,5 @@
 - `dotnet build src/Picer.MediaAgent/Picer.MediaAgent.csproj -c Release --no-restore --warnaserror`：通过。
 - `dotnet build server/Picer.IndexService/Picer.IndexService.csproj -c Release --no-restore --warnaserror`：通过。
 - 运行时需验证同一驻留连接连续处理多个预览请求，日志不应为每张缩略图新增 `agent_socket_connected`。
+
+2026-11-23 补充：上述“旧版驻留程序保留 fallback”原先缺少能力位而无法成立（旧程序不应答 `media.preview`，请求会等满超时）。现已增加 `media.preview.v1` 能力协商，见 [TEST_DRIFT_REPAIR_2026-11-23.md](TEST_DRIFT_REPAIR_2026-11-23.md)。
