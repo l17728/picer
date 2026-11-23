@@ -39,8 +39,8 @@
 
 - 新增 `tests/Picer.Tests/TagAlbumSyncTests.cs`(4 项):双写与成员镜像、同名手动相册复用不覆盖描述、标记相册随标签删除而手动同名相册保留、回填含相机标签和解且幂等。
 - 扩展 `tests/Picer.E2E` `DirectoryBrowser_SourceAlbumsAndTimelineRootsAlwaysResolvePhotos`:种子加入用户标签"海滨之行",断言启动回填后"我的相册"子节点为 `["海滨之行", "回归相册"]`(相册按创建时间倒序),且选中标签相册节点能解析出照片。
-- 严格构建(`--warnaserror`)0 警告;上述针对性测试全部通过;完整单元套件经 `tools/run-picer-tests.ps1` 运行:1239 项中 1237 通过,2 项失败(`MediaStreamingTests.SourceThumbnail_TransfersOnlyResizedPixels_AndCoalescesRequests`、`MediaStreamingTests.SaturatedOriginalReaders_LeavePreviewChannelAvailable`)。归因:已用 `git stash` 在无本改动的干净基线上复验,同样 2/2 失败(自托管 Kestrel 媒体流在 HttpClient 30 秒超时挂起),属本机环境既有问题,与本改动无关(CI 该项为绿)。
-- 完整 E2E 套件:171 项中 167 通过,4 项失败(`LocalAccountSynchronizationTests.LocalModePublishesAndDownloadsThroughItsOwnPairedAccount`×2、`ClassificationV2UiTests.IndependentGuiExposesTreeTogglePreviewAndScanWithoutModelCalls`、`DesktopSmokeTests.MainWindow_ExposesCoreNavigationAndSearchToUiAutomation`)。同样经干净基线复验 4/4 失败,属本机环境既有问题,与本改动无关。
+- 严格构建(`--warnaserror`)0 警告;上述针对性测试全部通过;完整单元套件经 `tools/run-picer-tests.ps1` 运行:1239 项中 1237 通过,2 项失败(`MediaStreamingTests.SourceThumbnail_TransfersOnlyResizedPixels_AndCoalescesRequests`、`MediaStreamingTests.SaturatedOriginalReaders_LeavePreviewChannelAvailable`)。归因:已用 `git stash` 在无本改动的干净基线上复验,同样 2/2 失败(自托管 Kestrel 媒体流在 HttpClient 30 秒超时挂起)。归因(2026-11-23 修订):非本机环境问题,而是 main 上的既有测试漂移——`01bdd40`(2026-11-18)新增 `media.preview` 持久预览协议但未同步更新测试替身 `TestAgent`,缩略图请求在 `RequestPreviewAsync` 等待 2 分钟直至客户端超时;与本改动无关。此前"CI 为绿"的表述未经核实,应予撤回。
+- 完整 E2E 套件:171 项中 167 通过,4 项失败(`LocalAccountSynchronizationTests.LocalModePublishesAndDownloadsThroughItsOwnPairedAccount`×2、`ClassificationV2UiTests.IndependentGuiExposesTreeTogglePreviewAndScanWithoutModelCalls`、`DesktopSmokeTests.MainWindow_ExposesCoreNavigationAndSearchToUiAutomation`)。同样经干净基线复验 4/4 失败。归因(2026-11-23 修订):非本机环境问题,而是 main 上的既有测试漂移——`0e486e7`(2026-11-17)加入的 E2E 断言期待从未在应用中存在的菜单项"语义索引管理与诊断"(实际为"中文语义检索")和窗口 `ClassificationV2Window`(实际为 `ClassificationBrowserWindow`);`afefd2d`(2026-11-19)在本地索引模式关闭 `ContinuousSync` 后,`CaptureSpaceNotificationBaselineAsync` 返回 null,而 `LocalAccountSynchronizationTests` 未同步更新;与本改动无关。
 
 
 ## 边界与已知限制
