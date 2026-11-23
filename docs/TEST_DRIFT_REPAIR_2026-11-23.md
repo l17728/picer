@@ -37,6 +37,7 @@
 - 定向单元测试：`MediaStreamingTests` + `AgentConnectionRegistryTests` 34/34；`SpaceInspectionClientTests` + `SpaceSyncReceiverTests` + `IndexBackendConfigTests` 48/48。
 - 定向 E2E：三组原失败用例全部通过；`LocalAccountSynchronizationTests` 由超时（3–5 分钟）恢复为约 21 秒，多来源的冲突与目录退休流程一并跑通。
 - 完整 E2E 套件（`tools/run-picer-tests.ps1`）：171/171 通过，7.7 分钟。
+- 完整单元套件（同 runner）：1241/1241 通过，2.5 小时，零失败——修复前为 1239 项中 2 项失败。
 
 ## 边界与说明
 
