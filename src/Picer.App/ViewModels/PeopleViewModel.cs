@@ -647,16 +647,17 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
                 return;
             }
             var baseline = await CaptureTrainingBaselineAsync(modelVersion);
-            await ApplyTrainedPrototypesAsync(artifact, baseline);
             // The artifact carries per-person prototypes; the calibrated threshold of the model
             // space is stored separately and must travel with it or suggestions tighten to 0.55.
+            // It is stored first: applying the artifact already mirrors the training layer, which
+            // then carries both, instead of a second full mirror pass.
             if (localSetting is { } setting)
             {
                 var client = _services.SyncClient ?? throw new InvalidOperationException("照片空间连接尚未就绪。");
                 await client.SaveFaceModelSettingAsync(_database, setting);
                 AppLogger.Info($"已导入人脸模型阈值；model={modelVersion}; threshold={setting.MatchThreshold:0.###}");
             }
-            await _services.SyncRemoteMirrorAsync(requireMetadataSync: true);
+            await ApplyTrainedPrototypesAsync(artifact, baseline);
             MarkAppliedArtifactInView(artifact);
             await LoadTrainingHistoryAsync(modelVersion);
             StatusText = $"已将本机训练制品导入照片空间：{artifact.Prototypes.Count} 个人物原型" +
