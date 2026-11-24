@@ -686,6 +686,86 @@ public sealed class GatewayContractTests(GatewayServiceFixture fixture) : IClass
     }
 
     [Fact]
+    public void FaceTaskPathRestoresThePublishedPathAndKeepsTheOtherFields()
+    {
+        const string original = @"C:\Photos\Apple照片\one.jpg";
+        var published = Picer.Core.Identity.PublishedMediaPath.Qualify(new string('a', 32), original);
+        Assert.NotEqual(original, published);
+
+        var restored = JsonDocument.Parse(IndexApiHandlers.NormalizeFaceTaskPath(
+            JsonSerializer.Serialize(new { imageId = 7L, path = published, modelVersion = "insightface-arcface" })));
+
+        Assert.Equal(original, restored.RootElement.GetProperty("path").GetString());
+        Assert.Equal(7, restored.RootElement.GetProperty("imageId").GetInt64());
+        Assert.Equal("insightface-arcface", restored.RootElement.GetProperty("modelVersion").GetString());
+    }
+
+    [Fact]
+    public void FaceTaskPathLeavesPayloadsWithoutAPublishedPathAlone()
+    {
+        // A path that was never published, a body without a path and a body that is not JSON.
+        const string local = "{\"imageId\":7,\"path\":\"C:\\\\Photos\\\\one.jpg\"}";
+        Assert.Equal(local, IndexApiHandlers.NormalizeFaceTaskPath(local));
+        const string withoutPath = "{\"imageId\":7}";
+        Assert.Equal(withoutPath, IndexApiHandlers.NormalizeFaceTaskPath(withoutPath));
+        Assert.Equal("not json", IndexApiHandlers.NormalizeFaceTaskPath("not json"));
+    }
+
+    [Fact]
+    public async Task RemoteFaceDetection_GivesTheAgentTheRealPhotoPathAndSavesDetections()
+    {
+        var imagePath = Path.Combine(fixture.Root, "remote-face-detect-" + Guid.NewGuid().ToString("N") + ".jpg");
+        await File.WriteAllBytesAsync(imagePath, [1, 2, 3, 4]);
+        var image = fixture.Db.UpsertImage(new ImageRecord
+        {
+            SourceId = fixture.SourceId, Path = imagePath, FileSize = 4,
+            ModifiedUtc = DateTime.UnixEpoch, IndexedUtc = DateTime.UtcNow, Status = ImageStatus.Active
+        });
+        // What the GUI holds for this photo: the logical path of the space, valid on no machine.
+        var published = Picer.Core.Identity.PublishedMediaPath.Qualify(new string('a', 32), imagePath);
+        var agentId = "test-face-detect-agent-" + Guid.NewGuid().ToString("N");
+        using var agent = new ClientWebSocket();
+        agent.Options.RemoteCertificateValidationCallback = (_, _, _, _) => true;
+        agent.Options.SetRequestHeader("Authorization", "Bearer picer-test-token");
+        var serviceUri = new UriBuilder(new Uri(fixture.BaseUrl)) { Scheme = "wss" }.Uri;
+        await agent.ConnectAsync(new Uri(serviceUri, "api/agent/v1/connect"), CancellationToken.None);
+        await SendWsAsync(agent, new { type = "agent.register", agentId, capabilities = new[] { "face.detect" } });
+        Assert.Contains("agent.registered", await ReceiveWsAsync(agent), StringComparison.Ordinal);
+
+        var task = Task.Run(async () =>
+        {
+            using var request = JsonDocument.Parse(await ReceiveAgentRequestAsync(agent));
+            Assert.Equal("task.open", request.RootElement.GetProperty("type").GetString());
+            Assert.Equal("face.detect", request.RootElement.GetProperty("task").GetString());
+            using var requestPayload = JsonDocument.Parse(request.RootElement.GetProperty("payload").GetString()!);
+            // The agent reads the file on the source machine; the logical path would not exist there.
+            Assert.Equal(imagePath, requestPayload.RootElement.GetProperty("path").GetString());
+            Assert.Equal(image.Id, requestPayload.RootElement.GetProperty("imageId").GetInt64());
+            Assert.Equal("insightface-arcface", requestPayload.RootElement.GetProperty("modelVersion").GetString());
+            var result = new FaceServiceResult(FaceServiceContract.CurrentSchema, "detect", "insightface-arcface",
+                [new FaceServiceFace(0, null, .2f, .2f, .3f, .3f, .99f, [1f, 0f, 0f])]);
+            await SendWsAsync(agent, new
+            {
+                type = "task.result",
+                requestId = request.RootElement.GetProperty("requestId").GetString(),
+                payload = JsonSerializer.Serialize(result)
+            });
+        });
+
+        using var handler = new HttpClientHandler { ServerCertificateCustomValidationCallback = (_, _, _, _) => true };
+        using var client = new HttpClient(handler) { BaseAddress = new Uri(fixture.BaseUrl) };
+        client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", "picer-test-token");
+        using var response = await client.PostAsJsonAsync($"api/service/v1/face/detect?agentId={Uri.EscapeDataString(agentId)}",
+            new { imageId = image.Id, path = published, modelVersion = "insightface-arcface" });
+        var body = await response.Content.ReadAsStringAsync();
+        Assert.True(response.IsSuccessStatusCode, $"remote face detection failed: {(int)response.StatusCode} {body}");
+        await task;
+        using var detected = fixture.Db.Command("SELECT COUNT(*) FROM detected_faces WHERE image_id=$image AND model_version='insightface-arcface'");
+        detected.Parameters.AddWithValue("$image", image.Id);
+        Assert.Equal(1L, Convert.ToInt64(detected.ExecuteScalar()));
+    }
+
+    [Fact]
     public async Task LateVideoKeyframeResponseCannotAttachToReplacementContent()
     {
         var path = Path.Combine(fixture.Root, "late-keyframe-" + Guid.NewGuid().ToString("N") + ".mp4");

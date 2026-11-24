@@ -93,6 +93,22 @@ public sealed class IndexApiHandlers(PicerDatabase db, ThumbnailService thumbnai
         if (Picer.Core.Identity.PublishedMediaPath.TryUnqualify(path, out _, out var original)) path = original;
         return Picer.Core.Indexing.MediaSourcePath.ForStorage(path);
     }
+    /// <summary>
+    /// The GUI holds the published (logical) path of a photo, which exists on no machine. Every
+    /// other agent task receives the source machine's real path, so the photo path of a face task
+    /// is restored here before the request reaches the agent. Other fields are passed through.
+    /// </summary>
+    internal static string NormalizeFaceTaskPath(string payload)
+    {
+        try
+        {
+            if (JsonNode.Parse(payload) is not JsonObject body || body["path"] is not JsonValue value
+                || !value.TryGetValue<string>(out var path)) return payload;
+            body["path"] = IndexApiHandlers.NormalizeAgentPath(path);
+            return body.ToJsonString();
+        }
+        catch (JsonException) { return payload; }
+    }
     public GatewayHealth Health() => new("ok", PicerDatabase.CurrentSchemaVersion, "1.0",
         typeof(IndexApiHandlers).Assembly.GetName().Version?.ToString() ?? "unknown");
 
@@ -1593,7 +1609,7 @@ async function load(){const [c,g]=await Promise.all([fetch('/api/service/v1/capa
             using var document = await JsonDocument.ParseAsync(request.Body, cancellationToken: cancellationToken);
             try
             {
-                var payload = await agents.RequestTaskAsync(agentId, "face." + operation, document.RootElement.GetRawText(), cancellationToken);
+                var payload = await agents.RequestTaskAsync(agentId, "face." + operation, IndexApiHandlers.NormalizeFaceTaskPath(document.RootElement.GetRawText()), cancellationToken);
                 if (payload is null) return Results.Json(new { error = "media_agent_offline" }, statusCode: StatusCodes.Status503ServiceUnavailable);
                 // MediaAgent implementations use the wire-format camelCase
                 // contract.  Use web defaults here so a valid remote result
