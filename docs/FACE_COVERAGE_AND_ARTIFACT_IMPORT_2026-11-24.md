@@ -45,9 +45,66 @@
 - 修复安装脚本（提交 `9c9d9aa`）：从单元 `ExecStart` 识别容器化部署，结构准备在同一镜像与挂载内执行，公网域名回退到容器参数；对 `ExecStart` 做字符白名单校验后再求值。新增 `tests/deployment/test_deploy_container_detection.py`（3 项，CI `deployment-safety` 任务执行）。同时修复 PowerShell 包装脚本在 PowerShell 5.1 下 `$PSScriptRoot` 默认值为空的问题。
 - 第二次部署成功：`deploymentId=20261124T013648093Z`，`binarySha256=27bc1bbb9dc58504ab719d8967e7e58d20416477a4ee50ead18dfab89f223c27`，`sourceCommit=9c9d9aa4d12d`；结构版本 v94→v94 无迁移；经公网域名复核 `/version`、`/health` 正常，MediaAgent 与 GUI 自动重连。
 
-## 用户操作（功能生效所需）
+## 实测验证与后续修复（2026-11-24 下午）
 
-1. **重新配对 GUI 设备**并在 Web 审批页勾选"允许分析"（缺口①需要 `analysis.run`）。
-2. 人物页 → 选择 `insightface-arcface` 模型空间 → 点击**"导入本机训练制品"**（缺口②，只需编辑权限）。
-3. 人物页 → 点击**"检查新照片"**（缺口①）。
-4. 视频页 → 对需要的视频重新点击"分析视频人物"。
+上面的实现在本机真实环境里逐项实测，每一项都是先跑通再记录。实测又暴露出若干缺陷，按发现的顺序记录如下。
+
+### 前置：本机人脸推理环境重建
+
+- 现象：`picer-model` 的 `/api/face-inference` 自 11-20 起全部返回 500。原因是 Python 被重装到 `G:\AI\python`（裸解释器），原 `C:\Python312` 及其依赖包随之消失，`PICER_GPU_WORKER_PYTHON` 指向不存在的路径。
+- 处理：用 `server\setup-modelserver.py --device cuda` 在 `%LOCALAPPDATA%\PicerModelWorker\cuda` 重建（torch 2.6.0+cu124、onnxruntime-gpu 1.20.2），`--check` 通过（实际加载 InsightFace 与 YuNet 并在 GPU 上运行）；启动器改指新环境后重启 `picer-model`。依赖锁定同步修正（`onnxruntime-gpu` 1.20.1 从未发布 GPU 包，改 1.20.2，提交 `1bef267`）。下载镜像与断点续传的注意事项见 [ENGINEERING_MEMORY.md](ENGINEERING_MEMORY.md)。
+
+### 视频人物分析复验
+
+- DXXT7429（id 7）、ARUA4227（id 2）、HLAO8549（id 8）重新分析：服务端日志均为 `Remote video people analysis indexed; faces=1`，空间权威库对应记录的时间戳更新为当日；镜像投影 `videoFaces` 由 6 变为 9（原有 6 条 legacy + 新增 3 条）；DXXT7429 在 GUI 上为 `displayedFaces=1`（此前为 0）。
+
+### 缺口②实测
+
+- **发现六：导入按钮始终禁用。** `ImportLocalTrainingArtifactCommand` 的可用性只随 `IsAnalyzing` 刷新，而页面是在加载完成后才设定所选模型空间，此时不通知命令，按钮一直是灰的（提交 `de7dc30` 引入的功能实际点不到）。修复见 `6b0d689`。
+- **发现七：导入只带了原型，没带校准阈值。** 自动归类取不到阈值时回落到默认 0.55，而本机为 0.415，照片空间的归类因此比原来更严。新增授权路由 `POST api/service/v1/faces/model-settings`（`index.write`；校验取值范围、NaN、负样本数；只读设备 403），导入时随制品一并写入。修复见 `15f87f7`。`dd39f8b` 把阈值存储提到应用制品之前，省掉紧随其后的一次全量镜像同步；**实测总耗时并未下降**（25 分钟，此前一次为 21 分钟），耗时由同步本身决定且波动更大。
+- **结果**：空间权威库 `face_training_artifacts` 1 条 active、8 个原型，`face_model_settings` 为 0.415（20 万对样本）；镜像库同样有阈值与制品；GUI 训练历史由 `local=0; remote=0` 变为 `local=1`。
+
+### 缺口①实测：照片人脸分析此前从未跑通
+
+"检查新照片"点击后连续失败。逐环实测定位出**四处互相独立的缺陷**，任何一处都足以让这条链路失败：
+
+- **发现八（服务端）：任务路径没有规范化。** `face/{operation}` 是唯一把 GUI 请求体原样转发给代理的端点，其余 24 处发给代理的路径都经过 `IndexApiHandlers.NormalizeAgentPath`。GUI 手里是发布时的逻辑路径 `\\Picer-<发布者id>\G$\…`，在任何机器上都不存在。修复见 `956b591`（新增 `NormalizeFaceTaskPath`）。
+- **发现九（代理）：没有把路径换成图片。** `face.*` 任务把载荷原样发给模型接口，而接口只接受 `imageBase64`，每次都是 HTTP 400。新增 `FaceImagePayload`（在授权根目录内读出文件并编码；管理共享形式的路径先映射），`video.people` 与 `vl.analyze` 原本就走这一步，唯独照片任务漏了。修复见 `792c137`。
+- **发现十（GUI）：解析服务端应答时区分大小写。** `ServiceFaceAnalyzer` 用默认选项反序列化，服务端输出驼峰命名，字段全部读成空，合法结果被判为 `face result schema invalid`。修复见 `9e40004`。
+- **发现十一（代理）：任务异常被吞。** 任务处理只捕获 IO、未授权、无效操作三类异常，而 `InvalidDataException` 直接继承自 `SystemException`；文件缺失时任务静默结束，不回结果、不记日志，GUI 每张要等满 5 分钟超时。现归入会回传 `task.error` 的类型，并对其它意外异常记 `task crashed`，成功路径也补了日志。修复见 `792c137`。
+- **定位过程中的两次误判（如实记录）**：先以为代理继承了命令行的代理环境变量，核对后环境里只有 `NO_PROXY`，到 2080 的连接是代理连云端服务的通道；又把镜像里的路径误读成命名共享，实际是 `G$` 管理共享形式（Windows 的 `splitdrive` 把 `\\host\G$` 整体算盘符）。两次都是靠直接测量（TCP 连接、系统调用计时）否定的，不是靠读代码。
+
+### 缺口①实测结果
+
+- 16:12 起在真实照片库上运行：每张由代理在 0.6～2 秒内完成，检出人脸时返回约 1.1 万字符（含特征向量），服务端新增人脸落库；16:17 时成功 27 张、失败 0。约 4 秒/张。
+- **已知限制**：
+  - 超过 10 MiB 的照片被拒绝（待分析的 3386 张里有 5 张），记为失败，不计入"连续失败"中止条件；
+  - 人物页加载时触发的"统一基线评估集发布"占住数据库队列，首轮保存排队约 2 分钟（一次性，之后每张排队 2～3 秒）；
+  - 人脸推理链路没有超时（模型服务持有无超时的单并发信号量，代理的模型客户端也是无限超时），目前只靠 GUI 侧 5 分钟兜底，未修。
+
+## 测试与构建记录
+
+- **完整单元套件**（`1bef267`，11:48–15:22）：**1273 / 1273 通过，0 失败，0 跳过**，3.55 小时。日志 `artifacts/test-logs/picer-tests-20261124-114824.out.log`。
+- **此后改动的针对性测试**（Debug，`--warnaserror` 0 警告 0 错误）：
+  - 阈值导入：`RemoteFaceAnalysisTests`、`SpaceRoutePermissionTests`、`SpacePublisherTrainingTests`，27/27（新增未校准/已校准读取、路由映射、端点往返与 400/403）；
+  - 代理读图：`FaceImagePayloadTests` 11/11（路径替换、已带图片不读文件、共享路径映射、解析结果越界拒绝、缺失/空/超限文件）；
+  - 任务路径与视频回归：`GatewayContractTests` 3 项新增（路径还原、无逻辑路径时原样返回、注册代理走通端点并把人脸写入索引），连同既有视频人物分析用例 17/17；
+  - 应答解析：`FaceServiceContractTests` 新增 2 项（驼峰应答、模型不符拒绝）。
+- **完整 E2E**（最终代码 `9e40004`，16:17–16:29）：**171 / 171 通过，0 失败，0 跳过**；整个解决方案 `dotnet build picer.sln -c Debug --warnaserror` 0 警告 0 错误。运行期间正式 GUI 正在后台分析照片，E2E 只按自己启动的进程号定位窗口，两者互不影响。
+- **Release 构建**（`src\Picer.App\bin\Release\net8.0-windows\win-x64\`）：`Picer.App.dll` SHA-256 `b2690d748a71a52cc6fc99e8151c31133b0d8f35330c8c6e4ebd1eb7691e831b`，`Picer.Core.dll` `390aec8c4f63842beb7828190d2e6660997b7c960d745560f85dea50b13159ad`（`9e40004`）；代理 `src\Picer.MediaAgent\bin\Release\net8.0-windows\Picer.MediaAgent.dll` `531dfa5e8aa84aaea385caa295474eb1b2eda4b99dd8c049bdac4bd7bf359b0e`（`792c137`）。
+
+### 部署记录（续）
+
+| deploymentId | sourceCommit | binarySha256 | 内容 |
+|---|---|---|---|
+| `20261124T054607774Z` | `145bc7704172` | `b70fbbe3959a1e5df59904a265a1b77771d04fa8703aaaf72759b357c1062b4c` | `faces/model-settings` 路由 |
+| `20261124T080227209Z` | `792c13758179` | `d12a4449fb0342864d4e7d5b7a97c9240b75824a069802693061f9ca7ad0c953` | 照片任务路径规范化 |
+
+两次均经安装脚本部署（自动备份、健康验证通过），MediaAgent 在服务重启后自动重连并重新收到配置。
+
+## 用户操作
+
+1. ~~重新配对 GUI 设备并勾选"允许分析"~~ 已核实本机 GUI 设备已有 `analysis.run`，无需重新配对。
+2. ~~"导入本机训练制品"~~ 已于 13:36（制品）与 13:51（阈值）执行完成。
+3. **"检查新照片"**：16:12 起已在运行（约 4 秒/张，全量约 3.5～4.5 小时）。人脸在服务端写入，GUI 界面要等下一次镜像同步才显示。需要停下时点人物页的"取消"；之后再次点击会跳过已有分析标记的照片，从断点继续。
+4. 视频页 → 对需要的视频重新点击"分析视频人物"（DXXT7429、ARUA4227、HLAO8549 已完成）。
