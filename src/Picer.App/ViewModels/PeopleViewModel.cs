@@ -151,6 +151,9 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(FaceModelSpaceText))]
     [NotifyPropertyChangedFor(nameof(PeoplePaneTitle))]
+    // The import is only offered once a model space is selected; the page sets the selection
+    // after it finished loading, so the command must re-evaluate when it changes.
+    [NotifyCanExecuteChangedFor(nameof(ImportLocalTrainingArtifactCommand))]
     private string? _selectedFaceModelVersion;
     [ObservableProperty] private FaceModelOption? _selectedFaceModelOption;
     [ObservableProperty] private FaceTrainingHistoryOption? _selectedTrainingHistory;
