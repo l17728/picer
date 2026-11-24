@@ -383,6 +383,9 @@
                                 </ComboBox>
                                 <Button Content="应用选中历史模型" Command="{Binding ApplySelectedTrainingCommand}" Padding="12,5" Margin="4,0"
                                         ToolTip="应用当前模型空间选中的历史版本；不会跨模型混用向量"/>
+                                <Button Content="导入本机训练制品" Command="{Binding ImportLocalTrainingArtifactCommand}" Padding="12,5" Margin="4,0"
+                                        AutomationProperties.Name="导入本机训练制品"
+                                        ToolTip="把本机旧索引里该模型空间已应用的训练制品导入照片空间；用于切换到远程模式之前训练的模型。导入前会核对本机与照片空间的人物是否一致"/>
                                 <Button Content="一致性扫描（修复索引）" Command="{Binding ScanConsistencyCommand}" Padding="12,5" Margin="4,0"
                                         ToolTip="不训练模型；检查并修复人物归属、人物标签和搜索索引的一致性"/>
                                 <Button Content="人脸精度验证" Click="FaceValidation_Click" Padding="12,5" Margin="4,0"/>

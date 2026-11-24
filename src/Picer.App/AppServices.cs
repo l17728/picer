@@ -111,6 +111,8 @@ public static partial class AppServices
     public static ClipSemanticService? ClipSemantic { get; private set; }
     public static string? ClipUnavailableReason { get; private set; }
     private static IImageFaceAnalyzer? FaceAnalyzer { get; set; }
+    /// <summary>The service-backed face analyzer in remote mode, or null when inference runs locally.</summary>
+    public static IImageFaceAnalyzer? RemoteFaceAnalyzer => ServiceMode ? FaceAnalyzer : null;
 
     private static string ConfigPath => Path.Combine(AppPaths.DataRoot, "storage.json");
 

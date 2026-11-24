@@ -256,6 +256,60 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
         transaction.Commit();
     }
 
+    /// <summary>
+    /// Records a completed analysis whose face rows were persisted by the index service itself
+    /// (remote mode). Those rows reach this database through metadata synchronization, so only
+    /// the per-image analysis marker is written here; writing the faces locally would race the
+    /// mirror and duplicate what the service already stored.
+    /// </summary>
+    public void SaveServiceCompleted(ImageRecord image, IImageFaceAnalyzer analyzer, int faceCount)
+    {
+        using var transaction = database.BeginTransaction();
+        UpsertAnalysis(image, analyzer, "completed", faceCount, null, transaction);
+        transaction.Commit();
+    }
+
+    /// <summary>Ids of the photos that already have at least one live face in the given model space.</summary>
+    public HashSet<long> GetImageIdsWithFaces(string modelVersion)
+    {
+        using var command = database.Command("SELECT DISTINCT image_id FROM detected_faces WHERE is_archived=0 AND model_version=$model");
+        command.Parameters.AddWithValue("$model", modelVersion);
+        using var reader = command.ExecuteReader();
+        var ids = new HashSet<long>();
+        while (reader.Read()) ids.Add(reader.GetInt64(0));
+        return ids;
+    }
+
+    /// <summary>
+    /// Reads the active training artifact of one model space from another library through an
+    /// already open connection, together with that library's person names. In remote mode the
+    /// GUI only reads the photo space, so an artifact trained while the library was local
+    /// exists solely in the local index. Prototypes reference persons by id, which is why the
+    /// caller must confirm the person mapping before applying the artifact elsewhere.
+    /// </summary>
+    public static (TrainingArtifactData Artifact, IReadOnlyDictionary<long, string> PersonNames)? ReadActiveTrainingArtifact(
+        SqliteConnection connection, string modelVersion)
+    {
+        string json;
+        using (var command = connection.CreateCommand())
+        {
+            command.CommandText = "SELECT artifact_json FROM face_training_artifacts WHERE model_version=$model AND state='active' ORDER BY applied_utc DESC, created_utc DESC LIMIT 1";
+            command.Parameters.AddWithValue("$model", modelVersion);
+            if (command.ExecuteScalar() is not string stored) return null;
+            json = stored;
+        }
+        var artifact = JsonSerializer.Deserialize<TrainingArtifactData>(json, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        if (artifact is null || artifact.Prototypes is null || !string.Equals(artifact.ModelVersion, modelVersion, StringComparison.Ordinal)) return null;
+        var names = new Dictionary<long, string>();
+        using (var command = connection.CreateCommand())
+        {
+            command.CommandText = "SELECT id, display_name FROM people";
+            using var reader = command.ExecuteReader();
+            while (reader.Read()) names[reader.GetInt64(0)] = reader.GetString(1);
+        }
+        return (artifact, names);
+    }
+
     private static IReadOnlyList<FaceDetection> DeduplicateDetections(IReadOnlyList<FaceDetection> faces)
     {
         var unique = new List<FaceDetection>(faces.Count);

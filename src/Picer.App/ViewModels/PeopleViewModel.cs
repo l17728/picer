@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Net;
 using System.Net.Http;
+using Microsoft.Data.Sqlite;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Picer.Core.Data;
@@ -11,6 +12,7 @@ using Picer.Core.Logging;
 using Picer.Core.Vision;
 using Picer.Core.Gateway;
 using Picer.Core.Indexing;
+using Picer.Core.Models;
 using Picer.App.Views;
 using System.Windows;
 using Picer.App.Infrastructure;
@@ -139,6 +141,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(AnalyzeAllCommand))]
     [NotifyCanExecuteChangedFor(nameof(CancelAnalysisCommand))]
+    [NotifyCanExecuteChangedFor(nameof(ImportLocalTrainingArtifactCommand))]
     private bool _isAnalyzing;
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(OrganizeButtonText))]
@@ -239,7 +242,11 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
 
     public string OrganizeButtonText => IsOrganizing ? "自动归类进行中…" : "更新自动归类";
 
-    public bool IsModelAvailable => _analysisService is not null;
+    // Remote (photo space) mode runs detection on the index service; the service stores the
+    // faces in the space and this mirror receives them through metadata synchronization.
+    private IImageFaceAnalyzer? RemoteFaceAnalyzer => _analysisService is null ? AppServices.RemoteFaceAnalyzer : null;
+
+    public bool IsModelAvailable => _analysisService is not null || RemoteFaceAnalyzer is not null;
     public PersonRecord? FindByName(string name) => _peopleService.FindByName(name);
     public PersonQueryMention? FindMention(string query) => _peopleService.FindMention(query);
 
@@ -596,6 +603,56 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         finally { IsAnalyzing = false; }
     }
 
+    private bool CanImportLocalTrainingArtifact() => !IsAnalyzing && _services.ServiceMode && !string.IsNullOrWhiteSpace(SelectedFaceModelVersion);
+
+    /// <summary>
+    /// Applies the active training artifact of the selected model space from this machine's
+    /// local index to the photo space. Artifacts trained before the library moved to remote
+    /// mode only exist there and have no other way into the space the GUI now reads.
+    /// </summary>
+    [RelayCommand(CanExecute = nameof(CanImportLocalTrainingArtifact))]
+    private async Task ImportLocalTrainingArtifactAsync()
+    {
+        if (!CanImportLocalTrainingArtifact()) return;
+        var modelVersion = SelectedFaceModelVersion!;
+        var localIndex = Path.Combine(AppPaths.DataRoot, "picer.db");
+        if (!File.Exists(localIndex)) { StatusText = "本机索引库不存在，没有可导入的训练制品"; return; }
+        IsAnalyzing = true;
+        try
+        {
+            // Opened read-only: the local index may still be this machine's fallback library.
+            var local = await Task.Run(() =>
+            {
+                using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+                    { DataSource = localIndex, Mode = SqliteOpenMode.ReadOnly, Pooling = false }.ToString());
+                connection.Open();
+                return VisionAnalysisRepository.ReadActiveTrainingArtifact(connection, modelVersion);
+            });
+            if (local is null) { StatusText = $"本机索引库中没有 {modelVersion} 的已应用训练制品"; return; }
+            var (artifact, localNames) = local.Value;
+            // Prototypes reference persons by id. They may only be applied to the photo space
+            // when every referenced person exists there under the same id and the same name.
+            var spaceNames = await UiWork.ReadSnapshotAsync("People.ImportLocalTrainingPeople", _database,
+                reader => new PeopleService(reader).GetAll().ToDictionary(person => person.Id, person => person.DisplayName));
+            var mappingDiffers = artifact.Prototypes.Any(prototype =>
+                !spaceNames.TryGetValue(prototype.PersonId, out var spaceName) ||
+                !localNames.TryGetValue(prototype.PersonId, out var localName) ||
+                !string.Equals(spaceName, localName, StringComparison.Ordinal));
+            if (mappingDiffers)
+            {
+                StatusText = "本机索引与照片空间的人物编号或姓名不一致，已阻止导入：不会把原型应用到错误的人物上";
+                return;
+            }
+            var baseline = await CaptureTrainingBaselineAsync(modelVersion);
+            await ApplyTrainedPrototypesAsync(artifact, baseline);
+            MarkAppliedArtifactInView(artifact);
+            await LoadTrainingHistoryAsync(modelVersion);
+            StatusText = $"已将本机训练制品导入照片空间：{artifact.Prototypes.Count} 个人物原型 · {modelVersion}";
+        }
+        catch (Exception exception) { StatusText = $"导入本机训练制品失败：{exception.Message}"; }
+        finally { IsAnalyzing = false; }
+    }
+
     private async Task<TrainingArtifactData?> TryGetRemoteArtifactAsync(string artifactId, CancellationToken cancellationToken = default)
     {
         var configuredEndpoint = ResolveTrainingEndpoint();
@@ -803,9 +860,18 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
     {
         using var operation = AppLogger.BeginOperation("people.analyze-and-organize");
         await _analysisGate.WaitAsync();
-        if (_analysisService is null)
+        var remoteAnalyzer = RemoteFaceAnalyzer;
+        if (_analysisService is null && remoteAnalyzer is null)
         {
             StatusText = _unavailableReason ?? "人脸模型不可用";
+            _analysisGate.Release();
+            return;
+        }
+        // Remote detection is bound to one model space (the one the service runs). Analyzing
+        // while another space is selected would add faces the user cannot see here.
+        if (_analysisService is null && !string.Equals(SelectedFaceModelVersion, remoteAnalyzer!.ModelVersion, StringComparison.OrdinalIgnoreCase))
+        {
+            StatusText = $"远程人物分析只作用于模型空间 {remoteAnalyzer.ModelVersion}；请先在人物页切换到该模型空间";
             _analysisGate.Release();
             return;
         }
@@ -820,9 +886,16 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
                 ProgressValue = value.Total == 0 ? 0 : value.Completed * 100d / value.Total;
                 StatusText = $"正在分析人物：{value.Completed}/{value.Total}";
             });
-            var result = await _analysisService.AnalyzeAsync(images, progress, _analysisCancellation.Token);
-            await OrganizeFacesAsync(_analysisCancellation.Token);
-            StatusText = $"人物分析和自动归类完成：新增 {result.Analyzed}，缓存跳过 {result.Skipped}，失败 {result.Failed}";
+            if (_analysisService is not null)
+            {
+                var result = await _analysisService.AnalyzeAsync(images, progress, _analysisCancellation.Token);
+                await OrganizeFacesAsync(_analysisCancellation.Token);
+                StatusText = $"人物分析和自动归类完成：新增 {result.Analyzed}，缓存跳过 {result.Skipped}，失败 {result.Failed}";
+            }
+            else
+            {
+                await AnalyzeThroughServiceAsync(images, remoteAnalyzer!, progress, _analysisCancellation.Token);
+            }
         }
         catch (OperationCanceledException)
         {
@@ -843,7 +916,61 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         }
     }
 
-    private bool CanAnalyzeAll() => !IsAnalyzing && _analysisService is not null;
+    private bool CanAnalyzeAll() => !IsAnalyzing && (_analysisService is not null || RemoteFaceAnalyzer is not null);
+
+    private async Task AnalyzeThroughServiceAsync(IReadOnlyList<ImageRecord> images, IImageFaceAnalyzer analyzer,
+        IProgress<(int Completed, int Total)> progress, CancellationToken cancellationToken)
+    {
+        var token = cancellationToken;
+        // Photos that already have a face in this model space are left alone: the goal is to
+        // cover the gaps (never analyzed, or analyzed only in another model space).
+        var withFaces = await UiWork.ReadSnapshotAsync("People.ServiceAnalysis.HasFaces", _database,
+            reader => new VisionAnalysisRepository(reader).GetImageIdsWithFaces(analyzer.ModelVersion), token);
+        var pending = images.Where(image => !withFaces.Contains(image.Id)).ToArray();
+        int analyzed = 0, skipped = 0, failed = 0, completed = 0, consecutiveFailures = 0;
+        string? firstFailure = null;
+        foreach (var image in pending)
+        {
+            token.ThrowIfCancellationRequested();
+            if (await UiWork.ReadSnapshotAsync("People.ServiceAnalysis.Current", _database,
+                    reader => new VisionAnalysisRepository(reader).IsCurrent(image, analyzer.AnalyzerName, analyzer.ModelVersion), token))
+                skipped++;
+            else
+            {
+                try
+                {
+                    var result = await analyzer.AnalyzeAsync(image, token).ConfigureAwait(false);
+                    token.ThrowIfCancellationRequested();
+                    var count = result.Faces.Count;
+                    await UiWork.RunDatabaseAsync("People.ServiceAnalysis.Save", () => _repository.SaveServiceCompleted(image, analyzer, count), token);
+                    analyzed++;
+                    consecutiveFailures = 0;
+                }
+                catch (OperationCanceledException) when (token.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception exception)
+                {
+                    // Persist only the exception type; messages may carry paths or service details.
+                    await UiWork.RunDatabaseAsync("People.ServiceAnalysis.Failure",
+                        () => _repository.SaveFailure(image, analyzer, exception.GetType().Name), token);
+                    failed++;
+                    firstFailure ??= exception.Message;
+                    // A service that rejects every request (authorization, model offline) must
+                    // not turn into thousands of identical failures.
+                    if (++consecutiveFailures >= 5 && analyzed == 0)
+                        throw new InvalidOperationException("人脸服务连续拒绝分析请求，已停止：" + firstFailure);
+                }
+            }
+            completed++;
+            progress?.Report((completed, pending.Length));
+        }
+        if (analyzed > 0)
+            await _services.SyncRemoteMirrorAsync(token, requireMetadataSync: true);
+        AppLogger.Info($"Remote people analysis finished; model={analyzer.ModelVersion}; analyzed={analyzed}; skipped={skipped}; failed={failed}");
+        StatusText = $"远程人物分析完成：新分析 {analyzed}，跳过 {skipped}，失败 {failed}";
+    }
 
     [RelayCommand]
     private async Task BackfillInsightFaceAsync()
