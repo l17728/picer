@@ -27,7 +27,7 @@ try:
     import torch  # Preload CUDA/cuDNN libraries before ONNX Runtime, like face_worker.
     import cv2, numpy as np, onnxruntime as ort
     expected = {"numpy": "1.26.4", "opencv-python-headless": "4.10.0.84",
-                "onnxruntime-gpu" if cfg["cuda"] else "onnxruntime": "1.20.1"}
+                "onnxruntime-gpu" if cfg["cuda"] else "onnxruntime": "1.20.2" if cfg["cuda"] else "1.20.1"}
     for package, version in expected.items():
         if md.version(package) != version:
             raise RuntimeError("version")
