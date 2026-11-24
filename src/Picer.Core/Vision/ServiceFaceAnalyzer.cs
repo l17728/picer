@@ -54,7 +54,8 @@ public sealed class ServiceFaceAnalyzer : IImageFaceAnalyzer, IDisposable
         var text = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
             throw new InvalidOperationException($"IndexService face analysis failed ({(int)response.StatusCode})");
-        var result = JsonSerializer.Deserialize<FaceServiceResult>(text)
+        // The service answers in camelCase; the default options are case-sensitive and read every field as empty.
+        var result = JsonSerializer.Deserialize<FaceServiceResult>(text, new JsonSerializerOptions(JsonSerializerDefaults.Web))
             ?? throw new InvalidOperationException("IndexService face result is empty");
         if (!FaceServiceContract.IsValid(result, "detect"))
             throw new InvalidOperationException("IndexService face result schema invalid");
