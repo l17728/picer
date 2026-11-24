@@ -122,6 +122,37 @@ fi
 [[ ! -e "$stage" && ! -e "$backup" ]] || { echo 'deployment ID already used; create a fresh package' >&2; exit 2; }
 [[ ! -e "$data_root/picer.db.migration.pending.json" ]] || { echo 'recover the interrupted previous migration before deploying' >&2; exit 2; }
 systemctl cat "$service" >/dev/null
+# Some hosts run the service inside a container because their own glibc predates the
+# bundled native libraries. Read that from the unit so the schema preparation runs in the
+# same image and mounts, and so the public origin is taken from the container arguments
+# instead of the unit environment.
+containerized=0
+docker_binary='' container_image='' container_exec=''
+container_args=()
+service_argv=()
+exec_line=$(systemctl show "$service" -p ExecStart --value)
+argv_text=${exec_line#*argv[]=}; argv_text=${argv_text%% ; ignore_errors=*}
+# The text is evaluated as a shell array below, so refuse anything outside the character
+# set a systemd command line is expected to contain.
+[[ $argv_text =~ ^[[:alnum:][:space:]/:._=+,@%-]+$ ]] || { echo 'unsupported characters in service ExecStart' >&2; exit 2; }
+eval "service_argv=($argv_text)"
+if [[ ${service_argv[0]} == */docker || ${service_argv[0]} == docker ]] && [[ " ${service_argv[*]} " == *" run "* ]]; then
+    containerized=1
+    docker_binary=${service_argv[0]}
+    skip_next=0
+    for (( index = 2; index < ${#service_argv[@]}; index++ )); do
+        if (( skip_next )); then skip_next=0; continue; fi
+        case ${service_argv[index]} in
+            --rm) ;;
+            --name) skip_next=1 ;;
+            *) container_args+=("${service_argv[index]}") ;;
+        esac
+    done
+    (( ${#container_args[@]} >= 2 )) || { echo 'containerized service is missing its image or executable' >&2; exit 2; }
+    container_exec=${container_args[-1]}; unset 'container_args[-1]'
+    container_image=${container_args[-1]}; unset 'container_args[-1]'
+    echo "Service runs in container image: $container_image"
+fi
 mkdir -p "$install_dir"
 if systemctl is-active --quiet "$timer"; then previous_timer_state=active; fi
 
@@ -187,8 +218,17 @@ mv -f "$new_binary" "$install_dir/Picer.IndexService"
 mv -f "$new_manifest" "$install_dir/deployment.json"
 # Migrate every existing tenant while the listener and all writers are stopped.
 # The public health endpoint alone would leave lazy-opened spaces unchecked.
-service_user=$(systemctl show "$service" -p User --value)
 prepare_log="/tmp/picer-index-prepare-$deployment_id.log"
+if (( containerized )); then
+    # Same image and mounts as the service: the host itself may lack the glibc that the
+    # bundled native libraries require.
+    if ! timeout 1800 "$docker_binary" run --rm "${container_args[@]}" "$container_image" "$container_exec" --prepare-index-upgrade >"$prepare_log" 2>&1; then
+        echo "Schema preparation failed; log=$prepare_log" >&2
+        tail -200 "$prepare_log" >&2 || true
+        exit 4
+    fi
+else
+service_user=$(systemctl show "$service" -p User --value)
 if [[ -z "$service_user" || "$service_user" == root ]]; then
     if ! PICER_INDEX_DATA_ROOT="$data_root" timeout 1800 "$install_dir/Picer.IndexService" --prepare-index-upgrade >"$prepare_log" 2>&1; then
         echo "Schema preparation failed; log=$prepare_log" >&2
@@ -202,11 +242,17 @@ else
         exit 4
     fi
 fi
+fi
 database_copy capacity
 systemctl start "$service"
 
 verified=0
 public_origin=$(systemctl show "$service" -p Environment --value | tr ' ' '\n' | sed -n 's/^PICER_INDEX_PUBLIC_ORIGIN=//p' | tail -n 1)
+if [[ -z "$public_origin" && $containerized ]]; then
+    for argument in "${service_argv[@]}"; do
+        case $argument in PICER_INDEX_PUBLIC_ORIGIN=*) public_origin=${argument#*=} ;; esac
+    done
+fi
 if [[ -n "$public_origin" ]]; then
     probe_origin="$public_origin"
     probe_host=${public_origin#*://}

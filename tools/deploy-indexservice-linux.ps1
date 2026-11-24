@@ -8,12 +8,14 @@ param(
     [string]$Version = '',
     [ValidatePattern('^[A-Za-z0-9_.@-]+\.service$')]
     [string[]]$AdditionalWriterServices = @(),
-    [string]$OutputRoot = (Join-Path (Split-Path -Parent $PSScriptRoot) 'artifacts\indexservice-deploy'),
+    [string]$OutputRoot = '',
     [switch]$PackageOnly
 )
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+# Windows PowerShell 5.1 leaves $PSScriptRoot empty inside a parameter default expression.
+if (-not $OutputRoot) { $OutputRoot = Join-Path (Split-Path -Parent $PSScriptRoot) 'artifacts\indexservice-deploy' }
 if ($Version -and $Version -notmatch '^v?\d+\.\d+\.\d+([-.][0-9A-Za-z.-]+)?$') { throw 'Invalid deployment version.' }
 
 function Invoke-Native {
