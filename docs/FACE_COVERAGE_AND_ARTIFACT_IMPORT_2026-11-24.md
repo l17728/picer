@@ -32,6 +32,15 @@
 
 ## 服务器部署记录（IndexService，47.103.99.229）
 
+### 发现五（代码缺陷，部署后实测发现）：照片空间没有继承服务级模型配置
+
+- 现象：路由映射修好、代理也在线后，视频人物分析仍返回 `media_agent_offline`。服务端日志 `Remote video people analysis started … agentSpecified=False` 之后无代理可派发；代理日志里没有任务到达的记录，也没有"收到服务端配置"的记录。
+- 根因：账号空间模式下每个空间是独立引擎，`SpaceRuntimePool` 以**空间自己的目录**为 `dataRoot` 调用 `IndexServiceHost.Build`，而 `Build` 只在 `dataRoot/service-config.json` 读取模型端点配置。该文件实际在服务根目录（`/var/lib/picer-index/service-config.json`），三个空间目录里都没有。于是空间里的代理注册时收不到 `agent.config`，不会声明 `face.detect`/`face.embed`/`video.people`/`vl.analyze` 等能力，**账号模式下所有依赖代理的分析任务都被报成"代理离线"**（服务端任务日志自 10-10 切换账号拓扑后再无写入）。
+- 修复：`IndexServiceHost.Build` 新增 `inheritedServiceConfigPath`；空间没有自己的配置时继承 `AccountStore.ServiceConfigurationPath`（服务根目录的配置），空间自有配置优先，便于将来按空间覆盖。
+- 测试：`SpaceServiceConfigurationTests` 三项——空间继承服务级配置、空间自有配置优先、两者皆无时不回放。
+
+### 部署过程
+
 - 首次部署（提交 `5505e12` 的包）在"结构准备"步骤失败并自动回滚，服务无中断数据损失：该服务实际通过 systemd 单元 `docker run … ubuntu:24.04` 运行在容器内（主机 glibc 2.32 < 原生库要求的 2.34），而安装脚本假定服务直接运行在主机上，且健康探测从单元 `Environment` 读取公网域名（docker 单元用 `-e` 传参）。
 - 修复安装脚本（提交 `9c9d9aa`）：从单元 `ExecStart` 识别容器化部署，结构准备在同一镜像与挂载内执行，公网域名回退到容器参数；对 `ExecStart` 做字符白名单校验后再求值。新增 `tests/deployment/test_deploy_container_detection.py`（3 项，CI `deployment-safety` 任务执行）。同时修复 PowerShell 包装脚本在 PowerShell 5.1 下 `$PSScriptRoot` 默认值为空的问题。
 - 第二次部署成功：`deploymentId=20261124T013648093Z`，`binarySha256=27bc1bbb9dc58504ab719d8967e7e58d20416477a4ee50ead18dfab89f223c27`，`sourceCommit=9c9d9aa4d12d`；结构版本 v94→v94 无迁移；经公网域名复核 `/version`、`/health` 正常，MediaAgent 与 GUI 自动重连。

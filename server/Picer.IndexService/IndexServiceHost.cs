@@ -598,7 +598,7 @@ public static class IndexServiceHost
     }
 
     public static IndexServiceInstance Build(string dataRoot, int port = 8445, string? bearerToken = null, bool isolatedSpace = false,
-        Picer.Core.Classification.ClassificationAuthorization? classificationAuthorization = null)
+        Picer.Core.Classification.ClassificationAuthorization? classificationAuthorization = null, string? inheritedServiceConfigPath = null)
     {
         Directory.CreateDirectory(dataRoot);
         if (!isolatedSpace) AppLogger.Initialize(Path.Combine(dataRoot, "logs"));
@@ -635,18 +635,36 @@ public static class IndexServiceHost
         var configHistory = Path.Combine(dataRoot, "service-config-history");
         Directory.CreateDirectory(configHistory);
         JsonElement? savedServiceConfig = null;
+        static JsonElement? ReadConfiguration(string path)
+        {
+            using var saved = JsonDocument.Parse(File.ReadAllBytes(path));
+            return saved.RootElement.TryGetProperty("config", out var config) && config.ValueKind == JsonValueKind.Object ? config.Clone() : null;
+        }
         if (File.Exists(configPath))
         {
             try
             {
-                using var saved = JsonDocument.Parse(File.ReadAllBytes(configPath));
-                if (saved.RootElement.TryGetProperty("config", out var config) && config.ValueKind == JsonValueKind.Object)
-                    savedServiceConfig = config.Clone();
+                savedServiceConfig = ReadConfiguration(configPath);
                 AppLogger.Info($"Service configuration loaded; hasPersistedConfig={savedServiceConfig.HasValue}");
             }
             catch (JsonException exception)
             {
                 AppLogger.Warn($"Persisted service configuration is invalid; agents will register without replay: {exception.GetType().Name}");
+            }
+        }
+        else if (inheritedServiceConfigPath is not null && File.Exists(inheritedServiceConfigPath))
+        {
+            // A photo space without its own configuration inherits the service-level one.
+            // Otherwise its agents register without model endpoints, never advertise face,
+            // vision or speech capabilities, and every analysis task is reported as offline.
+            try
+            {
+                savedServiceConfig = ReadConfiguration(inheritedServiceConfigPath);
+                AppLogger.Info($"Service configuration inherited from the service level; hasInheritedConfig={savedServiceConfig.HasValue}");
+            }
+            catch (JsonException exception)
+            {
+                AppLogger.Warn($"Service-level configuration is invalid; agents will register without replay: {exception.GetType().Name}");
             }
         }
         var agents = new AgentConnectionRegistry(journal, savedServiceConfig, isolatedSpace);

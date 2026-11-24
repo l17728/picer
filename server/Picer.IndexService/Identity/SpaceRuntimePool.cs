@@ -56,7 +56,8 @@ public sealed class SpaceRuntimePool(AccountStore accounts, int capacity = 32, R
                         if (actor is null || actor.SpaceId != spaceId) throw new UnauthorizedAccessException("classification_authorization_revoked");
                         accounts.ExecuteAuthorizedBackgroundWrite(actor, action, scope);
                     });
-                var instance = IndexServiceHost.Build(accounts.SpaceRoot(spaceId), 0, secret, isolatedSpace: true, classificationAuthorization: classificationAuthorization);
+                var instance = IndexServiceHost.Build(accounts.SpaceRoot(spaceId), 0, secret, isolatedSpace: true, classificationAuthorization: classificationAuthorization,
+                    inheritedServiceConfigPath: accounts.ServiceConfigurationPath);
                 try
                 {
                     if (restoreGuard is not null)

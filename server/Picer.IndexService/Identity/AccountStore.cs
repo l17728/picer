@@ -16,6 +16,9 @@ public sealed partial class AccountStore
     private readonly ReaderWriterLockSlim _authorizationFence = new();
     public string Root { get; }
     public string ServiceId { get; }
+    /// <summary>The service-level model endpoint configuration. A photo space without its own
+    /// <c>service-config.json</c> inherits this file so its agents learn where inference runs.</summary>
+    public string ServiceConfigurationPath => Path.Combine(Path.GetDirectoryName(Path.GetFullPath(Root))!, "service-config.json");
     public Action<string>? InitializeSpaceGuard { private get; set; }
 
     public bool HasSpaces
