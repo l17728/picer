@@ -35,6 +35,11 @@
     <ProjectReference Include="..\..\server\Picer.ModelServer\Picer.ModelServer.csproj" />
   </ItemGroup>
 
+  <!-- The agent's task helpers are compiled in directly: the agent itself is a Windows executable. -->
+  <ItemGroup>
+    <Compile Include="..\..\src\Picer.MediaAgent\FaceImagePayload.cs" Link="MediaAgent\FaceImagePayload.cs" />
+  </ItemGroup>
+
   <ItemGroup>
     <None Update="Fixtures\semantic-retrieval-acceptance-v1.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>

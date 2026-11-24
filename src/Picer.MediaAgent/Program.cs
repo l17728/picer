@@ -854,15 +854,25 @@ internal sealed partial class AgentApplication : IDisposable
             {
                 var endpointText = Setting("PICER_LOCAL_FACE_ENDPOINT");
                 if (!Uri.TryCreate(endpointText, UriKind.Absolute, out var endpoint)) throw new InvalidOperationException("face_endpoint_not_configured");
+                // The service forwards the indexed request (a path, not an image). The model
+                // endpoint only accepts the encoded image, so read the file here as video.people does.
+                var facePayload = await HydrateFaceImagePayloadAsync(payload, cancellationToken);
+                Log($"face image hydrated; requestId={requestId}; task={task}; requestChars={payload.Length}; imageChars={facePayload.Length}");
                 using var requestMessage = new HttpRequestMessage(HttpMethod.Post, endpoint)
                 {
-                    Content = new StringContent(payload, Encoding.UTF8, "application/json")
+                    Content = new StringContent(facePayload, Encoding.UTF8, "application/json")
                 };
                 AddModelAuthorization(requestMessage);
                 requestMessage.Headers.Add("X-Picer-Face-Operation", task["face.".Length..]);
                 using var response = await _modelClient.SendAsync(requestMessage, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
                 var responsePayload = await response.Content.ReadAsStringAsync(cancellationToken);
-                if (!response.IsSuccessStatusCode) throw new InvalidOperationException($"face_http_{(int)response.StatusCode}:{responsePayload}");
+                if (!response.IsSuccessStatusCode)
+                {
+                    // The agent log used to record only the exception type, which hid why a task failed.
+                    Log($"face task rejected upstream; requestId={requestId}; task={task}; status={(int)response.StatusCode}");
+                    throw new InvalidOperationException($"face_http_{(int)response.StatusCode}:{responsePayload}");
+                }
+                Log($"face task completed; requestId={requestId}; task={task}; elapsedMs={started.ElapsedMilliseconds}; responseChars={responsePayload.Length}");
                 await SendAsync(socket, new { type = "task.result", requestId, payload = responsePayload }, cancellationToken);
                 return;
             }
@@ -967,10 +977,19 @@ internal sealed partial class AgentApplication : IDisposable
         {
             Log($"task canceled; requestId={requestId}; task={task}; elapsedMs={started.ElapsedMilliseconds}");
         }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException)
+        // InvalidDataException derives from SystemException, not IOException: left out here, a
+        // missing or oversized file killed the task silently and the caller waited for its own timeout.
+        catch (Exception exception) when (exception is IOException or InvalidDataException or UnauthorizedAccessException or InvalidOperationException)
         {
             Log($"task failed; requestId={requestId}; task={task}; elapsedMs={started.ElapsedMilliseconds}; error={exception.GetType().Name}");
             try { await SendAsync(socket, new { type = "task.error", requestId, message = exception.Message }, cancellationToken); } catch { }
+        }
+        catch (Exception exception)
+        {
+            // Nothing answers a task whose handler died on an unexpected exception type: the caller
+            // waits until its own timeout. Record the type so the gap is visible in the agent log.
+            Log($"task crashed; requestId={requestId}; task={task}; elapsedMs={started.ElapsedMilliseconds}; error={exception.GetType().Name}");
+            throw;
         }
         finally
         {
@@ -1099,25 +1118,10 @@ internal sealed partial class AgentApplication : IDisposable
 
     }
 
-    private async Task<string> HydrateFaceImagePayloadAsync(string payload, CancellationToken cancellationToken)
-    {
-        var document = JsonNode.Parse(payload)?.AsObject()
-            ?? throw new InvalidOperationException("face_request_invalid");
-        if (document["imageBase64"]?.GetValue<string>() is { Length: > 0 }) return document.ToJsonString();
-        var path = document["path"]?.GetValue<string>();
-        if (string.IsNullOrWhiteSpace(path)) throw new InvalidOperationException("face_image_required");
-        var fullPath = Path.GetFullPath(path);
-        if (!_roots.Any(root => fullPath.StartsWith(root.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar,
-                StringComparison.OrdinalIgnoreCase)))
-            throw new UnauthorizedAccessException("face image is outside configured roots");
-        var info = new FileInfo(fullPath);
-        if (!info.Exists || info.Length == 0 || info.Length > 10L * 1024 * 1024)
-            throw new InvalidDataException("face image is missing or exceeds the 10 MiB service limit");
-        var bytes = await File.ReadAllBytesAsync(fullPath, cancellationToken);
-        document.Remove("path");
-        document["imageBase64"] = Convert.ToBase64String(bytes);
-        return document.ToJsonString();
-    }
+    private async Task<string> HydrateFaceImagePayloadAsync(string payload, CancellationToken cancellationToken) =>
+        // Indexed paths may be the administrative share of this machine; ResolveConfiguredPath maps
+        // them onto the configured root before FaceImagePayload applies the root check.
+        await FaceImagePayload.HydrateAsync(payload, _roots, ResolveConfiguredPath, cancellationToken);
 
     private static string Mime(string path) => Path.GetExtension(path).ToLowerInvariant() switch
     {
