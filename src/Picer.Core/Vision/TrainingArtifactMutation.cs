@@ -6,6 +6,9 @@ using Picer.Core.People;
 namespace Picer.Core.Vision;
 
 public sealed record TrainingArtifactMutation(TrainingArtifactData Artifact, string ExpectedEpoch, string ExpectedActiveArtifact);
+/// <summary>The calibrated match threshold of one model space. Suggestions fall back to 0.55
+/// without it, so a space that receives an artifact must also receive its calibration.</summary>
+public sealed record FaceModelSetting(string ModelVersion, double MatchThreshold, int CalibratedSamePairs, int CalibratedDifferentPairs);
 public sealed record TrainingApplicationBaseline(string Epoch, string ActiveArtifact);
 public sealed record LearnedTrainingApplication(string ArtifactId, string DatasetId, string Endpoint, string ModelVersion, string Json);
 public sealed record LearnedTrainingMutation(LearnedTrainingApplication Application, string ExpectedEpoch, string ExpectedActiveArtifact);

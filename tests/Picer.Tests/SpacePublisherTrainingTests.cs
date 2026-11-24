@@ -1,3 +1,4 @@
+using System.Net;
 using System.Net.Http.Json;
 using System.Security.Cryptography;
 using Picer.Core.Data;
@@ -71,6 +72,67 @@ public sealed partial class SpacePublisherIntegrationTests
             await publisher.PublishAsync(scope: scope);
             Assert.Equal(0, await publisher.PublishAsync(scope: scope));
             Assert.Equal(publisherId + ":second", new VisionAnalysisRepository(remote).GetActiveFaceAdapterVersion("model-a"));
+        }
+        finally
+        {
+            await instance.App.StopAsync(); await instance.App.DisposeAsync(); instance.Certificate.Dispose();
+            if (Directory.Exists(root)) Directory.Delete(root, true);
+        }
+    }
+
+    [Fact]
+    public async Task RemoteFaceModelSettingRequiresWriteScopeAndRejectsInvalidValues()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "picer-threshold-api-" + Guid.NewGuid().ToString("N"));
+        const string origin = "https://picer.test";
+        const string route = "api/service/v1/faces/model-settings";
+        var instance = AccountServiceHost.Build(Path.Combine(root, "service"), origin, 0);
+        try
+        {
+            var address = await IndexServiceHost.StartAsync(instance.App);
+            var owner = instance.Accounts.Register("threshold-user", "test-threshold-password!", "阈值同步测试");
+            var space = Assert.Single(instance.Accounts.ListSpaces(owner));
+            using var signing = IdentitySigningKey.LoadOrCreate(instance.Accounts.Root, instance.Accounts.ServiceId);
+            var pin = Convert.ToBase64String(ServiceSecurity.ComputeSpkiPin(instance.Certificate));
+            async Task<DeviceAccountClient> Open(bool editing)
+            {
+                var key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+                var request = Guid.NewGuid().ToString("N");
+                instance.Accounts.CreateEnrollment(new(request, DeviceAuthorization.ExportPublicKey(key), "阈值设备", "gui"));
+                var document = instance.Accounts.ApproveEnrollment(owner, request, space.Id, origin, pin, signing, editing, !editing);
+                var connection = new DeviceConnection(origin, instance.Accounts.ServiceId, pin, DeviceAuthorization.ExportPublicKey(signing), "test", request, "阈值设备", "gui");
+                var client = new DeviceAccountClient(connection, key, value => connection = value,
+                    new AddressBridge(address, DeviceAccountClient.CreateTransport(pin)));
+                await client.ImportAsync(DeviceAuthorization.WriteFileDocument(document));
+                return client;
+            }
+            using var editDevice = await Open(true);
+            using var readOnlyDevice = await Open(false);
+
+            // Out-of-range values and a device without the write scope must leave the space untouched.
+            using (var aboveRange = await editDevice.SpaceClient.PostAsJsonAsync(route, new FaceModelSetting("model-a", 1.5, 3, 20)))
+                Assert.Equal(HttpStatusCode.BadRequest, aboveRange.StatusCode);
+            using (var negativePairs = await editDevice.SpaceClient.PostAsJsonAsync(route, new FaceModelSetting("model-a", 0.4, -1, 20)))
+                Assert.Equal(HttpStatusCode.BadRequest, negativePairs.StatusCode);
+            using (var denied = await readOnlyDevice.SpaceClient.PostAsJsonAsync(route, new FaceModelSetting("model-a", 0.9, 3, 20)))
+                Assert.Equal(HttpStatusCode.Forbidden, denied.StatusCode);
+            using (var stored = await editDevice.SpaceClient.PostAsJsonAsync(route, new FaceModelSetting("model-a", 0.415, 12, 340)))
+                stored.EnsureSuccessStatusCode();
+            // Saving again replaces the one row of the model space instead of adding a second one.
+            using (var updated = await editDevice.SpaceClient.PostAsJsonAsync(route, new FaceModelSetting("model-a", 0.43, 14, 352)))
+                updated.EnsureSuccessStatusCode();
+
+            using var remote = new PicerDatabase(Path.Combine(instance.Accounts.SpaceRoot(space.Id), "picer.db"));
+            var repository = new VisionAnalysisRepository(remote);
+            Assert.Equal(0.43, repository.GetFaceMatchThreshold("model-a"));
+            Assert.Null(repository.GetFaceMatchThreshold("model-b"));
+            using var rows = remote.Command("SELECT calibrated_same_pairs, calibrated_different_pairs FROM face_model_settings");
+            using (var row = rows.ExecuteReader())
+            {
+                Assert.True(row.Read());
+                Assert.Equal((14, 352), (row.GetInt32(0), row.GetInt32(1)));
+                Assert.False(row.Read());
+            }
         }
         finally
         {

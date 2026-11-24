@@ -26,6 +26,7 @@ public sealed class SpaceRoutePermissionTests
     [InlineData("GET", "/api/service/v1/training/api/face-training/history", "analysis.run")]
     [InlineData("POST", "/api/service/v1/training/api/face-training/jobs", "analysis.run")]
     [InlineData("POST", "/api/service/v1/faces/training/apply", "index.write")]
+    [InlineData("POST", "/api/service/v1/faces/model-settings", "index.write")]
     [InlineData("POST", "/api/service/v1/scenes/edit", "index.write")]
     [InlineData("POST", "/api/gateway/v1/search", "index.read")]
     // Standalone-service administration stays closed through the account host.

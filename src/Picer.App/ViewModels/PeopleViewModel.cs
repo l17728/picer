@@ -632,7 +632,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
                 return VisionAnalysisRepository.ReadActiveTrainingArtifact(connection, modelVersion);
             });
             if (local is null) { StatusText = $"本机索引库中没有 {modelVersion} 的已应用训练制品"; return; }
-            var (artifact, localNames) = local.Value;
+            var (artifact, localNames, localSetting) = local.Value;
             // Prototypes reference persons by id. They may only be applied to the photo space
             // when every referenced person exists there under the same id and the same name.
             var spaceNames = await UiWork.ReadSnapshotAsync("People.ImportLocalTrainingPeople", _database,
@@ -648,9 +648,19 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             }
             var baseline = await CaptureTrainingBaselineAsync(modelVersion);
             await ApplyTrainedPrototypesAsync(artifact, baseline);
+            // The artifact carries per-person prototypes; the calibrated threshold of the model
+            // space is stored separately and must travel with it or suggestions tighten to 0.55.
+            if (localSetting is { } setting)
+            {
+                var client = _services.SyncClient ?? throw new InvalidOperationException("照片空间连接尚未就绪。");
+                await client.SaveFaceModelSettingAsync(_database, setting);
+                AppLogger.Info($"已导入人脸模型阈值；model={modelVersion}; threshold={setting.MatchThreshold:0.###}");
+            }
+            await _services.SyncRemoteMirrorAsync(requireMetadataSync: true);
             MarkAppliedArtifactInView(artifact);
             await LoadTrainingHistoryAsync(modelVersion);
-            StatusText = $"已将本机训练制品导入照片空间：{artifact.Prototypes.Count} 个人物原型 · {modelVersion}";
+            StatusText = $"已将本机训练制品导入照片空间：{artifact.Prototypes.Count} 个人物原型" +
+                (localSetting is null ? "" : $"，匹配阈值 {localSetting.MatchThreshold:0.###}") + $" · {modelVersion}";
         }
         catch (Exception exception) { StatusText = $"导入本机训练制品失败：{exception.Message}"; }
         finally { IsAnalyzing = false; }

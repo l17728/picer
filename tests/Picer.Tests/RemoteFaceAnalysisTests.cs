@@ -81,9 +81,12 @@ public sealed class RemoteFaceAnalysisTests : IDisposable
         using (var database = new PicerDatabase(path))
         {
             personId = new PeopleService(database).Create("test-person").Id;
-            new VisionAnalysisRepository(database).ApplyAgentTrainingArtifact(new TrainingArtifactData(
+            var repository = new VisionAnalysisRepository(database);
+            repository.ApplyAgentTrainingArtifact(new TrainingArtifactData(
                 "artifact-local", "test", "model-a", DateTime.UtcNow,
                 [new(personId, [1f, 0f], 0.7, 4)], new(4, 1, 1, 1, 0, 0, 1, 0)));
+            // The artifact and its calibration are stored apart; both must leave with the import.
+            repository.SaveFaceMatchThreshold("model-a", 0.415, 12, 340);
         }
         using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
             { DataSource = path, Mode = SqliteOpenMode.ReadOnly, Pooling = false }.ToString());
@@ -95,8 +98,32 @@ public sealed class RemoteFaceAnalysisTests : IDisposable
         Assert.Equal("artifact-local", read!.Value.Artifact.ArtifactId);
         Assert.Equal(personId, Assert.Single(read.Value.Artifact.Prototypes).PersonId);
         Assert.Equal("test-person", read.Value.PersonNames[personId]);
+        var setting = Assert.IsType<FaceModelSetting>(read.Value.Setting);
+        Assert.Equal(("model-a", 0.415, 12, 340), (setting.ModelVersion, setting.MatchThreshold, setting.CalibratedSamePairs, setting.CalibratedDifferentPairs));
         // Another model space has no active artifact in that library.
         Assert.Null(VisionAnalysisRepository.ReadActiveTrainingArtifact(connection, "model-b"));
+    }
+
+    [Fact]
+    public void ReadActiveTrainingArtifactReportsNoCalibrationForAnUncalibratedSpace()
+    {
+        var path = Path.Combine(_root, "uncalibrated-index.db");
+        using (var database = new PicerDatabase(path))
+        {
+            var personId = new PeopleService(database).Create("test-person").Id;
+            new VisionAnalysisRepository(database).ApplyAgentTrainingArtifact(new TrainingArtifactData(
+                "artifact-uncalibrated", "test", "model-a", DateTime.UtcNow,
+                [new(personId, [1f, 0f], 0.7, 4)], new(4, 1, 1, 1, 0, 0, 1, 0)));
+        }
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+            { DataSource = path, Mode = SqliteOpenMode.ReadOnly, Pooling = false }.ToString());
+        connection.Open();
+
+        var read = VisionAnalysisRepository.ReadActiveTrainingArtifact(connection, "model-a");
+
+        Assert.NotNull(read);
+        Assert.Equal("artifact-uncalibrated", read!.Value.Artifact.ArtifactId);
+        Assert.Null(read.Value.Setting);
     }
 
     public void Dispose()

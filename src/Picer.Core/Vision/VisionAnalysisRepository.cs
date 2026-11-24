@@ -282,12 +282,13 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
 
     /// <summary>
     /// Reads the active training artifact of one model space from another library through an
-    /// already open connection, together with that library's person names. In remote mode the
-    /// GUI only reads the photo space, so an artifact trained while the library was local
-    /// exists solely in the local index. Prototypes reference persons by id, which is why the
-    /// caller must confirm the person mapping before applying the artifact elsewhere.
+    /// already open connection, together with that library's person names and the calibrated
+    /// threshold of that space. In remote mode the GUI only reads the photo space, so an
+    /// artifact trained while the library was local exists solely in the local index.
+    /// Prototypes reference persons by id, which is why the caller must confirm the person
+    /// mapping before applying the artifact elsewhere.
     /// </summary>
-    public static (TrainingArtifactData Artifact, IReadOnlyDictionary<long, string> PersonNames)? ReadActiveTrainingArtifact(
+    public static (TrainingArtifactData Artifact, IReadOnlyDictionary<long, string> PersonNames, FaceModelSetting? Setting)? ReadActiveTrainingArtifact(
         SqliteConnection connection, string modelVersion)
     {
         string json;
@@ -307,7 +308,16 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
             using var reader = command.ExecuteReader();
             while (reader.Read()) names[reader.GetInt64(0)] = reader.GetString(1);
         }
-        return (artifact, names);
+        FaceModelSetting? setting = null;
+        using (var command = connection.CreateCommand())
+        {
+            command.CommandText = "SELECT match_threshold, calibrated_same_pairs, calibrated_different_pairs FROM face_model_settings WHERE model_version=$model";
+            command.Parameters.AddWithValue("$model", modelVersion);
+            using var reader = command.ExecuteReader();
+            if (reader.Read())
+                setting = new(modelVersion, reader.GetDouble(0), reader.GetInt32(1), reader.GetInt32(2));
+        }
+        return (artifact, names, setting);
     }
 
     private static IReadOnlyList<FaceDetection> DeduplicateDetections(IReadOnlyList<FaceDetection> faces)

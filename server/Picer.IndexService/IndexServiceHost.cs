@@ -1385,6 +1385,25 @@ async function load(){const [c,g]=await Promise.all([fetch('/api/service/v1/capa
             { return Results.Conflict(new { error = exception.Message }); }
             finally { faceOrganizationGate.Release(); }
         });
+        app.MapPost("/api/service/v1/faces/model-settings", (FaceModelSetting request) =>
+        {
+            if (!faceOrganizationGate.Wait(0)) return Results.Conflict(new { error = "face_organization_busy" });
+            try
+            {
+                // NaN is neither below 0 nor above 1, so the repository's range check alone lets it through.
+                if (string.IsNullOrWhiteSpace(request.ModelVersion) || !double.IsFinite(request.MatchThreshold)
+                    || request.MatchThreshold is < 0 or > 1
+                    || request.CalibratedSamePairs < 0 || request.CalibratedDifferentPairs < 0)
+                    return Results.BadRequest(new { error = "invalid_face_model_setting" });
+                using var faceDatabase = db.OpenIndependentConnection();
+                new VisionAnalysisRepository(faceDatabase).SaveFaceMatchThreshold(request.ModelVersion, request.MatchThreshold,
+                    request.CalibratedSamePairs, request.CalibratedDifferentPairs);
+                return Results.Ok();
+            }
+            catch (Exception exception) when (exception is ArgumentException or ArgumentOutOfRangeException)
+            { return Results.BadRequest(new { error = "invalid_face_model_setting" }); }
+            finally { faceOrganizationGate.Release(); }
+        });
         app.MapPost("/api/service/v1/faces/candidate/remove", (FaceCandidateRemovalRequest request) =>
         {
             if (!faceOrganizationGate.Wait(0)) return Results.Conflict(new { error = "face_organization_busy" });

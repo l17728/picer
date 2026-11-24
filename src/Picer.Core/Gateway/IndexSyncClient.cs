@@ -70,6 +70,17 @@ public sealed partial class IndexSyncClient(HttpClient client, bool accountMode 
         response.EnsureSuccessStatusCode();
     }
 
+    /// <summary>Stores the calibrated match threshold of a model space in the photo space.
+    /// Without it the space suggests with the 0.55 default instead of the calibrated value.</summary>
+    public async Task SaveFaceModelSettingAsync(PicerDatabase database, FaceModelSetting setting, CancellationToken cancellationToken = default)
+    {
+        if (!canWrite) throw new UnauthorizedAccessException("此设备没有编辑照片空间的权限。");
+        using var response = await PostMirrorEditAsync("api/service/v1/faces/model-settings", setting, database, cancellationToken).ConfigureAwait(false);
+        if (response.StatusCode == System.Net.HttpStatusCode.BadRequest)
+            throw new InvalidOperationException("人脸模型阈值无效，照片空间未更改。");
+        response.EnsureSuccessStatusCode();
+    }
+
     public async Task RemoveFaceCandidateAsync(PicerDatabase database, long clusterId, long faceId, CancellationToken cancellationToken = default)
     {
         if (!canWrite) throw new UnauthorizedAccessException("此设备没有编辑照片空间的权限。");

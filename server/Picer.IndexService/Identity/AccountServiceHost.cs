@@ -274,6 +274,7 @@ public static class SpaceRoutePermissions
         if (method == "POST" && path == "/api/service/v1/faces/organize") return "index.write";
         if (method == "POST" && path == "/api/service/v1/faces/candidate/remove") return "index.write";
         if (method == "POST" && path == "/api/service/v1/faces/training/apply") return "index.write";
+        if (method == "POST" && path == "/api/service/v1/faces/model-settings") return "index.write";
         if (method == "POST" && path == "/api/service/v1/faces/training/apply-learned") return "index.write";
         if (method == "POST" && path is "/api/service/v1/classification/confirm" or "/api/service/v1/classification/reject"
             or "/api/service/v1/classification/remove" or "/api/service/v1/classification/restore" or "/api/service/v1/classification/correct")
