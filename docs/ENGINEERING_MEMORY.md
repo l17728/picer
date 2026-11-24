@@ -18,6 +18,23 @@
   ```
   域名、SNI 与证书保持不变，仅把这一次连接解析到备用 IP（需 Git ≥ 2.37，本机 2.56）。推送失败时先用直连重试 2～3 次，仍失败再走备用地址；备用路线的推送也可能偶发被重置（2026-11-24 实测：只读 `ls-remote` 稳定，推送两次被重置后由直连成功），两条路线**交替重试**即可，不要因此改配置。
 
+## 生产环境拓扑（2026-11-24 实测核对）
+
+- **IndexService 在云服务器 `47.103.99.229`**（`https://47-103-99-229.sslip.io:8445`），不在本机。本机 `~/.ssh/id_ed25519` 可免密登录 `root@47.103.99.229`。
+- 该服务**跑在 Docker 容器里**：systemd 单元 `picer-index.service` 的 `ExecStart` 是 `docker run … ubuntu:24.04 /opt/picer-index/Picer.IndexService`（主机 glibc 2.32 低于自带原生库要求的 2.34，所以必须进容器）。安装目录 `/opt/picer-index`，数据根 `/var/lib/picer-index`（账号库在其下 `accounts-v2/spaces/<空间ID>/`），服务级模型端点配置 `/var/lib/picer-index/service-config.json`，应用日志 `/var/lib/picer-index/logs/`。
+- 部署命令（安装脚本已支持容器化单元，自带备份与失败自动回滚）：
+  ```powershell
+  $env:PATH = "C:\Users\a\.dotnet;" + $env:PATH   # PATH 上的 dotnet 没有 SDK
+  powershell -ExecutionPolicy Bypass -File tools\deploy-indexservice-linux.ps1 -Server 47.103.99.229 -User root
+  ```
+  发布阶段读取工作区源码，**部署前必须先把未验证的改动 `git stash`**，保证部署包来自已提交的版本。部署会重启服务，GUI 与 MediaAgent 会自动重连。
+- **本机 MediaAgent**：由启动文件夹的 `Picer 媒体驻留代理.lnk` 直接拉起 `src\Picer.MediaAgent\bin\Release\net8.0-windows\Picer.MediaAgent.exe`（无参数，使用保存的设备凭据）。连接日志在 `%TEMP%\picer-media-agent.log`。它的模型端点来自服务端下发的 `agent.config`，本机不再单独配置。
+- **本机模型服务**：控制台 `D:\VL-models\manager`（`node server.js`，监听 8090），启动器 `D:\VL-models\start-model-console.ps1`；开机自启项为启动文件夹里的 `model-console-startup.vbs`，桌面有"本地模型服务"快捷方式。人脸推理/训练服务 `picer-model` 在 8091（`D:\VL-models\start-picer-model-service.ps1`）。
+- **人脸 worker 的 Python 环境**：`picer-model` 的 `/api/face-inference` 靠 `PICER_GPU_WORKER_PYTHON` 启动 Python worker（`face_worker.py`）。2026-11-20 Python 被重装到 `G:\AI\python\cpython-3.12.16-windows-x86_64-none`（裸解释器，无依赖包），原 `C:\Python312` 连同依赖消失，人脸推理自此全部 500。2026-11-24 用官方脚本重建：`python server\setup-modelserver.py --device cuda --model insightface-arcface --model-path D:\vl-models\models\insightface\w600k_r50.onnx --detector-path D:\picer\third_party\runtime\models\face\face_detection_yunet_2023mar.onnx`，环境在 `%LOCALAPPDATA%\PicerModelWorker\cuda`（torch 2.6.0+cu124、onnxruntime-gpu 1.20.2），`--check` 已通过（模型加载 + GPU 运行验证）。启动器里的 `PICER_GPU_WORKER_PYTHON` 已指向 `…\PicerModelWorker\cuda\Scripts\python.exe`。
+- **重建该环境的网络要点**（2026-11-24 实测）：`download.pytorch.org` 经代理返回 403、直连超时；PyTorch 需从国内镜像直接下载 wheel（上交镜像 `https://mirror.sjtu.edu.cn/pytorch-wheels/cu124/` 约 1.6 MB/s，比阿里云快 8 倍；阿里云/上交的页面不是 pip 认的索引格式，要用 curl 下载后 `pip install <wheel>`）；其余依赖走 `https://mirrors.aliyun.com/pypi/simple/`。**不要跨镜像续传同一个文件，开始前先确认没有旧的 curl 进程还在写**（两个进程同时追加会产生超大的损坏文件）。下载后核对大小（torch 2.6.0+cu124 cp312 win_amd64 = 2,532,302,369 字节）与 zip 完整性。
+- **系统代理**：Shadowsocks 客户端监听 `localhost:2080` 并自动设置系统代理；若它没运行而系统代理仍指向 2080，浏览器会报"无法连接到互联网"，而 dotnet 等不走系统代理的程序正常——此时关闭系统代理或启动客户端即可，不要误判为网络故障。
+- **pip 不走系统代理**：本机设置了 `NO_PROXY`，Python 因此忽略注册表里的系统代理而直连，下载 PyTorch 等大文件会卡死。装 Python 依赖时显式设置 `$env:HTTPS_PROXY = 'http://127.0.0.1:2080'`（`server\setup-modelserver.py` 会保留该变量）。
+
 ## 本次事故记录
 
 - 未跟踪的分类窗口源码被重建并接入入口，造成简版 UI 覆盖正式窗口。
