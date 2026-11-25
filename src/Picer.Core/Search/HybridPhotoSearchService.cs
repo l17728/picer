@@ -76,6 +76,7 @@ public sealed class HybridPhotoSearchService(PicerDatabase database, ClipSemanti
         MaxFileSize = source.MaxFileSize,
         CameraBrand = source.CameraBrand,
         TagId = source.TagId,
+        ImageIds = source.ImageIds.ToArray(),
         GeoBounds = source.GeoBounds,
         PersonId = source.PersonId,
         VisualConceptIds = source.VisualConceptIds.ToArray(),

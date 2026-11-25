@@ -174,6 +174,11 @@ public static class IndexSearchEngine
             conditions.Add("t.id IN (SELECT pf.image_id FROM detected_faces pf JOIN face_person_assignments pa ON pa.face_id=pf.id WHERE pa.person_id=$personId AND pa.state='confirmed')");
             parameters.Add(("personId", filters.PersonId.Value));
         }
+        if (filters.ImageIds.Count > 0)
+        {
+            conditions.Add("t.id IN (SELECT CAST(value AS INTEGER) FROM json_each($imageIdsJson))");
+            parameters.Add(("imageIdsJson", System.Text.Json.JsonSerializer.Serialize(filters.ImageIds.Where(id => id > 0).Distinct().ToArray())));
+        }
         AddVisualConceptConditions(filters, conditions, parameters);
 
         var whereClause = conditions.Count > 0 ? "WHERE " + string.Join(" AND ", conditions) : "";
@@ -276,6 +281,11 @@ public static class IndexSearchEngine
         {
             conditions.Add("t.id IN (SELECT pf.image_id FROM detected_faces pf JOIN face_person_assignments pa ON pa.face_id=pf.id WHERE pa.person_id=$personId AND pa.state='confirmed')");
             parameters.Add(("personId", filters.PersonId.Value));
+        }
+        if (filters.ImageIds.Count > 0)
+        {
+            conditions.Add("t.id IN (SELECT CAST(value AS INTEGER) FROM json_each($imageIdsJson))");
+            parameters.Add(("imageIdsJson", System.Text.Json.JsonSerializer.Serialize(filters.ImageIds.Where(id => id > 0).Distinct().ToArray())));
         }
         AddVisualConceptConditions(filters, conditions, parameters);
     }

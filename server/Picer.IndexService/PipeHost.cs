@@ -117,6 +117,7 @@ public sealed class NamedPipeIndexServer : IDisposable
                 "directories" => JsonSerializer.SerializeToElement(await _handlers.ListDirectoriesAsync(cancellationToken)),
                 "tags" => JsonSerializer.SerializeToElement(_handlers.ListTags()),
                 "albums" => JsonSerializer.SerializeToElement(_handlers.ListAlbums()),
+                "browser_metadata" => JsonSerializer.SerializeToElement(_handlers.GetBrowseMetadata()),
                 "metadata" => JsonSerializer.SerializeToElement(_handlers.GetMetadata()),
                 "people" => JsonSerializer.SerializeToElement(_handlers.ListPeople()),
                 "add_source" => JsonSerializer.SerializeToElement(_handlers.RegisterSource(sourceRequest.Path)),

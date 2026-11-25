@@ -69,6 +69,40 @@ public sealed class VisionAnalysisService(
         return new VisionBatchResult(batch.Count, analyzed, skipped, failed);
     }
 
+    /// <summary>Forces a fresh analysis of one explicitly selected photo, even when the current model result is cached.</summary>
+    public async Task<FaceAnalysisResult> AnalyzeSingleAsync(
+        ImageRecord image, CancellationToken cancellationToken = default)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (image.Status != ImageStatus.Active)
+            throw new InvalidOperationException("face_analysis_requires_active_image");
+
+        await _singleWorker.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            try
+            {
+                var result = await analyzer.AnalyzeAsync(image, cancellationToken).ConfigureAwait(false);
+                cancellationToken.ThrowIfCancellationRequested();
+                repository.SaveCompleted(image, analyzer, result);
+                return result;
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception exception)
+            {
+                repository.SaveFailure(image, analyzer, exception.GetType().Name);
+                throw;
+            }
+        }
+        finally
+        {
+            _singleWorker.Release();
+        }
+    }
+
     public void Dispose()
     {
         if (_disposed) return;

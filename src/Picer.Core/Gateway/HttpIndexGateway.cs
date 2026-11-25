@@ -367,6 +367,14 @@ public sealed partial class HttpIndexGateway : IIndexGateway, IMediaAssetGateway
         return await response.Content.ReadFromJsonAsync<IReadOnlyList<Album>>(Json, cancellationToken) ?? [];
     }
 
+    public async Task<GatewayBrowseMetadata> GetBrowseMetadataAsync(CancellationToken cancellationToken = default)
+    {
+        using var response = await GetSnapshotReadAsync("api/gateway/v1/browser-metadata", cancellationToken);
+        await EnsureSuccessAsync(response, cancellationToken);
+        return await response.Content.ReadFromJsonAsync<GatewayBrowseMetadata>(Json, cancellationToken)
+            ?? new GatewayBrowseMetadata([], [], [], []);
+    }
+
     public async Task<GatewayMetadata> GetMetadataAsync(CancellationToken cancellationToken = default)
         => await GetMetadataAsync(cancellationToken, includeEmbeddings: false, includeFaceModels: false);
 

@@ -48,6 +48,8 @@ public sealed class SearchFilters
     // Camera/brand filter
     public string? CameraBrand { get; set; } = null;
     public long? TagId { get; set; } = null;
+    /// <summary>Restricts search to a server-provided set of media IDs (for remote album/geography browsing).</summary>
+    public IReadOnlyList<long> ImageIds { get; set; } = [];
     public GeoBounds? GeoBounds { get; set; } = null;
     public long? PersonId { get; set; } = null;
     public IReadOnlyList<string> VisualConceptIds { get; set; } = [];

@@ -58,10 +58,12 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
     private CancellationTokenSource? _collectionLoadCancellation;
     private string? _lastOrganizeFingerprint;
     private bool _isLoaded;
+    private bool _selectorsLoaded;
     private bool _suppressPersonSelectionLoad;
     private bool _suppressCollectionSelectionCallbacks;
     private int _baselinePublishStarted;
     private readonly SemaphoreSlim _modelSwitchGate = new(1, 1);
+    private readonly SemaphoreSlim _selectorLoadGate = new(1, 1);
     private CancellationTokenSource? _modelSwitchCancellation;
     private CancellationTokenSource? _organizeCancellation;
     private long _modelSwitchGeneration;
@@ -255,32 +257,60 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
 
     public Task RefreshSharedIdentityAsync() => _isLoaded ? RefreshAsync() : Task.CompletedTask;
 
+    /// <summary>
+    /// Loads face model selectors before cold mirror synchronization competes
+    /// for SQLite. The large face lists stay lazy until the people page opens.
+    /// </summary>
+    public async Task PrepareSelectorsAsync(bool refresh = false)
+    {
+        if (_selectorsLoaded && !refresh) return;
+        await _selectorLoadGate.WaitAsync();
+        try
+        {
+            if (_selectorsLoaded && !refresh) return;
+            var started = Stopwatch.StartNew();
+            var modelVersions = await UiWork.ReadSnapshotAsync("People.ModelOptions", _database, connection =>
+            {
+                var versionCounts = new VisionAnalysisRepository(connection).GetFaceModelVersionCounts();
+                var insight = versionCounts.Where(value => IsInsightModelVersion(value.Version))
+                    .OrderByDescending(value => value.Count).ThenBy(value => value.Version)
+                    .FirstOrDefault();
+                return new[] { string.IsNullOrWhiteSpace(insight.Version) ? "insightface-arcface" : insight.Version };
+            });
+            FaceModelVersions.Clear();
+            FaceModelOptions.Clear();
+            foreach (var version in modelVersions)
+            {
+                FaceModelVersions.Add(version);
+                FaceModelOptions.Add(new FaceModelOption(version, GetFaceModelDisplayName(version)));
+            }
+            var selectedVersion = FaceModelVersions.FirstOrDefault();
+            SelectedFaceModelVersion = selectedVersion;
+            SelectedFaceModelOption = FaceModelOptions.FirstOrDefault(value => value.ModelVersion == selectedVersion);
+            if (!string.IsNullOrWhiteSpace(selectedVersion)) await LoadTrainingHistoryAsync(selectedVersion);
+            _selectorsLoaded = true;
+            AppLogger.Info($"People selector options ready: models={FaceModelOptions.Count}; histories={TrainingHistoryOptions.Count}; elapsedMs={started.ElapsedMilliseconds}");
+        }
+        catch (Exception exception)
+        {
+            StatusText = "人脸模型选项加载失败；打开人物页后会自动重试";
+            AppLogger.Error("People selector preparation failed", exception);
+        }
+        finally { _selectorLoadGate.Release(); }
+    }
+
     public async Task InitializePageAsync()
     {
         if (_isLoaded || IsLoading) return;
         var initializationTimer = Stopwatch.StartNew();
         IsLoading = true;
         StatusText = "正在加载人物分类…";
-        var modelVersions = await UiWork.ReadSnapshotAsync("People.ModelOptions", _database, connection =>
+        await PrepareSelectorsAsync();
+        if (!_selectorsLoaded)
         {
-            var versionCounts = new VisionAnalysisRepository(connection).GetFaceModelVersionCounts();
-            var insight = versionCounts.Where(value => IsInsightModelVersion(value.Version))
-                .OrderByDescending(value => value.Count).ThenBy(value => value.Version)
-                .FirstOrDefault();
-            // SFace remains in storage for provenance/backfill, but the UI now
-            // exposes one supported model space only.
-            return new[] { string.IsNullOrWhiteSpace(insight.Version) ? "insightface-arcface" : insight.Version };
-        });
-        FaceModelVersions.Clear();
-        FaceModelOptions.Clear();
-        foreach (var version in modelVersions)
-        {
-            FaceModelVersions.Add(version);
-            FaceModelOptions.Add(new FaceModelOption(version, GetFaceModelDisplayName(version)));
+            IsLoading = false;
+            return;
         }
-        var selectedVersion = FaceModelVersions.FirstOrDefault();
-        SelectedFaceModelVersion = selectedVersion;
-        SelectedFaceModelOption = FaceModelOptions.FirstOrDefault(value => value.ModelVersion == selectedVersion);
         // Publish the model-space selector before loading thousands of face
         // rows/thumbnails. The page can render and accept a model choice
         // immediately; the expensive face refresh continues asynchronously.
@@ -289,7 +319,6 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         StatusText = "模型空间已加载，正在后台加载人物分类数据…";
         AppLogger.Info($"People model options ready: count={FaceModelOptions.Count}; elapsedMs={initializationTimer.ElapsedMilliseconds}");
         await RefreshAsync();
-        if (!string.IsNullOrWhiteSpace(selectedVersion)) await LoadTrainingHistoryAsync(selectedVersion);
         _ = PublishEvaluationSnapshotAsync();
 
         var summary = await UiWork.ReadSnapshotAsync("People.Summary", _database, reader => new VisionAnalysisRepository(reader).GetSummary());
@@ -809,8 +838,11 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         AssignedFaces.Clear();
         PersonVideoFaces.Clear();
         SelectedClusterFaces.Clear();
+        var people = _services.ServiceMode
+            ? await _services.Gateway.ListPeopleAsync(cancellation.Token)
+            : snapshot.People;
         People.Clear();
-        foreach (var person in snapshot.People) People.Add(person);
+        foreach (var person in people) People.Add(person);
         UnassignedFaces.Clear();
         if (loadFaces)
         {
@@ -869,6 +901,95 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
 
     [RelayCommand(CanExecute = nameof(CanAnalyzeAll))]
     private async Task AnalyzeAllAsync() => await ProcessNewPhotosAsync();
+
+    /// <summary>Re-runs face detection for one user-selected photo, bypassing the completed-result cache.</summary>
+    public async Task<int> DetectSinglePhotoAsync(ImageRecord image)
+    {
+        await _analysisGate.WaitAsync();
+        var analyzer = _analysisService is null ? RemoteFaceAnalyzer : null;
+        if (_analysisService is null && analyzer is null)
+        {
+            _analysisGate.Release();
+            throw new InvalidOperationException(_unavailableReason ?? "人脸模型不可用");
+        }
+        if (image.Status != ImageStatus.Active)
+        {
+            _analysisGate.Release();
+            throw new InvalidOperationException("照片当前不可用，无法检测人脸");
+        }
+        if (analyzer is not null && !string.Equals(SelectedFaceModelVersion, analyzer.ModelVersion, StringComparison.OrdinalIgnoreCase))
+        {
+            _analysisGate.Release();
+            throw new InvalidOperationException($"当前连接只支持模型空间 {analyzer.ModelVersion}，请先切换到该模型空间");
+        }
+
+        _analysisCancellation = new CancellationTokenSource();
+        IsAnalyzing = true;
+        CancelAnalysisCommand.NotifyCanExecuteChanged();
+        var token = _analysisCancellation.Token;
+        var count = 0;
+        try
+        {
+            StatusText = $"正在重新检测 {Path.GetFileName(image.Path)} 的人脸…";
+            if (_analysisService is not null)
+            {
+                var result = await _analysisService.AnalyzeSingleAsync(image, token);
+                count = result.Faces.Count;
+            }
+            else
+            {
+                try
+                {
+                    var result = await analyzer!.AnalyzeAsync(image, token);
+                    token.ThrowIfCancellationRequested();
+                    count = result.Faces.Count;
+                    await UiWork.RunDatabaseAsync("People.SingleAnalysis.Save", () =>
+                        _repository.SaveServiceCompleted(image, analyzer, count), token);
+                }
+                catch (OperationCanceledException) when (token.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception exception)
+                {
+                    await UiWork.RunDatabaseAsync("People.SingleAnalysis.Failure", () =>
+                        _repository.SaveFailure(image, analyzer!, exception is FaceImageInputException input
+                            ? input.ErrorCode : exception.GetType().Name), token);
+                    throw;
+                }
+
+                // The service has already persisted the face rows. Pull its authoritative face state
+                // back into the photo-space mirror so the People tab and face thumbnails agree.
+                try
+                {
+                    await _services.SyncRemoteMirrorAsync(token, requireMetadataSync: true);
+                }
+                catch (OperationCanceledException) when (token.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception exception)
+                {
+                    AppLogger.Warn($"Single photo face result saved remotely but mirror refresh failed; imageId={image.Id}; error={exception.GetType().Name}");
+                    StatusText = "服务端已完成检测；本机人物页刷新失败，请稍后点“刷新”";
+                    return count;
+                }
+            }
+
+            if (_isLoaded) await RefreshAsync();
+            StatusText = $"单张照片重新检测完成：发现 {count} 张人脸";
+            AppLogger.Info($"Single photo face reanalysis completed; imageId={image.Id}; model={analyzer?.ModelVersion ?? SelectedFaceModelVersion}; faces={count}");
+            return count;
+        }
+        finally
+        {
+            _analysisCancellation.Dispose();
+            _analysisCancellation = null;
+            IsAnalyzing = false;
+            CancelAnalysisCommand.NotifyCanExecuteChanged();
+            _analysisGate.Release();
+        }
+    }
 
     public async Task ProcessNewPhotosAsync()
     {
@@ -2551,7 +2672,9 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
     private async Task RefreshPeopleDropdownAsync(long createdPersonId)
     {
         var selectedId = SelectedPerson?.Id;
-        var values = await UiWork.ReadSnapshotAsync("People.Dropdown", _database, reader => new PeopleService(reader).GetAll().ToArray());
+        var values = _services.ServiceMode
+            ? await _services.Gateway.ListPeopleAsync()
+            : await UiWork.ReadSnapshotAsync("People.Dropdown", _database, reader => new PeopleService(reader).GetAll().ToArray());
         _suppressPersonSelectionLoad = true;
         try
         {

@@ -884,6 +884,10 @@ internal sealed partial class AgentApplication : IDisposable
                 {
                     throw new InvalidOperationException("face_request_timeout");
                 }
+                catch (HttpRequestException exception)
+                {
+                    throw new InvalidOperationException("face_endpoint_unreachable", exception);
+                }
             }
             var fullPath = Path.GetFullPath(payload);
             using var mediaOperation = Picer.Core.Video.VideoOperationLifetime.Begin(fullPath, cancellationToken);

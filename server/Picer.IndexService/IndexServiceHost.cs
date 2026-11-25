@@ -258,6 +258,18 @@ public sealed class IndexApiHandlers(PicerDatabase db, ThumbnailService thumbnai
         ? db.ReadSnapshot(reader => VideoDetailsSnapshot.Read(reader, id, model))
         : VideoDetailsSnapshot.Read(db, id, model);
     public IReadOnlyList<Album> ListAlbums() => SemanticEngine.GetAlbums(db);
+    public GatewayBrowseMetadata GetBrowseMetadata() => db.SupportsIndependentReadSnapshots
+        ? db.ReadSnapshot(reader => ReadBrowseMetadata(reader))
+        : ReadBrowseMetadata(db);
+    public static GatewayBrowseMetadata ReadBrowseMetadata(PicerDatabase reader)
+    {
+        var links = new List<GatewayAlbumImageLink>();
+        using (var command = reader.Command("SELECT ai.album_id,ai.image_id FROM album_images ai JOIN images i ON i.id=ai.image_id WHERE i.status='active'"))
+        using (var rows = command.ExecuteReader())
+            while (rows.Read()) links.Add(new(rows.GetInt64(0), rows.GetInt64(1)));
+        return new GatewayBrowseMetadata(SemanticEngine.GetAlbums(reader), links, reader.GetImageLocationHierarchyRows(),
+            IndexSearchEngine.GetDistinctValues(reader, "camera"));
+    }
     public GatewayMetadata GetMetadata(bool includeEmbeddings = true, bool includeFaceModels = true)
         => db.SupportsIndependentReadSnapshots
             ? db.ReadSnapshot(reader => ReadMetadata(reader, includeEmbeddings, includeFaceModels))
@@ -1785,6 +1797,7 @@ async function load(){const [c,g]=await Promise.all([fetch('/api/service/v1/capa
         });
         app.MapGet("/api/gateway/v1/tags", () => Results.Json(handlers.ListTags()));
         app.MapGet("/api/gateway/v1/albums", () => Results.Json(handlers.ListAlbums()));
+        app.MapGet("/api/gateway/v1/browser-metadata", () => Results.Json(handlers.GetBrowseMetadata()));
         app.MapGet("/api/gateway/v1/people", () => Results.Json(handlers.ListPeople()));
         app.MapPost("/api/gateway/v1/sources", (GatewaySourceRegistration request) =>
         {

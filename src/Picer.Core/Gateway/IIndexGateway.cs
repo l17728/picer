@@ -31,6 +31,12 @@ public interface IIndexGateway : IDisposable
     Task<IReadOnlyList<Tag>> ListTagsAsync(CancellationToken cancellationToken = default);
     Task<IReadOnlyList<Album>> ListAlbumsAsync(CancellationToken cancellationToken = default);
     Task<GatewayMetadata> GetMetadataAsync(CancellationToken cancellationToken = default);
+    async Task<GatewayBrowseMetadata> GetBrowseMetadataAsync(CancellationToken cancellationToken = default)
+    {
+        var albums = await ListAlbumsAsync(cancellationToken).ConfigureAwait(false);
+        var metadata = await GetMetadataAsync(cancellationToken).ConfigureAwait(false);
+        return new GatewayBrowseMetadata(albums, metadata.AlbumImages, metadata.Locations, []);
+    }
     Task<IReadOnlyList<PersonSummary>> ListPeopleAsync(CancellationToken cancellationToken = default);
     Task<SourceFolder> RegisterSourceAsync(string path, CancellationToken cancellationToken = default);
     Task<bool> RemoveSourceAsync(long sourceId, CancellationToken cancellationToken = default);

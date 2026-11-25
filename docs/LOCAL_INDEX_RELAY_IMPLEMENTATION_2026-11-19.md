@@ -60,3 +60,23 @@ IndexService 已存在以 `space_id` 为核心的多租户授权和运行时隔�
 ### 当前测试边界
 
 切换相关定向测试、`SpaceSyncReceiverTests` 全类和配对/镜像清理 E2E 均可重复通过；`SpacePublisherIntegrationTests.AccountSourcePurgeUsesStableIdentityAndRecoversWithoutTouchingAnotherSourceOrOriginal` 的 4 个参数场景全部通过，总耗时约 9 分钟。早先使用 90 秒无活动 blame 阈值会误中止仍在运行的长集成测试；整套 `Picer.Tests` 的长运行未取得最终汇总文件，因此不将其记为全套通过，也不把该现象误判为产品故障。
+
+## 2026-11-25 运行架构审计与缺项
+
+- Service 模式现状：`Picer.App/AppServices.cs` 将 `remote-mirror.db` 用作客户端可写镜像/待提交编辑库；主界面的目录、搜索、视频和人物数据大多从本地库读取。IndexService 是服务器已提交数据的权威端，但 GUI 并非对所有浏览操作直接向服务器查询。该镜像是旧同步架构的实现细节，不得称为“服务器索引已直接读取”，也不得与本机索引模式混淆。
+- 当前 `SpaceWebSocketRelay` 是账号服务与 MediaAgent 原图/来源通道的按请求双向代理；尚未发现本机 IndexService 主动建立的持久 Relay Connector、云 Relay 设备注册/配对/多路复用协议，或 GUI 经 Relay 直达来源 IndexService 的传输。
+- 当前可见的模式切换同步闸门、一致性快照、只读探针及镜像清理不等于完整 RELAY-01 至 RELAY-40 验收。
+- `SpaceRuntimePool` 和账号授权提供空间级运行时/设备授权隔离基础；尚未证明 Relay 请求的 tenant/device/session 全绑定、缓存/媒体隔离、租户级任务队列、撤销后既有流即时终止等全部验收。
+- 本次检查未发现针对所有服务模式媒体缓存文件的内容加密实现，也未发现满足 SDD 删除确认令牌、审计、Relay 开关、迁移/恢复任务要求的完整索引管理控制台。
+- 40 项 E2E 表中只有切换/同步相关用例具有当前自动化覆盖证据；Relay 长连接、密文透传、零落盘、重放、背压、加密缓存和 Web 管理仍未逐项验收。
+
+### 2026-11-25 远程 GUI 直读服务端索引的增量
+
+- 主画廊搜索/翻页、目录树的来源/目录、目录照片/视频和视频列表/详情已增加 HTTP IndexService 直读路径；这些浏览操作不再等待本地镜像同步。
+- 相册和地理分类树改为读取新的轻量 `browser-metadata` 服务端快照（相册、相册成员 ID、位置层级、相机值），分类照片通过 `ImageIds` 搜索过滤在服务端分页读取，避免从镜像库取内容或对每张照片发起单独请求。
+- 远程标签和人物查询选项改为直接读取 IndexService；远程人物名字的主搜索过滤使用服务器返回的人物 ID，避免从镜像库解析人物后把过期 ID 发给服务器。
+- 远程视频详情中的人物裁剪图现在复用该视频已从服务端加载并进入共享缓存的关键帧，不再为每个人脸回查本地镜像的帧引用。
+- 新读端点已加 HTTP/pipe gateway 路径及账号服务 `index.read` 权限/快照支持；定向的 Gateway HTTP、pipe、本地契约测试和 `ImageIds` 分页过滤测试已补充，待本轮完整套件结束后重新构建并执行。
+- 远程人物页的脸列表、训练记录和模型覆盖率仍有多处直接依赖镜像元数据；远程搜索的别名解析也尚未纳入轻量人物目录协议。本轮不得将“所有远程 UI 已完全直读”记为完成。
+
+以上缺项保持为当前工作，不将旧的阶段构建记录推断成完整 Relay 交付。详细症状与本轮启动修复见[远程镜像首屏加载报告](REMOTE_MIRROR_STARTUP_LOADING_FIX_2026-11-25.md)。

@@ -180,6 +180,22 @@ public sealed class VisionAnalysisTests : IDisposable
     }
 
     [Fact]
+    public async Task AnalyzeSingleAsync_ExplicitlyRechecksCompletedImage()
+    {
+        var analyzer = new FakeFaceAnalyzer("yunet-sface-1");
+        var repository = new VisionAnalysisRepository(_database);
+        using var service = new VisionAnalysisService(repository, analyzer);
+        await service.AnalyzeAsync([_image]);
+
+        var result = await service.AnalyzeSingleAsync(_image);
+
+        Assert.Equal(2, analyzer.Calls);
+        Assert.Single(result.Faces);
+        Assert.Equal(1, repository.GetFaceCount(_image.Id));
+        Assert.True(repository.IsCurrent(_image, analyzer.AnalyzerName, analyzer.ModelVersion));
+    }
+
+    [Fact]
     public async Task AnalyzeAsync_ReanalyzesAfterFileFingerprintOrModelChanges()
     {
         var repository = new VisionAnalysisRepository(_database);

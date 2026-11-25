@@ -16,6 +16,7 @@ public partial class App : Application
     private MainViewModel? _mainViewModel;
     private readonly CancellationTokenSource _coldStartSyncCts = new();
     private Task? _coldStartSync;
+    private int _coldStartSyncStarted;
     private static readonly string LogPath = Path.Combine(AppPaths.DataRoot, "logs", "crash.log");
     private static readonly object CrashLogLock = new();
     private static string? _lastCrashFingerprint;
@@ -140,12 +141,6 @@ public partial class App : Application
                 // while the resident agent refreshes its configuration.
                 _ = Task.Run(StartConfiguredMediaAgent);
             }
-            // Service mode must always pull the authoritative remote mirror.
-            // SyncClient is an optional publisher helper and can be absent when
-            // a read-only endpoint was configured, but that must not disable
-            // remote metadata refresh (video people/keyframes included).
-            if (AppServices.ContinuousSyncEnabled && (AppServices.ServiceMode || AppServices.SyncClient is not null || AppServices.LocalSpaceSyncConfigured))
-                _coldStartSync = Task.Run(() => ColdStartSynchronizationAsync(_coldStartSyncCts.Token));
             // A remote client is a read/mirror consumer. Publishing the local
             // evaluation snapshot here needlessly scans thousands of faces and
             // competes with mirror bootstrap, making the remote tree appear
@@ -162,6 +157,16 @@ public partial class App : Application
                 MessageBoxButton.OK, MessageBoxImage.Error);
             Shutdown(-1);
         }
+    }
+
+    internal void StartColdStartSynchronizationAfterInitialLoad()
+    {
+        // First-page reads and cold mirror bootstrap use the same SQLite DB.
+        // Starting both at once can starve the initial catalog reads for minutes.
+        if (Interlocked.Exchange(ref _coldStartSyncStarted, 1) != 0) return;
+        if (AppServices.ContinuousSyncEnabled &&
+            (AppServices.ServiceMode || AppServices.SyncClient is not null || AppServices.LocalSpaceSyncConfigured))
+            _coldStartSync = Task.Run(() => ColdStartSynchronizationAsync(_coldStartSyncCts.Token));
     }
 
     private static void StartConfiguredMediaAgent()
@@ -311,7 +316,7 @@ public partial class App : Application
             await AppServices.SyncRemoteMirrorAsync(timeout.Token);
             if (_mainViewModel is not null)
             {
-                await _mainViewModel.RefreshFromRemoteMirrorAsync();
+                await _mainViewModel.RefreshFromRemoteMirrorAsync(refreshFaceSelectors: AppServices.ServiceMode);
                 // SQLite readers can briefly retain the pre-commit snapshot when
                 // the metadata batch finishes on a background connection. Re-read
                 // once after the commit boundary so the tree never remains partial.

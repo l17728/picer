@@ -183,6 +183,8 @@
                     <MenuItem Header="查看同一照片的所有位置…" Click="ContentReferences_Click"/>
                     <MenuItem x:Name="EditLocationMenuItem" Header="编辑地点…" Click="EditLocation_Click"/>
                     <MenuItem x:Name="EditTagsMenuItem" Header="编辑标签…" Click="EditTags_Click"/>
+                    <MenuItem x:Name="DetectFacesMenuItem" Header="重新检测人脸" Click="DetectFaces_Click"
+                              ToolTip="忽略现有缓存，针对这张照片重新运行人脸检测"/>
                     <Separator/>
                     <MenuItem x:Name="OpenMenuItem" Header="打开" Click="Open_Click"/>
                     <MenuItem Header="在资源管理器中显示" Click="Explorer_Click"/>

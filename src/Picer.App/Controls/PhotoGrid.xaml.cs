@@ -51,6 +51,7 @@ public partial class PhotoGrid : UserControl
     public static readonly DependencyProperty ShowDetailsCommandProperty = DependencyProperty.Register(nameof(ShowDetailsCommand), typeof(ICommand), typeof(PhotoGrid));
     public static readonly DependencyProperty EditLocationCommandProperty = DependencyProperty.Register(nameof(EditLocationCommand), typeof(ICommand), typeof(PhotoGrid));
     public static readonly DependencyProperty EditTagsCommandProperty = DependencyProperty.Register(nameof(EditTagsCommand), typeof(ICommand), typeof(PhotoGrid));
+    public static readonly DependencyProperty DetectFacesCommandProperty = DependencyProperty.Register(nameof(DetectFacesCommand), typeof(ICommand), typeof(PhotoGrid));
     public static readonly DependencyProperty ThumbnailSizeProperty = DependencyProperty.Register(nameof(ThumbnailSize), typeof(double), typeof(PhotoGrid), new PropertyMetadata(150d, OnSizeChanged));
     public static readonly DependencyProperty CardWidthProperty = DependencyProperty.Register(nameof(CardWidth), typeof(double), typeof(PhotoGrid), new PropertyMetadata(170d));
     public static readonly DependencyProperty CardHeightProperty = DependencyProperty.Register(nameof(CardHeight), typeof(double), typeof(PhotoGrid), new PropertyMetadata(205d));
@@ -66,6 +67,7 @@ public partial class PhotoGrid : UserControl
     public ICommand? ShowDetailsCommand { get => (ICommand?)GetValue(ShowDetailsCommandProperty); set => SetValue(ShowDetailsCommandProperty, value); }
     public ICommand? EditLocationCommand { get => (ICommand?)GetValue(EditLocationCommandProperty); set => SetValue(EditLocationCommandProperty, value); }
     public ICommand? EditTagsCommand { get => (ICommand?)GetValue(EditTagsCommandProperty); set => SetValue(EditTagsCommandProperty, value); }
+    public ICommand? DetectFacesCommand { get => (ICommand?)GetValue(DetectFacesCommandProperty); set => SetValue(DetectFacesCommandProperty, value); }
     public double ThumbnailSize { get => (double)GetValue(ThumbnailSizeProperty); set => SetValue(ThumbnailSizeProperty, value); }
     public double CardWidth { get => (double)GetValue(CardWidthProperty); private set => SetValue(CardWidthProperty, value); }
     public double CardHeight { get => (double)GetValue(CardHeightProperty); private set => SetValue(CardHeightProperty, value); }
@@ -200,6 +202,11 @@ public partial class PhotoGrid : UserControl
     private void Details_Click(object sender, RoutedEventArgs e) => Execute(ShowDetailsCommand);
     private void EditLocation_Click(object sender, RoutedEventArgs e) => Execute(EditLocationCommand);
     private void EditTags_Click(object sender, RoutedEventArgs e) => Execute(EditTagsCommand);
+    private void DetectFaces_Click(object sender, RoutedEventArgs e)
+    {
+        if (SelectedItem is ImageItemViewModel item && DetectFacesCommand?.CanExecute(item) == true)
+            DetectFacesCommand.Execute(item);
+    }
     private void ContextMenu_Opened(object sender, RoutedEventArgs e)
     {
         var video = SelectedItem is ImageItemViewModel { IsVideo: true };
@@ -207,6 +214,7 @@ public partial class PhotoGrid : UserControl
         OpenMenuItem.Header = video ? "播放视频" : "打开图片";
         EditLocationMenuItem.IsEnabled = !video;
         EditTagsMenuItem.IsEnabled = !video;
+        DetectFacesMenuItem.IsEnabled = !video && SelectedItem is ImageItemViewModel { IsMissing: false } item && DetectFacesCommand?.CanExecute(item) == true;
         EditLocationMenuItem.ToolTip = video ? "视频地点编辑将在视频元数据索引中提供" : null;
         EditTagsMenuItem.ToolTip = video ? "视频标签将在视频元数据索引中提供" : null;
     }

@@ -482,7 +482,7 @@ public sealed class AiMediaRetrievalService(PicerDatabase database, PeopleServic
         && GeoPlaceResolver.TryParseCoordinates(gps, out _, out _)
         && !GeoPlaceResolver.IsWithin(gps, bounds.MinLatitude, bounds.MaxLatitude, bounds.MinLongitude, bounds.MaxLongitude);
 
-    private static SearchFilters Clone(SearchFilters value) => new() { PersonId = value.PersonId, GeoBounds = value.GeoBounds,
+    private static SearchFilters Clone(SearchFilters value) => new() { PersonId = value.PersonId, ImageIds = value.ImageIds.ToArray(), GeoBounds = value.GeoBounds,
         TakenAfter = value.TakenAfter, TakenBefore = value.TakenBefore, IncludeMissing = value.IncludeMissing,
         TimeOfDay = value.TimeOfDay,
         SortBy = value.SortBy, SortDir = value.SortDir };

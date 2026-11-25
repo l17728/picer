@@ -50,6 +50,13 @@ public sealed class PeopleModelSpaceRegressionTests
             var modelCombo = WaitForElement(window, "人脸模型空间下拉列表", TimeSpan.FromSeconds(8));
             Assert.NotNull(modelCombo);
 
+            // Startup preloads selector metadata before cold mirror sync or
+            // the potentially expensive people-face refresh begins.
+            var historyCombo = WaitForElement(window, "模型历史制品下拉列表", TimeSpan.FromSeconds(15));
+            Assert.NotNull(historyCombo);
+            var historyItem = FindPopupItemContaining(historyCombo!, "93", TimeSpan.FromSeconds(15));
+            Assert.NotNull(historyItem);
+
             // SFace records remain in storage, but only InsightFace is exposed.
             var insightTitle = WaitFor(window, ControlType.Text,
                 name => name.Contains("模型空间", StringComparison.OrdinalIgnoreCase)
@@ -67,13 +74,6 @@ public sealed class PeopleModelSpaceRegressionTests
             Assert.Null(ExpandAndFind(modelCombo!, name => name.Contains("SFace", StringComparison.OrdinalIgnoreCase), TimeSpan.FromSeconds(2)));
             Assert.NotNull(ExpandAndFind(modelCombo!, name => name.Contains("InsightFace", StringComparison.OrdinalIgnoreCase), TimeSpan.FromSeconds(5)));
             Key(0x1B); // close model selector popup
-
-            // The seeded InsightFace artifact must populate the model-scoped
-            // history list; an empty list is the production bug this test guards.
-            var historyCombo = WaitForElement(window, "模型历史制品下拉列表", TimeSpan.FromSeconds(15));
-            Assert.NotNull(historyCombo);
-            var historyItem = FindPopupItemContaining(historyCombo!, "93", TimeSpan.FromSeconds(15));
-            Assert.NotNull(historyItem);
 
             Assert.Equal(1, CountListItems(faceList!));
         }

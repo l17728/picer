@@ -34,6 +34,36 @@ public sealed class SharedImageAssetsTests
     }
 
     [Fact]
+    public async Task RemoteVideoFaceCropUsesAlreadyMaterializedServerFrameWithoutMirrorLookup()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "picer-remote-face-crop-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var serverFrame = Path.Combine(root, "server-frame.png");
+            var source = System.Windows.Media.Imaging.BitmapSource.Create(64, 64, 96, 96,
+                System.Windows.Media.PixelFormats.Bgra32, null, new byte[64 * 64 * 4], 64 * 4);
+            var encoder = new System.Windows.Media.Imaging.PngBitmapEncoder();
+            encoder.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(source));
+            using (var output = File.Create(serverFrame)) encoder.Save(output);
+            var services = new Picer.App.ClientServices
+            {
+                ServiceMode = true,
+                RemoteThumbnails = new RemoteThumbnailCache(root)
+            };
+            var face = new Picer.Core.Video.VideoFaceTimelineRecord(0, "server-path-not-on-this-client.jpg",
+                new(.1f, .1f, .7f, .7f), 1, 12, null, null, null, null, null, null);
+            var item = new Picer.App.ViewModels.VideoFaceItemViewModel(face, services, serverFrame);
+
+            await item.LoadThumbnailAsync();
+
+            Assert.True(item.HasThumbnail);
+            Assert.False(item.IsThumbnailLoading);
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    [Fact]
     public async Task VideoDetailsAndPeopleReuseTheSamePersistentFrame()
     {
         var root = Path.Combine(Path.GetTempPath(), "picer-shared-frame-" + Guid.NewGuid().ToString("N"));

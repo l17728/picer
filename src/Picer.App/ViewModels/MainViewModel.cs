@@ -15,6 +15,7 @@ using Picer.Core.Diagnostics;
 using Picer.Core.Indexing;
 using Picer.Core.Geocoding;
 using Picer.Core.Models;
+using Picer.Core.People;
 using Picer.Core.Logging;
 using Picer.Core.Search;
 using Picer.Core.Vision;
@@ -53,6 +54,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private long _searchVersion;
     private string? _resolvedGeoQuery;
     private readonly DirectoryClassificationPreferences _directoryClassification = new(AppPaths.DirectoryClassificationSettingsPath);
+    private IReadOnlyList<PersonSummary> _remotePeople = [];
     private GeoBounds? _resolvedGeoBounds;
     private readonly List<ImageRecord> _searchLoadedRecords = [];
     private readonly SemaphoreSlim _videoPosterGate = new(2, 2);
@@ -291,7 +293,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
         // service mode the authoritative refresh runs in the background and
         // can take substantially longer than first-page rendering; the later
         // mirror refresh preserves the current selection and reloads details.
-        _ = Video.LoadAsync();
+        await Video.LoadAsync();
+        // Populate model selectors before cold mirror synchronization competes
+        // for SQLite. Large people lists remain lazy until that tab is opened.
+        await People.PrepareSelectorsAsync();
         if (!_services.ServiceMode)
         {
             _ = EnrichLocationHierarchyAsync();
@@ -302,7 +307,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             BackfillBurstGroupsAsync().Forget();
     }
 
-    public async Task RefreshFromRemoteMirrorAsync(bool localSourceUpdate = false)
+    public async Task RefreshFromRemoteMirrorAsync(bool localSourceUpdate = false, bool refreshFaceSelectors = false)
     {
         if (_services.SyncClient is null && !localSourceUpdate) return;
         if (!Application.Current.Dispatcher.CheckAccess())
@@ -310,7 +315,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             // The remote poller runs on a worker thread. CollectionView-backed
             // ObservableCollections must be refreshed on the WPF dispatcher or
             // switching from a partially loaded tree can throw and stop polling.
-            var operation = Application.Current.Dispatcher.InvokeAsync(() => RefreshFromRemoteMirrorAsync(localSourceUpdate));
+            var operation = Application.Current.Dispatcher.InvokeAsync(() => RefreshFromRemoteMirrorAsync(localSourceUpdate, refreshFaceSelectors));
             await operation.Task.Unwrap();
             return;
         }
@@ -319,6 +324,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
         await ApplySearchAndFilterAsync();
         await LoadDirectoryTreeAsync();
         _ = Video.LoadAsync();
+        if (refreshFaceSelectors)
+        {
+            await People.PrepareSelectorsAsync(refresh: true);
+            await People.RefreshSharedIdentityAsync();
+        }
         StatusText = localSourceUpdate ? "照片空间更新已同步到本机" : "远程索引已同步";
     }
 
@@ -508,6 +518,29 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private async Task ReloadSourcesAsync()
     {
         var previous = SelectedSource?.SourceId;
+        if (_services.ServiceMode)
+        {
+            IReadOnlyList<SourceFolder> remoteSources;
+            try { remoteSources = await _services.Gateway.ListSourcesAsync(); }
+            catch (Exception exception)
+            {
+                StatusText = "服务器来源目录暂不可用；不会显示本机镜像冒充服务器结果";
+                AppLogger.Warn($"Remote source list failed: errorType={exception.GetType().Name}");
+                return;
+            }
+            Sources.Clear();
+            Sources.Add(new SourceNodeViewModel { SourceId = 0, IsAll = true, DisplayName = "所有图片", ImageCount = remoteSources.Sum(source => source.ImageCount) });
+            foreach (var source in remoteSources)
+                Sources.Add(new SourceNodeViewModel
+                {
+                    SourceId = source.Id,
+                    DisplayName = $"远程 / {GetDisplaySourceName(source.Path)}",
+                    FullPath = source.Path,
+                    ImageCount = source.ImageCount
+                });
+            SelectedSource = Sources.FirstOrDefault(source => source.SourceId == previous) ?? Sources.FirstOrDefault();
+            return;
+        }
         var snapshot = await UiWork.ReadSnapshotAsync("Library.Counts", _db, reader => (Count: reader.GetImageCount(), Sources: reader.GetSources().ToArray()));
         Sources.Clear();
         Sources.Add(new SourceNodeViewModel { SourceId = 0, IsAll = true, DisplayName = "所有图片", ImageCount = snapshot.Count });
@@ -521,6 +554,32 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private async Task LoadLookupValuesAsync()
     {
+        if (_services.ServiceMode)
+        {
+            try
+            {
+                var browseTask = _services.Gateway.GetBrowseMetadataAsync();
+                var tagsTask = _services.Gateway.ListTagsAsync();
+                var peopleTask = _services.Gateway.ListPeopleAsync();
+                await Task.WhenAll(browseTask, tagsTask, peopleTask);
+                var browse = await browseTask;
+                _remotePeople = await peopleTask;
+                CameraBrands = browse.CameraValues.Select(camera => camera.Split(' ')[0])
+                    .Where(camera => !string.IsNullOrWhiteSpace(camera))
+                    .Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase).ToList();
+                Tags.Clear();
+                foreach (var tag in await tagsTask) Tags.Add(new TagItemViewModel(tag));
+            }
+            catch (Exception exception)
+            {
+                CameraBrands = [];
+                Tags.Clear();
+                _remotePeople = [];
+                StatusText = "服务器筛选目录暂不可用；搜索和浏览仍会直接读取服务端索引";
+                AppLogger.Warn($"Remote filter catalog load failed: errorType={exception.GetType().Name}");
+            }
+            return;
+        }
         var snapshot = await UiWork.ReadSnapshotAsync("Library.Filters", _db, reader => (
             Cameras: IndexSearchEngine.GetDistinctValues(reader, "camera").Select(camera => camera.Split(' ')[0])
                 .Distinct(StringComparer.OrdinalIgnoreCase).ToList(),
@@ -549,7 +608,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         SearchPage page;
         try
         {
-            page = await _services.MediaSearch.ExecutePagedAsync(filters, cancellationToken: cts.Token);
+            page = await ExecuteSearchPageAsync(filters, cursor: null, cts.Token);
         }
         catch (OperationCanceledException)
         {
@@ -708,17 +767,19 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private SearchFilters BuildSearchFilters(long? sourceId = null)
     {
-        var mention = People.FindMention(SearchQuery);
-        var person = mention?.Person;
-        var visual = VisualConceptCatalog.Parse(mention?.RemainingQuery ?? SearchQuery);
-        var geoBounds = mention is null && visual.ConceptIds.Count == 0
+        var remoteMention = _services.ServiceMode ? FindRemotePersonMention(SearchQuery) : null;
+        var mention = _services.ServiceMode ? null : People.FindMention(SearchQuery);
+        var remainingQuery = remoteMention?.RemainingQuery ?? mention?.RemainingQuery ?? SearchQuery;
+        var personId = remoteMention?.PersonId ?? mention?.Person.Id;
+        var visual = VisualConceptCatalog.Parse(remainingQuery);
+        var geoBounds = mention is null && remoteMention is null && visual.ConceptIds.Count == 0
             ? ResolveGeoBounds()
             : ResolveMentionGeoBounds(visual.RemainingQuery);
         return new()
     {
-        Query = geoBounds is not null || mention is not null || visual.ConceptIds.Count > 0 ? "" : SearchQuery,
+        Query = geoBounds is not null || mention is not null || remoteMention is not null || visual.ConceptIds.Count > 0 ? "" : SearchQuery,
         GeoBounds = geoBounds,
-        PersonId = person?.Id,
+        PersonId = personId,
         VisualConceptIds = visual.ConceptIds,
             IncludeSuggestedClassifications = IncludeSuggestedClassifications,
         SourceId = sourceId ?? (SelectedSource is null || SelectedSource.IsAll ? null : SelectedSource.SourceId),
@@ -736,6 +797,39 @@ public partial class MainViewModel : ObservableObject, IDisposable
         SortBy = SortBy,
         SortDir = SortDir
     };
+    }
+
+    private (long PersonId, string RemainingQuery)? FindRemotePersonMention(string query)
+    {
+        if (string.IsNullOrWhiteSpace(query) || _remotePeople.Count == 0) return null;
+        var matches = _remotePeople.Where(person => !string.IsNullOrWhiteSpace(person.DisplayName))
+            .Select(person => (Person: person, Position: query.IndexOf(person.DisplayName, StringComparison.OrdinalIgnoreCase)))
+            .Where(item => item.Position >= 0)
+            .OrderByDescending(item => item.Person.DisplayName.Length)
+            .ThenBy(item => item.Position).ToArray();
+        if (matches.Length == 0) return null;
+        var best = matches[0];
+        if (matches.Skip(1).Any(item => item.Position == best.Position && item.Person.DisplayName.Length == best.Person.DisplayName.Length && item.Person.Id != best.Person.Id))
+            return null;
+        var remaining = query.Remove(best.Position, best.Person.DisplayName.Length)
+            .Replace("找一下", "", StringComparison.OrdinalIgnoreCase)
+            .Replace("查找", "", StringComparison.OrdinalIgnoreCase)
+            .Replace("照片", "", StringComparison.OrdinalIgnoreCase)
+            .Trim(' ', '，', ',', '。', '的', '在');
+        return (best.Person.Id, remaining);
+    }
+
+    private async Task<SearchPage> ExecuteSearchPageAsync(SearchFilters filters, SearchCursor? cursor, CancellationToken cancellationToken)
+    {
+        if (!_services.ServiceMode)
+            return await _services.MediaSearch.ExecutePagedAsync(filters, cursor: cursor, cancellationToken: cancellationToken);
+
+        // In remote mode, IndexService is authoritative. Query it directly so
+        // the gallery does not wait for the client mirror to bootstrap or show
+        // stale results while a background mirror update is still running.
+        var remote = await _services.Gateway.SearchAsync(filters, pageSize: 200,
+            cursor: cursor is null ? null : GatewayCursors.Encode(cursor), cancellationToken);
+        return new SearchPage(remote.Items, GatewayCursors.Decode(remote.NextCursor), remote.TotalCount);
     }
 
     private GeoBounds? ResolveMentionGeoBounds(string remainingQuery)
@@ -795,7 +889,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         if (_searchCursor is null) return;
         var token = _searchCts?.Token ?? default;
-        var page = await _services.MediaSearch.ExecutePagedAsync(BuildSearchFilters(), cursor: _searchCursor, cancellationToken: token);
+        var page = await ExecuteSearchPageAsync(BuildSearchFilters(), _searchCursor, token);
         token.ThrowIfCancellationRequested();
 
         // Do not rebuild/clear the already rendered page. Clearing the bound
@@ -1259,6 +1353,29 @@ public partial class MainViewModel : ObservableObject, IDisposable
         await OpenSelected();
     }
 
+    [RelayCommand(CanExecute = nameof(CanDetectPhotoFaces))]
+    private async Task DetectPhotoFacesAsync(ImageItemViewModel? item)
+    {
+        if (item is null || item.IsVideo || item.IsMissing) return;
+        StatusText = $"正在重新检测 {item.FileName} 的人脸…";
+        try
+        {
+            var count = await People.DetectSinglePhotoAsync(item.Record);
+            StatusText = $"{item.FileName} 人脸检测完成：{count} 张";
+        }
+        catch (OperationCanceledException)
+        {
+            StatusText = $"{item.FileName} 人脸检测已取消";
+        }
+        catch (Exception exception)
+        {
+            StatusText = $"{item.FileName} 人脸检测失败：{exception.Message}";
+        }
+    }
+
+    private bool CanDetectPhotoFaces(ImageItemViewModel? item) =>
+        item is { IsVideo: false, IsMissing: false } && People.IsModelAvailable && !People.IsAnalyzing;
+
     [RelayCommand]
     private async Task OpenSelected()
     {
@@ -1512,6 +1629,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
         var generation = Interlocked.Increment(ref _directoryTreeGeneration);
         var selectedPath = SelectedDirectory?.FullPath;
         var selectedAlbumId = SelectedDirectory?.AlbumId;
+        if (_services.ServiceMode)
+        {
+            await LoadRemoteDirectoryTreeAsync(generation, selectedPath, selectedAlbumId);
+            return;
+        }
         var snapshot = await UiWork.ReadSnapshotAsync("Library.Tree", _db, reader =>
         {
             var albums = SemanticEngine.GetAlbumImageMap(reader);
@@ -1591,6 +1713,89 @@ public partial class MainViewModel : ObservableObject, IDisposable
             : DirectoryTree.FirstOrDefault(node => !node.IsAlbumRoot &&
                 string.Equals(node.FullPath, selectedPath, StringComparison.OrdinalIgnoreCase)) ??
               DirectoryTree.FirstOrDefault(node => !node.IsAlbumRoot);
+    }
+
+    private async Task LoadRemoteDirectoryTreeAsync(long generation, string? selectedPath, long? selectedAlbumId)
+    {
+        var started = Stopwatch.GetTimestamp();
+        try
+        {
+            var sourcesTask = _services.Gateway.ListSourcesAsync();
+            var directoriesTask = _services.Gateway.ListDirectoriesAsync();
+            var browseMetadataTask = _services.Gateway.GetBrowseMetadataAsync();
+            await Task.WhenAll(sourcesTask, directoriesTask, browseMetadataTask);
+            var sources = await sourcesTask;
+            var directories = await directoriesTask;
+            var browseMetadata = await browseMetadataTask;
+            var albums = browseMetadata.Albums;
+            var albumImages = browseMetadata.AlbumImages.GroupBy(link => link.AlbumId)
+                .ToDictionary(group => group.Key, group => group.Select(link => link.ImageId).Distinct().ToArray());
+            var catalog = albums.Select(album => (Album: album, ImageIds: albumImages.GetValueOrDefault(album.Id) ?? []))
+                .ToArray();
+            if (generation != Volatile.Read(ref _directoryTreeGeneration)) return;
+
+            var roots = new List<DirectoryNodeViewModel>();
+            foreach (var source in sources)
+            {
+                var root = new DirectoryNodeViewModel
+                {
+                    SourceId = source.Id,
+                    Name = $"远程 / {GetDisplaySourceName(source.Path)}",
+                    FullPath = NormalizeRemoteSourcePath(source.Path),
+                    Icon = "📁",
+                    ImageCount = directories.Where(item => item.SourceId == source.Id).Sum(item => item.Images + item.Videos),
+                    IsExpanded = true
+                };
+                BuildRemoteDirectoryChildren(root, source, directories);
+                roots.Add(root);
+            }
+
+            var regularAlbums = catalog.Where(item => !IsTimelineAlbum(item.Album)).ToArray();
+            var timelineAlbums = catalog.Where(item => IsTimelineAlbum(item.Album)).ToArray();
+            var albumsRoot = new DirectoryNodeViewModel
+            {
+                Name = "我的相册", Icon = "📚", IsAlbumRoot = true, IsExpanded = true,
+                ImageCount = regularAlbums.Sum(item => item.ImageIds.Length),
+                AnchorImageIds = regularAlbums.SelectMany(item => item.ImageIds).Distinct().ToArray()
+            };
+            foreach (var item in regularAlbums)
+                albumsRoot.Children.Add(new DirectoryNodeViewModel
+                { Name = item.Album.Name, Icon = "🖼", AlbumId = item.Album.Id, ImageCount = item.ImageIds.Length,
+                    AnchorImageIds = item.ImageIds });
+            roots.Add(albumsRoot);
+
+            var timelineRoot = new DirectoryNodeViewModel
+            {
+                Name = "光锥之内", Icon = "⌛", IsAlbumRoot = true, IsExpanded = true, IsTimelineAlbum = true,
+                ImageCount = timelineAlbums.Sum(item => item.ImageIds.Length),
+                AnchorImageIds = timelineAlbums.SelectMany(item => item.ImageIds).Distinct().ToArray()
+            };
+            foreach (var item in timelineAlbums)
+                timelineRoot.Children.Add(new DirectoryNodeViewModel
+                {
+                    Name = item.Album.Name, Icon = "🕰", AlbumId = item.Album.Id, ImageCount = item.ImageIds.Length,
+                    AnchorImageIds = item.ImageIds,
+                    IsTimelineAlbum = true
+                });
+            roots.Add(timelineRoot);
+            roots.Add(BuildGeographyTree(browseMetadata.Locations));
+
+            if (generation != Volatile.Read(ref _directoryTreeGeneration)) return;
+            DirectoryTree.Clear();
+            foreach (var root in roots) DirectoryTree.Add(root);
+            SelectedDirectory = selectedAlbumId is not null
+                ? albumsRoot.Children.Concat(timelineRoot.Children).FirstOrDefault(node => node.AlbumId == selectedAlbumId)
+                : DirectoryTree.FirstOrDefault(node => !node.IsAlbumRoot &&
+                    string.Equals(node.FullPath, selectedPath, StringComparison.OrdinalIgnoreCase)) ??
+                  DirectoryTree.FirstOrDefault(node => !node.IsAlbumRoot);
+            AppLogger.Info($"Remote directory tree loaded from IndexService: sources={sources.Count}; directories={directories.Count}; albums={albums.Count}; locations={browseMetadata.Locations.Count}; elapsedMs={Stopwatch.GetElapsedTime(started).TotalMilliseconds:0}");
+        }
+        catch (Exception exception)
+        {
+            if (generation == Volatile.Read(ref _directoryTreeGeneration))
+                StatusText = "服务器目录加载失败；请检查索引服务连接后重试";
+            AppLogger.Warn($"Remote directory tree load failed: errorType={exception.GetType().Name}");
+        }
     }
 
     private static bool IsTimelineAlbum(Album album) =>
@@ -2055,6 +2260,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private Task<ImageItemViewModel[]> LoadDirectoryVideosAsync(DirectoryNodeViewModel directory, CancellationToken token)
     {
         var query = SearchQuery?.Trim();
+        if (_services.ServiceMode)
+            return LoadRemoteDirectoryVideosAsync(directory, query, token);
         return UiWork.ReadSnapshotAsync("DirectoryVideos.Load", _db, reader =>
         {
             var videos = new VideoRepository(reader);
@@ -2064,6 +2271,25 @@ public partial class MainViewModel : ObservableObject, IDisposable
             return records.Where(video => string.IsNullOrWhiteSpace(query) || Path.GetFileName(video.Path).Contains(query, StringComparison.CurrentCultureIgnoreCase))
                 .Select(video => new ImageItemViewModel(video, posters.GetValueOrDefault(video.Id), LoadVideoPosterPathAsync, token, _services)).ToArray();
         }, token);
+    }
+
+    private async Task<ImageItemViewModel[]> LoadRemoteDirectoryVideosAsync(DirectoryNodeViewModel directory, string? query, CancellationToken token)
+    {
+        var records = new List<VideoRecord>();
+        string? cursor = null;
+        do
+        {
+            var page = await _services.Gateway.SearchVideosAsync(new GatewayVideoQuery(
+                SourceId: directory.SourceId,
+                DirectoryPath: directory.RemotePathPrefix,
+                Query: query,
+                IncludeMissing: false), pageSize: 500, cursor: cursor, cancellationToken: token);
+            records.AddRange(page.Items);
+            cursor = page.NextCursor;
+        } while (cursor is not null);
+
+        return records.Select(video => new ImageItemViewModel(video, previewPath: null,
+            LoadVideoPosterPathAsync, token, _services)).ToArray();
     }
 
     private async void LoadImagesForSelectedDirectory()
@@ -2089,9 +2315,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 StatusText = $"请选择“{selectedDirectory.Name}”下的一个相册";
                 return;
             }
-            var records = await UiWork.ReadSnapshotAsync("Directory.Images", _db, reader => _services.ServiceMode && selectedDirectory.SourceId is { } remoteSourceId
-                ? reader.GetImagesInPathPrefix(remoteSourceId, selectedDirectory.RemotePathPrefix)
-                : selectedDirectory.IsSceneAnchor || selectedDirectory.IsGeoNode || selectedDirectory.IsAlbumRoot
+            var records = _services.ServiceMode && selectedDirectory.SourceId is { } remoteSourceId
+                ? await LoadRemoteDirectoryImagesAsync(remoteSourceId, selectedDirectory.RemotePathPrefix, cts.Token)
+                : _services.ServiceMode && (selectedDirectory.IsSceneAnchor || selectedDirectory.IsGeoNode || selectedDirectory.IsAlbumRoot || selectedDirectory.AlbumId is not null)
+                    ? await LoadRemoteDirectoryImagesByIdsAsync(selectedDirectory.AnchorImageIds, cts.Token)
+                : await UiWork.ReadSnapshotAsync("Directory.Images", _db, reader => selectedDirectory.IsSceneAnchor || selectedDirectory.IsGeoNode || selectedDirectory.IsAlbumRoot
                 ? reader.GetImagesByIds(selectedDirectory.AnchorImageIds)
                     .OrderBy(SceneTimeClusterService.EffectiveTime).ThenBy(image => image.Id).ToList()
                 : selectedDirectory.AlbumId is { } albumId
@@ -2215,6 +2443,47 @@ public partial class MainViewModel : ObservableObject, IDisposable
         catch (Exception exception) { StatusText = $"目录照片加载失败：{exception.Message}"; }
     }
 
+    private async Task<List<ImageRecord>> LoadRemoteDirectoryImagesAsync(long sourceId, string? directoryPath, CancellationToken token)
+    {
+        var records = new List<ImageRecord>();
+        string? cursor = null;
+        do
+        {
+            var page = await _services.Gateway.SearchAsync(new SearchFilters
+            {
+                SourceId = sourceId,
+                DirectoryPath = directoryPath,
+                IncludeMissing = false,
+                SortBy = SortField.TakenDate,
+                SortDir = SortDirection.Descending
+            }, pageSize: 500, cursor: cursor, cancellationToken: token);
+            records.AddRange(page.Items);
+            cursor = page.NextCursor;
+        } while (cursor is not null);
+        return records;
+    }
+
+    private async Task<List<ImageRecord>> LoadRemoteDirectoryImagesByIdsAsync(IReadOnlyList<long> imageIds, CancellationToken token)
+    {
+        var records = new List<ImageRecord>();
+        if (imageIds.Count == 0) return records;
+        var filters = new SearchFilters
+        {
+            ImageIds = imageIds.Where(id => id > 0).Distinct().ToArray(),
+            IncludeMissing = false,
+            SortBy = SortField.TakenDate,
+            SortDir = SortDirection.Descending
+        };
+        string? cursor = null;
+        do
+        {
+            var page = await _services.Gateway.SearchAsync(filters, pageSize: 500, cursor: cursor, cancellationToken: token);
+            records.AddRange(page.Items);
+            cursor = page.NextCursor;
+        } while (cursor is not null);
+        return records;
+    }
+
     private static bool IsPathUnderDirectory(string path, string directory)
     {
         if (string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory)) return false;
@@ -2269,6 +2538,42 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     parent.Children.Add(child);
                 }
                 child.ImageCount++;
+                parent = child;
+            }
+        }
+        SortDirectoryChildren(root);
+        root.IsLoaded = true;
+    }
+
+    private void BuildRemoteDirectoryChildren(DirectoryNodeViewModel root, SourceFolder source,
+        IReadOnlyList<GatewayDirectorySummary> directories)
+    {
+        var rootPath = NormalizeRemoteSourcePath(source.Path);
+        var map = new Dictionary<string, DirectoryNodeViewModel>(StringComparer.OrdinalIgnoreCase) { [rootPath] = root };
+        foreach (var directory in directories.Where(item => item.SourceId == source.Id))
+        {
+            var normalized = NormalizeRemotePath(directory.Path);
+            if (string.Equals(normalized, rootPath, StringComparison.OrdinalIgnoreCase)) continue;
+            if (!normalized.StartsWith(rootPath + "/", StringComparison.OrdinalIgnoreCase)) continue;
+            var relative = normalized[(rootPath.Length + 1)..];
+            var segments = relative.Split('/', StringSplitOptions.RemoveEmptyEntries);
+            if (segments.Length == 0) continue;
+            var currentPath = rootPath;
+            var parent = root;
+            for (var index = 0; index < segments.Length; index++)
+            {
+                currentPath += "/" + segments[index];
+                if (!map.TryGetValue(currentPath, out var child))
+                {
+                    child = new DirectoryNodeViewModel
+                    {
+                        Name = segments[index], FullPath = currentPath, RemotePathPrefix = currentPath,
+                        SourceId = source.Id, Icon = "📂", IsExpanded = false
+                    };
+                    map[currentPath] = child;
+                    parent.Children.Add(child);
+                }
+                child.ImageCount += directory.Images + directory.Videos;
                 parent = child;
             }
         }

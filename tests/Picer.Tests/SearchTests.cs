@@ -88,6 +88,26 @@ public sealed class SearchTests : IDisposable
     }
 
     [Fact]
+    public async Task Search_ImageIdsFiltersToServerSelectedAlbumOrLocationMembers()
+    {
+        AddFile("photos/selected.jpg", 0x41, 100);
+        AddFile("photos/other.jpg", 0x42, 100);
+        _db = new PicerDatabase(Path.Combine(_dataDir, "test.db"));
+        var engine = new IndexEngine(_db, _storage = new DiskBackedStorageProvider(),
+            _thumbService = new ThumbnailService(Path.Combine(_dataDir, "thumbs")));
+        await engine.IndexSourceAsync(new SourceFolder { Id = 1, Path = Path.GetFullPath(_dataDir) });
+        var selected = _db.GetImages(1).Single(image => image.Path.EndsWith("selected.jpg", StringComparison.Ordinal));
+
+        var direct = IndexSearchEngine.Search(_db, new SearchFilters { ImageIds = [selected.Id], IncludeMissing = false });
+        var page = await IndexSearchEngine.SearchPagedAsync(_db,
+            new SearchFilters { ImageIds = [selected.Id], IncludeMissing = false }, pageSize: 10);
+
+        Assert.Equal(selected.Id, Assert.Single(direct).Id);
+        Assert.Equal(selected.Id, Assert.Single(page.Items).Id);
+        Assert.Equal(1, page.TotalCount);
+    }
+
+    [Fact]
     public async Task Search_TimeOfDayFiltersUsingLocalCaptureHour()
     {
         AddFile("photos/day.jpg", 0x41, 100);

@@ -75,6 +75,7 @@ public sealed class SpaceReadSnapshots : IDisposable
             {
                 "/api/gateway/v1/tags" => SemanticEngine.GetTags(snapshot),
                 "/api/gateway/v1/albums" => SemanticEngine.GetAlbums(snapshot),
+                "/api/gateway/v1/browser-metadata" => IndexApiHandlers.ReadBrowseMetadata(snapshot),
                 "/api/gateway/v1/people" => new PeopleService(snapshot).GetAll(),
                 "/api/gateway/v1/metadata" => IndexApiHandlers.ReadMetadata(snapshot, embeddings, models),
                 _ => throw new ArgumentException("invalid_snapshot_route")

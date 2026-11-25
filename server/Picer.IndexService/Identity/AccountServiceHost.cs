@@ -334,7 +334,7 @@ public static class SpaceRoutePermissions
             "directories" when components.Length == 4 => "index.read",
             "thumbs" or "face-thumbs" or "video-thumbs" when components.Length == 5 => "thumb.read",
             "previews" or "video-keyframes" when components.Length == 5 => "media.read",
-            "sources" or "metadata" or "tags" or "albums" or "people" or "directory-classification" when components.Length == 4 => "index.read",
+            "sources" or "metadata" or "tags" or "albums" or "people" or "browser-metadata" or "directory-classification" when components.Length == 4 => "index.read",
             _ => null
         };
     }

@@ -5,6 +5,26 @@ namespace Picer.Tests;
 public sealed class ForegroundWorkPriorityTests
 {
     [Fact]
+    public async Task RequiredSyncUnblocksExistingWaitersAndRestoresPriorityAfterLastLease()
+    {
+        var priority = new ForegroundWorkPriority();
+        using var foreground = priority.Enter();
+        var waiting = priority.WaitAsync(CancellationToken.None);
+        Assert.False(waiting.IsCompleted);
+        var first = priority.RequireBackgroundProgress();
+        var second = priority.RequireBackgroundProgress();
+        await waiting.WaitAsync(TimeSpan.FromSeconds(2));
+        first.Dispose();
+        first.Dispose();
+        await priority.WaitAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(2));
+        second.Dispose();
+        var deferred = priority.WaitAsync(CancellationToken.None);
+        Assert.False(deferred.IsCompleted);
+        foreground.Dispose();
+        await deferred.WaitAsync(TimeSpan.FromSeconds(2));
+    }
+
+    [Fact]
     public async Task BackgroundResumesOnlyAfterLastForegroundLeaseAndCancellationDoesNotReleaseOthers()
     {
         var priority = new ForegroundWorkPriority();

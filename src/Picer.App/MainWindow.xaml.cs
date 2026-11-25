@@ -80,9 +80,11 @@ public partial class MainWindow : Window
             // Do not open a second empty ServiceBrowseWindow at startup.
             if (_mainVm is not null)
                 await _mainVm.InitializeAsync();
+            ((App)Application.Current).StartColdStartSynchronizationAfterInitialLoad();
             return;
         }
         await _mainVm.InitializeAsync();
+        ((App)Application.Current).StartColdStartSynchronizationAfterInitialLoad();
         if (!ShouldCheckLocalRuntime(AppServices.ServiceMode, System.IO.File.Exists(AppPaths.BackendConfigPath)))
         {
             if (!AppServices.ServiceMode)

@@ -278,7 +278,8 @@
                                         ShowDetailsCommand="{Binding ShowImageInfoCommand}"
                                         EditLocationCommand="{Binding EditSelectedLocationCommand}"
                                         EditTagsCommand="{Binding EditSelectedTagsCommand}"
-                                        ShowInExplorerCommand="{Binding ShowInExplorerCommand}"/>
+                                        ShowInExplorerCommand="{Binding ShowInExplorerCommand}"
+                                        DetectFacesCommand="{Binding DetectPhotoFacesCommand}"/>
                     </DockPanel>
                 </Grid>
             </TabItem>

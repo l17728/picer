@@ -193,6 +193,34 @@ public sealed class GatewayContractTests(GatewayServiceFixture fixture) : IClass
         Assert.Empty(photos.Items); Assert.Equal(0, photos.TotalCount);
     }
 
+    [Theory]
+    [InlineData("http")]
+    [InlineData("pipe")]
+    [InlineData("local")]
+    public async Task BrowseMetadataReadsOnlyCatalogAndLocationDataThroughEachGateway(string transport)
+    {
+        using var isolated = new GatewayServiceFixture();
+        var album = SemanticEngine.AddAlbum(isolated.Db, "browser metadata test");
+        var image = isolated.Db.GetImages(isolated.SourceId).First();
+        using (var command = isolated.Db.Command("INSERT INTO album_images(album_id,image_id,added_utc) VALUES($album,$image,$added)"))
+        {
+            command.Parameters.AddWithValue("$album", album.Id);
+            command.Parameters.AddWithValue("$image", image.Id);
+            command.Parameters.AddWithValue("$added", DateTime.UtcNow.ToString("o"));
+            command.ExecuteNonQuery();
+        }
+
+        using var gateway = isolated.CreateGateway(transport);
+        var result = await gateway.GetBrowseMetadataAsync();
+
+        Assert.Contains(result.Albums, item => item.Id == album.Id);
+        Assert.Contains(result.AlbumImages, item => item.AlbumId == album.Id && item.ImageId == image.Id);
+        Assert.Equal(isolated.Db.GetImageLocationHierarchyRows(), result.Locations);
+        var selected = await gateway.SearchAsync(new SearchFilters { ImageIds = [image.Id], IncludeMissing = false }, pageSize: 10);
+        Assert.Equal(image.Id, Assert.Single(selected.Items).Id);
+        Assert.Equal(1, selected.TotalCount);
+    }
+
     [Fact]
     public async Task PipeDirectoryEndpointSupportsSwitchReadProbe()
     {

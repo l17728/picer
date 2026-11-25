@@ -367,6 +367,7 @@ public static partial class AppServices
 
     public static async Task SyncRemoteMirrorAsync(CancellationToken cancellationToken = default, bool requireMetadataSync = false, bool refreshMedia = false, bool publishPendingEdits = true)
     {
+        using var requiredProgress = requireMetadataSync ? ForegroundReads.RequireBackgroundProgress() : null;
         await RemoteMirrorGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {

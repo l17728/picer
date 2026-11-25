@@ -68,6 +68,11 @@ public partial class VideoViewModel(VideoRepository repository, VideoIndexServic
         var started = Stopwatch.StartNew();
         try
         {
+        if (remoteMode && remoteFrameLoader is null && _services.Gateway is Picer.Core.Gateway.HttpIndexGateway)
+        {
+            await LoadRemoteCatalogAsync(query, cancellation.Token, started);
+            return;
+        }
         var rows = await UiWork.ReadSnapshotAsync("Videos.Catalog.Read", repository.Database, connection =>
         {
             var reader = new VideoRepository(connection);
@@ -174,6 +179,11 @@ public partial class VideoViewModel(VideoRepository repository, VideoIndexServic
         var metadataLoaded = false;
         try
         {
+        if (remoteMode && remoteFrameLoader is null && _services.Gateway is Picer.Core.Gateway.HttpIndexGateway directGateway)
+        {
+            await LoadRemoteVideoDetailsAsync(directGateway, selected, cancellationToken, started);
+            return;
+        }
         var snapshot = await UiWork.ReadSnapshotAsync("VideoDetails.Snapshot", repository.Database, connection =>
         {
             var reader = new VideoRepository(connection);
@@ -291,14 +301,75 @@ public partial class VideoViewModel(VideoRepository repository, VideoIndexServic
         }
     }
 
+    private async Task LoadRemoteCatalogAsync(string? query, CancellationToken cancellationToken, Stopwatch started)
+    {
+        var rows = new List<VideoRecord>();
+        string? cursor = null;
+        do
+        {
+            var page = await _services.Gateway.SearchVideosAsync(new GatewayVideoQuery(Query: query, IncludeMissing: false),
+                pageSize: 500, cursor: cursor, cancellationToken: cancellationToken);
+            rows.AddRange(page.Items);
+            cursor = page.NextCursor;
+        } while (cursor is not null);
+        cancellationToken.ThrowIfCancellationRequested();
+        var selectedId = SelectedVideo?.Record.Id;
+        Videos.Clear();
+        await UiWork.AddInBatchesAsync(rows.Select(video => new VideoItemViewModel(video, 0)), Videos.Add, cancellationToken);
+        SelectedVideo = selectedId is { } id ? Videos.FirstOrDefault(video => video.Record.Id == id) : null;
+        StatusText = string.IsNullOrWhiteSpace(query) ? $"共 {Videos.Count} 个视频（来自索引服务）" : $"索引服务搜索命中 {Videos.Count} 个视频";
+        AppLogger.Info($"Video catalog loaded from IndexService: count={Videos.Count}; elapsedMs={started.ElapsedMilliseconds}");
+    }
+
+    private async Task LoadRemoteVideoDetailsAsync(Picer.Core.Gateway.HttpIndexGateway gateway,
+        VideoItemViewModel selected, CancellationToken cancellationToken, Stopwatch started)
+    {
+        TranscriptText = "正在从索引服务读取转写…";
+        PeopleTimelineText = "正在从索引服务读取人物标注…";
+        SummaryText = "正在从索引服务读取摘要…";
+        var model = faceTimeline?.PreferredModelVersion ?? "legacy-video";
+        var details = await gateway.GetVideoDetailsAsync(selected.Record.Id, model, cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (SelectedVideo?.Record.Id != selected.Record.Id) return;
+        if (details is null)
+        {
+            TranscriptText = "索引服务没有返回此视频的详情";
+            PeopleTimelineText = "暂无视频人物标注";
+            SummaryText = "暂无摘要";
+            return;
+        }
+        var people = await _services.Gateway.ListPeopleAsync(cancellationToken);
+        TranscriptText = ExtractTranscriptText(details.Transcript);
+        SummaryText = details.Summary ?? "服务端尚未生成融合摘要";
+        PeopleTimelineText = FormatTimeline(details.Timeline);
+        var frames = await MaterializeRemoteFramesAsync(_services, details.Frames, details.Video, cancellationToken,
+            progress: new Progress<VideoKeyframe>(frame =>
+            {
+                if (!cancellationToken.IsCancellationRequested && SelectedVideo?.Record.Id == selected.Record.Id &&
+                    !Frames.Any(item => Math.Abs(item.TimestampSeconds - frame.TimestampSeconds) < .001))
+                    Frames.Add(new VideoKeyframeItemViewModel(frame));
+            }));
+        cancellationToken.ThrowIfCancellationRequested();
+        if (SelectedVideo?.Record.Id != selected.Record.Id) return;
+        PopulateVideoFaces(details.Timeline, people, frames);
+        Frames.Clear();
+        await UiWork.AddInBatchesAsync(frames, frame => Frames.Add(new VideoKeyframeItemViewModel(frame)), cancellationToken, batchSize: 30);
+        AppLogger.Info($"Video details loaded from IndexService: video={selected.Record.Id}; frames={frames.Count}; faces={details.Timeline.Count}; elapsedMs={started.ElapsedMilliseconds}");
+        StatusText = $"服务端视频详情已加载：关键帧 {frames.Count}/{details.Frames.Count}，人物 {details.Timeline.Count}";
+    }
+
     partial void OnSelectedVideoFaceGroupChanged(VideoFaceGroupViewModel? value) => ApplyVideoFaceFilter();
 
-    private void PopulateVideoFaces(IReadOnlyList<VideoFaceTimelineRecord> faces, IReadOnlyList<PersonSummary>? people = null)
+    private void PopulateVideoFaces(IReadOnlyList<VideoFaceTimelineRecord> faces, IReadOnlyList<PersonSummary>? people = null,
+        IReadOnlyList<VideoKeyframe>? remoteFrames = null)
     {
         VideoFaces.Clear();
         foreach (var face in faces)
         {
-            var item = new VideoFaceItemViewModel(face, _services);
+            var framePath = remoteFrames is { Count: > 0 }
+                ? remoteFrames.MinBy(frame => Math.Abs(frame.TimestampSeconds - face.TimestampSeconds))?.Path
+                : null;
+            var item = new VideoFaceItemViewModel(face, _services, framePath);
             VideoFaces.Add(item);
         }
         ScheduleVideoFaceThumbnails();
@@ -974,11 +1045,13 @@ public sealed class VideoKeyframeItemViewModel(VideoKeyframe frame)
 {
     public string Path { get; } = frame.Path;
     public string Timestamp => TimeSpan.FromSeconds(frame.TimestampSeconds).ToString(@"hh\:mm\:ss");
+    public double TimestampSeconds => frame.TimestampSeconds;
 }
 
 public sealed record VideoFaceGroupViewModel(string Key, string DisplayName, long? PersonId = null);
 
-public sealed partial class VideoFaceItemViewModel(VideoFaceTimelineRecord record, ClientServices? services = null) : ObservableObject
+public sealed partial class VideoFaceItemViewModel(VideoFaceTimelineRecord record, ClientServices? services = null,
+    string? remoteFramePath = null) : ObservableObject
 {
     private static readonly SemaphoreSlim CropSlots = new(2, 2);
     public VideoFaceTimelineRecord Record { get; } = record;
@@ -1009,7 +1082,7 @@ public sealed partial class VideoFaceItemViewModel(VideoFaceTimelineRecord recor
         ThumbnailLoadAttempted = true;
         try
         {
-        var framePath = Record.KeyframePath;
+        var framePath = !string.IsNullOrWhiteSpace(remoteFramePath) ? remoteFramePath : Record.KeyframePath;
         if (!File.Exists(framePath) && services is { ServiceMode: true, RemoteThumbnails: not null })
         {
             var selected = await UiWork.ReadSnapshotAsync("VideoFace.FrameReference", services.Db, db =>
