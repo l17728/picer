@@ -229,12 +229,36 @@ public sealed class GatewayContractTests(GatewayServiceFixture fixture) : IClass
         using var isolated = new GatewayServiceFixture();
         using var gateway = isolated.CreateGateway(transport);
 
+        var videoPath = Path.Combine(isolated.Root, "named-person-video.mp4");
+        await File.WriteAllBytesAsync(videoPath, [1, 2, 3, 4]);
+        var videoRepository = new VideoRepository(isolated.Db);
+        var video = videoRepository.Upsert(isolated.SourceId, videoPath);
+        videoRepository.SaveKeyframes(video.Id, [new VideoKeyframe(1.5, videoPath, 12)]);
+        var videoFrame = videoRepository.GetKeyframes(video.Id, existingOnly: false).Single();
+        using (var face = isolated.Db.Command("""
+            INSERT INTO video_detected_faces(video_id,keyframe_id,timestamp_seconds,ordinal,model_version,
+                box_x,box_y,box_width,box_height,confidence,assigned_person_id,assignment_state,created_utc)
+            VALUES($video,$frame,1.5,0,'insightface-arcface',.2,.2,.3,.3,.99,$person,'confirmed',$created)
+            """))
+        {
+            face.Parameters.AddWithValue("$video", new VideoContentRepository(isolated.Db).GetContentId(video.Id));
+            face.Parameters.AddWithValue("$frame", videoFrame.Id);
+            face.Parameters.AddWithValue("$person", isolated.SeedPersonId);
+            face.Parameters.AddWithValue("$created", DateTime.UtcNow.ToString("O"));
+            face.ExecuteNonQuery();
+        }
+
         var result = await gateway.GetPeopleBrowseSnapshotAsync("person", modelVersion: "test-model",
             personId: isolated.SeedPersonId, limit: 50);
 
         Assert.Contains(result.People, person => person.Id == isolated.SeedPersonId && person.DisplayName == "测试人物");
         Assert.Single(result.Faces);
         Assert.Equal(isolated.SeedPersonId, result.Faces[0].SuggestedPersonId);
+        var videoFace = Assert.Single(result.VideoFacesOrEmpty);
+        Assert.Equal(video.Id, videoFace.Video.Id);
+        Assert.Equal(videoFrame.Id, videoFace.Keyframe.Id);
+        Assert.Equal(0, videoFace.KeyframeOrdinal);
+        Assert.Equal(isolated.SeedPersonId, videoFace.Face.AssignedPersonId);
 
         var pending = await gateway.GetPeopleBrowseSnapshotAsync("pending", modelVersion: "test-model", limit: 50);
         var ignored = await gateway.GetPeopleBrowseSnapshotAsync("ignored", modelVersion: "test-model", limit: 50);

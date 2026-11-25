@@ -2498,17 +2498,20 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         AppLogger.Info($"People named-person load started: personId={person.Id}");
         try
         {
+            var remoteSnapshot = _services.ServiceMode
+                ? await _services.Gateway.GetPeopleBrowseSnapshotAsync("person", personId: person.Id,
+                    limit: 5000, cancellationToken: cancellationToken)
+                : null;
             var photos = _services.ServiceMode
-                ? (await _services.Gateway.GetPeopleBrowseSnapshotAsync("person", personId: person.Id,
-                    limit: 5000, cancellationToken: cancellationToken)).Faces.ToArray()
+                ? remoteSnapshot!.Faces.ToArray()
                 : await UiWork.ReadSnapshotAsync("People.NamedFaces.Load", _database, connection =>
                     new VisionAnalysisRepository(connection).GetPersonFaces(person.Id).ToArray(), cancellationToken);
-            var videos = _services.ServiceMode ? Array.Empty<VideoFaceTimelineRecord>()
+            VideoFaceTimelineRecord[] localVideos = _services.ServiceMode ? []
                 : await UiWork.ReadSnapshotAsync("People.NamedVideoFaces.Load", _database, connection =>
                     _services.VideoFaceTimeline?.WithDatabase(connection).GetPersonFaces(person.Id).ToArray() ?? [], cancellationToken);
-            var snapshot = (Photos: photos, Videos: videos);
-            AppLogger.Info($"People named-person records ready: personId={person.Id}; photos={snapshot.Photos.Length}; videos={snapshot.Videos.Length}; elapsedMs={loadStarted.ElapsedMilliseconds}");
-            var faces = await LoadOrderedFacesAsync(_ => snapshot.Photos, cancellationToken);
+            var remoteVideos = remoteSnapshot?.VideoFacesOrEmpty ?? [];
+            AppLogger.Info($"People named-person records ready: personId={person.Id}; photos={photos.Length}; videos={(_services.ServiceMode ? remoteVideos.Count : localVideos.Length)}; elapsedMs={loadStarted.ElapsedMilliseconds}");
+            var faces = await LoadOrderedFacesAsync(_ => photos, cancellationToken);
             if (cancellationToken.IsCancellationRequested || SelectedPerson?.Id != person.Id) return;
             var items = await BuildBurstAwareFaceItemsAsync(faces, cancellationToken);
             await UiWork.AddInBatchesAsync(items, item =>
@@ -2519,11 +2522,24 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
                 DisplayedFacesTitle = $"{person.DisplayName} · {AssignedFaces.Count} / {items.Count} 项";
                 }, cancellationToken);
                 DisplayedFacesTitle = $"{person.DisplayName} · {AssignedFaces.Count} 张人脸 · {CurrentClassificationModelLabel()}";
-            foreach (var record in snapshot.Videos)
+            if (_services.ServiceMode)
             {
-                var item = new VideoFaceItemViewModel(record, _services);
-                PersonVideoFaces.Add(item);
-                _ = item.LoadThumbnailAsync(cancellationToken);
+                foreach (var record in remoteVideos)
+                {
+                    var item = new VideoFaceItemViewModel(record.Face, _services, remoteVideo: record.Video,
+                        remoteKeyframe: record.Keyframe, remoteKeyframeOrdinal: record.KeyframeOrdinal);
+                    PersonVideoFaces.Add(item);
+                    _ = item.LoadThumbnailAsync(cancellationToken);
+                }
+            }
+            else
+            {
+                foreach (var record in localVideos)
+                {
+                    var item = new VideoFaceItemViewModel(record, _services);
+                    PersonVideoFaces.Add(item);
+                    _ = item.LoadThumbnailAsync(cancellationToken);
+                }
             }
             if (PersonVideoFaces.Count > 0) DisplayedFacesTitle += $" + {PersonVideoFaces.Count} 张视频人脸";
             AppLogger.Info($"People named-person loaded: person={person.Id}; photos={AssignedFaces.Count}; videos={PersonVideoFaces.Count}; elapsedMs={loadStarted.ElapsedMilliseconds}");

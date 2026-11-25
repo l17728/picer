@@ -1,6 +1,7 @@
 using Picer.Core.Models;
 using Picer.Core.People;
 using Picer.Core.Search;
+using Picer.Core.Video;
 using Picer.Core.Vision;
 using System.Text.Json.Serialization;
 
@@ -15,6 +16,7 @@ public sealed record GatewayBrowseMetadata(IReadOnlyList<Album> Albums,
     IReadOnlyList<string> CameraValues,
     IReadOnlyList<GatewayFaceModelCount> FaceModelVersions);
 public sealed record GatewayFaceModelCount(string ModelVersion, int Count);
+public sealed record GatewayPersonVideoFace(VideoFaceTimelineRecord Face, VideoRecord Video, VideoKeyframe Keyframe, int KeyframeOrdinal);
 public sealed record GatewayPeopleBrowseSnapshot(
     IReadOnlyList<PersonSummary> People,
     IReadOnlyList<UnassignedFaceRecord> Faces,
@@ -24,7 +26,11 @@ public sealed record GatewayPeopleBrowseSnapshot(
     FacePartitionCounts Partition,
     int IgnoredCount,
     VisionAnalysisSummary Summary,
-    IReadOnlyList<FaceTrainingArtifactSummary> TrainingHistory);
+    IReadOnlyList<FaceTrainingArtifactSummary> TrainingHistory,
+    IReadOnlyList<GatewayPersonVideoFace>? VideoFaces = null)
+{
+    [JsonIgnore] public IReadOnlyList<GatewayPersonVideoFace> VideoFacesOrEmpty => VideoFaces ?? [];
+}
 public sealed record GatewayImageTagLink(long ImageId, long TagId);
 public sealed record GatewayDetectedFace(
     long Id, long ImageId, string ModelVersion, int Ordinal,

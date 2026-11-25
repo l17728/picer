@@ -1051,7 +1051,8 @@ public sealed class VideoKeyframeItemViewModel(VideoKeyframe frame)
 public sealed record VideoFaceGroupViewModel(string Key, string DisplayName, long? PersonId = null);
 
 public sealed partial class VideoFaceItemViewModel(VideoFaceTimelineRecord record, ClientServices? services = null,
-    string? remoteFramePath = null) : ObservableObject
+    string? remoteFramePath = null, VideoRecord? remoteVideo = null, VideoKeyframe? remoteKeyframe = null,
+    int remoteKeyframeOrdinal = -1) : ObservableObject
 {
     private static readonly SemaphoreSlim CropSlots = new(2, 2);
     public VideoFaceTimelineRecord Record { get; } = record;
@@ -1083,7 +1084,11 @@ public sealed partial class VideoFaceItemViewModel(VideoFaceTimelineRecord recor
         try
         {
         var framePath = !string.IsNullOrWhiteSpace(remoteFramePath) ? remoteFramePath : Record.KeyframePath;
-        if (!File.Exists(framePath) && services is { ServiceMode: true, RemoteThumbnails: not null })
+        if (string.IsNullOrWhiteSpace(remoteFramePath) && remoteVideo is not null && remoteKeyframe is not null
+            && services is { ServiceMode: true, RemoteThumbnails: not null })
+            framePath = await Services.RemoteKeyframeAssets.GetAsync(services, remoteVideo, remoteKeyframe,
+                remoteKeyframeOrdinal, cancellationToken, prefetch: true) ?? framePath;
+        else if (!File.Exists(framePath) && services is { ServiceMode: true, RemoteThumbnails: not null })
         {
             var selected = await UiWork.ReadSnapshotAsync("VideoFace.FrameReference", services.Db, db =>
             {
