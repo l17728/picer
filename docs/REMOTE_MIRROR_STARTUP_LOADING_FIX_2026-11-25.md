@@ -39,4 +39,4 @@
 - 人物页实测发现顶部 `DockPanel` 的右侧操作 `WrapPanel` 抢占全部宽度，导致模型选择器、状态摘要及分类区域显示异常；已改为全宽分行布局。修复后 Release 构建 0 警告、0 错误，正式 GUI 与 MediaAgent 已重启。最新 GUI SHA-256 `DE9452AD200D2136AF05A11E8BE8C63DBC39D4C099C1936C55E5CC14E5A0683A`。
 - 修复后实际 UI 检查确认：服务地址标题正确；远程照片 8,603 张、缩略图可见；视频页来自索引服务并显示 529 项；人物页模型下拉为 InsightFace、训练历史下拉有已应用 92.2% 版本、已命名人物下拉包含 8 人；人脸列表显示 5,000/7,551 项并已载入缩略图。
 - 人物脸列表、人物统计和训练历史的部分读取目前仍经过 `remote-mirror.db`；因此虽然当前 UI 项目有数据，尚未实现“所有人物浏览均以服务端索引为读源”。同时 UI 当前 `FacePartitionSummary` 的 18,053 人脸分区计数与待处理人脸列表 7,551 数量存在 13 项差异；必须把人物浏览迁到服务端分页查询并核对分区一致性，不能声称人物数据链路已彻底闭环。
-- 本轮本地提交：`752aee2 fix: read remote browsing data from index service`、`f276311 fix: load remote face model options from index service`。推送因网络连接 GitHub 443 超时/重置尚未成功，需继续按 `docs/ENGINEERING_MEMORY.md` 的直连与备用路由重试；仓库提交目前领先 `origin/main` 两个提交。
+- 本轮提交 `752aee2`、`f276311`、`7e71d9b`、`54cd4fb` 已于 2026-11-25 推送到 `origin/main`，本地与远端提交一致。

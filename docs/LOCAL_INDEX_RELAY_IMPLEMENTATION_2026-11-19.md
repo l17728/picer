@@ -80,6 +80,6 @@ IndexService 已存在以 `space_id` 为核心的多租户授权和运行时隔�
 - 新读端点已加 HTTP/pipe gateway 路径及账号服务 `index.read` 权限/快照支持；定向 Gateway HTTP、pipe、本地契约测试和 `ImageIds` 分页过滤测试通过。已部署到 `47.103.99.229`，第二次 deployment ID `20261125T114630214Z`，Linux x64 IndexService SHA-256 `50f5e0f1f2c88c6d409033e87ba95b8032d929d5d484ff6fa69497cfb38a1c70`。GUI Release 路径 `src/Picer.App/bin/Release/net8.0-windows/win-x64/Picer.App.exe`，当前 SHA-256 `DE9452AD200D2136AF05A11E8BE8C63DBC39D4C099C1936C55E5CC14E5A0683A`；GUI 和 MediaAgent 均已从正式 Release 路径启动。
 - 远程人物页脸列表、分区统计、训练记录和模型切换覆盖率仍有镜像依赖；远程搜索别名解析也尚未纳入轻量人物目录协议。人物页控件挤压已由分行布局修复；UI 中已看到模型/训练/人物下拉值及 5,000 张人脸缩略图，但 18,053 分区总数与 7,551 待处理人脸之间有 13 项统计差异。后续需将人物浏览改为服务器分页查询并从同一服务端快照计算分区，解决差异；不得将所有远程 UI 记为直读完成。
 
-本轮提交 `752aee2`、`f276311` 已在本地；向 `origin/main` 推送遇 GitHub 443 连接超时/重置，仓库暂时领先远端两个提交。按 `docs/ENGINEERING_MEMORY.md` 的备用路由继续重试，不更改 origin、hosts 或证书检查。
+本轮提交 `752aee2`、`f276311`、`7e71d9b`、`54cd4fb` 均已推送到 `origin/main`；此前直连与备用路由的暂时性 443 超时后，直连重试成功。工作区与远端已同步。
 
 以上缺项保持为当前工作，不将旧的阶段构建记录推断成完整 Relay 交付。详细症状与本轮启动修复见[远程镜像首屏加载报告](REMOTE_MIRROR_STARTUP_LOADING_FIX_2026-11-25.md)。
