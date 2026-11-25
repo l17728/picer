@@ -944,19 +944,21 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         var failedImages = await UiWork.ReadSnapshotAsync("People.ServiceAnalysis.RetryFailures", _database,
             reader => new VisionAnalysisRepository(reader).GetFailedImageIds(analyzer.AnalyzerName, analyzer.ModelVersion), token);
         var pending = images.Where(image => !withFaces.Contains(image.Id) || failedImages.Contains(image.Id)).ToArray();
-        int analyzed = 0, skipped = 0, failed = 0, completed = 0, consecutiveFailures = 0;
+        var needsAnalysis = await UiWork.ReadSnapshotAsync("People.ServiceAnalysis.Eligibility", _database, reader =>
+        {
+            var repository = new VisionAnalysisRepository(reader);
+            return pending.Where(image => !repository.IsCurrent(image, analyzer.AnalyzerName, analyzer.ModelVersion)).ToArray();
+        }, token);
+        int analyzed = 0, skipped = pending.Length - needsAnalysis.Length, failed = 0, completed = skipped, consecutiveFailures = 0;
+        progress.Report((completed, pending.Length));
         string? firstFailure = null;
-        foreach (var image in pending)
+        foreach (var image in needsAnalysis)
         {
             token.ThrowIfCancellationRequested();
-            if (await UiWork.ReadSnapshotAsync("People.ServiceAnalysis.Current", _database,
-                    reader => new VisionAnalysisRepository(reader).IsCurrent(image, analyzer.AnalyzerName, analyzer.ModelVersion), token))
-                skipped++;
-            else
             {
                 try
                 {
-                    var result = await analyzer.AnalyzeAsync(image, token).ConfigureAwait(false);
+                    var result = await analyzer.AnalyzeAsync(image, token);
                     token.ThrowIfCancellationRequested();
                     var count = result.Faces.Count;
                     await UiWork.RunDatabaseAsync("People.ServiceAnalysis.Save", () => _repository.SaveServiceCompleted(image, analyzer, count), token);
@@ -986,13 +988,9 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         }
         var summary = $"远程人物分析完成：新分析 {analyzed}，跳过 {skipped}，失败 {failed}";
         if (analyzed > 0)
-        {
             await _services.SyncRemoteMirrorAsync(token, requireMetadataSync: true);
-            // Local analysis continues straight into the automatic grouping. Remote analysis must
-            // do the same, or the faces it just found stay unassigned until the user asks separately.
-            await OrganizeFacesAsync(token);
-            summary += "；" + StatusText;
-        }
+        await OrganizeFacesAsync(token);
+        summary += "；" + StatusText;
         AppLogger.Info($"Remote people analysis finished; model={analyzer.ModelVersion}; analyzed={analyzed}; skipped={skipped}; failed={failed}");
         StatusText = summary;
     }
