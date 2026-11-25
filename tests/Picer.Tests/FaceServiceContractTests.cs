@@ -7,7 +7,7 @@ namespace Picer.Tests;
 
 public sealed class FaceServiceContractTests
 {
-    private sealed class StubHandler(string answer) : HttpMessageHandler
+    private sealed class StubHandler(string answer, HttpStatusCode status = HttpStatusCode.OK) : HttpMessageHandler
     {
         public string? RequestBody { get; private set; }
         public string? RequestMethod { get; private set; }
@@ -17,8 +17,30 @@ public sealed class FaceServiceContractTests
             RequestBody = request.RequestUri!.AbsolutePath.EndsWith("face/detect", StringComparison.Ordinal)
                 ? await request.Content!.ReadAsStringAsync(cancellationToken) : null;
             RequestMethod = new Uri(request.RequestUri!, "api/service/v1/face/detect").AbsolutePath;
-            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(answer, System.Text.Encoding.UTF8, "application/json") };
+            return new HttpResponseMessage(status) { Content = new StringContent(answer, System.Text.Encoding.UTF8, "application/json") };
         }
+    }
+
+    [Theory]
+    [InlineData("face_image_missing")]
+    [InlineData("face_image_empty")]
+    [InlineData("face_image_too_large")]
+    [InlineData("face_image_decode_failed")]
+    public async Task IndividualInputErrorsRemainDistinctFromServiceFailures(string code)
+    {
+        using var handler = new StubHandler(JsonSerializer.Serialize(new { detail = code }), HttpStatusCode.BadGateway);
+        using var analyzer = new ServiceFaceAnalyzer(new Uri("https://service.test/"), new HttpClient(handler));
+        var error = await Assert.ThrowsAsync<FaceImageInputException>(() => analyzer.AnalyzeAsync(new ImageRecord(), CancellationToken.None));
+        Assert.Equal(code, error.ErrorCode);
+    }
+
+    [Fact]
+    public async Task UntrustedServerDetailsAreNotExposed()
+    {
+        using var handler = new StubHandler("{\"detail\":\"secret path or credential\"}", HttpStatusCode.BadGateway);
+        using var analyzer = new ServiceFaceAnalyzer(new Uri("https://service.test/"), new HttpClient(handler));
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => analyzer.AnalyzeAsync(new ImageRecord(), CancellationToken.None));
+        Assert.DoesNotContain("secret", error.Message);
     }
 
     [Fact]

@@ -890,8 +890,9 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             return;
         }
 
-        IsAnalyzing = true;
         _analysisCancellation = new CancellationTokenSource();
+        IsAnalyzing = true;
+        CancelAnalysisCommand.NotifyCanExecuteChanged();
         try
         {
             var images = await UiWork.ReadSnapshotAsync("People.AnalysisImages", _database, reader => reader.GetImages(includeMissing: false), _analysisCancellation.Token);
@@ -968,12 +969,13 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
                 {
                     // Persist only the exception type; messages may carry paths or service details.
                     await UiWork.RunDatabaseAsync("People.ServiceAnalysis.Failure",
-                        () => _repository.SaveFailure(image, analyzer, exception.GetType().Name), token);
+                        () => _repository.SaveFailure(image, analyzer, exception is FaceImageInputException input ? input.ErrorCode : exception.GetType().Name), token);
                     failed++;
                     firstFailure ??= exception.Message;
                     // A service that rejects every request (authorization, model offline) must
                     // not turn into thousands of identical failures.
-                    if (++consecutiveFailures >= 5 && analyzed == 0)
+                    if (exception is FaceImageInputException) consecutiveFailures = 0;
+                    else if (++consecutiveFailures >= 5)
                         throw new InvalidOperationException("人脸服务连续拒绝分析请求，已停止：" + firstFailure);
                 }
             }

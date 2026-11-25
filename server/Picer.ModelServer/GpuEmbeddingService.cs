@@ -13,6 +13,20 @@ public sealed class GpuEmbeddingService : IDisposable
     private StreamReader? _output;
     private bool _disposed;
 
+    private readonly TimeSpan _timeout;
+    private readonly Func<ProcessStartInfo>? _workerStartInfo;
+
+    public GpuEmbeddingService() : this(TimeSpan.FromSeconds(
+        int.TryParse(Environment.GetEnvironmentVariable("PICER_GPU_WORKER_TIMEOUT_SECONDS"), out var seconds)
+            ? Math.Clamp(seconds, 1, 600) : 120)) { }
+
+    public GpuEmbeddingService(TimeSpan timeout, Func<ProcessStartInfo>? workerStartInfo = null)
+    {
+        if (timeout <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(timeout));
+        _timeout = timeout;
+        _workerStartInfo = workerStartInfo;
+    }
+
     public async Task<IReadOnlyList<float[]>> GenerateAsync(string modelVersion, string[] images, CancellationToken ct = default)
     {
         if (images.Length == 0) return [];
@@ -33,29 +47,43 @@ public sealed class GpuEmbeddingService : IDisposable
 
     private async Task<JsonElement> ExecuteAsync(object payload, CancellationToken ct)
     {
-        await _gate.WaitAsync(ct).ConfigureAwait(false);
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        deadline.CancelAfter(_timeout);
+        var token = deadline.Token;
+        var entered = false;
         try
         {
-            var request = JsonSerializer.Serialize(payload);
-            for (var attempt = 0; attempt < 2; attempt++)
+            await _gate.WaitAsync(token).ConfigureAwait(false);
+            entered = true;
+            try
             {
-                try
+                var request = JsonSerializer.Serialize(payload);
+                for (var attempt = 0; attempt < 2; attempt++)
                 {
-                    EnsureWorker(ct);
-                    await _input!.WriteLineAsync(request.AsMemory(), ct).ConfigureAwait(false);
-                    await _input.FlushAsync(ct).ConfigureAwait(false);
-                    var line = await _output!.ReadLineAsync(ct).ConfigureAwait(false);
-                    if (string.IsNullOrWhiteSpace(line)) throw new InvalidOperationException("GPU worker closed its response stream");
-                    using var document = JsonDocument.Parse(line);
-                    if (document.RootElement.TryGetProperty("error", out var error))
-                        throw new InvalidOperationException(error.GetString() ?? "GPU worker failed");
-                    return document.RootElement.Clone();
+                    try
+                    {
+                        EnsureWorker(token);
+                        await _input!.WriteLineAsync(request.AsMemory(), token).ConfigureAwait(false);
+                        await _input.FlushAsync(token).ConfigureAwait(false);
+                        var line = await _output!.ReadLineAsync(token).ConfigureAwait(false);
+                        if (string.IsNullOrWhiteSpace(line)) throw new InvalidOperationException("GPU worker closed its response stream");
+                        using var document = JsonDocument.Parse(line);
+                        if (document.RootElement.TryGetProperty("error", out var error))
+                            throw new InvalidOperationException(error.GetString() ?? "GPU worker failed");
+                        return document.RootElement.Clone();
+                    }
+                    catch (OperationCanceledException) { StopWorker(); throw; }
+                    catch when (attempt == 0) { StopWorker(); }
+                    catch { StopWorker(); throw; }
                 }
-                catch when (attempt == 0) { StopWorker(); }
+                throw new InvalidOperationException("GPU worker failed after restart");
             }
-            throw new InvalidOperationException("GPU worker failed after restart");
+            finally { _gate.Release(); }
         }
-        finally { _gate.Release(); }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            throw new TimeoutException(entered ? "face_worker_timeout" : "face_worker_queue_timeout");
+        }
     }
 
     private void EnsureWorker(CancellationToken ct)
@@ -67,11 +95,11 @@ public sealed class GpuEmbeddingService : IDisposable
             StopWorker();
             var python = Environment.GetEnvironmentVariable("PICER_GPU_WORKER_PYTHON");
             var script = Environment.GetEnvironmentVariable("PICER_GPU_WORKER_SCRIPT");
-            if (string.IsNullOrWhiteSpace(python) || string.IsNullOrWhiteSpace(script))
+            if (_workerStartInfo is null && (string.IsNullOrWhiteSpace(python) || string.IsNullOrWhiteSpace(script)))
                 throw new InvalidOperationException("GPU worker is not configured");
-            var info = new ProcessStartInfo(python) { RedirectStandardInput = true, RedirectStandardOutput = true,
+            var info = _workerStartInfo?.Invoke() ?? new ProcessStartInfo(python!) { RedirectStandardInput = true, RedirectStandardOutput = true,
                 RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true };
-            info.ArgumentList.Add(script); info.ArgumentList.Add("--server");
+            if (_workerStartInfo is null) { info.ArgumentList.Add(script!); info.ArgumentList.Add("--server"); }
             _process = Process.Start(info) ?? throw new InvalidOperationException("GPU worker could not start");
             _input = _process.StandardInput; _output = _process.StandardOutput;
             _ = DrainErrorsAsync(_process.StandardError);

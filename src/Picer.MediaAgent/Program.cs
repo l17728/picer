@@ -852,29 +852,38 @@ internal sealed partial class AgentApplication : IDisposable
             }
             if (task.StartsWith("face.", StringComparison.OrdinalIgnoreCase))
             {
-                var endpointText = Setting("PICER_LOCAL_FACE_ENDPOINT");
-                if (!Uri.TryCreate(endpointText, UriKind.Absolute, out var endpoint)) throw new InvalidOperationException("face_endpoint_not_configured");
-                // The service forwards the indexed request (a path, not an image). The model
-                // endpoint only accepts the encoded image, so read the file here as video.people does.
-                var facePayload = await HydrateFaceImagePayloadAsync(payload, cancellationToken);
-                Log($"face image hydrated; requestId={requestId}; task={task}; requestChars={payload.Length}; imageChars={facePayload.Length}");
-                using var requestMessage = new HttpRequestMessage(HttpMethod.Post, endpoint)
+                using var faceDeadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                faceDeadline.CancelAfter(TimeSpan.FromMinutes(3));
+                try
                 {
-                    Content = new StringContent(facePayload, Encoding.UTF8, "application/json")
-                };
-                AddModelAuthorization(requestMessage);
-                requestMessage.Headers.Add("X-Picer-Face-Operation", task["face.".Length..]);
-                using var response = await _modelClient.SendAsync(requestMessage, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
-                var responsePayload = await response.Content.ReadAsStringAsync(cancellationToken);
-                if (!response.IsSuccessStatusCode)
-                {
-                    // The agent log used to record only the exception type, which hid why a task failed.
-                    Log($"face task rejected upstream; requestId={requestId}; task={task}; status={(int)response.StatusCode}");
-                    throw new InvalidOperationException($"face_http_{(int)response.StatusCode}:{responsePayload}");
+                    var endpointText = Setting("PICER_LOCAL_FACE_ENDPOINT");
+                    if (!Uri.TryCreate(endpointText, UriKind.Absolute, out var endpoint)) throw new InvalidOperationException("face_endpoint_not_configured");
+                    // The service forwards the indexed request (a path, not an image). The model
+                    // endpoint only accepts the encoded image, so read the file here as video.people does.
+                    var facePayload = await HydrateFaceImagePayloadAsync(payload, faceDeadline.Token);
+                    Log($"face image hydrated; requestId={requestId}; task={task}; requestChars={payload.Length}; imageChars={facePayload.Length}");
+                    using var requestMessage = new HttpRequestMessage(HttpMethod.Post, endpoint)
+                    {
+                        Content = new StringContent(facePayload, Encoding.UTF8, "application/json")
+                    };
+                    AddModelAuthorization(requestMessage);
+                    requestMessage.Headers.Add("X-Picer-Face-Operation", task["face.".Length..]);
+                    using var response = await _modelClient.SendAsync(requestMessage, HttpCompletionOption.ResponseHeadersRead, faceDeadline.Token);
+                    var responsePayload = await response.Content.ReadAsStringAsync(faceDeadline.Token);
+                    if (!response.IsSuccessStatusCode)
+                    {
+                        // The agent log used to record only the exception type, which hid why a task failed.
+                        Log($"face task rejected upstream; requestId={requestId}; task={task}; status={(int)response.StatusCode}");
+                        throw new InvalidOperationException($"face_http_{(int)response.StatusCode}:{responsePayload}");
+                    }
+                    Log($"face task completed; requestId={requestId}; task={task}; elapsedMs={started.ElapsedMilliseconds}; responseChars={responsePayload.Length}");
+                    await SendAsync(socket, new { type = "task.result", requestId, payload = responsePayload }, faceDeadline.Token);
+                    return;
                 }
-                Log($"face task completed; requestId={requestId}; task={task}; elapsedMs={started.ElapsedMilliseconds}; responseChars={responsePayload.Length}");
-                await SendAsync(socket, new { type = "task.result", requestId, payload = responsePayload }, cancellationToken);
-                return;
+                catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+                {
+                    throw new InvalidOperationException("face_request_timeout");
+                }
             }
             var fullPath = Path.GetFullPath(payload);
             using var mediaOperation = Picer.Core.Video.VideoOperationLifetime.Begin(fullPath, cancellationToken);

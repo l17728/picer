@@ -53,7 +53,19 @@ public sealed class ServiceFaceAnalyzer : IImageFaceAnalyzer, IDisposable
         using var response = await _client.PostAsJsonAsync(_endpoint, payload, cancellationToken).ConfigureAwait(false);
         var text = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
-            throw new InvalidOperationException($"IndexService face analysis failed ({(int)response.StatusCode})");
+        {
+            string? detail = null;
+            try
+            {
+                using var error = JsonDocument.Parse(text);
+                if (error.RootElement.TryGetProperty("detail", out var value) && value.ValueKind == JsonValueKind.String)
+                    detail = value.GetString();
+            }
+            catch (JsonException) { }
+            if (detail is "face_image_missing" or "face_image_empty" or "face_image_too_large" or "face_image_decode_failed")
+                throw new FaceImageInputException(detail);
+            throw new InvalidOperationException($"人脸服务不可用或处理超时（HTTP {(int)response.StatusCode}）");
+        }
         // The service answers in camelCase; the default options are case-sensitive and read every field as empty.
         var result = JsonSerializer.Deserialize<FaceServiceResult>(text, new JsonSerializerOptions(JsonSerializerDefaults.Web))
             ?? throw new InvalidOperationException("IndexService face result is empty");
@@ -68,4 +80,10 @@ public sealed class ServiceFaceAnalyzer : IImageFaceAnalyzer, IDisposable
     }
 
     public void Dispose() => _client.Dispose();
+}
+
+/// <summary>Individual image input errors do not indicate a service outage.</summary>
+public sealed class FaceImageInputException(string errorCode) : InvalidOperationException(errorCode)
+{
+    public string ErrorCode { get; } = errorCode;
 }
