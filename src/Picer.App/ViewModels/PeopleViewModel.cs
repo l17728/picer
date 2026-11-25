@@ -269,14 +269,15 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         {
             if (_selectorsLoaded && !refresh) return;
             var started = Stopwatch.StartNew();
-            var modelVersions = await UiWork.ReadSnapshotAsync("People.ModelOptions", _database, connection =>
-            {
-                var versionCounts = new VisionAnalysisRepository(connection).GetFaceModelVersionCounts();
-                var insight = versionCounts.Where(value => IsInsightModelVersion(value.Version))
-                    .OrderByDescending(value => value.Count).ThenBy(value => value.Version)
-                    .FirstOrDefault();
-                return new[] { string.IsNullOrWhiteSpace(insight.Version) ? "insightface-arcface" : insight.Version };
-            });
+            IReadOnlyList<(string Version, int Count)> versionCounts = _services.ServiceMode
+                ? (await _services.Gateway.GetBrowseMetadataAsync()).FaceModelVersions
+                    .Select(value => (value.ModelVersion, value.Count)).ToArray()
+                : await UiWork.ReadSnapshotAsync("People.ModelOptions", _database, connection =>
+                    new VisionAnalysisRepository(connection).GetFaceModelVersionCounts());
+            var insight = versionCounts.Where(value => IsInsightModelVersion(value.Version))
+                .OrderByDescending(value => value.Count).ThenBy(value => value.Version)
+                .FirstOrDefault();
+            var modelVersions = new[] { string.IsNullOrWhiteSpace(insight.Version) ? "insightface-arcface" : insight.Version };
             FaceModelVersions.Clear();
             FaceModelOptions.Clear();
             foreach (var version in modelVersions)

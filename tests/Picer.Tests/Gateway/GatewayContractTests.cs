@@ -215,6 +215,7 @@ public sealed class GatewayContractTests(GatewayServiceFixture fixture) : IClass
 
         Assert.Contains(result.Albums, item => item.Id == album.Id);
         Assert.Contains(result.AlbumImages, item => item.AlbumId == album.Id && item.ImageId == image.Id);
+        Assert.Contains(result.FaceModelVersions, item => item.ModelVersion == "test-model" && item.Count == 1);
         Assert.Equal(isolated.Db.GetImageLocationHierarchyRows(), result.Locations);
         var selected = await gateway.SearchAsync(new SearchFilters { ImageIds = [image.Id], IncludeMissing = false }, pageSize: 10);
         Assert.Equal(image.Id, Assert.Single(selected.Items).Id);

@@ -267,8 +267,12 @@ public sealed class IndexApiHandlers(PicerDatabase db, ThumbnailService thumbnai
         using (var command = reader.Command("SELECT ai.album_id,ai.image_id FROM album_images ai JOIN images i ON i.id=ai.image_id WHERE i.status='active'"))
         using (var rows = command.ExecuteReader())
             while (rows.Read()) links.Add(new(rows.GetInt64(0), rows.GetInt64(1)));
+        using var versionsCommand = reader.Command("SELECT model_version,COUNT(*) FROM detected_faces GROUP BY model_version ORDER BY COUNT(*) DESC,model_version");
+        using var versionsReader = versionsCommand.ExecuteReader();
+        var versions = new List<GatewayFaceModelCount>();
+        while (versionsReader.Read()) versions.Add(new GatewayFaceModelCount(versionsReader.GetString(0), versionsReader.GetInt32(1)));
         return new GatewayBrowseMetadata(SemanticEngine.GetAlbums(reader), links, reader.GetImageLocationHierarchyRows(),
-            IndexSearchEngine.GetDistinctValues(reader, "camera"));
+            IndexSearchEngine.GetDistinctValues(reader, "camera"), versions);
     }
     public GatewayMetadata GetMetadata(bool includeEmbeddings = true, bool includeFaceModels = true)
         => db.SupportsIndependentReadSnapshots

@@ -10,7 +10,9 @@ public sealed record GatewayAlbumImageLink(long AlbumId, long ImageId);
 public sealed record GatewayBrowseMetadata(IReadOnlyList<Album> Albums,
     IReadOnlyList<GatewayAlbumImageLink> AlbumImages,
     IReadOnlyList<ImageLocationHierarchyRow> Locations,
-    IReadOnlyList<string> CameraValues);
+    IReadOnlyList<string> CameraValues,
+    IReadOnlyList<GatewayFaceModelCount> FaceModelVersions);
+public sealed record GatewayFaceModelCount(string ModelVersion, int Count);
 public sealed record GatewayImageTagLink(long ImageId, long TagId);
 public sealed record GatewayDetectedFace(
     long Id, long ImageId, string ModelVersion, int Ordinal,

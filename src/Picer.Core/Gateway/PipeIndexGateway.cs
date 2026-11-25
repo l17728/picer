@@ -116,7 +116,7 @@ public sealed class PipeIndexGateway : IIndexGateway, IDisposable
 
     public async Task<GatewayBrowseMetadata> GetBrowseMetadataAsync(CancellationToken cancellationToken = default) =>
         await CallAsync<GatewayBrowseMetadata>("browser_metadata", null, cancellationToken)
-        ?? new GatewayBrowseMetadata([], [], [], []);
+        ?? new GatewayBrowseMetadata([], [], [], [], []);
 
     public async Task<GatewayMetadata> GetMetadataAsync(CancellationToken cancellationToken = default) =>
         await CallAsync<GatewayMetadata>("metadata", null, cancellationToken) ?? new GatewayMetadata([], [], []);

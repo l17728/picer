@@ -35,7 +35,9 @@ public interface IIndexGateway : IDisposable
     {
         var albums = await ListAlbumsAsync(cancellationToken).ConfigureAwait(false);
         var metadata = await GetMetadataAsync(cancellationToken).ConfigureAwait(false);
-        return new GatewayBrowseMetadata(albums, metadata.AlbumImages, metadata.Locations, []);
+        var faceModelVersions = metadata.Faces.GroupBy(face => face.ModelVersion, StringComparer.OrdinalIgnoreCase)
+            .Select(group => new GatewayFaceModelCount(group.Key, group.Count())).ToArray();
+        return new GatewayBrowseMetadata(albums, metadata.AlbumImages, metadata.Locations, [], faceModelVersions);
     }
     Task<IReadOnlyList<PersonSummary>> ListPeopleAsync(CancellationToken cancellationToken = default);
     Task<SourceFolder> RegisterSourceAsync(string path, CancellationToken cancellationToken = default);
