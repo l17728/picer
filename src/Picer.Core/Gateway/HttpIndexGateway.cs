@@ -439,6 +439,18 @@ public sealed partial class HttpIndexGateway : IIndexGateway, IMediaAssetGateway
         return await response.Content.ReadFromJsonAsync<IReadOnlyList<PersonSummary>>(Json, cancellationToken) ?? [];
     }
 
+    public async Task<GatewayPeopleBrowseSnapshot> GetPeopleBrowseSnapshotAsync(string view, string? modelVersion = null,
+        long? personId = null, int limit = 500, CancellationToken cancellationToken = default)
+    {
+        var query = $"view={Uri.EscapeDataString(view)}&limit={Math.Clamp(limit, 1, 5000)}";
+        if (!string.IsNullOrWhiteSpace(modelVersion)) query += $"&modelVersion={Uri.EscapeDataString(modelVersion)}";
+        if (personId is > 0) query += $"&personId={personId.Value}";
+        using var response = await GetSnapshotReadAsync($"api/gateway/v1/people?{query}", cancellationToken);
+        await EnsureSuccessAsync(response, cancellationToken);
+        return await response.Content.ReadFromJsonAsync<GatewayPeopleBrowseSnapshot>(Json, cancellationToken)
+            ?? throw new InvalidDataException("Empty people browse snapshot.");
+    }
+
     public async Task<SourceFolder> RegisterSourceAsync(string path, CancellationToken cancellationToken = default)
     {
         using var response = await _client.PostAsJsonAsync("api/gateway/v1/sources", new { path }, Json, cancellationToken);

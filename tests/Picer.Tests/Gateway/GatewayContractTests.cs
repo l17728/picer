@@ -222,6 +222,30 @@ public sealed class GatewayContractTests(GatewayServiceFixture fixture) : IClass
         Assert.Equal(1, selected.TotalCount);
     }
 
+    [Theory]
+    [MemberData(nameof(Transports))]
+    public async Task PeopleBrowseReadsNamedFacesAndCountsFromEachGateway(string transport)
+    {
+        using var isolated = new GatewayServiceFixture();
+        using var gateway = isolated.CreateGateway(transport);
+
+        var result = await gateway.GetPeopleBrowseSnapshotAsync("person", modelVersion: "test-model",
+            personId: isolated.SeedPersonId, limit: 50);
+
+        Assert.Contains(result.People, person => person.Id == isolated.SeedPersonId && person.DisplayName == "测试人物");
+        Assert.Single(result.Faces);
+        Assert.Equal(isolated.SeedPersonId, result.Faces[0].SuggestedPersonId);
+
+        var pending = await gateway.GetPeopleBrowseSnapshotAsync("pending", modelVersion: "test-model", limit: 50);
+        var ignored = await gateway.GetPeopleBrowseSnapshotAsync("ignored", modelVersion: "test-model", limit: 50);
+        var summary = await gateway.GetPeopleBrowseSnapshotAsync("summary", modelVersion: "test-model", limit: 1);
+        Assert.Empty(pending.Faces);
+        Assert.Empty(ignored.Faces);
+        Assert.Equal(1, summary.Partition.Total);
+        Assert.Equal(1, summary.Partition.Named);
+        Assert.True(summary.Partition.IsConserved);
+    }
+
     [Fact]
     public async Task PipeDirectoryEndpointSupportsSwitchReadProbe()
     {

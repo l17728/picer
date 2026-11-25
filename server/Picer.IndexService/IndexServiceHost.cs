@@ -366,6 +366,10 @@ public sealed class IndexApiHandlers(PicerDatabase db, ThumbnailService thumbnai
             DescriptionVersions: db.GetDescriptionVersions());
     }
     public IReadOnlyList<PersonSummary> ListPeople() => new PeopleService(db).GetAll();
+    public GatewayPeopleBrowseSnapshot GetPeopleBrowseSnapshot(string view, string? modelVersion, long? personId, int limit) =>
+        db.SupportsIndependentReadSnapshots
+            ? db.ReadSnapshot(reader => GatewayPeopleBrowseSnapshotReader.Read(reader, view, modelVersion, personId, limit))
+            : GatewayPeopleBrowseSnapshotReader.Read(db, view, modelVersion, personId, limit);
 
     public SourceFolder? GetSource(long id) => db.GetSource(id);
 
@@ -1802,7 +1806,10 @@ async function load(){const [c,g]=await Promise.all([fetch('/api/service/v1/capa
         app.MapGet("/api/gateway/v1/tags", () => Results.Json(handlers.ListTags()));
         app.MapGet("/api/gateway/v1/albums", () => Results.Json(handlers.ListAlbums()));
         app.MapGet("/api/gateway/v1/browser-metadata", () => Results.Json(handlers.GetBrowseMetadata()));
-        app.MapGet("/api/gateway/v1/people", () => Results.Json(handlers.ListPeople()));
+        app.MapGet("/api/gateway/v1/people", (string? view, string? modelVersion, long? personId, int? limit) =>
+            view is null
+                ? Results.Json(handlers.ListPeople())
+                : Results.Json(handlers.GetPeopleBrowseSnapshot(view, modelVersion, personId, limit ?? 500)));
         app.MapPost("/api/gateway/v1/sources", (GatewaySourceRegistration request) =>
         {
             try { return Results.Json(handlers.RegisterSource(request.Path)); }

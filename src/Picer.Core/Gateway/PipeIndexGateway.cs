@@ -124,6 +124,11 @@ public sealed class PipeIndexGateway : IIndexGateway, IDisposable
     public async Task<IReadOnlyList<PersonSummary>> ListPeopleAsync(CancellationToken cancellationToken = default) =>
         await CallAsync<IReadOnlyList<PersonSummary>>("people", null, cancellationToken) ?? [];
 
+    public async Task<GatewayPeopleBrowseSnapshot> GetPeopleBrowseSnapshotAsync(string view, string? modelVersion = null,
+        long? personId = null, int limit = 500, CancellationToken cancellationToken = default) =>
+        await CallAsync<GatewayPeopleBrowseSnapshot>("people_browse", new { view, modelVersion, personId, limit }, cancellationToken)
+        ?? throw new InvalidDataException("Empty people browse snapshot.");
+
     public async Task<SourceFolder> RegisterSourceAsync(string path, CancellationToken cancellationToken = default) =>
         await CallAsync<SourceFolder>("add_source", new { path }, cancellationToken)
             ?? throw new InvalidOperationException("Empty source payload.");

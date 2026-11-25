@@ -2,6 +2,7 @@ using Picer.Core.Models;
 using Picer.Core.People;
 using Picer.Core.Search;
 using Picer.Core.Video;
+using Picer.Core.Vision;
 
 namespace Picer.Core.Gateway;
 
@@ -40,6 +41,9 @@ public interface IIndexGateway : IDisposable
         return new GatewayBrowseMetadata(albums, metadata.AlbumImages, metadata.Locations, [], faceModelVersions);
     }
     Task<IReadOnlyList<PersonSummary>> ListPeopleAsync(CancellationToken cancellationToken = default);
+    Task<GatewayPeopleBrowseSnapshot> GetPeopleBrowseSnapshotAsync(string view, string? modelVersion = null,
+        long? personId = null, int limit = 500, CancellationToken cancellationToken = default)
+        => Task.FromException<GatewayPeopleBrowseSnapshot>(new NotSupportedException("people_browse_unavailable"));
     Task<SourceFolder> RegisterSourceAsync(string path, CancellationToken cancellationToken = default);
     Task<bool> RemoveSourceAsync(long sourceId, CancellationToken cancellationToken = default);
     Task<string> StartScanAsync(long sourceId, CancellationToken cancellationToken = default);

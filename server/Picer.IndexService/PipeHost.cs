@@ -19,6 +19,7 @@ internal sealed record PipeJobRequest(string JobId = "");
 internal sealed record PipeScanRequest(long SourceId = 0);
 internal sealed record PipeVerifiedChangesRequest(IReadOnlyList<long> ImageIds);
 internal sealed record PipeBackupRequest(string DestinationPath = "");
+internal sealed record PipePeopleBrowseRequest(string View = "summary", string? ModelVersion = null, long? PersonId = null, int Limit = 500);
 
 public sealed class NamedPipeIndexServer : IDisposable
 {
@@ -101,6 +102,9 @@ public sealed class NamedPipeIndexServer : IDisposable
             var backupRequest = payload is null || payload.Value.ValueKind != JsonValueKind.Object
                 ? new PipeBackupRequest()
                 : payload.Value.Deserialize<PipeBackupRequest>(Json) ?? new PipeBackupRequest();
+            var peopleBrowseRequest = payload is null || payload.Value.ValueKind != JsonValueKind.Object
+                ? new PipePeopleBrowseRequest()
+                : payload.Value.Deserialize<PipePeopleBrowseRequest>(Json) ?? new PipePeopleBrowseRequest();
             var body = op switch
             {
                 "health" => JsonSerializer.SerializeToElement(_handlers.Health()),
@@ -120,6 +124,8 @@ public sealed class NamedPipeIndexServer : IDisposable
                 "browser_metadata" => JsonSerializer.SerializeToElement(_handlers.GetBrowseMetadata()),
                 "metadata" => JsonSerializer.SerializeToElement(_handlers.GetMetadata()),
                 "people" => JsonSerializer.SerializeToElement(_handlers.ListPeople()),
+                "people_browse" => JsonSerializer.SerializeToElement(_handlers.GetPeopleBrowseSnapshot(peopleBrowseRequest.View,
+                    peopleBrowseRequest.ModelVersion, peopleBrowseRequest.PersonId, peopleBrowseRequest.Limit)),
                 "add_source" => JsonSerializer.SerializeToElement(_handlers.RegisterSource(sourceRequest.Path)),
                 "remove_source" => JsonSerializer.SerializeToElement(new PipeFlagResponse(_handlers.RemoveSource(idRequest.Id))),
                 "verified_changes" => JsonSerializer.SerializeToElement(new GatewayVerifiedChangesResult(_handlers.RemoveRecycledRecords(changes))),

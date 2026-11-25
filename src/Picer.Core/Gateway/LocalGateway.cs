@@ -156,6 +156,10 @@ public sealed class LocalGateway(PicerDatabase db, ThumbnailService thumbnails, 
     public Task<IReadOnlyList<PersonSummary>> ListPeopleAsync(CancellationToken cancellationToken = default) =>
         ReadAsync<IReadOnlyList<PersonSummary>>(reader => new PeopleService(reader).GetAll(), cancellationToken);
 
+    public Task<GatewayPeopleBrowseSnapshot> GetPeopleBrowseSnapshotAsync(string view, string? modelVersion = null,
+        long? personId = null, int limit = 500, CancellationToken cancellationToken = default) =>
+        ReadAsync(reader => GatewayPeopleBrowseSnapshotReader.Read(reader, view, modelVersion, personId, limit), cancellationToken);
+
     public Task<SourceFolder> RegisterSourceAsync(string path, CancellationToken cancellationToken = default)
     {
         var fullPath = Path.GetFullPath(path);

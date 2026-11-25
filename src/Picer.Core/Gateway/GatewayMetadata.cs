@@ -1,5 +1,7 @@
 using Picer.Core.Models;
+using Picer.Core.People;
 using Picer.Core.Search;
+using Picer.Core.Vision;
 using System.Text.Json.Serialization;
 
 namespace Picer.Core.Gateway;
@@ -13,6 +15,16 @@ public sealed record GatewayBrowseMetadata(IReadOnlyList<Album> Albums,
     IReadOnlyList<string> CameraValues,
     IReadOnlyList<GatewayFaceModelCount> FaceModelVersions);
 public sealed record GatewayFaceModelCount(string ModelVersion, int Count);
+public sealed record GatewayPeopleBrowseSnapshot(
+    IReadOnlyList<PersonSummary> People,
+    IReadOnlyList<UnassignedFaceRecord> Faces,
+    IReadOnlyList<FaceCandidateClusterRecord> Clusters,
+    IReadOnlyList<SuggestedPersonGroupRecord> SuggestedGroups,
+    FaceWorkQueueCounts WorkQueue,
+    FacePartitionCounts Partition,
+    int IgnoredCount,
+    VisionAnalysisSummary Summary,
+    IReadOnlyList<FaceTrainingArtifactSummary> TrainingHistory);
 public sealed record GatewayImageTagLink(long ImageId, long TagId);
 public sealed record GatewayDetectedFace(
     long Id, long ImageId, string ModelVersion, int Ordinal,
