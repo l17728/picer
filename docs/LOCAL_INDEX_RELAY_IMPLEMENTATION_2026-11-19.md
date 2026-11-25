@@ -83,3 +83,13 @@ IndexService 已存在以 `space_id` 为核心的多租户授权和运行时隔�
 本轮提交 `752aee2`、`f276311`、`7e71d9b`、`54cd4fb` 均已推送到 `origin/main`；此前直连与备用路由的暂时性 443 超时后，直连重试成功。工作区与远端已同步。
 
 以上缺项保持为当前工作，不将旧的阶段构建记录推断成完整 Relay 交付。详细症状与本轮启动修复见[远程镜像首屏加载报告](REMOTE_MIRROR_STARTUP_LOADING_FIX_2026-11-25.md)。
+
+### 2026-11-25 远程人物浏览直读补充
+
+本节覆盖本文件此前关于人物列表仍读 `remote-mirror.db` 的状态描述。远程人物浏览快照现在由 IndexService 的权威索引生成，覆盖人物目录、人脸列表视图、分区/摘要及训练历史。GUI 将其用于远程浏览；远程浏览不需要等待或依赖完整本地镜像同步。镜像保留给本地模式、离线兼容和需要本地计算/提交的操作，不作为远程浏览的权威数据副本。
+
+- 变更提交：`f562dfa fix: read remote people browsing from index service`，已推送 `origin/main`。
+- 验证：HTTP、named-pipe、本地 gateway 契约测试 78/78；Debug 整解方案、GUI Release、IndexService Release 均无警告/错误。
+- 部署：`20261125T122655387Z`，Linux x64 IndexService SHA-256 `92d8713823f67301190c9b899cf90e8bc2429266c59d0e0c478d3195c5409623`。GUI Release SHA-256 `0855D9EAF7D0484F8CA2540DA96823BE7643570E2DBECC056DD0B2EC7036A4DD`，已重启并连接新服务。
+- UI 实测：人物模型、训练历史、命名人物选择器、服务端人脸统计及分页列表可见；照片人脸缩略图通过共享远程缓存异步显示。
+- 缺项：远程命名人物详情尚未接入服务端视频人脸时间线；人物操作中的本地训练/补算/写入仍是本地工作流。Relay E2E-01 至 E2E-40 尚未整体通过，不能据此声明 Relay SDD 全部完成。
