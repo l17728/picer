@@ -366,8 +366,10 @@
                     <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
                     <Grid.ColumnDefinitions><ColumnDefinition Width="300"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
                     <Border Grid.ColumnSpan="2" Background="{DynamicResource {x:Static SystemColors.ControlBrushKey}}" BorderBrush="{DynamicResource {x:Static SystemColors.ControlDarkBrushKey}}" BorderThickness="1" Padding="10" Margin="4,0,4,8">
-                        <DockPanel>
-                            <WrapPanel DockPanel.Dock="Right" HorizontalAlignment="Right" MaxWidth="1100">
+                        <StackPanel>
+                            <TextBlock Text="{Binding StatusText}" TextWrapping="Wrap"/>
+                            <TextBlock Text="{Binding TrainingResultText}" TextWrapping="Wrap" Foreground="{DynamicResource {x:Static SystemColors.ControlTextBrushKey}}" FontSize="11" Margin="0,3,0,0"/>
+                            <WrapPanel Orientation="Horizontal" Margin="0,5,0,0">
                                 <Button Content="检查新照片" Command="{Binding AnalyzeAllCommand}" Padding="12,5" Margin="4,0" ToolTip="已分析的照片会使用缓存跳过"/>
                                 <Button Content="{Binding OrganizeButtonText}" Command="{Binding OrganizeFacesCommand}" Padding="12,5" Margin="4,0"
                                         ToolTip="使用最新已应用阈值匹配已命名人物，并重建待命名候选组；保留人工确认与排除结果"/>
@@ -394,10 +396,7 @@
                                 <Button Content="刷新" Command="{Binding RefreshPageCommand}" Padding="12,5" Margin="4,0"
                                         ToolTip="仅从数据库同步最新人物、候选组和人脸状态，不重新扫描或归类"/>
                             </WrapPanel>
-                            <StackPanel VerticalAlignment="Center">
-                                <TextBlock Text="{Binding StatusText}" TextWrapping="Wrap"/>
-                                <TextBlock Text="{Binding TrainingResultText}" TextWrapping="Wrap" Foreground="{DynamicResource {x:Static SystemColors.ControlTextBrushKey}}" FontSize="11" Margin="0,3,0,0"/>
-                                <WrapPanel Orientation="Horizontal" Margin="0,6,0,0">
+                            <WrapPanel Orientation="Horizontal" Margin="0,6,0,0">
                                     <Label x:Name="FaceModelLabel" Content="人脸模型空间：" Target="{Binding ElementName=FaceModelBox}" Padding="0" VerticalAlignment="Center" FontWeight="SemiBold"/>
                                     <ComboBox x:Name="FaceModelBox" AutomationProperties.LabeledBy="{Binding ElementName=FaceModelLabel}" Width="340" ItemsSource="{Binding FaceModelOptions}"
                                               DisplayMemberPath="DisplayName"
@@ -408,10 +407,9 @@
                                 <TextBlock Text=" · 已命名人脸为跨模型共享的人工确认结果" Margin="8,0,0,0" VerticalAlignment="Center" Foreground="{DynamicResource {x:Static SystemColors.ControlTextBrushKey}}" FontSize="11"/>
                                 <TextBlock Text=" · 当前分类模型：" Margin="8,0,0,0" VerticalAlignment="Center" Foreground="{DynamicResource {x:Static SystemColors.ControlTextBrushKey}}" FontSize="11"/>
                                 <TextBlock Text="{Binding TrainingHistoryText}" VerticalAlignment="Center" Foreground="{DynamicResource {x:Static SystemColors.ControlTextBrushKey}}" FontSize="11" ToolTip="当前人物分类使用的模型版本和历史验证准确率"/>
-                                </WrapPanel>
-                                <TextBlock Text="{Binding FacePartitionSummary}" TextWrapping="Wrap" Foreground="{DynamicResource {x:Static SystemColors.ControlTextBrushKey}}" FontSize="11" Margin="0,3,0,0"/>
-                            </StackPanel>
-                        </DockPanel>
+                            </WrapPanel>
+                            <TextBlock Text="{Binding FacePartitionSummary}" TextWrapping="Wrap" Foreground="{DynamicResource {x:Static SystemColors.ControlTextBrushKey}}" FontSize="11" Margin="0,3,0,0"/>
+                        </StackPanel>
                     </Border>
                     <Border Grid.Row="1" Grid.ColumnSpan="2" Background="{DynamicResource {x:Static SystemColors.ControlBrushKey}}" BorderBrush="{DynamicResource {x:Static SystemColors.ControlDarkBrushKey}}" BorderThickness="1"
                             CornerRadius="4" Padding="10" Margin="4,0,4,8"

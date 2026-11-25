@@ -35,6 +35,8 @@
 - 定向 `Picer.E2E`：1/1 通过，确认远程视频人脸裁剪使用已物化的服务端关键帧缓存，不查镜像帧引用。
 - `Picer.Tests` 全量：1301/1302 通过；唯一失败是 `AccountMediaRoutingTests.VideoPeopleAnalysisPassesScopeOnlyWithAnalysisGrant` 在 60 秒截止时间内等待 HTTPS 响应超时。单独重跑 1/1 通过，因此记录为全量中的偶发超时，不隐去该结果。
 - IndexService 部署到 `47.103.99.229` 两次，第二次 deployment ID `20261125T114630214Z`，Linux x64 服务二进制 SHA-256 `50f5e0f1f2c88c6d409033e87ba95b8032d929d5d484ff6fa69497cfb38a1c70`；部署脚本返回 `Upgrade verified`，版本端点为 `https://47-103-99-229.sslip.io:8445/version`。部署脚本在升级前备份数据库/服务目录。
-- 正式 GUI Release 构建 `dotnet build src/Picer.App/Picer.App.csproj -c Release --warnaserror`：0 警告、0 错误；产物 `src/Picer.App/bin/Release/net8.0-windows/win-x64/Picer.App.exe`，当前 SHA-256 `2A0E3563F2F229BFFB8B61BEC9E3D7AD7B29DB31B2617CC315F5DA90BFCB0388`。已从该正式路径启动 GUI 与 MediaAgent。
-- 2026-11-25 实际 UI 检查：窗口标题为 `Picer - 图片管理（远程：47-103-99-229.sslip.io:8445）`；目录树、缩略图和 8,603 张远程图库状态可见；视频页显示“共 529 个视频（来自索引服务）”并列出视频；人物页模型/历史选择器有值，统计文本显示 28,925 张人脸。人物页分类内容仍在加载/显示不全且布局挤压，须作为后续专项修复，不能宣称人物页全部验收完成。
+- 正式 GUI Release 构建 `dotnet build src/Picer.App/Picer.App.csproj -c Release --warnaserror`：0 警告、0 错误；产物 `src/Picer.App/bin/Release/net8.0-windows/win-x64/Picer.App.exe`。
+- 人物页实测发现顶部 `DockPanel` 的右侧操作 `WrapPanel` 抢占全部宽度，导致模型选择器、状态摘要及分类区域显示异常；已改为全宽分行布局。修复后 Release 构建 0 警告、0 错误，正式 GUI 与 MediaAgent 已重启。最新 GUI SHA-256 `DE9452AD200D2136AF05A11E8BE8C63DBC39D4C099C1936C55E5CC14E5A0683A`。
+- 修复后实际 UI 检查确认：服务地址标题正确；远程照片 8,603 张、缩略图可见；视频页来自索引服务并显示 529 项；人物页模型下拉为 InsightFace、训练历史下拉有已应用 92.2% 版本、已命名人物下拉包含 8 人；人脸列表显示 5,000/7,551 项并已载入缩略图。
+- 人物脸列表、人物统计和训练历史的部分读取目前仍经过 `remote-mirror.db`；因此虽然当前 UI 项目有数据，尚未实现“所有人物浏览均以服务端索引为读源”。同时 UI 当前 `FacePartitionSummary` 的 18,053 人脸分区计数与待处理人脸列表 7,551 数量存在 13 项差异；必须把人物浏览迁到服务端分页查询并核对分区一致性，不能声称人物数据链路已彻底闭环。
 - 本轮本地提交：`752aee2 fix: read remote browsing data from index service`、`f276311 fix: load remote face model options from index service`。推送因网络连接 GitHub 443 超时/重置尚未成功，需继续按 `docs/ENGINEERING_MEMORY.md` 的直连与备用路由重试；仓库提交目前领先 `origin/main` 两个提交。
