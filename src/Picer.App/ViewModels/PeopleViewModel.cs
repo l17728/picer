@@ -941,7 +941,9 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         // cover the gaps (never analyzed, or analyzed only in another model space).
         var withFaces = await UiWork.ReadSnapshotAsync("People.ServiceAnalysis.HasFaces", _database,
             reader => new VisionAnalysisRepository(reader).GetImageIdsWithFaces(analyzer.ModelVersion), token);
-        var pending = images.Where(image => !withFaces.Contains(image.Id)).ToArray();
+        var failedImages = await UiWork.ReadSnapshotAsync("People.ServiceAnalysis.RetryFailures", _database,
+            reader => new VisionAnalysisRepository(reader).GetFailedImageIds(analyzer.AnalyzerName, analyzer.ModelVersion), token);
+        var pending = images.Where(image => !withFaces.Contains(image.Id) || failedImages.Contains(image.Id)).ToArray();
         int analyzed = 0, skipped = 0, failed = 0, completed = 0, consecutiveFailures = 0;
         string? firstFailure = null;
         foreach (var image in pending)

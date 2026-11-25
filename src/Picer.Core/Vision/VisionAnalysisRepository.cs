@@ -270,6 +270,17 @@ public sealed class VisionAnalysisRepository(PicerDatabase database)
     }
 
     /// <summary>Ids of the photos that already have at least one live face in the given model space.</summary>
+    public HashSet<long> GetFailedImageIds(string analyzer, string modelVersion)
+    {
+        using var command = database.Command("SELECT image_id FROM vision_analyses WHERE analyzer=$analyzer AND model_version=$model AND status='failed'");
+        command.Parameters.AddWithValue("$analyzer", analyzer);
+        command.Parameters.AddWithValue("$model", modelVersion);
+        using var reader = command.ExecuteReader();
+        var ids = new HashSet<long>();
+        while (reader.Read()) ids.Add(reader.GetInt64(0));
+        return ids;
+    }
+
     public HashSet<long> GetImageIdsWithFaces(string modelVersion)
     {
         using var command = database.Command("SELECT DISTINCT image_id FROM detected_faces WHERE is_archived=0 AND model_version=$model");

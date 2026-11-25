@@ -34,6 +34,23 @@ public sealed class RemoteFaceAnalysisTests : IDisposable
         });
 
     [Fact]
+    public void FailedImagesWithExistingFacesRemainRetryableInTheirModelSpace()
+    {
+        using var database = new PicerDatabase(Path.Combine(_root, "retry.db"));
+        var source = database.AddSource(_root);
+        var image = AddImage(database, source.Id, "retry.jpg");
+        var repository = new VisionAnalysisRepository(database);
+        var analyzer = new FixedAnalyzer("model-a");
+        repository.SaveCompleted(image, analyzer, OneFace());
+        repository.SaveFailure(image, analyzer, "face_image_missing");
+        Assert.Contains(image.Id, repository.GetImageIdsWithFaces("model-a"));
+        Assert.Contains(image.Id, repository.GetFailedImageIds(analyzer.AnalyzerName, "model-a"));
+        Assert.Empty(repository.GetFailedImageIds(analyzer.AnalyzerName, "model-b"));
+        repository.SaveServiceCompleted(image, analyzer, 1);
+        Assert.Empty(repository.GetFailedImageIds(analyzer.AnalyzerName, "model-a"));
+    }
+
+    [Fact]
     public void ServiceCompletedMarkerSkipsReanalysisWithoutInventingLocalFaces()
     {
         using var database = new PicerDatabase(Path.Combine(_root, "index.db"));
