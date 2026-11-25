@@ -63,7 +63,7 @@ IndexService 已存在以 `space_id` 为核心的多租户授权和运行时隔�
 
 ## 2026-11-25 运行架构审计与缺项
 
-- Service 模式现状：`Picer.App/AppServices.cs` 将 `remote-mirror.db` 用作客户端可写镜像/待提交编辑库；主界面的目录、搜索、视频和人物数据大多从本地库读取。IndexService 是服务器已提交数据的权威端，但 GUI 并非对所有浏览操作直接向服务器查询。该镜像是旧同步架构的实现细节，不得称为“服务器索引已直接读取”，也不得与本机索引模式混淆。
+- 远程浏览的权威数据源是服务器 IndexService。主画廊、目录照片及分类树数据、视频列表/详情、标签、相机筛选、人物选项和人脸模型版本/覆盖数已改为直接读取 IndexService；实际 GUI 验收确认远程图库 8,603 张、视频 529 个、人物页模型/历史选项及 28,925 张人脸统计可见。`remote-mirror.db` 仍承载部分编辑/兼容数据，人物脸列表与训练历史等路径仍有镜像依赖，故不能将所有人物页功能记为直读完成。
 - 当前 `SpaceWebSocketRelay` 是账号服务与 MediaAgent 原图/来源通道的按请求双向代理；尚未发现本机 IndexService 主动建立的持久 Relay Connector、云 Relay 设备注册/配对/多路复用协议，或 GUI 经 Relay 直达来源 IndexService 的传输。
 - 当前可见的模式切换同步闸门、一致性快照、只读探针及镜像清理不等于完整 RELAY-01 至 RELAY-40 验收。
 - `SpaceRuntimePool` 和账号授权提供空间级运行时/设备授权隔离基础；尚未证明 Relay 请求的 tenant/device/session 全绑定、缓存/媒体隔离、租户级任务队列、撤销后既有流即时终止等全部验收。
@@ -77,7 +77,9 @@ IndexService 已存在以 `space_id` 为核心的多租户授权和运行时隔�
 - 远程标签和人物查询选项改为直接读取 IndexService；远程人物名字的主搜索过滤使用服务器返回的人物 ID，避免从镜像库解析人物后把过期 ID 发给服务器。
 - 远程人脸模型版本/覆盖数量从轻量目录接口读取；人物页的模型版本下拉不再通过镜像库冷读。
 - 远程视频详情中的人物裁剪图现在复用该视频已从服务端加载并进入共享缓存的关键帧，不再为每个人脸回查本地镜像的帧引用。
-- 新读端点已加 HTTP/pipe gateway 路径及账号服务 `index.read` 权限/快照支持；定向的 Gateway HTTP、pipe、本地契约测试和 `ImageIds` 分页过滤测试已补充，待本轮完整套件结束后重新构建并执行。
-- 远程人物页的脸列表、训练记录和模型切换覆盖率仍有多处直接依赖镜像元数据；远程搜索的别名解析也尚未纳入轻量人物目录协议。本轮不得将“所有远程 UI 已完全直读”记为完成。
+- 新读端点已加 HTTP/pipe gateway 路径及账号服务 `index.read` 权限/快照支持；定向 Gateway HTTP、pipe、本地契约测试和 `ImageIds` 分页过滤测试通过。已部署到 `47.103.99.229`，第二次 deployment ID `20261125T114630214Z`，Linux x64 IndexService SHA-256 `50f5e0f1f2c88c6d409033e87ba95b8032d929d5d484ff6fa69497cfb38a1c70`。GUI Release 路径 `src/Picer.App/bin/Release/net8.0-windows/win-x64/Picer.App.exe`，SHA-256 `2A0E3563F2F229BFFB8B61BEC9E3D7AD7B29DB31B2617CC315F5DA90BFCB0388`；GUI 和 MediaAgent 均已从正式 Release 路径启动。
+- 远程人物页脸列表、训练记录和模型切换覆盖率仍有镜像依赖；远程搜索别名解析也尚未纳入轻量人物目录协议。实际 GUI 检查时人物统计已出现，但分类列表区域仍在加载且版面挤压，需单独定位。不得将“所有远程 UI 已完全直读”记为完成。
+
+本轮提交 `752aee2`、`f276311` 已在本地；向 `origin/main` 推送遇 GitHub 443 连接超时/重置，仓库暂时领先远端两个提交。按 `docs/ENGINEERING_MEMORY.md` 的备用路由继续重试，不更改 origin、hosts 或证书检查。
 
 以上缺项保持为当前工作，不将旧的阶段构建记录推断成完整 Relay 交付。详细症状与本轮启动修复见[远程镜像首屏加载报告](REMOTE_MIRROR_STARTUP_LOADING_FIX_2026-11-25.md)。
