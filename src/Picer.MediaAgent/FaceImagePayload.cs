@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using ImageMagick;
 
 namespace Picer.MediaAgent;
 
@@ -29,9 +30,33 @@ public static class FaceImagePayload
         var fullPath = Path.GetFullPath(resolvePath(path.Replace('/', Path.DirectorySeparatorChar)));
         if (!IsInsideRoots(fullPath, roots)) throw new UnauthorizedAccessException("face image is outside configured roots");
         var info = new FileInfo(fullPath);
-        if (!info.Exists || info.Length == 0 || info.Length > MaxImageBytes)
-            throw new InvalidDataException("face image is missing or exceeds the 10 MiB service limit");
+        if (!info.Exists) throw new InvalidDataException("face_image_missing");
+        if (info.Length == 0) throw new InvalidDataException("face_image_empty");
+        if (info.Length > 256L * 1024 * 1024) throw new InvalidDataException("face_image_too_large");
         var bytes = await File.ReadAllBytesAsync(fullPath, cancellationToken).ConfigureAwait(false);
+        if (bytes.LongLength > MaxImageBytes)
+        {
+            // Encode a bounded analysis copy in memory. Original media remains read-only.
+            try
+            {
+                using var image = new MagickImage(bytes);
+                image.AutoOrient();
+                image.Strip();
+                image.Quality = 90;
+                image.Resize(new MagickGeometry(4096, 4096) { Greater = true });
+                bytes = image.ToByteArray(MagickFormat.Jpeg);
+                while (bytes.LongLength > MaxImageBytes)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    image.Resize(new Percentage(75));
+                    bytes = image.ToByteArray(MagickFormat.Jpeg);
+                }
+            }
+            catch (MagickException exception)
+            {
+                throw new InvalidDataException("face_image_decode_failed", exception);
+            }
+        }
         document.Remove("path");
         document["imageBase64"] = Convert.ToBase64String(bytes);
         return document.ToJsonString();

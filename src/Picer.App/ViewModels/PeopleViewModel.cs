@@ -980,10 +980,17 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             completed++;
             progress?.Report((completed, pending.Length));
         }
+        var summary = $"远程人物分析完成：新分析 {analyzed}，跳过 {skipped}，失败 {failed}";
         if (analyzed > 0)
+        {
             await _services.SyncRemoteMirrorAsync(token, requireMetadataSync: true);
+            // Local analysis continues straight into the automatic grouping. Remote analysis must
+            // do the same, or the faces it just found stay unassigned until the user asks separately.
+            await OrganizeFacesAsync(token);
+            summary += "；" + StatusText;
+        }
         AppLogger.Info($"Remote people analysis finished; model={analyzer.ModelVersion}; analyzed={analyzed}; skipped={skipped}; failed={failed}");
-        StatusText = $"远程人物分析完成：新分析 {analyzed}，跳过 {skipped}，失败 {failed}";
+        StatusText = summary;
     }
 
     [RelayCommand]

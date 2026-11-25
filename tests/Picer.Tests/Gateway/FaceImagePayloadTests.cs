@@ -137,4 +137,19 @@ public sealed class FaceImagePayloadTests : IDisposable
 
         Assert.Equal(FaceImagePayload.MaxImageBytes, Convert.FromBase64String(hydrated["imageBase64"]!.GetValue<string>()).LongLength);
     }
+    [Fact]
+    public async Task LargePhotoUsesBoundedCopyWithoutChangingOriginal()
+    {
+        var path = Path.Combine(_photos, "large.bmp");
+        using (var image = new ImageMagick.MagickImage(ImageMagick.MagickColors.Red, 2500, 2500))
+            image.Write(path, ImageMagick.MagickFormat.Bmp);
+        var original = await File.ReadAllBytesAsync(path);
+        Assert.True(original.LongLength > FaceImagePayload.MaxImageBytes);
+        var result = await Hydrate(JsonSerializer.Serialize(new { path }), Unchanged, [_root]);
+        var encoded = Convert.FromBase64String(result["imageBase64"]!.GetValue<string>());
+        Assert.InRange(encoded.LongLength, 1, FaceImagePayload.MaxImageBytes);
+        using var decoded = new ImageMagick.MagickImage(encoded);
+        Assert.Equal(2500u, decoded.Width);
+        Assert.Equal(original, await File.ReadAllBytesAsync(path));
+    }
 }
