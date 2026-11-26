@@ -102,3 +102,10 @@ IndexService 已存在以 `space_id` 为核心的多租户授权和运行时隔�
 - Debug 严格构建、GUI Release、IndexService Release 均为 0 警告/0 错误。
 - 新服务器部署 ID `20261125T125625883Z`，IndexService Linux x64 SHA-256 `8622ef86b95b6dfe537a342eaf211cffa92c4afe38b5f21b4285713870f6801b`，部署脚本 `Upgrade verified`。正式 GUI 路径 `src/Picer.App/bin/Release/net8.0-windows/win-x64/Picer.App.exe`，SHA-256 `4A8CE90D23CA4BAC7F2667ED7A0C4C9561DC1B8372B6D6D2E8F0163B9D6C1624`。
 - 保留边界：集成测试证明查询数据契约，不证明当前服务器上任一人物恰有视频脸，也不代表整个 Relay SDD 的持久连接、隔离、加密和管理控制台已完成。
+
+### 2026-11-26 一致性快照竞态保护
+
+- `IndexConsistencySnapshotBuilder.CaptureRemoteAsync` 原先先读取服务端 revision，再分别分页读取来源/媒体并读取元数据；这期间若服务端发生写入，方法仍会返回不同时间点拼接的快照，模式切换的一致性闸门可能基于非原子证据放行。
+- 现在快照采集结束后再次读取 epoch、媒体 revision 和 metadata revision；任一项变化即抛出 `index_consistency_snapshot_changed`，切换事务失败关闭，原有模式不变。用户可在数据静止后重试。
+- `IndexConsistencySnapshotTests` 覆盖稳定性比较及真实 `CaptureRemoteAsync` 在分页期间 revision 变化时拒绝返回快照，3/3 通过。
+- 本次只改一致性证据验证，不改变持续同步策略或服务端数据；无需部署 IndexService。

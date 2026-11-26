@@ -74,10 +74,21 @@ public static class IndexConsistencySnapshotBuilder
             } while (cursor is not null);
         }
         var metadata = await gateway.GetMetadataAsync(cancellationToken).ConfigureAwait(false);
+        // The catalog is read over multiple requests. Never report a mixed-time
+        // snapshot as consistent if a writer changed either revision while the
+        // pages or metadata were being read. The mode-switch transaction will
+        // fail closed and leave the current authority untouched.
+        var verification = await gateway.GetChangesAsync(new GatewayChangeRequest(After: 0, Through: null, PageSize: 1), cancellationToken).ConfigureAwait(false);
+        if (!HasSameRevision(revision, verification))
+            throw new InvalidDataException("index_consistency_snapshot_changed");
         return new(revision.Epoch, revision.Through, revision.MetadataRevision,
             images.Count, videos.Count, Digest(images.Select(MediaKey).Concat(videos.Select(MediaKey))),
             DigestMetadata(metadata), 0, 0);
     }
+
+    public static bool HasSameRevision(GatewayChangePage before, GatewayChangePage after) =>
+        string.Equals(before.Epoch, after.Epoch, StringComparison.Ordinal) &&
+        before.Through == after.Through && before.MetadataRevision == after.MetadataRevision;
 
     /// <summary>Read-only probes used as the final gate before changing authority.</summary>
     public static async Task ProbeReadPathAsync(IIndexGateway gateway, CancellationToken cancellationToken = default)
