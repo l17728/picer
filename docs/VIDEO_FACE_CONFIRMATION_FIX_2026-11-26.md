@@ -19,4 +19,4 @@
 - 视频回归测试覆盖已确认人物纠正、清除旧建议、以及旧镜像快照重放后仍保留人工确认。
 - 正式配置 Release GUI：commit `97fb946594902b995590391f029597f0eef8988d`；路径 `src/Picer.App/artifacts/builds/video-face-confirmation-2026-11-26/Release/net8.0-windows/win-x64/Picer.App.exe`；SHA-256 `DD47711C8539536885DC9E30B3FD84370266EC197A8CFA12E2303B29157DB030`。
 
-当前 GUI 仍运行于 `src/Picer.App/bin/Release/net8.0-windows/win-x64/Picer.App.exe`（PID 6220）。本次未覆盖正在运行的 Release 文件，也未部署服务器。Debug 验证程序集：`src/Picer.App/bin/Debug/net8.0-windows/Picer.App.dll`；提交后记录 SHA-256。
+修复构建已通过 Release 侧载方式启动并显示；进程 PID 3296，窗口标题为 `Picer - 图片管理（远程：47-103-99-229.sslip.io:8445）`，窗口句柄非零。正式 GUI 原路径未被覆盖；本次修复不需要部署 IndexService。Debug 验证程序集：`src/Picer.App/bin/Debug/net8.0-windows/Picer.App.dll`。

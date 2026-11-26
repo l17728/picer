@@ -52,7 +52,7 @@
 - 分类浏览器当前基线：以 `e52f416` 的左树右图重构为基础，并在工作区补充分页游标、滚动自动加载和批量审核入口
 - 业务修复汇总提交：`0e486e7`
 - 当前正式 GUI：`src/Picer.App/bin/Release/net8.0-windows/win-x64/Picer.App.exe`
-- 2026-11-26 人物确认修复构建：commit `97fb946594902b995590391f029597f0eef8988d`，`src/Picer.App/artifacts/builds/video-face-confirmation-2026-11-26/Release/net8.0-windows/win-x64/Picer.App.exe`，SHA-256 `DD47711C8539536885DC9E30B3FD84370266EC197A8CFA12E2303B29157DB030`。这是侧载验收构建；原正式 GUI 进程仍运行 `src/Picer.App/bin/Release/net8.0-windows/win-x64/Picer.App.exe`。
+- 2026-11-26 人物确认修复构建：commit `97fb946594902b995590391f029597f0eef8988d`，`src/Picer.App/artifacts/builds/video-face-confirmation-2026-11-26/Release/net8.0-windows/win-x64/Picer.App.exe`，SHA-256 `DD47711C8539536885DC9E30B3FD84370266EC197A8CFA12E2303B29157DB030`。该侧载构建当前运行 PID 3296，窗口标题已确认远端 `47-103-99-229.sslip.io:8445`，可见窗口句柄非零。
 
 ## 对话恢复证据
 
