@@ -93,3 +93,12 @@ IndexService 已存在以 `space_id` 为核心的多租户授权和运行时隔�
 - 部署：`20261125T122655387Z`，Linux x64 IndexService SHA-256 `92d8713823f67301190c9b899cf90e8bc2429266c59d0e0c478d3195c5409623`。GUI Release SHA-256 `0855D9EAF7D0484F8CA2540DA96823BE7643570E2DBECC056DD0B2EC7036A4DD`，已重启并连接新服务。
 - UI 实测：人物模型、训练历史、命名人物选择器、服务端人脸统计及分页列表可见；照片人脸缩略图通过共享远程缓存异步显示。
 - 缺项：远程命名人物详情尚未接入服务端视频人脸时间线；人物操作中的本地训练/补算/写入仍是本地工作流。Relay E2E-01 至 E2E-40 尚未整体通过，不能据此声明 Relay SDD 全部完成。
+
+### 2026-11-26 已命名人物视频人脸
+
+远程命名人物详情现从服务端人员快照获取已确认视频人脸记录及视频/关键帧引用，GUI 通过服务端关键帧媒体路由和统一远程缓存取图，不再向镜像数据库查找视频关联。Gateway HTTP、pipe 和 local 三种契约测试均覆盖这一查询，3/3 通过。
+
+- 提交 `364163c` 已推送 `origin/main`。
+- Debug 严格构建、GUI Release、IndexService Release 均为 0 警告/0 错误。
+- 新服务器部署 ID `20261125T125625883Z`，IndexService Linux x64 SHA-256 `8622ef86b95b6dfe537a342eaf211cffa92c4afe38b5f21b4285713870f6801b`，部署脚本 `Upgrade verified`。正式 GUI 路径 `src/Picer.App/bin/Release/net8.0-windows/win-x64/Picer.App.exe`，SHA-256 `4A8CE90D23CA4BAC7F2667ED7A0C4C9561DC1B8372B6D6D2E8F0163B9D6C1624`。
+- 保留边界：集成测试证明查询数据契约，不证明当前服务器上任一人物恰有视频脸，也不代表整个 Relay SDD 的持久连接、隔离、加密和管理控制台已完成。

@@ -56,3 +56,13 @@
 - 人物页的某些写操作、模型切换覆盖率/本地向量补算仍使用本机工作库，因为它们执行本地分析或写入；这与远程浏览读取服务器索引是不同路径。
 - 远程已命名人物页当前没有从服务器读取视频人脸时间线，显示为空；需补齐服务端视频人脸查询后才可称人物页所有媒体类型浏览完整。
 - 本次增量没有完成 Relay SDD 的持久 Relay Connector、多租户端到端隔离、服务端媒体加密或 Web 管理控制台；这些仍按 SDD/E2E 清单跟踪。
+
+## 2026-11-26 已命名人物视频人脸直读
+
+已补齐上一节列出的远程视频人脸空白：人物详情的已确认视频人脸时间线现在由 IndexService 的 `people` 快照查询；响应同时带回视频/关键帧身份和序号。GUI 使用已有的 IndexService 关键帧下载接口及共享远程媒体缓存显示裁剪图，不再查询 `remote-mirror.db` 来找视频或关键帧引用。服务端查询只返回当前人物的已确认、仍归属于有效视频的记录，并受 5,000 项上限约束。
+
+- 提交：`364163c fix: load named people video faces from index service`，已推送 `origin/main`。
+- 验证：Debug 解决方案严格构建 0 警告/0 错误；Gateway PeopleBrowse 跨 HTTP、named-pipe、local 定向测试 3/3 通过，覆盖视频人脸、视频 ID、关键帧 ID/序号和人员归属；GUI Release 和 IndexService Release 构建 0 警告/0 错误。
+- 部署：deployment ID `20261125T125625883Z`；Linux x64 IndexService SHA-256 `8622ef86b95b6dfe537a342eaf211cffa92c4afe38b5f21b4285713870f6801b`；部署脚本报告 `Upgrade verified`。升级前备份为 `/opt/picer-index.backup-20261125T125625883Z`。
+- 正式 GUI 路径 `src/Picer.App/bin/Release/net8.0-windows/win-x64/Picer.App.exe`，SHA-256 `4A8CE90D23CA4BAC7F2667ED7A0C4C9561DC1B8372B6D6D2E8F0163B9D6C1624`。IndexService Release DLL SHA-256 `5EA93D1012BA0362592384C62C3D232618A90BE2F4B3D0B1E499170D5DC77259`。GUI 与 MediaAgent 已从正式 Release 路径运行，窗口标题为 `远程：47-103-99-229.sslip.io:8445`。
+- 实际 GUI 已确认人物页远程索引统计、模型历史、命名人物选项及照片脸列表加载；未对命名人物下拉执行最后一次选择，因为自动化期间检测到该窗口有用户输入。视频人脸端到端服务契约由三种网关的集成测试验证，尚未据此声称对现有任一人物存在可显示的视频脸数据。
