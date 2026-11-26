@@ -1933,9 +1933,6 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
                 _peopleService.ConfirmFace(face.FaceId, personId);
                 AuditFaceAction("confirm", face.FaceId, personId, face.Record.SuggestedPersonId);
             });
-            _services.QueueImmediateRemoteSync("人脸自动推荐人工确认");
-            _ = RefreshPendingSummaryAsync();
-            StatusText = "已确认该人脸，后续自动归类会将其作为人物参照";
         }
         catch (Exception exception)
         {
@@ -1943,6 +1940,20 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             RefreshDisplayedFaces();
             StatusText = $"确认人脸失败：{exception.Message}";
             AppLogger.Error($"确认自动人脸建议失败：{face.FaceId}", exception);
+            return;
+        }
+
+        _services.QueueImmediateRemoteSync("人脸自动推荐人工确认");
+        _ = RefreshPendingSummaryAsync();
+        try
+        {
+            await RefreshAsync();
+            StatusText = "已确认该人脸，后续自动归类会将其作为人物参照";
+        }
+        catch (Exception exception)
+        {
+            StatusText = $"确认已写入本地索引；界面刷新失败：{exception.Message}";
+            AppLogger.Error($"刷新已确认人脸失败：{face.FaceId}", exception);
         }
     }
 

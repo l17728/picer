@@ -593,7 +593,7 @@ public partial class MainWindow : Window
         e.Handled = true;
     }
 
-    private async void RejectSuggestedFace_Click(object sender, RoutedEventArgs e)
+    private void RejectSuggestedFace_Click(object sender, RoutedEventArgs e)
     {
         if (sender is not FrameworkElement anchor || anchor.DataContext is not UnassignedFaceViewModel face) return;
         var menu = new ContextMenu();
@@ -613,13 +613,13 @@ public partial class MainWindow : Window
         };
         menu.Items.Add(create);
         var pending = new MenuItem { Header = "保留在待分类" };
+        pending.Click += async (_, _) => await _mainVm.People.RejectAutomaticSuggestionAsync(face);
         menu.Items.Add(pending);
         var ignored = new MenuItem { Header = "标记为不分类" };
         ignored.Click += async (_, _) => await _mainVm.People.IgnoreFaceAsync(face);
         menu.Items.Add(ignored);
         menu.PlacementTarget = anchor;
         menu.IsOpen = true;
-        await _mainVm.People.RejectAutomaticSuggestionAsync(face);
         e.Handled = true;
     }
 

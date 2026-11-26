@@ -46,6 +46,21 @@ public sealed class VideoFaceCausalTests : IDisposable
     }
 
     [Fact]
+    public void ConfirmCanCorrectAnAlreadyConfirmedVideoFaceAndPersistsTheNewPerson()
+    {
+        _timeline.Confirm(11, 1);
+        _timeline.Confirm(11, 2);
+        var state = PicerDatabase.ParseFaceManualState(
+            Assert.Single(_database.GetMetadataEdits().Where(edit => edit.Kind == "video-face-state")).Value);
+        Assert.Equal("confirmed", state.State);
+        Assert.Equal(2L, state.PersonId);
+        _database.ReplayMetadataEdits();
+        var current = Assert.Single(_database.GetAllMirroredVideoFaces());
+        Assert.Equal("confirmed", current.AssignmentState);
+        Assert.Equal(2L, current.AssignedPersonId);
+    }
+
+    [Fact]
     public void ConfirmIgnoreWithdrawAndRejectionWithdrawalProduceExplicitModelBoundFields()
     {
         _timeline.RejectSuggestion(11,1);

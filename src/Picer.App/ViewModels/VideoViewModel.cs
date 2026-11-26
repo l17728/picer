@@ -434,13 +434,25 @@ public partial class VideoViewModel(VideoRepository repository, VideoIndexServic
     {
         var faces = GetSelectedVideoFaces();
         if (faces.Length == 0 || faceTimeline is null) { StatusText = "请先选择视频人脸"; return; }
-        var confirmable = faces.Where(face => face.Record.SuggestedPersonId is not null).ToArray();
-        if (confirmable.Length == 0) { StatusText = "所选人脸没有推荐人物，请先选择正确人物"; return; }
+        // When a named person is selected, “Yes” confirms that identity and can
+        // correct an existing assignment. Otherwise it accepts model suggestions.
+        var target = SelectedVideoPerson;
+        var confirmable = target is null
+            ? faces.Where(face => face.Record.SuggestedPersonId is not null).ToArray()
+            : faces;
+        if (confirmable.Length == 0) { StatusText = "所选人脸没有待确认推荐；请选择人物后点击“是”进行确认或更正"; return; }
         await SaveVideoFaceIdentitiesAsync(() =>
         {
             foreach (var face in confirmable)
-                faceTimeline.Confirm(face.Record.FaceId, face.Record.SuggestedPersonId!.Value);
-        }, $"已确认 {confirmable.Length} 张视频人脸");
+            {
+                var personId = target?.Id ?? face.Record.SuggestedPersonId!.Value;
+                if (face.Record.SuggestedPersonId is long suggested && suggested != personId)
+                    faceTimeline.RejectSuggestion(face.Record.FaceId, suggested);
+                faceTimeline.Confirm(face.Record.FaceId, personId);
+            }
+        }, target is null
+            ? $"已确认 {confirmable.Length} 张视频人脸"
+            : $"已将 {confirmable.Length} 张视频人脸确认归入“{target.DisplayName}”");
     }
 
     [RelayCommand]
@@ -500,15 +512,33 @@ public partial class VideoViewModel(VideoRepository repository, VideoIndexServic
     {
         var selectedFaceId = SelectedVideoFace?.Record.FaceId;
         var selectedVideoId = SelectedVideo?.Record.Id;
-        await UiWork.RunDatabaseAsync(save);
+        try
+        {
+            await UiWork.RunDatabaseAsync(save);
+        }
+        catch (Exception exception)
+        {
+            StatusText = $"视频人物标注保存失败：{exception.Message}";
+            AppLogger.Error("视频人物标注保存失败", exception);
+            return;
+        }
+
         _services.QueueImmediateRemoteSync("视频人物标注写入");
-        if (_identityChanged is not null) await _identityChanged();
-        _selectedVideoFaces = [];
-        await LoadAsync();
-        SelectedVideo = selectedVideoId is null ? null : Videos.FirstOrDefault(video => video.Record.Id == selectedVideoId);
-        await _selectedVideoLoad;
-        SelectedVideoFace = FilteredVideoFaces.FirstOrDefault(face => face.Record.FaceId == selectedFaceId);
-        StatusText = message;
+        try
+        {
+            if (_identityChanged is not null) await _identityChanged();
+            _selectedVideoFaces = [];
+            await LoadAsync();
+            SelectedVideo = selectedVideoId is null ? null : Videos.FirstOrDefault(video => video.Record.Id == selectedVideoId);
+            await _selectedVideoLoad;
+            SelectedVideoFace = FilteredVideoFaces.FirstOrDefault(face => face.Record.FaceId == selectedFaceId);
+            StatusText = message;
+        }
+        catch (Exception exception)
+        {
+            StatusText = $"视频人物标注已写入本地索引；同步刷新失败：{exception.Message}";
+            AppLogger.Error("视频人物标注写入后刷新失败", exception);
+        }
     }
 
     public async Task AssignVideoFaceToPersonAsync(VideoFaceItemViewModel face, PersonSummary person)
