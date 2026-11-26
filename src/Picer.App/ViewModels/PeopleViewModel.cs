@@ -1083,15 +1083,50 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             return pending.Where(image => !repository.IsCurrent(image, analyzer.AnalyzerName, analyzer.ModelVersion)).ToArray();
         }, token);
         int analyzed = 0, skipped = pending.Length - needsAnalysis.Length, failed = 0, completed = skipped, consecutiveFailures = 0;
+        var successfulServiceWrites = 0;
+        var writesIncludedInMirrorRefresh = 0;
+        var lastMirrorRefreshTicks = Stopwatch.GetTimestamp();
+        var mirrorRefreshSucceeded = false;
+        Task<bool>? mirrorRefreshTask = null;
         progress.Report((completed, pending.Length));
         string? firstFailure = null;
-        foreach (var image in needsAnalysis)
+        async Task<bool> RefreshMirrorSafelyAsync(CancellationToken syncToken)
         {
-            token.ThrowIfCancellationRequested();
+            try
             {
+                await _services.SyncRemoteMirrorAsync(syncToken, requireMetadataSync: true);
+                AppLogger.Info($"Remote face-analysis mirror checkpoint completed; serverWrites={writesIncludedInMirrorRefresh}");
+                return true;
+            }
+            catch (Exception exception)
+            {
+                AppLogger.Warn($"Remote face-analysis mirror checkpoint deferred; serverWrites={writesIncludedInMirrorRefresh}; errorType={exception.GetType().Name}");
+                return false;
+            }
+        }
+
+        void ScheduleMirrorCheckpointIfDue()
+        {
+            if (mirrorRefreshTask is { IsCompleted: false }) return;
+            var elapsed = Stopwatch.GetElapsedTime(lastMirrorRefreshTicks);
+            if (successfulServiceWrites - writesIncludedInMirrorRefresh < 25 && elapsed < TimeSpan.FromSeconds(30)) return;
+            writesIncludedInMirrorRefresh = successfulServiceWrites;
+            lastMirrorRefreshTicks = Stopwatch.GetTimestamp();
+            mirrorRefreshSucceeded = false;
+            mirrorRefreshTask = RefreshMirrorSafelyAsync(token);
+        }
+
+        try
+        {
+            foreach (var image in needsAnalysis)
+            {
+                token.ThrowIfCancellationRequested();
                 try
                 {
                     var result = await analyzer.AnalyzeAsync(image, token);
+                    // The IndexService commits detections before returning the successful response.
+                    successfulServiceWrites++;
+                    ScheduleMirrorCheckpointIfDue();
                     token.ThrowIfCancellationRequested();
                     var count = result.Faces.Count;
                     await UiWork.RunDatabaseAsync("People.ServiceAnalysis.Save", () => _repository.SaveServiceCompleted(image, analyzer, count), token);
@@ -1115,13 +1150,29 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
                     else if (++consecutiveFailures >= 5)
                         throw new InvalidOperationException("人脸服务连续拒绝分析请求，已停止：" + firstFailure);
                 }
+                completed++;
+                progress?.Report((completed, pending.Length));
             }
-            completed++;
-            progress?.Report((completed, pending.Length));
         }
+        finally
+        {
+            if (successfulServiceWrites > 0)
+            {
+                if (mirrorRefreshTask is not null)
+                    mirrorRefreshSucceeded = await mirrorRefreshTask;
+                if (!mirrorRefreshSucceeded || writesIncludedInMirrorRefresh < successfulServiceWrites)
+                {
+                    // A canceled/failed analysis must still leave a bounded chance to pull
+                    // committed server results into the optional local mirror.
+                    using var finalSync = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+                    writesIncludedInMirrorRefresh = successfulServiceWrites;
+                    mirrorRefreshSucceeded = await RefreshMirrorSafelyAsync(finalSync.Token);
+                }
+                AppLogger.Info($"Remote face-analysis mirror final state; serverWrites={successfulServiceWrites}; synchronized={mirrorRefreshSucceeded}");
+            }
+        }
+
         var summary = $"远程人物分析完成：新分析 {analyzed}，跳过 {skipped}，失败 {failed}";
-        if (analyzed > 0)
-            await _services.SyncRemoteMirrorAsync(token, requireMetadataSync: true);
         await OrganizeFacesAsync(token);
         summary += "；" + StatusText;
         AppLogger.Info($"Remote people analysis finished; model={analyzer.ModelVersion}; analyzed={analyzed}; skipped={skipped}; failed={failed}");
