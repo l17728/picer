@@ -71,7 +71,7 @@ ServiceMode 的共享远程缩略图、人脸裁剪、视频关键帧和视频�
 - Debug 整解方案严格构建 0 警告/错误；`SharedImageAssetsTests` 5/5 通过。
 - Release GUI 路径 `src/Picer.App/artifacts/builds/legacy-keyframe-startup-migration-final-2026-11-26/Release/net8.0-windows/win-x64/Picer.App.exe`，SHA-256 `EE8955B8FAFFB7741A88C20D3457B787263CCBB5ADAFD99B3984F5B17226A052`；`Picer.App.dll` SHA-256 `7E34B8A70190C0D3805A24DBE55294A73EE3670DC3AFC4391E9986065FE2D761`。
 - 实际日志 `migrated=482; discarded=194; failed=0`，旧目录 JPG 计数为 0。Release GUI PID `22756` 正在运行，窗口标题指向 `47-103-99-229.sslip.io:8445`。
-- 当前 Relay 是按请求 account relay 与独立心跳控制 socket；请求多路复用、数据转发、加密 payload、Web 管理和 RELAY E2E 尚未全部完成。
+- 当前生产数据面仍是按请求 account relay 与独立心跳控制 socket；本机的加密帧/请求多路复用原语尚未接入云端双向转发，GUI 路由、Web 管理和 Relay E2E 仍未全部完成。
 
 
 ## 2026-11-26 Relay 连接身份与控制通道
@@ -90,5 +90,6 @@ ServiceMode 的共享远程缩略图、人脸裁剪、视频关键帧和视频�
 ### 2026-11-26 Relay 加密协议原语
 
 - Core 新增设备签名临时 ECDH、方向分离 HKDF-SHA256/AES-256-GCM 会话密钥、绑定 tenant/device/session/request/idempotency 的密文帧及序号滑动重放窗口。peer 签名公钥必须来自已认证的账号设备目录；帧正文/路径不应明文发送。
-- 验证：整解方案严格 Debug 构建 0 警告/错误；Relay 凭据/connector 和加密协议测试 7/7；IndexService Release SHA-256 `9B6F6495740D546196615A30619C0644302B0A9A0D15DD8FCBD63E740EA0FFE2`。
-- 原语尚未接入生产 Relay socket；peer key 发现、云路由/多路复用、GUI 与本机服务数据流、持久写幂等和负载/撤销验收仍缺。未部署生产。详细边界见 `docs/LOCAL_INDEX_RELAY_PROTOCOL_V1_2026-11-26.md`。
+- 新增 `RelayRequestMultiplexer`，为共享 session 上的加密请求做 request ID/幂等键响应关联，默认并行上限 32、最大 256；超时/取消清理 pending 并尽力发送取消帧。
+- 验证：整解方案严格 Debug 构建 0 警告/错误；Relay 凭据/connector/加密协议/多路复用测试 9/9；IndexService Release SHA-256 `7B6F5FF4C14EC83E8952FBDA5F919FC1E0957273642E7F7DA7DE93B65B44E128`。
+- 原语尚未接入生产 Relay socket；peer key 发现、云路由/分块流、GUI 与本机服务数据流、持久写幂等和负载/撤销验收仍缺。未部署生产。详细边界见 `docs/LOCAL_INDEX_RELAY_PROTOCOL_V1_2026-11-26.md`。

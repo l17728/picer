@@ -7,6 +7,84 @@ namespace Picer.Tests;
 public sealed class RelaySessionCryptoTests
 {
     [Fact]
+    public async Task MultiplexerCorrelatesConcurrentEncryptedResponsesWithinBoundedCapacity()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var space = Guid.NewGuid().ToString("N");
+        var initiator = Guid.NewGuid().ToString("N");
+        var responder = Guid.NewGuid().ToString("N");
+        var session = Guid.NewGuid().ToString("N");
+        using var initiatorIdentity = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        using var responderIdentity = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        using var initiatorOffer = RelayKeyExchangeOffer.Create(space, session, initiator, responder, initiator, initiatorIdentity, now);
+        using var responderOffer = RelayKeyExchangeOffer.Create(space, session, initiator, responder, responder, responderIdentity, now);
+        using var initiatorSession = initiatorOffer.AcceptPeer(responderOffer.Share, DeviceAuthorization.ExportPublicKey(responderIdentity), now);
+        using var responderSession = responderOffer.AcceptPeer(initiatorOffer.Share, DeviceAuthorization.ExportPublicKey(initiatorIdentity), now);
+        var receiverReplay = new RelayReplayWindow();
+        var senderReplay = new RelayReplayWindow();
+        RelayRequestMultiplexer? multiplexer = null;
+        var active = 0;
+        var peak = 0;
+        multiplexer = new RelayRequestMultiplexer(initiatorSession, receiverReplay, async (requestFrame, token) =>
+        {
+            var count = Interlocked.Increment(ref active);
+            UpdatePeak(ref peak, count);
+            try
+            {
+                await Task.Delay(20, token);
+                var request = responderSession.Decrypt(requestFrame, senderReplay);
+                var response = responderSession.Encrypt("response", Guid.ParseExact(requestFrame.RequestId, "N"),
+                    Guid.ParseExact(requestFrame.IdempotencyKey, "N"), request);
+                multiplexer!.Accept(response);
+            }
+            finally { Interlocked.Decrement(ref active); }
+        }, maxInFlight: 3);
+        using (multiplexer)
+        {
+            var requests = Enumerable.Range(0, 12).Select(async value =>
+            {
+                var payload = Encoding.UTF8.GetBytes("query-" + value);
+                var result = await multiplexer.RequestAsync(Guid.NewGuid(), payload);
+                Assert.Equal(payload, result);
+            });
+            await Task.WhenAll(requests);
+            Assert.InRange(peak, 1, 3);
+            Assert.Equal(0, multiplexer.PendingCount);
+        }
+    }
+
+    [Fact]
+    public async Task MultiplexerTimeoutReleasesItsPendingSlot()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var space = Guid.NewGuid().ToString("N");
+        var initiator = Guid.NewGuid().ToString("N");
+        var responder = Guid.NewGuid().ToString("N");
+        using var initiatorIdentity = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        using var responderIdentity = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        using var initiatorOffer = RelayKeyExchangeOffer.Create(space, Guid.NewGuid().ToString("N"), initiator, responder, initiator, initiatorIdentity, now);
+        using var responderOffer = RelayKeyExchangeOffer.Create(space, initiatorOffer.Share.SessionId, initiator, responder, responder, responderIdentity, now);
+        using var initiatorSession = initiatorOffer.AcceptPeer(responderOffer.Share, DeviceAuthorization.ExportPublicKey(responderIdentity), now);
+        var receiverReplay = new RelayReplayWindow();
+        var requestSends = 0;
+        var cancelSends = 0;
+        using var multiplexer = new RelayRequestMultiplexer(initiatorSession, receiverReplay, (frame, token) =>
+        {
+            if (frame.Kind == "cancel") { Interlocked.Increment(ref cancelSends); return Task.CompletedTask; }
+            Interlocked.Increment(ref requestSends);
+            return Task.Delay(Timeout.InfiniteTimeSpan, token);
+        }, maxInFlight: 1,
+            defaultTimeout: TimeSpan.FromMilliseconds(50));
+
+        await Assert.ThrowsAsync<TimeoutException>(() => multiplexer.RequestAsync(Guid.NewGuid(), new byte[] { 1 }));
+        Assert.Equal(0, multiplexer.PendingCount);
+        await Assert.ThrowsAsync<TimeoutException>(() => multiplexer.RequestAsync(Guid.NewGuid(), new byte[] { 2 }, timeout: TimeSpan.FromMilliseconds(50)));
+        Assert.Equal(2, requestSends);
+        Assert.Equal(2, cancelSends);
+        Assert.Equal(0, multiplexer.PendingCount);
+    }
+
+    [Fact]
     public void SignedEcdhSessionEncryptsBothDirectionsAndBindsTheFrameMetadata()
     {
         var now = DateTimeOffset.UtcNow;
@@ -86,5 +164,14 @@ public sealed class RelaySessionCryptoTests
         Assert.True(window.TryAccept(7));
         Assert.False(window.TryAccept(3));
         Assert.False(window.TryAccept(0));
+    }
+
+    private static void UpdatePeak(ref int peak, int candidate)
+    {
+        while (true)
+        {
+            var current = Volatile.Read(ref peak);
+            if (candidate <= current || Interlocked.CompareExchange(ref peak, candidate, current) == current) return;
+        }
     }
 }

@@ -15,10 +15,11 @@ The AES-GCM associated data binds version, session, space, sender, recipient, se
 ## Current code and tests
 
 - Primitive implementation: `src/Picer.Core/Identity/RelaySessionCrypto.cs`.
-- Tests cover signed two-party agreement, bidirectional encryption, frame binding, tamper detection, invalid peer identity, expiry, replay, and out-of-order sequence acceptance.
-- Debug full solution build: 0 warnings, 0 errors. Relay credential/connector and crypto protocol tests: 7/7 passed.
-- Release artifact path: `server/Picer.IndexService/bin/Release/net8.0/Picer.IndexService.dll`; SHA-256 `9B6F6495740D546196615A30619C0644302B0A9A0D15DD8FCBD63E740EA0FFE2`.
+- `src/Picer.Core/Identity/RelayRequestMultiplexer.cs` correlates concurrent requests by request ID and idempotency key, bounds in-flight work (32 by default, max 256), handles timeout/cancellation and releases pending capacity. Request timeout is capped at five minutes to match frame expiry. A late response for an expired/cancelled request is discarded.
+- Tests cover signed two-party agreement, bidirectional encryption, frame binding, tamper detection, invalid peer identity, expiry, replay, out-of-order sequence acceptance, concurrent response correlation, capacity bounds, and timeout cleanup.
+- Debug full solution build: 0 warnings, 0 errors. Relay credential/connector and protocol tests: 9/9 passed.
+- Release artifact path: `server/Picer.IndexService/bin/Release/net8.0/Picer.IndexService.dll`; SHA-256 `7B6F5FF4C14EC83E8952FBDA5F919FC1E0957273642E7F7DA7DE93B65B44E128`.
 - Idempotency key is cryptographically bound to a request frame, but no durable request ledger or exactly-once write execution exists yet. This must be implemented at the local IndexService transaction boundary before write operations are routed.
-- Peer key lookup, account-service routing, GUI integration, response/chunk multiplexing, cancellation propagation, durable replay state, throughput/backpressure enforcement, and complete tenant revocation behavior remain unimplemented.
+- The multiplexer currently resolves one response frame per request. Chunk-stream aggregation, peer key lookup, account-service routing, GUI integration, cancellation propagation at the local IndexService, durable replay state, throughput/backpressure enforcement across tenants, and complete tenant revocation behavior remain unimplemented.
 
 Do not enable data forwarding until those pieces are integrated and the E2E cases for RELAY-03, 09, 14, 17, 18, 20, 21, 33, and 35 pass. The protocol layer alone is not full end-to-end Relay acceptance.
