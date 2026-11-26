@@ -3,6 +3,7 @@ using System.IO;
 using System.Runtime.InteropServices;
 using System.Windows;
 using Picer.App.Infrastructure;
+using Picer.App.Services;
 using Picer.App.ViewModels;
 using Picer.Core.Diagnostics;
 
@@ -323,6 +324,17 @@ public partial class App : Application
                 // once after the commit boundary so the tree never remains partial.
                 await Task.Delay(250, timeout.Token);
                 await _mainViewModel.RefreshFromRemoteMirrorAsync();
+            }
+            if (AppServices.ServiceMode)
+            {
+                var keyframeMetadata = await UiWork.ReadSnapshotAsync("RemoteKeyframeCache.MigrationMetadata", AppServices.Videos.Database, database =>
+                {
+                    var repository = new Picer.Core.Video.VideoRepository(database);
+                    return repository.GetAll().ToDictionary(video => video.Id,
+                        video => (video, repository.GetKeyframes(video.Id, existingOnly: false).ToArray()));
+                }, timeout.Token);
+                var migration = await RemoteKeyframeAssets.MigrateLegacyCacheAsync(AppServices.GetClientServices(), keyframeMetadata, timeout.Token);
+                LogInfo($"Legacy remote keyframe cache migration completed; migrated={migration.Migrated}; discarded={migration.Discarded}; failed={migration.Failed}");
             }
             LogInfo("远程索引镜像同步完成");
         }

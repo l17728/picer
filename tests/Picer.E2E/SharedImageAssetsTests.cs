@@ -3,6 +3,7 @@ using System.Net;
 using System.Net.Http;
 using System.Security.Cryptography;
 using Picer.App.Services;
+using Picer.Core.Data;
 using Picer.Core.Gateway;
 using Picer.Core.Security;
 
@@ -102,15 +103,25 @@ public sealed class SharedImageAssetsTests
             using var client = new HttpClient(handler) { BaseAddress = new Uri("https://fixture.invalid/") };
             using var gateway = new HttpIndexGateway(client);
             using var cache = new RemoteThumbnailCache(root, new MediaFileCipher(key));
-            var services = new Picer.App.ClientServices { Gateway = gateway, RemoteThumbnails = cache, RemoteVideoCacheRoot = root };
-            var video = new Picer.Core.Video.VideoRecord(7, 1, "remote.mp4", 10, DateTime.UtcNow, 1, 10, 10, null, null, "active") { Sha256 = new string('a', 64) };
+            using var database = new PicerDatabase(Path.Combine(root, "mirror.db"));
+            var source = database.AddSource(root);
+            var repository = new Picer.Core.Video.VideoRepository(database);
+            var videoPath = Path.Combine(root, "remote.mp4");
+            await File.WriteAllBytesAsync(videoPath, [1, 2, 3]);
+            var video = repository.Upsert(source.Id, videoPath);
             var frame = new Picer.Core.Video.VideoKeyframe(0, "remote-frame.jpg", 15, 11);
-            var legacy = Path.Combine(root, "remote-video-keyframes", "7", "v2-11-0-15.jpg");
+            repository.SaveKeyframes(video.Id, [frame]);
+            var services = new Picer.App.ClientServices { Gateway = gateway, RemoteThumbnails = cache, RemoteVideoCacheRoot = root, Videos = repository };
+            var legacy = Path.Combine(root, "remote-video-keyframes", video.Id.ToString(), "v2-11-0-15.jpg");
             Directory.CreateDirectory(Path.GetDirectoryName(legacy)!);
             await File.WriteAllBytesAsync(legacy, data);
 
-            var cached = await RemoteKeyframeAssets.GetAsync(services, video, frame, 0, default);
+            var catalog = new Dictionary<long, (Picer.Core.Video.VideoRecord Video, Picer.Core.Video.VideoKeyframe[] Frames)>
+            { [video.Id] = (video, [frame]) };
+            var migration = await RemoteKeyframeAssets.MigrateLegacyCacheAsync(services, catalog, default);
+            var cached = cache.TryGet(RemoteKeyframeAssets.Key(video, frame));
 
+            Assert.Equal(new(1, 0, 0), migration);
             Assert.NotNull(cached);
             Assert.False(File.Exists(legacy));
             Assert.Equal(0, handler.Calls);
