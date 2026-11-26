@@ -4,6 +4,7 @@ using System.Net.Sockets;
 using System.Net.WebSockets;
 using System.Security.Cryptography;
 using System.Text.Json;
+using Microsoft.Extensions.DependencyInjection;
 using Picer.Core.Data;
 using Picer.Core.Gateway;
 using Picer.Core.Identity;
@@ -16,6 +17,56 @@ namespace Picer.Tests;
 
 public sealed class AccountMediaRoutingTests
 {
+    [Fact]
+    public async Task IndexServiceConnectorUsesDedicatedRelayGrantAndHeartbeatSocket()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "picer-index-relay-connector-" + Guid.NewGuid().ToString("N"));
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start(); var port = ((IPEndPoint)listener.LocalEndpoint).Port; listener.Stop();
+        var origin = $"https://127.0.0.1:{port}";
+        var instance = AccountServiceHost.Build(Path.Combine(root, "service"), origin, port);
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(45));
+        try
+        {
+            await IndexServiceHost.StartAsync(instance.App);
+            var account = instance.Accounts.Register("relay-owner", "relay-owner-password-123!", "Relay 空间");
+            var space = Assert.Single(instance.Accounts.ListSpaces(account));
+            using var signing = IdentitySigningKey.LoadOrCreate(instance.Accounts.Root, instance.Accounts.ServiceId);
+            using var key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+            var requestId = Guid.NewGuid().ToString("N");
+            instance.Accounts.CreateEnrollment(new(requestId, DeviceAuthorization.ExportPublicKey(key), "本机 IndexService", "index-service"));
+            var pin = Convert.ToBase64String(ServiceSecurity.ComputeSpkiPin(instance.Certificate));
+            var document = instance.Accounts.ApproveEnrollment(account, requestId, space.Id, origin, pin, signing,
+                allowEditing: false, allowMedia: false);
+            var connection = new DeviceConnection(origin, instance.Accounts.ServiceId, pin,
+                DeviceAuthorization.ExportPublicKey(signing), "test", requestId, "本机索引服务", "index-service");
+            using var client = new DeviceAccountClient(connection, key, value => connection = value);
+            await client.ImportAsync(DeviceAuthorization.WriteFileDocument(document), deadline.Token);
+
+            using var socket = await client.ConnectWebSocketAsync("api/index/v1/connect", deadline.Token);
+            var registry = instance.App.Services.GetRequiredService<IndexRelayConnectorRegistry>();
+            var connected = Assert.IsType<IndexRelayConnectorStatus>(registry.GetStatus(client.Connection.Session!.GrantId));
+            await RelayConnectorProtocol.SendAsync(socket, RelayConnectorProtocol.Heartbeat, deadline.Token);
+            var acknowledgement = await RelayConnectorProtocol.ReceiveAsync(socket, deadline.Token);
+            Assert.Equal(RelayConnectorProtocol.HeartbeatAck, acknowledgement.Type);
+            Assert.True(registry.GetStatus(client.Connection.Session!.GrantId)!.LastHeartbeatUtc >= connected.LastHeartbeatUtc);
+
+            using var denied = await client.SpaceClient.GetAsync("health", deadline.Token);
+            Assert.Equal(HttpStatusCode.Forbidden, denied.StatusCode);
+            await Assert.ThrowsAsync<UnauthorizedAccessException>(() => client.ConnectWebSocketAsync("api/agent/v1/connect", deadline.Token));
+
+            instance.Accounts.Revoke(account, client.Connection.Session.GrantId);
+            using var revocationDeadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            await Assert.ThrowsAsync<WebSocketException>(() => RelayConnectorProtocol.ReceiveAsync(socket, revocationDeadline.Token));
+            Assert.Null(registry.GetStatus(client.Connection.Session.GrantId));
+        }
+        finally
+        {
+            await instance.App.StopAsync(); await instance.App.DisposeAsync(); instance.Certificate.Dispose();
+            if (Directory.Exists(root)) Directory.Delete(root, true);
+        }
+    }
+
     [Fact]
     public async Task VideoPeopleAnalysisPassesScopeOnlyWithAnalysisGrant()
     {

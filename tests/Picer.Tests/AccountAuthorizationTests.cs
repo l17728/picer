@@ -53,6 +53,21 @@ public sealed class AccountAuthorizationTests : IDisposable
     }
 
     [Fact]
+    public void IndexServiceEnrollmentGetsOnlyTheRelayConnectorScope()
+    {
+        var entry = Enroll(editing: true, clientKind: "index-service");
+        var device = Assert.IsType<AuthorizedDevice>(_store.Authorize(entry.Session.AccessToken, PublicKey));
+
+        Assert.Equal("index-service", device.Kind);
+        Assert.Equal(AccountStore.RelayConnectorScopes, device.Scope);
+        Assert.True(device.Allows("relay.connect"));
+        Assert.False(device.Allows("index.read"));
+        Assert.False(device.Allows("index.write"));
+        Assert.False(device.Allows("source.serve"));
+        Assert.False(device.Allows("media.read"));
+    }
+
+    [Fact]
     public void RedemptionRetryReturnsSameCredentialsButAnotherAttemptCannotReuseCode()
     {
         var entry = Enroll();

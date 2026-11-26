@@ -8,6 +8,7 @@ using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.Data.Sqlite;
+using Microsoft.Extensions.DependencyInjection;
 using Picer.Core.Identity;
 using System.Threading.RateLimiting;
 
@@ -164,10 +165,15 @@ public static partial class AccountWebPortal
             }
             body.Append("</ul><h2>连接另一台电脑</h2><p>请先在目标电脑的 Picer 中选择登录照片空间，生成设备配对请求。打开它提供的网页链接后，即可批准并下载仅适用于该设备的认证文件。</p>");
             body.Append("<p>没有配对请求时，可以下载服务地址文件；其中不包含登录凭据。</p><a href='/account/service-file'>下载服务地址文件</a><h2>设备</h2>");
+            var relayConnectors = context.RequestServices.GetService<IndexRelayConnectorRegistry>();
             foreach (var device in store.ListDevices(account))
-                body.Append("<article><b>").Append(E(device.Name)).Append("</b><p>").Append(E(device.Kind)).Append(" · ").Append(E(device.State)).Append("</p>")
-                    .Append(Form(context, antiforgery, "/account/revoke", "", "<input type=hidden name=grant value='" + E(device.Id) + "'><button>撤销此设备</button>"))
+            {
+                body.Append("<article><b>").Append(E(device.Name)).Append("</b><p>").Append(E(device.Kind)).Append(" · ").Append(E(device.State)).Append("</p>");
+                if (device.Kind == "index-service")
+                    body.Append("<p>Relay 连接：").Append(relayConnectors?.GetStatus(device.Id) is null ? "离线" : "在线").Append("</p>");
+                body.Append(Form(context, antiforgery, "/account/revoke", "", "<input type=hidden name=grant value='" + E(device.Id) + "'><button>撤销此设备</button>"))
                     .Append("</article>");
+            }
             body.Append("<p><a href='/account/password'>修改密码</a></p>");
             body.Append(Form(context, antiforgery, "/account/logout", "", "<button>退出登录</button>"));
             return Page("我的照片空间", body.ToString());
@@ -189,7 +195,8 @@ public static partial class AccountWebPortal
             foreach (var space in store.ListSpaces(account)) body.Append("<option value='").Append(E(space.Id)).Append("'>").Append(E(space.Name)).Append("</option>");
             body.Append("</select></label>");
             if (enrollment.ClientKind == "gui") body.Append("<label><input type=checkbox name=editing value=yes>允许上传和修改索引</label><label><input type=checkbox name=media value=yes>允许读取原始照片和视频</label><label><input type=checkbox name=analysis value=yes>允许调用 AI 分析和问答（可能产生计算费用）</label>");
-            else body.Append("<p>将允许此驻留程序提供本机明确授权的来源目录。请在来源电脑中核对目录列表。</p>");
+            else if (enrollment.ClientKind == "agent") body.Append("<p>将允许此驻留程序提供本机明确授权的来源目录。请在来源电脑中核对目录列表。</p>");
+            else body.Append("<p>将此本机索引服务注册为 Relay 连接端。该设备凭据只能维持 Relay 长连接，不能读取或修改云端索引，也不能访问驻留程序的原图接口。</p>");
             body.Append("<p>认证文件有效期 15 分钟，只能由该目标设备兑换。</p><button>批准并下载认证文件</button>");
             return Page("授权自己的设备", Form(context, antiforgery, "/account/approve", requestId, body.ToString()));
         });

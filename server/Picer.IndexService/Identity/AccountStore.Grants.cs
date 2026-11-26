@@ -21,11 +21,12 @@ public sealed partial class AccountStore
     public const string EditorScopes = ViewerScopes + " index.write taxonomy.propose";
     public const string OwnerScopes = EditorScopes + " index.purge source.publish taxonomy.manage";
     public const string AgentScopes = "source.serve";
+    public const string RelayConnectorScopes = "relay.connect";
 
     public string CreateEnrollment(DeviceEnrollmentRequest request)
     {
         if (!Guid.TryParseExact(request.RequestId, "N", out _) || request.DeviceName is null || request.DeviceName.Length is < 1 or > 80 ||
-            request.DeviceName.Any(char.IsControl) || request.ClientKind is not ("gui" or "agent"))
+            request.DeviceName.Any(char.IsControl) || request.ClientKind is not ("gui" or "agent" or "index-service"))
             throw new ArgumentException("invalid_enrollment_request");
         using var key = DeviceAuthorization.ReadPublicKey(request.PublicKey);
         var canonical = DeviceAuthorization.ExportPublicKey(key);
@@ -82,8 +83,14 @@ public sealed partial class AccountStore
             publicKey = reader.GetString(0); kind = reader.GetString(1);
         }
         // Approval is for the authenticated person's own device, never implicit impersonation of another member.
-        if (kind == "agent" && role != "owner") throw new UnauthorizedAccessException("source_approval_requires_owner");
-        var scope = kind == "agent" ? AgentScopes : allowEditing && role != "viewer" ? (role == "owner" ? OwnerScopes : EditorScopes) : ViewerScopes;
+        if ((kind is "agent" or "index-service") && role != "owner")
+            throw new UnauthorizedAccessException(kind == "agent" ? "source_approval_requires_owner" : "index_service_approval_requires_owner");
+        var scope = kind switch
+        {
+            "agent" => AgentScopes,
+            "index-service" => RelayConnectorScopes,
+            _ => allowEditing && role != "viewer" ? (role == "owner" ? OwnerScopes : EditorScopes) : ViewerScopes
+        };
         if (kind == "gui" && allowMedia && !scope.Split(' ').Contains("media.read")) scope += " media.read";
         if (kind == "gui" && allowAnalysis && role != "viewer") scope += " analysis.run answer.run";
         Execute(connection, transaction, """
@@ -145,12 +152,13 @@ public sealed partial class AccountStore
         string family, long? absoluteExpiry)
     {
         var access = DeviceAuthorization.NewSecret(); var refresh = DeviceAuthorization.NewSecret();
-        var absolute = absoluteExpiry ?? Now + (kind == "agent" ? 365L : 90L) * 86400;
+        var longLived = kind is "agent" or "index-service";
+        var absolute = absoluteExpiry ?? Now + (longLived ? 365L : 90L) * 86400;
         Execute(connection, transaction, """
             INSERT INTO sessions(access_hash,refresh_hash,grant_id,access_expires,refresh_expires,absolute_expires,security_epoch,auth_epoch,membership_version,family_id)
             VALUES($access,$refresh,$grant,$accessExpires,$refreshExpires,$absolute,$security,$auth,$membership,$family)
             """, ("$access", DeviceAuthorization.Digest(access)), ("$refresh", DeviceAuthorization.Digest(refresh)), ("$grant", grant),
-            ("$accessExpires", Now + 300), ("$refreshExpires", Math.Min(absolute, Now + (kind == "agent" ? 90L : 30L) * 86400)),
+            ("$accessExpires", Now + 300), ("$refreshExpires", Math.Min(absolute, Now + (longLived ? 90L : 30L) * 86400)),
             ("$absolute", absolute), ("$security", securityEpoch), ("$auth", authEpoch), ("$membership", membership), ("$family", family));
         return new(ServiceId, space, device, grant, account, scope, access, refresh, DateTimeOffset.FromUnixTimeSeconds(Now + 300))
         {

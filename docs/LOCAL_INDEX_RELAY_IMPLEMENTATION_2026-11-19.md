@@ -70,6 +70,14 @@ IndexService 已存在以 `space_id` 为核心的多租户授权和运行时隔�
 - 本次检查未发现针对所有服务模式媒体缓存文件的内容加密实现，也未发现满足 SDD 删除确认令牌、审计、Relay 开关、迁移/恢复任务要求的完整索引管理控制台。
 - 40 项 E2E 表中只有切换/同步相关用例具有当前自动化覆盖证据；Relay 长连接、密文透传、零落盘、重放、背压、加密缓存和 Web 管理仍未逐项验收。
 
+### 2026-11-26 Relay 连接身份与控制通道首片
+
+- 新增 `index-service` 设备类型，必须由空间所有者批准，只签发 `relay.connect`，批准表单明确它不能读取/修改索引或访问驻留程序原图接口。其 access/refresh 生命周期按长期服务设备设置；撤销仍沿用现有授权 epoch。
+- `DeviceAccountClient` 只允许该设备类型连接 `/api/index/v1/connect`；驻留 `agent` 的 `/api/agent/v1/connect` 与媒体 socket 权限保持独立。
+- 账号服务新增空间隔离的连接注册表，在线 socket 不申请云端 `SpaceRuntimePool`，每设备最多一条，独立限流。协议第一版只接受有界心跳控制帧，记录连接时间/最近心跳；设备撤销由现有后台授权观察器关闭连接。账号门户设备页显示该服务设备的在线/离线状态。
+- `AccountAuthorizationTests` 验证即使批准表勾选编辑，也只发 `relay.connect`；`AccountMediaRoutingTests.IndexServiceConnectorUsesDedicatedRelayGrantAndHeartbeatSocket` 验证配对、心跳应答、云索引请求拒绝、MediaAgent socket 拒绝、撤销断流和注册状态清理。
+- 本切片是身份与控制通道，不是完整 Relay：本机 IndexService 出站 worker/凭据存储、请求/响应多路复用、端到端密文 payload、GUI 路由、恢复幂等和真正远程查询尚未接入。不能标记 RELAY-02、RELAY-03 或 RELAY-07 已完成；实现报告见[Relay 连接身份首片](LOCAL_INDEX_RELAY_CONNECTOR_IDENTITY_2026-11-26.md)。
+
 ### 2026-11-25 远程 GUI 直读服务端索引的增量
 
 - 主画廊搜索/翻页、目录树的来源/目录、目录照片/视频和视频列表/详情已增加 HTTP IndexService 直读路径；这些浏览操作不再等待本地镜像同步。

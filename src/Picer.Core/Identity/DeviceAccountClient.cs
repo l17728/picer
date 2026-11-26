@@ -31,13 +31,17 @@ public sealed class DeviceAccountClient : IDisposable
 
     public async Task<ClientWebSocket> ConnectWebSocketAsync(string relativePath, CancellationToken cancellationToken = default)
     {
-        if (relativePath != "api/agent/v1/connect" &&
+        var indexRelayConnector = relativePath == "api/index/v1/connect";
+        if (!indexRelayConnector && relativePath != "api/agent/v1/connect" &&
             !(relativePath.StartsWith("api/agent/v1/media/", StringComparison.Ordinal) &&
               relativePath[19..] is { Length: 64 } ticket && ticket.All(Uri.IsHexDigit)))
-            throw new ArgumentException("invalid_agent_socket_path", nameof(relativePath));
+            throw new ArgumentException("invalid_device_socket_path", nameof(relativePath));
         var session = await SessionAsync(cancellationToken);
-        if (Connection.ClientKind != "agent" || !session.Scope.Split(' ').Contains("source.serve"))
-            throw new UnauthorizedAccessException("agent_authorization_required");
+        var authorized = indexRelayConnector
+            ? Connection.ClientKind == "index-service" && session.Scope.Split(' ').Contains("relay.connect")
+            : Connection.ClientKind == "agent" && session.Scope.Split(' ').Contains("source.serve");
+        if (!authorized)
+            throw new UnauthorizedAccessException(indexRelayConnector ? "index_service_relay_authorization_required" : "agent_authorization_required");
         var endpoint = new Uri(DeviceAuthorization.SpaceAddress(Connection.Origin, session.SpaceId) + "/" + relativePath);
         var socket = new ClientWebSocket();
         var pin = Convert.FromBase64String(Connection.SpkiPin);

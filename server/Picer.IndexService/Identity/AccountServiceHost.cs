@@ -41,6 +41,7 @@ public static class AccountServiceHost
         builder.Services.AddSingleton<SpacePurgeApi>();
         builder.Services.AddSingleton<SpaceReadSnapshots>();
         builder.Services.AddSingleton<SpaceWebSocketRelay>();
+        builder.Services.AddSingleton<IndexRelayConnectorRegistry>();
         builder.Services.AddSingleton<SpaceRequestAdmission>();
         var app = builder.Build();
         _ = app.Services.GetRequiredService<AccountRuntimeLease>();
@@ -162,6 +163,23 @@ public static class AccountServiceHost
             }
             var scope = SpaceRoutePermissions.RequiredScope(context.Request.Method, relative);
             if (scope is null || !device.Allows(scope)) return Results.StatusCode(403);
+            if (scope == "relay.connect")
+            {
+                if (relative != "/api/index/v1/connect" || device.Kind != "index-service") return Results.StatusCode(403);
+                using var connectorLifetime = CancellationTokenSource.CreateLinkedTokenSource(context.RequestAborted);
+                var revocationObserver = ObserveRevocationAsync(accounts, device, connectorLifetime);
+                try
+                {
+                    await app.Services.GetRequiredService<IndexRelayConnectorRegistry>()
+                        .ConnectAsync(context, device, connectorLifetime.Token);
+                    return Results.Empty;
+                }
+                finally
+                {
+                    await connectorLifetime.CancelAsync();
+                    await revocationObserver;
+                }
+            }
             await using var lease = await pool.AcquireAsync(spaceId, context.RequestAborted);
             mediaTrace?.Mark("runtime_acquired");
             if (lease.Runtime.Purging) { context.Response.Headers.RetryAfter = "2"; return Results.StatusCode(503); }
@@ -258,6 +276,7 @@ public static class SpaceRoutePermissions
 {
     public static string? RequiredScope(string method, string path)
     {
+        if (method == "GET" && path == "/api/index/v1/connect") return "relay.connect";
         if (method == "GET" && (path == "/api/agent/v1/connect" ||
             path.StartsWith("/api/agent/v1/media/", StringComparison.Ordinal) && path[20..] is { Length: 64 } ticket && ticket.All(Uri.IsHexDigit)))
             return "source.serve";
