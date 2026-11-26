@@ -65,18 +65,24 @@
 ServiceMode 的共享远程缩略图、人脸裁剪、视频关键帧和视频摘要拼图现使用 Windows DPAPI CurrentUser 稳定密钥和 PICERENC2 认证加密；旧 JPEG 缓存后台/按需迁移。视频摘要模型调用期间在系统临时目录短暂保存明文，正常结束、失败、取消后删除。提交 ccb74c2 已推送 origin/main；Release 路径 D:\picer\src\Picer.App\artifacts\builds\remote-summary-cache-2026-11-26\Release\net8.0-windows\win-x64\Picer.App.exe，SHA-256 9F7E20E285315343F4FB52DDE6E4E33270CE30A3BEEAA9AEDCD7196FBC4EDCBA。当前 PID 25492 已启动且响应，标题指向 47-103-99-229.sslip.io:8445。既有视频摘要拼图 529 个已迁移、0 失败。Relay SDD 仍未全部闭合；详细范围见 docs/CLIENT_MEDIA_CACHE_ENCRYPTION_2026-11-26.md。
 
 
-## 2026-11-26 ??????????
+## 2026-11-26 旧关键帧缓存启动迁移
 
-- ?????????`7b0a7bd`?`fix: migrate legacy keyframes after remote startup`????????????????????????????????????????????????????????????????????????????
-- ?? Debug ???????0 ??/0 ???`SharedImageAssetsTests` 5/5 ???
-- Release ?????`src/Picer.App/artifacts/builds/legacy-keyframe-startup-migration-final-2026-11-26/Release/net8.0-windows/win-x64/`?`Picer.App.exe` SHA-256 `EE8955B8FAFFB7741A88C20D3457B787263CCBB5ADAFD99B3984F5B17226A052`?`Picer.App.dll` SHA-256 `7E34B8A70190C0D3805A24DBE55294A73EE3670DC3AFC4391E9986065FE2D761`?
-- ?????????????`migrated=482; discarded=194; failed=0`???? JPG ???? 0?? Release GUI PID `22756`?????????? `47-103-99-229.sslip.io:8445`?
-- ???? Relay ??? Connector?RELAY E2E ? Web ???????????? per-request account relay ??????? Relay?
+- 提交 `7b0a7bd fix: migrate legacy keyframes after remote startup` 修复远程启动时旧视频关键帧缓存迁移：确保远程缓存管理器初始化后执行迁移，处理完后清理旧目录。
+- Debug 整解方案严格构建 0 警告/错误；`SharedImageAssetsTests` 5/5 通过。
+- Release GUI 路径 `src/Picer.App/artifacts/builds/legacy-keyframe-startup-migration-final-2026-11-26/Release/net8.0-windows/win-x64/Picer.App.exe`，SHA-256 `EE8955B8FAFFB7741A88C20D3457B787263CCBB5ADAFD99B3984F5B17226A052`；`Picer.App.dll` SHA-256 `7E34B8A70190C0D3805A24DBE55294A73EE3670DC3AFC4391E9986065FE2D761`。
+- 实际日志 `migrated=482; discarded=194; failed=0`，旧目录 JPG 计数为 0。Release GUI PID `22756` 正在运行，窗口标题指向 `47-103-99-229.sslip.io:8445`。
+- 当前 Relay 是按请求 account relay 与独立心跳控制 socket；请求多路复用、数据转发、加密 payload、Web 管理和 RELAY E2E 尚未全部完成。
 
 
-## 2026-11-26 Relay ??????? socket ??
+## 2026-11-26 Relay 连接身份与控制通道
 
-- ?? `25db71d feat: add index relay connector identity`??????? owner ??? `index-service` ???????????? `relay.connect`?cloud ?? socket ?????? grant ???????????????
-- ?? Debug ?????? 0 ??/0 ???????/Relay connector/AI ?????? 41/41 ????????????? `docs/LOCAL_INDEX_RELAY_CONNECTOR_IDENTITY_2026-11-26.md`?
-- Release IndexService?`server/Picer.IndexService/bin/Release/net8.0/Picer.IndexService.dll`?SHA-256 `D40582CBC475E06274E122C1267E5DA9FE7C1026941918A2C7C7575E3D4F0CA2`??? Release ?? 0 ??/0 ????????????????????????? worker??????????????? GUI ???????
-- `RELAY-01` ? `RELAY-40` ?????????????????????????? Relay?
+- 提交 `25db71d feat: add index relay connector identity` 为 `index-service` 新增所有者批准的设备类型，仅授予 `relay.connect`。云端持久 WebSocket 专用 grant 不启动租户 IndexService 运行时。
+- Debug 整解方案严格构建 0 警告/错误；Relay connector 与身份相关测试 41/41；详细范围见 `docs/LOCAL_INDEX_RELAY_CONNECTOR_IDENTITY_2026-11-26.md`。
+- IndexService Release 路径 `server/Picer.IndexService/bin/Release/net8.0/Picer.IndexService.dll`，SHA-256 `D40582CBC475E06274E122C1267E5DA9FE7C1026941918A2C7C7575E3D4F0CA2`。此构建未部署生产；当时尚无本机凭据存储和重连 worker。
+- RELAY-01 至 RELAY-40 尚未全部验收；请求多路复用、密文 payload、GUI 路由、恢复和管理控制台仍待实现。
+
+### 2026-11-26 Local Relay Connector runtime
+
+- 本地 IndexService 已实现持久化 Relay 凭据、设备公私钥绑定校验、Unix 0700/0600 权限、配对导入 API 和单一后台 WebSocket 连接器。连接器使用证书 SPKI pin/DPoP，15 秒心跳及退避重连；状态可从 bearer-token 保护的 `/api/index-relay/v1/status` 查询。缺少凭据时保持禁用，隔离租户服务不启动连接器。
+- 验证：Debug 整解方案严格构建 0 警告/错误；凭据与 connector 端到端测试 4/4；IndexService Release 0 警告/错误。正式产物路径 `server/Picer.IndexService/bin/Release/net8.0/Picer.IndexService.dll`，SHA-256 `F4F73443837A1F33AA223D02CBE76662A56574E7BBF3C731A4F4A7B08E2150DD`。
+- 尚无索引请求多路复用、数据 payload 加密、GUI 路由和生产服务配对入口。当前生产服务未部署此构建（只有心跳协议，未承载查询），不能称 Relay 迁移或 RELAY-01 至 RELAY-40 完成。详细记录：`docs/LOCAL_INDEX_RELAY_CONNECTOR_RUNTIME_2026-11-26.md`。

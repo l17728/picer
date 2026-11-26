@@ -19,6 +19,7 @@ using Picer.Core.Storage;
 using Picer.Core.Thumbnails;
 using Picer.Core.Video;
 using Picer.Core.Vision;
+using Picer.IndexService.Identity;
 
 namespace Picer.IndexService;
 
@@ -654,6 +655,15 @@ public static class IndexServiceHost
             options.EnableForHttps = true;
             options.MimeTypes = ["application/json"];
         });
+        var relayCredentialPath = Environment.GetEnvironmentVariable("PICER_INDEX_RELAY_CREDENTIAL_PATH");
+        if (string.IsNullOrWhiteSpace(relayCredentialPath)) relayCredentialPath = Path.Combine(dataRoot, "relay-connector.json");
+        if (!isolatedSpace)
+        {
+            builder.Services.AddSingleton(new IndexRelayDeviceCredentialStore(relayCredentialPath));
+            builder.Services.AddSingleton(provider => new IndexRelayConnectorWorker(
+                provider.GetRequiredService<IndexRelayDeviceCredentialStore>()));
+            builder.Services.AddHostedService(provider => provider.GetRequiredService<IndexRelayConnectorWorker>());
+        }
         // Keep the secure loopback default for local deployments.  Cross-
         // machine LAN deployments explicitly opt in with
         // PICER_INDEX_SERVICE_BIND=0.0.0.0 (or a specific interface).
@@ -744,6 +754,8 @@ async function load(){const [c,g]=await Promise.all([fetch('/api/service/v1/capa
 </script></body></html>
 """, "text/html; charset=utf-8"));
         app.MapGet("/health", () => Results.Json(handlers.Health()));
+        if (!isolatedSpace)
+            app.MapGet("/api/index-relay/v1/status", (IndexRelayConnectorWorker worker) => Results.Json(worker.State));
         app.MapGet("/version", Version);
         app.MapGet("/api/service/v1/capabilities", () =>
         {

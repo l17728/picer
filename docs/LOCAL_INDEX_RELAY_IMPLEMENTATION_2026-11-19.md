@@ -78,6 +78,13 @@ IndexService 已存在以 `space_id` 为核心的多租户授权和运行时隔�
 - `AccountAuthorizationTests` 验证即使批准表勾选编辑，也只发 `relay.connect`；`AccountMediaRoutingTests.IndexServiceConnectorUsesDedicatedRelayGrantAndHeartbeatSocket` 验证配对、心跳应答、云索引请求拒绝、MediaAgent socket 拒绝、撤销断流和注册状态清理。
 - 本切片是身份与控制通道，不是完整 Relay：本机 IndexService 出站 worker/凭据存储、请求/响应多路复用、端到端密文 payload、GUI 路由、恢复幂等和真正远程查询尚未接入。不能标记 RELAY-02、RELAY-03 或 RELAY-07 已完成；实现报告见[Relay 连接身份首片](LOCAL_INDEX_RELAY_CONNECTOR_IDENTITY_2026-11-26.md)。
 
+### 2026-11-26 本机 Connector 凭据与常驻心跳
+
+- 本机 IndexService 已新增 Linux 可用的 `IndexRelayDeviceCredentialStore`，可从可信 `ServiceDiscovery` 创建 `index-service` 设备身份、发起配对并导入批准文件；私钥与设备公钥绑定校验，Unix 文件权限固定为目录 0700、凭据 0600，拒绝宽权限凭据。
+- 独立 IndexService 在数据根中发现 `relay-connector.json` 后启动单一后台连接器，可由 `PICER_INDEX_RELAY_CREDENTIAL_PATH` 覆盖路径。连接器使用证书 SPKI pin、DPoP 和现有 token refresh，常驻 WebSocket 每 15 秒心跳并以指数退避重连；隔离租户运行时不启动此 worker。状态通过本地 bearer token 保护的 `/api/index-relay/v1/status` 查询。
+- 配对/凭据/心跳/关停定向测试 4/4；Debug 整解方案严格构建 0 警告/错误；IndexService Release 0 警告/错误，DLL SHA-256 `F4F73443837A1F33AA223D02CBE76662A56574E7BBF3C731A4F4A7B08E2150DD`。详细边界见[本机 Connector 运行时报告](LOCAL_INDEX_RELAY_CONNECTOR_RUNTIME_2026-11-26.md)。
+- 仍未实现请求/响应多路复用、GUI 查询路由、端到端密文 payload、数据请求幂等和恢复、生产配对入口及完整 tenant/device/session 验收。由于 socket 目前仅传心跳，本阶段没有部署到生产服务；不得将完整 Relay 或 RELAY-01 至 RELAY-40 标为完成。
+
 ### 2026-11-25 远程 GUI 直读服务端索引的增量
 
 - 主画廊搜索/翻页、目录树的来源/目录、目录照片/视频和视频列表/详情已增加 HTTP IndexService 直读路径；这些浏览操作不再等待本地镜像同步。
