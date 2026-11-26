@@ -15,9 +15,13 @@
 ## 验证边界
 
 - `dotnet build picer.sln -c Debug --no-restore --warnaserror`：0 警告、0 错误。
+- IndexService Release 构建：`server/Picer.IndexService/bin/Release/net8.0/Picer.IndexService.dll`。
+- 部署源码提交：`558a2f23faa6`；Linux x64 部署号：`20261126T164803566Z`；二进制 SHA-256：`1d5b3c91e45aa5cc32cbcb03421c798f8ade4ed5af1aa18c2ed5765585eadcce`。
+- 使用 `tools/deploy-indexservice-linux.ps1` 部署到 `47.103.99.229`，部署脚本报告升级成功并通过版本/健康检查；旧部署备份为 `/opt/picer-index.backup-20261126T164803566Z`。
 - 本次未运行 xUnit/E2E 测试，也未启动照片批量匹配任务。批量任务会把照片发送到当前分类配置的模型端点；在没有确认该端点及运行范围前，不自动提交照片内容。
-- 远程模式需要将更新后的 IndexService 部署到照片空间后，分类窗口刷新才能读取新分类树。部署与批量重分类结果需单独记录。
+- PowerShell 对 `/version` 的独立 TLS 请求未建立信任，未绕过证书校验；部署脚本内的验证已通过。
+- 远程分类树已随 IndexService 更新。已有照片会在分类页执行“增量扫描”后显示待更新；需明确启动匹配任务才会调用当前模型端点。
 
 ## 构建记录
 
-Release 构建与部署状态待补充。
+GUI Release 无需重建：本次远程模式改动在 IndexService 和 Core，不改 GUI 层；本机模式的正式 GUI Release 尚未构建。
