@@ -15,7 +15,7 @@
 ## 验证边界
 
 - `dotnet build picer.sln -c Debug --no-restore --warnaserror`：0 警告、0 错误。
-- IndexService Release 构建：`server/Picer.IndexService/bin/Release/net8.0/Picer.IndexService.dll`。
+- IndexService Release 构建：`server/Picer.IndexService/bin/Release/net8.0/Picer.IndexService.dll`，SHA-256 `99656B6CAF796696414118041DDA76AB4B94DB2214DD183B21041E8AE09F9BA6`。
 - 部署源码提交：`558a2f23faa6`；Linux x64 部署号：`20261126T164803566Z`；二进制 SHA-256：`1d5b3c91e45aa5cc32cbcb03421c798f8ade4ed5af1aa18c2ed5765585eadcce`。
 - 使用 `tools/deploy-indexservice-linux.ps1` 部署到 `47.103.99.229`，部署脚本报告升级成功并通过版本/健康检查；旧部署备份为 `/opt/picer-index.backup-20261126T164803566Z`。
 - 本次未运行 xUnit/E2E 测试，也未启动照片批量匹配任务。批量任务会把照片发送到当前分类配置的模型端点；在没有确认该端点及运行范围前，不自动提交照片内容。
