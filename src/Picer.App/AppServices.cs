@@ -365,14 +365,20 @@ public static partial class AppServices
             ? Path.GetFullPath(configured)
             : Path.Combine(AppPaths.DataRoot, "cache");
 
-    public static async Task SyncRemoteMirrorAsync(CancellationToken cancellationToken = default, bool requireMetadataSync = false, bool refreshMedia = false, bool publishPendingEdits = true)
+    public static async Task SyncRemoteMirrorAsync(CancellationToken cancellationToken = default, bool requireMetadataSync = false,
+        bool refreshMedia = false, bool publishPendingEdits = true, bool scheduleRetryOnFailure = true)
     {
         using var requiredProgress = requireMetadataSync ? ForegroundReads.RequireBackgroundProgress() : null;
         await RemoteMirrorGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             if (refreshMedia) Volatile.Write(ref _remoteMediaBootstrapped, false);
-            await SyncRemoteMirrorCoreAsync(cancellationToken, requireMetadataSync, publishPendingEdits).ConfigureAwait(false);
+            try { await SyncRemoteMirrorCoreAsync(cancellationToken, requireMetadataSync, publishPendingEdits).ConfigureAwait(false); }
+            catch (Exception) when (ServiceMode && scheduleRetryOnFailure)
+            {
+                QueueRemoteMirrorReconciliation("remote mirror sync failed");
+                throw;
+            }
         }
         finally { RemoteMirrorGate.Release(); }
     }
@@ -389,14 +395,15 @@ public static partial class AppServices
         {
             try { await SyncClient.PushDescriptionsAsync(Db, cancellationToken).ConfigureAwait(false); }
             catch (Exception exception) when (exception is HttpRequestException or InvalidOperationException or InvalidDataException)
-            { AppLogger.Warn("描述结果已保存在本机，等待同步确认：" + exception.GetType().Name); }
+            { AppLogger.Warn("Description publication is pending; errorType=" + exception.GetType().Name); if (requireMetadataSync) throw; }
             try { await SyncClient.PushMetadataEditsAsync(Db, cancellationToken).ConfigureAwait(false); }
             catch (Exception exception) when (exception is HttpRequestException or InvalidOperationException)
-            { AppLogger.Warn("Manual metadata sync pending: " + exception.GetType().Name); }
+            { AppLogger.Warn("Manual metadata publication is pending; errorType=" + exception.GetType().Name); if (requireMetadataSync) throw; }
             try { await SyncClient.PushFaceReviewDecisionsAsync(Db, cancellationToken).ConfigureAwait(false); }
-            catch (HttpRequestException)
+            catch (Exception exception) when (exception is HttpRequestException or InvalidOperationException or Microsoft.Data.Sqlite.SqliteException)
             {
-                AppLogger.Warn("人工人脸状态同步未完成，保留本地操作日志并等待重试");
+                AppLogger.Warn("Face review publication is pending; errorType=" + exception.GetType().Name);
+                if (requireMetadataSync) throw;
             }
         }
         var sources = await mirrorGateway.ListSourcesAsync(cancellationToken).ConfigureAwait(false);
@@ -411,7 +418,8 @@ public static partial class AppServices
         }
         catch (Exception exception) when (exception is HttpRequestException or InvalidOperationException)
         {
-            AppLogger.Warn("Remote directory classification preferences unavailable: " + exception.Message);
+            AppLogger.Warn("Remote directory classification preferences unavailable; errorType=" + exception.GetType().Name);
+            if (requireMetadataSync) throw;
         }
         var incremental = await RefreshChangedMediaAsync(mirrorGateway, sources, cancellationToken).ConfigureAwait(false);
         if (incremental.Supported && incremental.Checkpoint?.MetadataRevision == incremental.MetadataRevision)
@@ -434,8 +442,9 @@ public static partial class AppServices
         }
         catch (Exception ex) when (ex is HttpRequestException or InvalidOperationException)
         {
-            AppLogger.Warn("Remote tag metadata is unavailable; continuing media sync: " + ex.Message);
+            AppLogger.Warn("Remote tag metadata is unavailable; errorType=" + ex.GetType().Name);
             metadataComplete = false;
+            if (requireMetadataSync) throw;
         }
         try
         {
@@ -448,8 +457,9 @@ public static partial class AppServices
         }
         catch (Exception ex) when (ex is HttpRequestException or InvalidOperationException)
         {
-            AppLogger.Warn("Remote album metadata is unavailable; continuing media sync: " + ex.Message);
+            AppLogger.Warn("Remote album metadata is unavailable; errorType=" + ex.GetType().Name);
             metadataComplete = false;
+            if (requireMetadataSync) throw;
         }
         try
         {
@@ -462,8 +472,9 @@ public static partial class AppServices
         }
         catch (Exception ex) when (ex is HttpRequestException or InvalidOperationException)
         {
-            AppLogger.Warn("Remote people metadata is unavailable; continuing media sync: " + ex.Message);
+            AppLogger.Warn("Remote people metadata is unavailable; errorType=" + ex.GetType().Name);
             metadataComplete = false;
+            if (requireMetadataSync) throw;
         }
         foreach (var source in incremental.Supported ? [] : sources)
         {
@@ -578,13 +589,15 @@ public static partial class AppServices
         catch (Exception ex) when (ex is HttpRequestException or InvalidOperationException or Microsoft.Data.Sqlite.SqliteException)
         {
             if (requireMetadataSync) throw;
-            AppLogger.Warn("Remote metadata links are unavailable; continuing media sync: " + ex.Message);
+            AppLogger.Warn("Remote metadata links are unavailable; errorType=" + ex.GetType().Name);
             metadataComplete = false;
         }
         if (metadataComplete && incremental.Checkpoint is { } completedCheckpoint)
             await UiWork.RunDatabaseAsync("RemoteMirror.MetadataCheckpoint", () =>
                 Db.SaveMirrorCheckpoint(completedCheckpoint with { MetadataRevision = incremental.MetadataRevision }), cancellationToken).ConfigureAwait(false);
-        Volatile.Write(ref _remoteMediaBootstrapped, true);
+        Volatile.Write(ref _remoteMediaBootstrapped, metadataComplete);
+        if (requireMetadataSync && !metadataComplete)
+            throw new InvalidOperationException("remote_mirror_metadata_incomplete");
     }
 
     /// <summary>
@@ -975,6 +988,7 @@ public static partial class AppServices
 
     public static void Shutdown()
     {
+        StopRemoteMirrorReconciliation();
         DescriptionWorker.Dispose();
         StopSpaceNotifications();
         Services.MediaPlayback.Shutdown();

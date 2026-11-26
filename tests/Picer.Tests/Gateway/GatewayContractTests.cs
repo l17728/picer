@@ -180,7 +180,14 @@ public sealed class GatewayContractTests(GatewayServiceFixture fixture) : IClass
         for (var index = 0; index < 3; index++)
         {
             var path = Path.Combine(directory, $"clip-{index}.mp4"); File.WriteAllBytes(path, [(byte)index]);
-            ids.Add(repository.Upsert(isolated.SourceId, path).Id);
+            var video = repository.Upsert(isolated.SourceId, path);
+            ids.Add(video.Id);
+            if (index == 0)
+            {
+                repository.SaveKeyframes(video.Id, [new VideoKeyframe(0, "frame.jpg")]);
+                repository.SavePersonAnalysisStatus(video.Id, "completed");
+                repository.SaveTranscript(video.Id, "test-asr", "{\"text\":\"hello\"}");
+            }
         }
         using var gateway = isolated.CreateHttpGateway();
         var directories = await gateway.ListDirectoriesAsync();
@@ -189,6 +196,9 @@ public sealed class GatewayContractTests(GatewayServiceFixture fixture) : IClass
         var last = await gateway.SearchVideosAsync(new(isolated.SourceId, directory, "clip"), 2, first.NextCursor);
         Assert.Equal(3, first.TotalCount); Assert.Null(last.NextCursor);
         Assert.Equal(ids, first.Items.Concat(last.Items).Select(video => video.Id));
+        Assert.Equal(1, first.KeyframeCounts![ids[0]]);
+        Assert.Equal("completed", first.FaceReviewSummaries![ids[0]].AnalysisStatus);
+        Assert.True(first.FaceReviewSummaries[ids[0]].HasTranscript);
         var photos = await gateway.SearchAsync(new SearchFilters { DirectoryPath = directory });
         Assert.Empty(photos.Items); Assert.Equal(0, photos.TotalCount);
     }

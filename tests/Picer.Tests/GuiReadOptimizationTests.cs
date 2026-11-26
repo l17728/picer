@@ -82,6 +82,26 @@ public sealed class GuiReadOptimizationTests : IDisposable
     }
 
     [Fact]
+    public void VideoBrowsePageCarriesAnalysisBadgesAndKeyframeCounts()
+    {
+        var path = Path.Combine(_root, "status.mp4");
+        File.WriteAllBytes(path, [1, 2, 3]);
+        var videos = new VideoRepository(_db);
+        var video = videos.Upsert(_source, path);
+        videos.SaveKeyframes(video.Id, [new VideoKeyframe(0, "frame.jpg")]);
+        videos.SavePersonAnalysisStatus(video.Id, "completed");
+        videos.SaveTranscript(video.Id, "test-asr", "{\"text\":\"hello\"}");
+
+        var page = _db.ReadSnapshot(reader => GatewayBrowseQueries.Videos(reader, new(_source), 20, null));
+
+        Assert.Equal(1, page.KeyframeCounts![video.Id]);
+        var status = page.FaceReviewSummaries![video.Id];
+        Assert.Equal("completed", status.AnalysisStatus);
+        Assert.True(status.HasTranscript);
+        Assert.False(status.HasSummary);
+    }
+
+    [Fact]
     public void PreparedVideoRejectsChangedFileBeforeDatabaseCommit()
     {
         var path = Path.Combine(_root, "prepared.mp4"); File.WriteAllBytes(path, [1]);

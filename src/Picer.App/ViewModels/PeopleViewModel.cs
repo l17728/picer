@@ -1169,6 +1169,8 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
                     mirrorRefreshSucceeded = await RefreshMirrorSafelyAsync(finalSync.Token);
                 }
                 AppLogger.Info($"Remote face-analysis mirror final state; serverWrites={successfulServiceWrites}; synchronized={mirrorRefreshSucceeded}");
+                if (!mirrorRefreshSucceeded)
+                    AppServices.QueueRemoteMirrorReconciliation("remote face analysis mirror lagging");
             }
         }
 

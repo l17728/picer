@@ -9,7 +9,9 @@ namespace Picer.Core.Gateway;
 public sealed record GatewayHealth(string Status, int SchemaVersion, string MinClientVersion, string ServiceVersion);
 
 public sealed record GatewayPage(IReadOnlyList<ImageRecord> Items, string? NextCursor, int TotalCount);
-public sealed record GatewayVideoPage(IReadOnlyList<VideoRecord> Items, string? NextCursor, int TotalCount);
+public sealed record GatewayVideoPage(IReadOnlyList<VideoRecord> Items, string? NextCursor, int TotalCount,
+    IReadOnlyDictionary<long, VideoFaceReviewSummary>? FaceReviewSummaries = null,
+    IReadOnlyDictionary<long, int>? KeyframeCounts = null);
 
 public interface IIndexGateway : IDisposable
 {

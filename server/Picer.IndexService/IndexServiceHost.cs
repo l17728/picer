@@ -1659,6 +1659,12 @@ async function load(){const [c,g]=await Promise.all([fetch('/api/service/v1/capa
         {
             var record = await handlers.GetVideoAsync(id, cancellationToken);
             if (record is null) return Results.NotFound();
+            void MarkAnalysisFailed()
+            {
+                try { new VideoRepository(db).SavePersonAnalysisStatus(id, "failed", record); }
+                catch (Exception exception) when (exception is InvalidOperationException or Microsoft.Data.Sqlite.SqliteException)
+                { AppLogger.Warn($"Video people failure status was not saved; videoId={id}; errorType={exception.GetType().Name}"); }
+            }
             try
             {
                 // Send the mirrored keyframe manifest to the source-host agent.  A
@@ -1684,22 +1690,41 @@ async function load(){const [c,g]=await Promise.all([fetch('/api/service/v1/capa
                     keyframes
                 });
                 var result = await agents.RequestTaskAsync(agentId, "video.people", payload, cancellationToken);
-                if (result is null) return Results.Json(new { error = "media_agent_offline" }, statusCode: StatusCodes.Status503ServiceUnavailable);
+                if (result is null)
+                {
+                    MarkAnalysisFailed();
+                    return Results.Json(new { error = "media_agent_offline" }, statusCode: StatusCodes.Status503ServiceUnavailable);
+                }
                 var faceResult = JsonSerializer.Deserialize<FaceServiceResult>(result, new JsonSerializerOptions(JsonSerializerDefaults.Web));
-                if (!FaceServiceContract.IsValid(faceResult, "video.people")) return Results.Json(new { error = "face_result_schema_invalid", schema = FaceServiceContract.CurrentSchema }, statusCode: StatusCodes.Status502BadGateway);
+                if (!FaceServiceContract.IsValid(faceResult, "video.people"))
+                {
+                    MarkAnalysisFailed();
+                    return Results.Json(new { error = "face_result_schema_invalid", schema = FaceServiceContract.CurrentSchema }, statusCode: StatusCodes.Status502BadGateway);
+                }
                 var allowedModels = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
                     { "insightface-arcface", "adaface", "arcface-paddle", "facex-zoo", "arcface", "sface" };
                 if (!allowedModels.Contains(faceResult!.ModelVersion))
                 {
                     AppLogger.Warn($"Remote video people analysis rejected; videoId={id}; reason=face_model_mismatch; allowedModels={string.Join(',', allowedModels)}; actual={faceResult.ModelVersion}");
+                    MarkAnalysisFailed();
                     return Results.Json(new { error = "face_model_mismatch", expected = "one_of_prioritized_face_models", actual = faceResult.ModelVersion }, statusCode: StatusCodes.Status409Conflict);
                 }
                 if (!string.IsNullOrWhiteSpace(faceResult.Error))
+                {
+                    MarkAnalysisFailed();
                     return Results.Json(new { error = "video_face_analysis_incomplete", detail = SafeVideoPeopleDiagnostic(faceResult.Error) }, statusCode: StatusCodes.Status502BadGateway);
-                if (faceResult!.Faces.Any(face => face.KeyframeId is null)) return Results.Json(new { error = "video_face_keyframe_id_required" }, statusCode: StatusCodes.Status502BadGateway);
+                }
+                if (faceResult!.Faces.Any(face => face.KeyframeId is null))
+                {
+                    MarkAnalysisFailed();
+                    return Results.Json(new { error = "video_face_keyframe_id_required" }, statusCode: StatusCodes.Status502BadGateway);
+                }
                 var requestedKeyframeIds = keyframes.Select(frame => frame.id).ToHashSet();
                 if (faceResult.Faces.Any(face => !requestedKeyframeIds.Contains(face.KeyframeId!.Value)))
+                {
+                    MarkAnalysisFailed();
                     return Results.Json(new { error = "video_face_keyframe_id_unknown" }, statusCode: StatusCodes.Status502BadGateway);
+                }
                 var matcher = new FaceSuggestionEngine(new VisionAnalysisRepository(db), new PeopleService(db))
                     .CreateMatcher(faceResult.ModelVersion);
                 using var transaction = db.BeginTransaction();
@@ -1744,6 +1769,7 @@ async function load(){const [c,g]=await Promise.all([fetch('/api/service/v1/capa
             }
             catch (Exception exception) when (exception is IOException or TimeoutException or InvalidOperationException or JsonException)
             {
+                MarkAnalysisFailed();
                 var detail = SafeVideoPeopleDiagnostic(exception.Message);
                 AppLogger.Error($"Remote video people analysis failed; videoId={id}; diagnostic={detail}; exceptionType={exception.GetType().Name}");
                 return Results.Json(new { error = "video_people_task_failed", detail }, statusCode: StatusCodes.Status502BadGateway);

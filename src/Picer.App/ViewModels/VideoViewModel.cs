@@ -304,18 +304,26 @@ public partial class VideoViewModel(VideoRepository repository, VideoIndexServic
     private async Task LoadRemoteCatalogAsync(string? query, CancellationToken cancellationToken, Stopwatch started)
     {
         var rows = new List<VideoRecord>();
+        var faceReviews = new Dictionary<long, VideoFaceReviewSummary>();
+        var keyframeCounts = new Dictionary<long, int>();
         string? cursor = null;
         do
         {
             var page = await _services.Gateway.SearchVideosAsync(new GatewayVideoQuery(Query: query, IncludeMissing: false),
                 pageSize: 500, cursor: cursor, cancellationToken: cancellationToken);
             rows.AddRange(page.Items);
+            if (page.FaceReviewSummaries is not null)
+                foreach (var entry in page.FaceReviewSummaries) faceReviews[entry.Key] = entry.Value;
+            if (page.KeyframeCounts is not null)
+                foreach (var entry in page.KeyframeCounts) keyframeCounts[entry.Key] = entry.Value;
             cursor = page.NextCursor;
         } while (cursor is not null);
         cancellationToken.ThrowIfCancellationRequested();
         var selectedId = SelectedVideo?.Record.Id;
         Videos.Clear();
-        await UiWork.AddInBatchesAsync(rows.Select(video => new VideoItemViewModel(video, 0)), Videos.Add, cancellationToken);
+        await UiWork.AddInBatchesAsync(rows.Select(video => new VideoItemViewModel(video,
+            keyframeCounts.GetValueOrDefault(video.Id), faceReviews.GetValueOrDefault(video.Id) ??
+                new VideoFaceReviewSummary(0, 0, 0, 0, video.PersonAnalysisStatus))), Videos.Add, cancellationToken);
         SelectedVideo = selectedId is { } id ? Videos.FirstOrDefault(video => video.Record.Id == id) : null;
         StatusText = string.IsNullOrWhiteSpace(query) ? $"共 {Videos.Count} 个视频（来自索引服务）" : $"索引服务搜索命中 {Videos.Count} 个视频";
         AppLogger.Info($"Video catalog loaded from IndexService: count={Videos.Count}; elapsedMs={started.ElapsedMilliseconds}");
@@ -792,7 +800,17 @@ public partial class VideoViewModel(VideoRepository repository, VideoIndexServic
                 StatusText = $"视频人物分析任务已完成：{selected.FileName}";
                 AppLogger.Info($"远程视频人物分析完成；video={selected.Record.Id}");
             }
-            catch (Exception ex) { StatusText = $"视频人物分析失败：{CompactError(ex.Message)}"; AppLogger.Error($"远程视频人物分析失败；video={selected.Record.Id}", ex); }
+            catch (Exception ex)
+            {
+                try
+                {
+                    await LoadAsync();
+                    SelectedVideo = Videos.FirstOrDefault(video => video.Record.Id == selected.Record.Id);
+                }
+                catch (Exception refreshException) when (refreshException is OperationCanceledException or InvalidOperationException or HttpRequestException) { }
+                StatusText = $"视频人物分析失败：{CompactError(ex.Message)}";
+                AppLogger.Error($"远程视频人物分析失败；video={selected.Record.Id}", ex);
+            }
             finally { IsBusy = false; }
             return;
         }
@@ -1028,6 +1046,8 @@ public sealed class VideoItemViewModel
         {
             var parts = new List<string>(4);
             if (KeyframeCount > 0) parts.Add("帧");
+            if (FaceReview.AnalysisStatus == "failed") parts.Add("人物失败");
+            else if (FaceReview.AnalysisStatus == "running") parts.Add("人物分析中");
             if (FaceReview.Total > 0 || FaceReview.AnalysisStatus == "completed") parts.Add("人物");
             if (FaceReview.HasTranscript) parts.Add("对话");
             if (FaceReview.HasSummary) parts.Add("摘要");

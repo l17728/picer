@@ -274,6 +274,7 @@ public partial class App : Application
                     if (_mainViewModel is not null)
                         await _mainViewModel.RefreshFromRemoteMirrorAsync(localSourceUpdate: !AppServices.ServiceMode);
                 },notificationBaseline);
+            AppServices.ResumeRemoteMirrorReconciliation();
         }
     }
 
@@ -313,7 +314,7 @@ public partial class App : Application
             // A cold pass includes network download and several bounded database
             // phases. Do not spend the whole pass budget on the large metadata body.
             timeout.CancelAfter(TimeSpan.FromMinutes(30));
-            await AppServices.SyncRemoteMirrorAsync(timeout.Token);
+            await AppServices.SyncRemoteMirrorAsync(timeout.Token, requireMetadataSync: true);
             if (_mainViewModel is not null)
             {
                 await _mainViewModel.RefreshFromRemoteMirrorAsync(refreshFaceSelectors: AppServices.ServiceMode);
@@ -332,10 +333,12 @@ public partial class App : Application
         catch (OperationCanceledException)
         {
             LogInfo("远程索引镜像同步超时，保留已同步内容");
+            AppServices.QueueRemoteMirrorReconciliation("cold start mirror timeout");
         }
         catch (Exception exception)
         {
             LogCrash("远程索引镜像同步失败", exception);
+            AppServices.QueueRemoteMirrorReconciliation("cold start mirror failure");
         }
     }
 

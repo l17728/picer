@@ -45,7 +45,58 @@ public static class GatewayBrowseQueries
                 PersonAnalyzedUtc = reader.IsDBNull(12) ? null : reader.GetString(12), Sha256 = reader.IsDBNull(13) ? null : reader.GetString(13)
             });
         }
-        return new(result, offset + result.Count < total ? (offset + result.Count).ToString(CultureInfo.InvariantCulture) : null, total);
+        var (faceReviews, keyframeCounts) = VideoBrowseStatus(database, result, token);
+        return new(result, offset + result.Count < total ? (offset + result.Count).ToString(CultureInfo.InvariantCulture) : null,
+            total, faceReviews, keyframeCounts);
+    }
+
+    private static (IReadOnlyDictionary<long, VideoFaceReviewSummary> FaceReviews, IReadOnlyDictionary<long, int> KeyframeCounts)
+        VideoBrowseStatus(PicerDatabase database, IReadOnlyList<VideoRecord> videos, CancellationToken token)
+    {
+        if (videos.Count == 0) return (new Dictionary<long, VideoFaceReviewSummary>(), new Dictionary<long, int>());
+        var parameters = videos.Select((video, index) => (video.Id, Name: "$video" + index)).ToArray();
+        var inClause = string.Join(',', parameters.Select(parameter => parameter.Name));
+        var faceReviews = new Dictionary<long, VideoFaceReviewSummary>();
+        using (var command = database.Command($"""
+            SELECT v.id,COUNT(vf.id),
+                   SUM(CASE WHEN vf.id IS NOT NULL AND vf.assignment_state IS NULL THEN 1 ELSE 0 END),
+                   SUM(CASE WHEN vf.assignment_state='confirmed' THEN 1 ELSE 0 END),
+                   SUM(CASE WHEN vf.assignment_state='ignored' THEN 1 ELSE 0 END),v.person_analysis_status,
+                   EXISTS(SELECT 1 FROM video_transcripts tr WHERE tr.video_id=v.content_id),
+                   EXISTS(SELECT 1 FROM video_summaries vs WHERE vs.video_id=v.content_id)
+            FROM videos v LEFT JOIN video_effective_faces vf ON vf.reference_id=v.id
+            WHERE v.id IN ({inClause}) GROUP BY v.id,v.person_analysis_status
+            """))
+        {
+            foreach (var parameter in parameters) command.Parameters.AddWithValue(parameter.Name, parameter.Id);
+            using var registration = token.Register(command.Cancel);
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                token.ThrowIfCancellationRequested();
+                faceReviews[reader.GetInt64(0)] = new(reader.GetInt32(1), reader.GetInt32(2), reader.GetInt32(3), reader.GetInt32(4),
+                    reader.IsDBNull(5) ? null : reader.GetString(5), Convert.ToInt64(reader.GetValue(6)) != 0,
+                    Convert.ToInt64(reader.GetValue(7)) != 0);
+            }
+        }
+
+        var keyframeCounts = new Dictionary<long, int>();
+        using (var command = database.Command($"""
+            SELECT v.id,COUNT(k.id) FROM videos v
+            LEFT JOIN video_keyframes k ON k.video_id=v.content_id
+            WHERE v.id IN ({inClause}) GROUP BY v.id
+            """))
+        {
+            foreach (var parameter in parameters) command.Parameters.AddWithValue(parameter.Name, parameter.Id);
+            using var registration = token.Register(command.Cancel);
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                token.ThrowIfCancellationRequested();
+                keyframeCounts[reader.GetInt64(0)] = reader.GetInt32(1);
+            }
+        }
+        return (faceReviews, keyframeCounts);
     }
 
     public static IReadOnlyList<GatewayDirectorySummary> Directories(PicerDatabase database, CancellationToken token = default)
