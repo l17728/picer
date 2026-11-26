@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Picer.Core.Data;
+using Picer.Core.Identity;
 using Picer.Core.Models;
 using Picer.Core.Search;
 using Picer.Core.Video;
@@ -90,6 +91,20 @@ public static class IndexConsistencySnapshotBuilder
         string.Equals(before.Epoch, after.Epoch, StringComparison.Ordinal) &&
         before.Through == after.Through && before.MetadataRevision == after.MetadataRevision;
 
+    public static async Task VerifySourcePathsAsync(IIndexGateway gateway, IReadOnlyList<SourceFolder> expectedSources,
+        string? publisherId = null, CancellationToken cancellationToken = default)
+    {
+        var actual = await gateway.ListSourcesAsync(cancellationToken).ConfigureAwait(false);
+        var comparer = OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+        var available = actual.Select(source => NormalizeSourcePath(source.Path)).ToHashSet(comparer);
+        if (expectedSources.Any(source =>
+            {
+                var expectedPath = publisherId is null ? source.Path : PublishedMediaPath.Qualify(publisherId, source.Path);
+                return !available.Contains(NormalizeSourcePath(expectedPath));
+            }))
+            throw new InvalidDataException("index_mode_switch_source_missing");
+    }
+
     /// <summary>Read-only probes used as the final gate before changing authority.</summary>
     public static async Task ProbeReadPathAsync(IIndexGateway gateway, CancellationToken cancellationToken = default)
     {
@@ -109,6 +124,9 @@ public static class IndexConsistencySnapshotBuilder
         $"image|{image.Id}|{image.Path}|{image.FileSize}|{image.ModifiedUtc:o}|{image.Sha256 ?? image.ContentSha256}";
     private static string MediaKey(VideoRecord video) =>
         $"video|{video.Id}|{video.Path}|{video.FileSize}|{video.ModifiedUtc:o}|{video.Sha256}";
+
+    private static string NormalizeSourcePath(string path) =>
+        path.Trim().Replace('\\', '/').TrimEnd('/') is { Length: > 0 } normalized ? normalized : "/";
 
     private static string Digest(IEnumerable<string> values)
     {

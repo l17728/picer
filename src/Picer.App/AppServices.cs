@@ -683,8 +683,21 @@ public static partial class AppServices
                         new DirectoryClassificationPreferences(AppPaths.DirectoryClassificationSettingsPath).Snapshot(), cancellationToken).ConfigureAwait(false);
                 }
                 else
+                {
                     await SyncLocalChangesToRemoteAsync(cancellationToken).ConfigureAwait(false);
-                if (oneTimeGateway is not null || (SyncGateway is not null && _localSpacePublisher is null))
+                    if (_localSpacePublisher is not null)
+                    {
+                        var scope = _localSpaceUploadScope ?? throw new InvalidOperationException("index_mode_switch_scope_unavailable");
+                        var publisherId = await _localSpacePublisher.VerifyCompleteIndexPublishedAsync(scope, cancellationToken).ConfigureAwait(false);
+                        var accountClient = _localSpacePublisherClient ?? throw new InvalidOperationException("index_mode_switch_account_unavailable");
+                        oneTimeGateway = new HttpIndexGateway(accountClient.CreateSpaceClient(), ownsClient: true);
+                        var expectedSources = await UiWork.RunDatabaseAsync("IndexModeSwitch.SourceSnapshot",
+                            () => Db.GetSources(), cancellationToken).ConfigureAwait(false);
+                        await IndexConsistencySnapshotBuilder.VerifySourcePathsAsync(oneTimeGateway, expectedSources, publisherId, cancellationToken).ConfigureAwait(false);
+                        await IndexConsistencySnapshotBuilder.ProbeReadPathAsync(oneTimeGateway, cancellationToken).ConfigureAwait(false);
+                    }
+                }
+                if (_localSpacePublisher is null && (oneTimeGateway is not null || SyncGateway is not null))
                 {
                     var local = await UiWork.RunDatabaseAsync("IndexModeSwitch.LocalSnapshot",
                         () => IndexConsistencySnapshotBuilder.CaptureLocal(Db), cancellationToken).ConfigureAwait(false);

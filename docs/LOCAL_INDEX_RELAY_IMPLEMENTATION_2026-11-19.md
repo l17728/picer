@@ -109,3 +109,9 @@ IndexService 已存在以 `space_id` 为核心的多租户授权和运行时隔�
 - 现在快照采集结束后再次读取 epoch、媒体 revision 和 metadata revision；任一项变化即抛出 `index_consistency_snapshot_changed`，切换事务失败关闭，原有模式不变。用户可在数据静止后重试。
 - `IndexConsistencySnapshotTests` 覆盖稳定性比较及真实 `CaptureRemoteAsync` 在分页期间 revision 变化时拒绝返回快照，3/3 通过。
 - 本次只改一致性证据验证，不改变持续同步策略或服务端数据；无需部署 IndexService。
+
+### 2026-11-26 账号发布器切换完整性门禁
+
+账号发布器路径此前绕过本地/远端快照门禁。本阶段要求完整来源范围、媒体及元数据 revision 检查点、待处理队列与冲突清空、服务端 publisher 检查点相同，并逐项验证目标服务端来源路径和既有只读探针。详细实现及测试证据见[账号发布器切换验证报告](INDEX_MODE_SWITCH_ACCOUNT_VERIFICATION_2026-11-26.md)。切换相关状态机/配置/快照/清理测试 15/15、账号来源清理的四个长参数场景 4/4 通过。
+
+此实现仅闭合现有服务索引切换的一处门禁缺口；持久 Relay Connector、端到端密文通道、媒体缓存内容加密、Relay 零落盘和 Web 管理控制台等仍未开发/验收，不能据此标记 RELAY-01 至 RELAY-40 完成。

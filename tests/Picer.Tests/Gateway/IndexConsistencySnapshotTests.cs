@@ -42,6 +42,30 @@ public sealed class IndexConsistencySnapshotTests
     }
 
     [Fact]
+    public async Task SourceProbeRequiresEveryLocallyConfiguredRoot()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "picer-source-probe-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            using var database = new PicerDatabase(Path.Combine(root, "index.db"));
+            var source = database.AddSource(Path.Combine(root, "photos"));
+            var gateway = new LocalGateway(database, new ThumbnailService(Path.Combine(root, "thumbs")));
+
+            await IndexConsistencySnapshotBuilder.VerifySourcePathsAsync(gateway, [source]);
+            var exception = await Assert.ThrowsAsync<InvalidDataException>(() =>
+                IndexConsistencySnapshotBuilder.VerifySourcePathsAsync(gateway,
+                    [source, new Picer.Core.Models.SourceFolder { Id = source.Id, Path = Path.Combine(root, "missing") }]));
+
+            Assert.Equal("index_mode_switch_source_missing", exception.Message);
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch (IOException) { }
+        }
+    }
+
+    [Fact]
     public void MatchingSnapshotsRequireEpochMediaAndMetadataEvidence()
     {
         var left = new IndexConsistencySnapshot("epoch-1", 4, 7, 12, 3, "media", "metadata", 0, 0);

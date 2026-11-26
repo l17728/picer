@@ -60,6 +60,18 @@ public sealed partial class SpacePublisherIntegrationTests
             var publisherA=new SpaceSyncPublisher(clientA,localA,Path.Combine(root,"snapshots-a"));
             var publisherB=new SpaceSyncPublisher(clientB,localB,Path.Combine(root,"snapshots-b"));
             await publisherA.PublishAsync(scope:scopeA);await publisherB.PublishAsync(scope:scopeB);
+            await publisherA.PullMetadataChangesAsync(scope:scopeA);
+            await publisherB.PullMetadataChangesAsync(scope:scopeB);
+            var publisherAId = await publisherA.VerifyCompleteIndexPublishedAsync(scopeA);
+            await publisherB.VerifyCompleteIndexPublishedAsync(scopeB);
+            var omittedMedia = video ? scopeA with { Videos = false } : scopeA with { Photos = false };
+            var incompleteScope = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                publisherA.VerifyCompleteIndexPublishedAsync(omittedMedia));
+            Assert.Equal("index_mode_switch_media_scope_incomplete", incompleteScope.Message);
+            using (var remoteGateway = new Picer.Core.Gateway.HttpIndexGateway(clientA.CreateSpaceClient(), ownsClient: true))
+            {
+                await Picer.Core.Gateway.IndexConsistencySnapshotBuilder.VerifySourcePathsAsync(remoteGateway, localA.GetSources(), publisherAId);
+            }
             using var remote=new PicerDatabase(Path.Combine(instance.Accounts.SpaceRoot(space.Id),"picer.db"));
             var kind=video?"video":"image";var table=video?"videos":"images";
             using(var count=remote.Command($"SELECT COUNT(*) FROM {table}")) Assert.Equal(2L,count.ExecuteScalar());
