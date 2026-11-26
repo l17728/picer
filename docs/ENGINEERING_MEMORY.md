@@ -62,4 +62,4 @@
 
 ### 2026-11-26 GUI 远程媒体缓存加密
 
-ServiceMode 的共享远程缩略图、人脸裁剪、视频关键帧和视频摘要拼图现使用 Windows DPAPI CurrentUser 稳定密钥和 PICERENC2 认证加密；旧 JPEG 缓存后台/按需迁移。视频摘要模型调用期间在系统临时目录短暂保存明文，正常结束、失败、取消后删除。当前源码新增视频拼图加密尚待提交、Release 重建和 GUI 重启；前一个正式 GUI 仍是提交 2490d07 的构建。完整范围见 docs/CLIENT_MEDIA_CACHE_ENCRYPTION_2026-11-26.md。Relay SDD 仍未全部闭合。
+ServiceMode 的共享远程缩略图、人脸裁剪、视频关键帧和视频摘要拼图现使用 Windows DPAPI CurrentUser 稳定密钥和 PICERENC2 认证加密；旧 JPEG 缓存后台/按需迁移。视频摘要模型调用期间在系统临时目录短暂保存明文，正常结束、失败、取消后删除。提交 ccb74c2 已推送 origin/main；Release 路径 D:\picer\src\Picer.App\artifacts\builds\remote-summary-cache-2026-11-26\Release\net8.0-windows\win-x64\Picer.App.exe，SHA-256 9F7E20E285315343F4FB52DDE6E4E33270CE30A3BEEAA9AEDCD7196FBC4EDCBA。当前 PID 25492 已启动且响应，标题指向 47-103-99-229.sslip.io:8445。既有视频摘要拼图 529 个已迁移、0 失败。Relay SDD 仍未全部闭合；详细范围见 docs/CLIENT_MEDIA_CACHE_ENCRYPTION_2026-11-26.md。

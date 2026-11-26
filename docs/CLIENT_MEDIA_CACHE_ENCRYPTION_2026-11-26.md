@@ -13,9 +13,11 @@
 
 - `dotnet build picer.sln -c Debug --no-restore --warnaserror`：通过，0 警告、0 错误。
 - 定向测试（RemoteThumbnailCache、MediaFileCipher、ClientMediaCacheKeyStore、VideoFaceCausal）：25/25 通过。
-- 视频摘要策略/并发回归（含远程拼图磁盘加密、旧拼图迁移、临时文件清理）：11/11 通过；远程缓存/密钥/人脸确认定向回归：25/25 通过。
+- 视频摘要策略与并发回归：修复后的策略/并发组合 11/11 通过，加入旧拼图迁移用例后的策略类 8/8 通过，合计覆盖 12 个独立用例；远程缓存/密钥/人脸确认定向回归：25/25 通过。
 - Release：`D:\picer\src\Picer.App\artifacts\builds\client-media-cache-2026-11-26\Release\net8.0-windows\win-x64\Picer.App.exe`，SHA-256 `3251AF66932E18DF48748D4916DFA3C1052259A37672B844AA213F40838D1BD9`，嵌入源码提交 `2490d07`。`dotnet build src/Picer.App/Picer.App.csproj -c Release --no-restore --warnaserror -p:BaseOutputPath=artifacts/builds/client-media-cache-2026-11-26/`：0 警告、0 错误。
 - 已关闭前一个 GUI 并从上述 EXE 可见启动。运行 PID `22676`，主窗口句柄非零且 `Responding=True`，标题 `Picer - 图片管理（远程：47-103-99-229.sslip.io:8445）`。CUA 对旧默认路径的窗口归属缓存未能附加截图；Windows 进程路径核验确认实际运行的是上述新构建。
+- 视频摘要加密后再次构建：`D:\picer\src\Picer.App\artifacts\builds\remote-summary-cache-2026-11-26\Release\net8.0-windows\win-x64\Picer.App.exe`，SHA-256 `9F7E20E285315343F4FB52DDE6E4E33270CE30A3BEEAA9AEDCD7196FBC4EDCBA`，源码提交 `ccb74c2`，Release 严格构建 0 警告/0 错误。当前 GUI PID `25492` 从此路径运行，窗口响应正常，标题指向 `47-103-99-229.sslip.io:8445`。
+- 当前用户远程空间下的 529 个既有视频摘要拼图缓存已启动迁移，日志确认 `migrated=529; failed=0`；抽样磁盘文件头为 `PICERENC2`。DPAPI 密钥文件已存在于空间隔离数据根，文件长度 262 字节。
 
 ## 尚未覆盖
 
