@@ -17,7 +17,7 @@
 - `AccountSourcePurgeUsesStableIdentityAndRecoversWithoutTouchingAnotherSourceOrOriginal`：4/4 参数场景通过，3 分 40 秒。
 - 切换状态机、配置、一致性快照和镜像清理定向回归：15/15 通过。
 - `dotnet build src/Picer.App/Picer.App.csproj -c Debug --no-restore --warnaserror`：0 警告、0 错误。
-- Release GUI：`dotnet build src/Picer.App/Picer.App.csproj -c Release --no-restore --warnaserror -p:OutDir=artifacts/index-mode-switch-account-verification/win-x64/`，0 警告、0 错误。隔离产物 GUI：`src/Picer.App/artifacts/index-mode-switch-account-verification/win-x64/Picer.App.exe`；`Picer.App.dll` SHA-256：`A348E7521764A9EF690AFD7001D5A6903DB51C0E62804008270AF54589A6F3C3`；没有覆盖仍运行中的正式 GUI。
+- 代码提交：`a2b3d46`，已推送 `origin/main`。Release GUI：`dotnet build src/Picer.App/Picer.App.csproj -c Release --no-restore --warnaserror -p:OutDir=artifacts/index-mode-switch-account-verification/win-x64/`，0 警告、0 错误。隔离产物 GUI：`src/Picer.App/artifacts/index-mode-switch-account-verification/win-x64/Picer.App.exe`；EXE SHA-256：`E67233203749F2BDDB89986C998A1B0AD66CB75426C84E6BF6396344C65DF1BD`；DLL SHA-256：`A348E7521764A9EF690AFD7001D5A6903DB51C0E62804008270AF54589A6F3C3`；没有覆盖仍运行中的正式 GUI。
 
 ## 边界
 
