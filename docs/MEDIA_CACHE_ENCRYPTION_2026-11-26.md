@@ -16,6 +16,8 @@
 - Gateway HTTP 测试以真实 IndexService handler 验证磁盘密文可被服务端读取为有效 JPEG。
 - 定向测试：人物状态回放、媒体加密、Gateway 缩略图共 28/28 通过。
 - `dotnet build picer.sln -c Debug --no-restore --warnaserror`：0 警告、0 错误。
+- IndexService Release：`dotnet build server/Picer.IndexService/Picer.IndexService.csproj -c Release --warnaserror`，0 警告、0 错误。
+- 已部署到 `47.103.99.229`，deployment ID `20261126T044027575Z`；Linux x64 IndexService SHA-256 `1f888396e0ab37bd90a1a1e010bbcda058227014276db0624c5885afa3efbab0`。部署脚本完成 `/version` 检查并报告 `Upgrade verified`；现有 GUI 进程仍响应且标题保持新服务器地址。
 
 ## 未闭合范围
 

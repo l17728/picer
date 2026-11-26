@@ -118,4 +118,4 @@ IndexService 已存在以 `space_id` 为核心的多租户授权和运行时隔�
 
 ### 2026-11-26 IndexService 缩略图缓存静态加密
 
-IndexService 缩略图缓存已加入每数据根的稳定密钥、AES-256-GCM/XChaCha20-Poly1305 算法回退、按缓存文件名绑定的认证数据、HTTP 读取解密、旧明文缓存惰性迁移和启动后台迁移。完整范围、测试边界与尚未加密的媒体/客户端缓存见[缩略图缓存加密报告](MEDIA_CACHE_ENCRYPTION_2026-11-26.md)。这只完成服务器缩略图磁盘缓存一项，不能表述为 Relay 媒体加密已闭环。
+IndexService 缩略图缓存已加入每数据根的稳定密钥、AES-256-GCM/XChaCha20-Poly1305 算法回退、按缓存文件名绑定的认证数据、HTTP 读取解密、旧明文缓存惰性迁移和启动后台迁移。已部署 ID `20261126T044027575Z`，Linux x64 IndexService SHA-256 `1f888396e0ab37bd90a1a1e010bbcda058227014276db0624c5885afa3efbab0`。完整范围、测试边界与尚未加密的媒体/客户端缓存见[缩略图缓存加密报告](MEDIA_CACHE_ENCRYPTION_2026-11-26.md)。这只完成服务器缩略图磁盘缓存一项，不能表述为 Relay 媒体加密已闭环。
