@@ -54,10 +54,20 @@ public sealed class VideoFaceCausalTests : IDisposable
             Assert.Single(_database.GetMetadataEdits().Where(edit => edit.Kind == "video-face-state")).Value);
         Assert.Equal("confirmed", state.State);
         Assert.Equal(2L, state.PersonId);
-        _database.ReplayMetadataEdits();
         var current = Assert.Single(_database.GetAllMirroredVideoFaces());
         Assert.Equal("confirmed", current.AssignmentState);
         Assert.Equal(2L, current.AssignedPersonId);
+        Assert.Null(current.SuggestedPersonId);
+        Assert.Null(current.MatchConfidence);
+        // A later server snapshot may still carry the old model suggestion.
+        // The causal manual confirmation must clear it again on replay.
+        _database.UpsertMirroredVideoMetadata(new GatewayMetadata([],[],[]) with { VideoFaces=[_face] });
+        _database.ReplayMetadataEdits();
+        current = Assert.Single(_database.GetAllMirroredVideoFaces());
+        Assert.Equal("confirmed", current.AssignmentState);
+        Assert.Equal(2L, current.AssignedPersonId);
+        Assert.Null(current.SuggestedPersonId);
+        Assert.Null(current.MatchConfidence);
     }
 
     [Fact]

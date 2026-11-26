@@ -200,7 +200,11 @@ public sealed class VideoFaceTimelineService(PicerDatabase database, IImageFaceA
     {
         using var transaction=database.BeginTransaction();
         database.RequireOwnedVideoFace(videoFaceId,transaction);
-        using var command=database.Command("UPDATE video_detected_faces SET assigned_person_id=$person,assignment_state='confirmed',updated_utc=$now WHERE id=$face");
+        // A manual confirmation supersedes the model's pending suggestion. Keep
+        // only the confirmed identity so every UI projection stops presenting
+        // the face as pending and a later correction cannot be masked by stale
+        // suggestion data.
+        using var command=database.Command("UPDATE video_detected_faces SET assigned_person_id=$person,assignment_state='confirmed',suggested_person_id=NULL,match_confidence=NULL,updated_utc=$now WHERE id=$face");
         command.Transaction=transaction;
         command.Parameters.AddWithValue("$person",personId);command.Parameters.AddWithValue("$face",videoFaceId);command.Parameters.AddWithValue("$now",DateTime.UtcNow.ToString("o"));
         if(command.ExecuteNonQuery()==0)throw new KeyNotFoundException($"Video face {videoFaceId} was not found.");

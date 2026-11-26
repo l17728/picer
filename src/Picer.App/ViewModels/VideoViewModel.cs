@@ -155,6 +155,11 @@ public partial class VideoViewModel(VideoRepository repository, VideoIndexServic
         _selectedVideoLoadCancellation?.Cancel();
         _selectedVideoLoadCancellation?.Dispose();
         _selectedVideoLoadCancellation = null;
+        // Selection belongs to a single video. WPF may keep an old selected
+        // face while the new video's list is loading, so never let toolbar
+        // commands operate on that stale face.
+        _selectedVideoFaces = [];
+        SelectedVideoFace = null;
         Frames.Clear();
         VideoFaces.Clear();
         FilteredVideoFaces.Clear();
@@ -505,8 +510,18 @@ public partial class VideoViewModel(VideoRepository repository, VideoIndexServic
         },$"已将 {faces.Length} 张视频人脸移回待分类");
     }
 
-    private VideoFaceItemViewModel[] GetSelectedVideoFaces() =>
-        _selectedVideoFaces.Length > 0 ? _selectedVideoFaces : SelectedVideoFace is null ? [] : [SelectedVideoFace];
+    private VideoFaceItemViewModel[] GetSelectedVideoFaces()
+    {
+        if (SelectedVideo is null) return [];
+        var visibleFaces = VideoFaces.Select(face => face.Record.FaceId).ToHashSet();
+        var selected = _selectedVideoFaces
+            .Where(face => visibleFaces.Contains(face.Record.FaceId))
+            .ToArray();
+        if (selected.Length > 0) return selected;
+        return SelectedVideoFace is { } face && visibleFaces.Contains(face.Record.FaceId)
+            ? [face]
+            : [];
+    }
 
     private async Task SaveVideoFaceIdentitiesAsync(Action save, string message)
     {

@@ -1919,7 +1919,21 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
 
     public async Task ConfirmAutomaticSuggestionAsync(UnassignedFaceViewModel face)
     {
-        if (face.Record.SuggestedPersonId is not long personId) return;
+        if (face.Record.SuggestedPersonId is not long personId)
+        {
+            // The suggestion may have been confirmed or withdrawn elsewhere
+            // while this virtualized card was still on screen. Remove the stale
+            // action immediately and reload the current index state.
+            face.IsAutomaticSuggestion = false;
+            StatusText = "此人脸的待确认建议已变化，正在刷新列表";
+            try { await RefreshAsync(); }
+            catch (Exception exception)
+            {
+                StatusText = $"建议已变化，但列表刷新失败：{exception.Message}";
+                AppLogger.Error($"刷新过期的人脸确认卡失败：{face.FaceId}", exception);
+            }
+            return;
+        }
         face.IsAutomaticSuggestion = false;
         if (DisplayedCollectionKind is DisplayedFaceCollectionKind.Unassigned
             or DisplayedFaceCollectionKind.CandidateCluster

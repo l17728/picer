@@ -1,21 +1,21 @@
-# 视频与照片待确认人物操作修复（2026-11-26）
+# 视频与照片人物确认失效修复（2026-11-26）
 
-## 根因
+## 问题
 
-- 视频人物标注顶部“是”按钮调用的命令只确认模型的 `SuggestedPersonId`，没有读取人物下拉框当前选项。选择了已命名人物后点“是”，仍会确认原推荐；而已错误确认的人脸没有待确认建议，命令直接返回，所以无法通过该按钮纠正。
-- 照片人物卡片的“不是”事件在打开纠错菜单后，又立即调用拒绝方法。拒绝发生在用户选择菜单项之前，导致菜单中的纠错选项和当前数据状态错位。
-- 照片“是”操作写入成功后没有重新加载人物卡片，非待确认视图可能继续展示旧的人物文字。视频写入后的数据库异常也没有转换成可见状态。
+- 视频人物卡片确认后仍可能带有旧模型推荐；服务端镜像快照重放人工状态时也没有清除推荐字段，界面容易继续呈现旧推荐，错误身份纠正看起来没有生效。
+- 切换视频期间，WPF 可能暂留旧视频的人脸选择，工具栏操作存在使用过期选择的风险。
+- 照片建议卡在其他操作已撤回建议后仍留在虚拟化列表时，“是”按钮原先静默返回，没有刷新提示。
 
 ## 修复
 
-- 视频人物卡片选中具体人脸后，若下拉框选择了人物，“是”会把当前选择的人物作为人工确认结果；对错误的已有确认也可直接改正。若未选择人物，“是”继续接受模型建议。替换掉不同的模型建议时，同时记录该建议的拒绝状态。
-- 视频标注写入失败时显示错误；写入已成功但同步/界面刷新失败时明确提示“已写入本地索引”，避免把后续刷新异常误报成数据库写入失败。
-- 照片“不是”只打开纠错菜单，用户选择“保留在待分类”时才写入拒绝决定。照片“是”写入成功后刷新人物卡片；刷新失败不会回滚 UI 中的已保存状态，也会单独提示。
-- 增加因果测试，覆盖把已经确认到人物 A 的视频人脸更正到人物 B，并验证元数据回放后仍保留 B。
+- 视频人工确认在本地写入及因果状态重放时，均清空 `suggested_person_id` 和 `match_confidence`。目标人物与确认状态通过 `video-face-state` 继续同步；旧服务器快照重放后不会复活已确认的人物建议。
+- 切换视频时清除旧人脸选择；工具栏命令只处理当前视频列表内仍可见的人脸。
+- 照片确认卡发现其建议已变化时，立即隐藏旧按钮、刷新列表并显示状态；刷新失败会记录错误并向用户说明。
 
-## 验收
+## 验证
 
-- `VideoFaceCausalTests`：12/12 通过。
-- Debug GUI：`dotnet build src/Picer.App/Picer.App.csproj -c Debug --no-restore --warnaserror`，0 警告、0 错误。
-- Release GUI：为避免覆盖当前仍运行的正式 GUI，构建到隔离目录 `src/Picer.App/artifacts/video-face-confirmation-fix/win-x64/Picer.App.exe`；`Picer.App.dll` SHA-256：`1B1B00EDC795CE7E5B8120012387D9D4161F62A8D1DF82AC830D7455580F50EF`。当前正式 GUI 进程仍是 `src/Picer.App/bin/Release/net8.0-windows/win-x64/Picer.App.exe`。
-- 当前运行中的正式 GUI 未被关闭或替换；修复后的界面行为须在该进程退出并启动隔离目录构建版后生效。
+- `dotnet build picer.sln -c Debug --no-restore --warnaserror`：通过，0 警告、0 错误。
+- `dotnet test tests/Picer.Tests/Picer.Tests.csproj -c Debug --no-build --no-restore --filter "FullyQualifiedName~VideoFaceCausalTests|FullyQualifiedName~FaceMetadataCausalTests|FullyQualifiedName~MediaFileCipherTests"`：25/25 通过。
+- 视频回归测试覆盖已确认人物纠正、清除旧建议、以及旧镜像快照重放后仍保留人工确认。
+
+当前 GUI 仍运行于 `src/Picer.App/bin/Release/net8.0-windows/win-x64/Picer.App.exe`（PID 6220）。本次未覆盖正在运行的 Release 文件，也未部署服务器。Debug 验证程序集：`src/Picer.App/bin/Debug/net8.0-windows/Picer.App.dll`；提交后记录 SHA-256。

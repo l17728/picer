@@ -36,8 +36,13 @@ public sealed partial class PicerDatabase
     {
         var state=ParseFaceManualState(edit.Value);
         using var update=Command("""
-            UPDATE video_detected_faces SET assigned_person_id=$person,assignment_state=$state,updated_utc=$utc
-            WHERE id=$id AND (assigned_person_id IS NOT $person OR assignment_state IS NOT $state);
+            UPDATE video_detected_faces
+            SET assigned_person_id=$person,assignment_state=$state,
+                suggested_person_id=CASE WHEN $state='confirmed' THEN NULL ELSE suggested_person_id END,
+                match_confidence=CASE WHEN $state='confirmed' THEN NULL ELSE match_confidence END,
+                updated_utc=$utc
+            WHERE id=$id AND (assigned_person_id IS NOT $person OR assignment_state IS NOT $state
+                OR ($state='confirmed' AND (suggested_person_id IS NOT NULL OR match_confidence IS NOT NULL)));
             """);
         update.Transaction=transaction;update.Parameters.AddWithValue("$id",edit.EntityId);
         update.Parameters.AddWithValue("$person",(object?)state.PersonId??DBNull.Value);
