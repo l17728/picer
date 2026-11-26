@@ -626,10 +626,10 @@
                             <DataGridTextColumn Header="时长" Binding="{Binding Duration}" Width="90"/>
                             <DataGridTextColumn Header="分辨率" Binding="{Binding Resolution}" Width="100"/>
                             <DataGridTextColumn Header="关键帧" Binding="{Binding KeyframeCount}" Width="75"/>
-                            <DataGridTemplateColumn Header="分析状态" Width="110">
+                            <DataGridTemplateColumn Header="分析状态" Width="160">
                                 <DataGridTemplateColumn.CellTemplate><DataTemplate>
                                     <Button Content="{Binding AnalysisStatusText}" Click="VideoFaceReviewBadge_Click" Padding="7,2" HorizontalAlignment="Left"
-                                            ToolTip="帧、人物、对话、摘要分别表示已有关键帧或对应分析结果；空白表示尚未产生任何结果">
+                                            ToolTip="显示关键帧、人物、对话和摘要的分析进度；未分析表示尚未产生分析结果">
                                         <Button.Style><Style TargetType="Button"><Setter Property="Foreground" Value="#4C5967"/><Setter Property="Background" Value="#EEF2F6"/>
                                             <Style.Triggers>
                                                 <DataTrigger Binding="{Binding HasPendingFaces}" Value="True"><Setter Property="Foreground" Value="#7A3E00"/><Setter Property="Background" Value="#FFD991"/><Setter Property="FontWeight" Value="SemiBold"/><Setter Property="ToolTip" Value="点击直接打开该视频的待确认人物"/></DataTrigger>

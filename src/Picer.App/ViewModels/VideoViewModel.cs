@@ -1020,7 +1020,15 @@ public partial class VideoViewModel(VideoRepository repository, VideoIndexServic
 public sealed class VideoItemViewModel
 {
     public VideoItemViewModel(VideoRecord record, int keyframeCount, VideoFaceReviewSummary? faceReview = null)
-    { Record = record; KeyframeCount = keyframeCount; FaceReview = faceReview ?? new(0, 0, 0, 0, null); }
+    {
+        Record = record;
+        KeyframeCount = keyframeCount;
+        FaceReview = faceReview is null
+            ? new(0, 0, 0, 0, record.PersonAnalysisStatus)
+            : faceReview.AnalysisStatus is null && record.PersonAnalysisStatus is not null
+                ? faceReview with { AnalysisStatus = record.PersonAnalysisStatus }
+                : faceReview;
+    }
     public VideoRecord Record { get; }
     public string FileName => System.IO.Path.GetFileName(Record.Path);
     public string Path => Record.Path;
@@ -1039,7 +1047,7 @@ public sealed class VideoItemViewModel
         _ when FaceReview.Total > 0 => $"索引中有 {FaceReview.Total} 条人脸记录，但默认模型空间“{preferredModel ?? "未知"}”无可显示结果；可能是关键帧关联缺失。",
         _ => "尚未分析视频人物"
     };
-    /// <summary>按实际已有结果组合显示分析类型；没有结果时为空。</summary>
+    /// <summary>按实际已有结果组合显示分析状态；没有结果时明确显示未分析。</summary>
     public string AnalysisStatusText
     {
         get
@@ -1051,6 +1059,7 @@ public sealed class VideoItemViewModel
             if (FaceReview.Total > 0 || FaceReview.AnalysisStatus == "completed") parts.Add("人物");
             if (FaceReview.HasTranscript) parts.Add("对话");
             if (FaceReview.HasSummary) parts.Add("摘要");
+            if (parts.Count == 0) parts.Add("未分析");
             return string.Join("|", parts);
         }
     }

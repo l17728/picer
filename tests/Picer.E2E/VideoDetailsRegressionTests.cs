@@ -173,7 +173,7 @@ public sealed class VideoDetailsRegressionTests(ITestOutputHelper output)
     }
 
     [Theory]
-    [InlineData(0, 0, null, false, false, "")]
+    [InlineData(0, 0, null, false, false, "未分析")]
     [InlineData(0, 0, "failed", false, false, "人物失败")]
     [InlineData(2, 0, null, false, false, "帧")]
     [InlineData(0, 0, null, true, false, "对话")]
