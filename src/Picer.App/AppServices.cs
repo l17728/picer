@@ -150,8 +150,23 @@ public static partial class AppServices
             Db.RecoverUnsyncedDescriptions();
             Config = StorageConfig.Load(ConfigPath);
             Storage = Config.CreateProvider(Path.Combine(RemoteDataRoot, "remote-cache"));
-            Thumbnails = new ThumbnailService(Path.Combine(RemoteDataRoot, "remote-thumbs"));
-            RemoteThumbnails = new RemoteThumbnailCache(Path.Combine(RemoteDataRoot, "remote-thumbs"));
+            var remoteMediaKey = Picer.Core.Security.ClientMediaCacheKeyStore.LoadOrCreate(RemoteDataRoot);
+            try
+            {
+                Thumbnails = new ThumbnailService(Path.Combine(RemoteDataRoot, "remote-thumbs"), cipher: new Picer.Core.Security.MediaFileCipher(remoteMediaKey));
+                RemoteThumbnails = new RemoteThumbnailCache(Path.Combine(RemoteDataRoot, "remote-thumbs"), new Picer.Core.Security.MediaFileCipher(remoteMediaKey));
+            }
+            finally { System.Security.Cryptography.CryptographicOperations.ZeroMemory(remoteMediaKey); }
+            _ = Task.Run(() =>
+            {
+                try
+                {
+                    var migration = RemoteThumbnails.ProtectExistingCacheFiles();
+                    if (migration.Migrated > 0 || migration.Failed > 0)
+                        AppLogger.Info($"Remote thumbnail cache protection completed; migrated={migration.Migrated}; failed={migration.Failed}");
+                }
+                catch (Exception exception) { AppLogger.Error($"Remote thumbnail cache protection failed; error={exception.GetType().Name}", exception); }
+            });
             Index = new IndexEngine(Db, Storage, Thumbnails);
             FileOperations = new WindowsRecycleBinFileOperation();
             Geocoder = new NominatimReverseGeocoder(Path.Combine(RemoteDataRoot, "remote-geocoding-cache.json"));
@@ -172,7 +187,8 @@ public static partial class AppServices
             MediaSearch = new MediaSearchTool(Db, Videos);
             VideoIndex = new VideoIndexService(Db, Videos);
             VideoSummaries = new VideoSummaryService(Videos, Path.Combine(RemoteDataRoot, "remote-video-summary-cache"),
-                (work, token) => Infrastructure.UiWork.RunDatabaseAsync(work, token));
+                (work, token) => Infrastructure.UiWork.RunDatabaseAsync(work, token),
+                frame => RemoteThumbnails.IsCachePath(frame.Path) ? RemoteThumbnails.OpenReadPath(frame.Path) : File.OpenRead(frame.Path));
             ClipRepository = new ClipSemanticRepository(Db);
             FlorenceResults = new FlorenceResultRepository(Db);
             // Remote mode still needs a read-only timeline analyzer so the
@@ -1009,6 +1025,8 @@ public static partial class AppServices
         if (ServiceMode)
         {
             (Gateway as IDisposable)?.Dispose();
+            (RemoteThumbnails as IDisposable)?.Dispose();
+            (Thumbnails as IDisposable)?.Dispose();
             SyncClient?.Dispose();
             (FaceAnalyzer as IDisposable)?.Dispose();
             FaceTraining?.Dispose();

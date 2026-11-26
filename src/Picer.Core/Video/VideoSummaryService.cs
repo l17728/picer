@@ -6,7 +6,7 @@ using Picer.Core.Vision;
 namespace Picer.Core.Video;
 
 public sealed class VideoSummaryService(VideoRepository repository, string cacheDirectory,
-    Func<Action, CancellationToken, Task>? databaseWork = null)
+    Func<Action, CancellationToken, Task>? databaseWork = null, Func<VideoKeyframe, Stream>? openFrame = null)
 {
     private readonly SemaphoreSlim _databaseGate = new(1, 1);
     private static readonly object ContentGateLock = new();
@@ -84,7 +84,7 @@ public sealed class VideoSummaryService(VideoRepository repository, string cache
             var contentKey = video.Sha256 is { Length: 64 } hash && hash.All(Uri.IsHexDigit)
                 ? hash.ToLowerInvariant() : "content-" + currentContentId.ToString(System.Globalization.CultureInfo.InvariantCulture);
             var montagePath = Path.Combine(cacheDirectory, $"video-{video.Id}-{contentKey}-{video.FileSize}-{video.ModifiedUtc.Ticks}.jpg");
-            if (!File.Exists(montagePath)) await CreateMontageAsync(frames, montagePath, cancellationToken).ConfigureAwait(false);
+            if (!File.Exists(montagePath)) await CreateMontageAsync(frames, montagePath, cancellationToken, openFrame).ConfigureAwait(false);
 
             var transcript = ExtractTranscript(transcriptJson);
             var context = new StringBuilder("这是按时间顺序排列的视频关键帧拼图，请生成整段视频的融合摘要，而不是逐图描述。");
@@ -139,7 +139,7 @@ public sealed class VideoSummaryService(VideoRepository repository, string cache
     }
 
     private static async Task CreateMontageAsync(IReadOnlyList<VideoKeyframe> frames, string output,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, Func<VideoKeyframe, Stream>? openFrame)
     {
         const int cellWidth = 320, cellHeight = 180, columns = 3;
         var rows = (int)Math.Ceiling(frames.Count / (double)columns);
@@ -147,7 +147,8 @@ public sealed class VideoSummaryService(VideoRepository repository, string cache
         for (var i = 0; i < frames.Count; i++)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            using var image = await RasterImage.LoadAsync(frames[i].Path, cancellationToken).ConfigureAwait(false);
+            using var source = openFrame?.Invoke(frames[i]) ?? File.OpenRead(frames[i].Path);
+            using var image = RasterImage.Load(source);
             image.ResizePadded(cellWidth, cellHeight);
             canvas.Draw(image, i % columns * cellWidth, i / columns * cellHeight);
         }

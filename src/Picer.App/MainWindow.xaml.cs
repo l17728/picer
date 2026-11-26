@@ -510,6 +510,12 @@ public partial class MainWindow : Window
             _mainVm.Video.UpdateSelection(grid.SelectedItems.Cast<VideoItemViewModel>());
     }
 
+    private async void VideoKeyframeImage_Loaded(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is VideoKeyframeItemViewModel frame)
+            await frame.LoadThumbnailAsync();
+    }
+
     private void VideoFaces_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (sender is ListBox list)

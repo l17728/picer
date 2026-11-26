@@ -1,6 +1,7 @@
 using System.Text;
 using Picer.Core.Gateway;
 using Picer.Core.Models;
+using Picer.Core.Security;
 
 namespace Picer.Tests.Gateway;
 
@@ -140,6 +141,70 @@ public sealed class RemoteThumbnailCacheTests
         finally
         {
             try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task EncryptedCacheStoresCiphertextAndServesPlaintextOnlyFromReadStream()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "picer-thumb-encrypted-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var key = System.Security.Cryptography.RandomNumberGenerator.GetBytes(32);
+        var record = new ImageRecord { Id = 12, ContentSha256 = new string('b', 64) };
+        try
+        {
+            string path;
+            using (var cache = new RemoteThumbnailCache(root, new MediaFileCipher(key)))
+            {
+                path = Assert.IsType<string>(await cache.GetOrDownloadAsync(record,
+                    () => Task.FromResult<Stream?>(new MemoryStream("private-thumbnail"u8.ToArray()))));
+                var stored = await File.ReadAllBytesAsync(path);
+                Assert.NotEqual("private-thumbnail"u8.ToArray(), stored);
+                using var decoded = new StreamReader(cache.OpenRead(record));
+                Assert.Equal("private-thumbnail", await decoded.ReadToEndAsync());
+            }
+
+            using (var reopened = new RemoteThumbnailCache(root, new MediaFileCipher(key)))
+            {
+                var migrated = reopened.ProtectExistingCacheFiles();
+                Assert.Equal((0, 0), migrated);
+                Assert.Equal(path, reopened.TryGet(record));
+                using var decoded = new StreamReader(reopened.OpenReadPath(path));
+                Assert.Equal("private-thumbnail", await decoded.ReadToEndAsync());
+            }
+        }
+        finally
+        {
+            System.Security.Cryptography.CryptographicOperations.ZeroMemory(key);
+            Directory.Delete(root, true);
+        }
+    }
+
+    [Fact]
+    public void ExistingPlaintextCacheIsMigratedInPlace()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "picer-thumb-migrate-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var key = System.Security.Cryptography.RandomNumberGenerator.GetBytes(32);
+        var record = new ImageRecord { Id = 13, ContentSha256 = new string('c', 64) };
+        try
+        {
+            string path;
+            using (var plain = new RemoteThumbnailCache(root))
+                path = Path.Combine(root, plain.GetKey(record) + ".jpg");
+            File.WriteAllBytes(path, "old-thumbnail"u8.ToArray());
+
+            using var encrypted = new RemoteThumbnailCache(root, new MediaFileCipher(key));
+            Assert.Equal((1, 0), encrypted.ProtectExistingCacheFiles());
+            Assert.NotEqual("old-thumbnail"u8.ToArray(), File.ReadAllBytes(path));
+            using var source = new StreamReader(encrypted.OpenRead(record));
+            Assert.Equal("old-thumbnail", source.ReadToEnd());
+            Assert.Equal((0, 0), encrypted.ProtectExistingCacheFiles());
+        }
+        finally
+        {
+            System.Security.Cryptography.CryptographicOperations.ZeroMemory(key);
+            Directory.Delete(root, true);
         }
     }
 }

@@ -33,6 +33,25 @@ public sealed class MediaFileCipherTests
     }
 
     [Fact]
+    public void ClientMediaCacheKeyIsStableAndBoundToCurrentWindowsUser()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var root = Path.Combine(Path.GetTempPath(), "picer-client-media-key-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var first = ClientMediaCacheKeyStore.LoadOrCreate(root);
+            var second = ClientMediaCacheKeyStore.LoadOrCreate(root);
+            Assert.Equal(32, first.Length);
+            Assert.Equal(first, second);
+            Assert.NotEqual(first, File.ReadAllBytes(Path.Combine(root, "media-cache-key.dpapi")));
+            CryptographicOperations.ZeroMemory(first);
+            CryptographicOperations.ZeroMemory(second);
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
+    [Fact]
     public void ProtectUsesAuthenticatedEncryptionAndBindsCacheIdentity()
     {
         var key = RandomNumberGenerator.GetBytes(32);

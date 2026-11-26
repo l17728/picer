@@ -59,3 +59,7 @@
 - `G:\.codex` 的历史备份已扫描；其中未发现可直接恢复的 Picer 分类源码，主要是其他工程的会话记录。
 - 当前 Picer 会话记录保留了分类交互要求：左侧分类树、待确认建议和历史分类开关，右侧虚拟化缩略图，滚动到底自动继续加载，勾选后批量确认或拒绝，双击打开预览。
 - 因此分类入口必须指向 `ClassificationBrowserWindow`；旧的 `PhotoClassificationWindow` 仅保留为兼容实现，不作为主菜单入口。
+
+### 2026-11-26 GUI 远程媒体缓存加密
+
+远程 GUI emote-thumbs 现使用 DPAPI CurrentUser 稳定密钥和 PICERENC2 加密；缩略图、人脸裁剪、视频关键帧统一从共享缓存解密读取，旧 JPEG 缓存后台/按需迁移。定向测试 25/25、Debug 严格构建通过。范围和限制见 docs/CLIENT_MEDIA_CACHE_ENCRYPTION_2026-11-26.md。正式 Release 路径和 SHA-256 在构建后补录。视频拼图缓存尚未加密；本条不代表 Relay SDD 全部闭合。

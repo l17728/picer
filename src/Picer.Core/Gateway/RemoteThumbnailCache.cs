@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using Picer.Core.Models;
+using Picer.Core.Security;
 
 namespace Picer.Core.Gateway;
 
@@ -9,10 +10,11 @@ namespace Picer.Core.Gateway;
 /// refer to the same source image, so virtualization/scrolling cannot issue
 /// duplicate requests.
 /// </summary>
-public sealed class RemoteThumbnailCache
+public sealed class RemoteThumbnailCache : IDisposable
 {
     private const string CacheVersion = "v1";
     private readonly string _root;
+    private readonly MediaFileCipher? _cipher;
     private readonly object _sync = new();
     private readonly Dictionary<string, Flight> _inFlight = new(StringComparer.OrdinalIgnoreCase);
     private readonly ThumbnailWorkScheduler _downloads = new(3, 1);
@@ -28,14 +30,22 @@ public sealed class RemoteThumbnailCache
         public bool Visible;
     }
 
-    public RemoteThumbnailCache(string root)
+    public RemoteThumbnailCache(string root, MediaFileCipher? cipher = null)
     {
         _root = Path.GetFullPath(root);
+        _cipher = cipher;
         Directory.CreateDirectory(_root);
         foreach (var partial in Directory.EnumerateFiles(_root, "*.part", SearchOption.TopDirectoryOnly))
         {
             try { if (File.GetLastWriteTimeUtc(partial) < DateTime.UtcNow.AddDays(-1)) File.Delete(partial); } catch { }
         }
+    }
+
+    public bool IsCachePath(string path)
+    {
+        var fullPath = Path.GetFullPath(path);
+        var rootPrefix = _root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        return fullPath.StartsWith(rootPrefix, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
     }
 
     public string GetKey(ImageRecord record)
@@ -55,6 +65,55 @@ public sealed class RemoteThumbnailCache
         if (!File.Exists(path)) return null;
         try { File.SetLastAccessTimeUtc(path, DateTime.UtcNow); } catch { }
         return path;
+    }
+
+    public Stream OpenRead(ImageRecord record) => OpenReadPath(Path.Combine(_root, GetKey(record) + ".jpg"));
+
+    public Stream OpenReadPath(string path)
+    {
+        var fullPath = Path.GetFullPath(path);
+        if (!IsCachePath(fullPath))
+            throw new UnauthorizedAccessException("thumbnail_cache_path_outside_root");
+        if (_cipher is null) return File.OpenRead(fullPath);
+        var bytes = File.ReadAllBytes(fullPath);
+        var plaintext = _cipher.UnprotectOrReadLegacy(bytes, Path.GetFileName(fullPath), out var encrypted);
+        CryptographicOperations.ZeroMemory(bytes);
+        try
+        {
+            if (!encrypted) SaveProtectedAtomic(fullPath, plaintext);
+            return new ZeroingMemoryStream(plaintext);
+        }
+        catch
+        {
+            CryptographicOperations.ZeroMemory(plaintext);
+            throw;
+        }
+    }
+
+    public (int Migrated, int Failed) ProtectExistingCacheFiles(CancellationToken cancellationToken = default)
+    {
+        if (_cipher is null) return (0, 0);
+        var migrated = 0;
+        var failed = 0;
+        foreach (var path in Directory.EnumerateFiles(_root, "*.jpg", SearchOption.TopDirectoryOnly))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                var alreadyProtected = IsProtected(path);
+                using var content = OpenReadPath(path);
+                if (!alreadyProtected) migrated++;
+            }
+            catch (OperationCanceledException) { throw; }
+            catch { failed++; }
+        }
+        return (migrated, failed);
+    }
+
+    private bool IsProtected(string path)
+    {
+        var bytes = File.ReadAllBytes(path);
+        return _cipher!.IsEncrypted(bytes);
     }
 
     public void Invalidate(ImageRecord record)
@@ -149,12 +208,41 @@ public sealed class RemoteThumbnailCache
         var temporary = destination + "." + Guid.NewGuid().ToString("N") + ".part";
         try
         {
-            await using (var target = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write,
-                FileShare.None, 128 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan))
+            byte[]? plaintext = null;
+            byte[]? stored = null;
+            try
             {
-                await source.CopyToAsync(target, cancellationToken).ConfigureAwait(false);
-                if (target.Length == 0) throw new IOException("Empty thumbnail response.");
-                trace.Mark("body_copied", target.Length);
+                if (_cipher is null)
+                {
+                    await using var target = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write,
+                        FileShare.None, 128 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
+                    await CopyBoundedAsync(source, target, cancellationToken).ConfigureAwait(false);
+                    if (target.Length == 0) throw new IOException("Empty thumbnail response.");
+                    trace.Mark("body_copied", target.Length);
+                }
+                else
+                {
+                    using var buffer = new MemoryStream();
+                    try
+                    {
+                        await CopyBoundedAsync(source, buffer, cancellationToken, 32 * 1024 * 1024).ConfigureAwait(false);
+                        if (buffer.Length == 0) throw new IOException("Empty thumbnail response.");
+                        plaintext = buffer.ToArray();
+                        stored = _cipher.Protect(plaintext, Path.GetFileName(destination));
+                        await File.WriteAllBytesAsync(temporary, stored, cancellationToken).ConfigureAwait(false);
+                        trace.Mark("body_encrypted", stored.Length);
+                    }
+                    finally
+                    {
+                        if (buffer.TryGetBuffer(out var segment) && segment.Array is not null)
+                            CryptographicOperations.ZeroMemory(segment.Array.AsSpan(segment.Offset, segment.Count));
+                    }
+                }
+            }
+            finally
+            {
+                if (plaintext is not null) CryptographicOperations.ZeroMemory(plaintext);
+                if (stored is not null) CryptographicOperations.ZeroMemory(stored);
             }
             lock (_sync)
             {
@@ -170,4 +258,48 @@ public sealed class RemoteThumbnailCache
             try { if (File.Exists(temporary)) File.Delete(temporary); } catch { }
         }
     }
+
+    private void SaveProtectedAtomic(string destination, ReadOnlySpan<byte> plaintext)
+    {
+        var encrypted = _cipher!.Protect(plaintext, Path.GetFileName(destination));
+        var temporary = destination + "." + Guid.NewGuid().ToString("N") + ".part";
+        try { File.WriteAllBytes(temporary, encrypted); File.Move(temporary, destination, overwrite: true); }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(encrypted);
+            try { if (File.Exists(temporary)) File.Delete(temporary); } catch { }
+        }
+    }
+
+    private static async Task CopyBoundedAsync(Stream source, Stream destination, CancellationToken token,
+        long maximumBytes = 32 * 1024 * 1024)
+    {
+        var buffer = new byte[64 * 1024];
+        long total = 0;
+        try
+        {
+            int read;
+            while ((read = await source.ReadAsync(buffer.AsMemory(), token).ConfigureAwait(false)) > 0)
+            {
+                total += read;
+                if (total > maximumBytes) throw new IOException("thumbnail_response_too_large");
+                await destination.WriteAsync(buffer.AsMemory(0, read), token).ConfigureAwait(false);
+            }
+        }
+        finally { CryptographicOperations.ZeroMemory(buffer); }
+    }
+
+    private sealed class ZeroingMemoryStream(byte[] buffer) : MemoryStream(buffer, 0, buffer.Length, writable: false, publiclyVisible: true)
+    {
+        private byte[]? _ownedBuffer = buffer;
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing && Interlocked.Exchange(ref _ownedBuffer, null) is { } owned)
+                CryptographicOperations.ZeroMemory(owned);
+            base.Dispose(disposing);
+        }
+    }
+
+    public void Dispose() => _cipher?.Dispose();
 }

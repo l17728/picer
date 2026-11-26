@@ -224,7 +224,9 @@ public partial class ImageItemViewModel : ObservableObject
                 {
                     try
                     {
-                        return Picer.App.Services.ThumbnailBitmapLoader.Load(imagePath);
+                        return imagePath == persistent && _services.ServiceMode
+                            ? Picer.App.Services.ThumbnailBitmapLoader.Load(_services.RemoteThumbnails.OpenReadPath(imagePath))
+                            : Picer.App.Services.ThumbnailBitmapLoader.Load(imagePath);
                     }
                     catch (Exception exception)
                     {

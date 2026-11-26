@@ -457,7 +457,7 @@
                                          SelectedItem="{Binding SelectedCandidateCluster}" PreviewMouseRightButtonDown="CandidateCluster_PreviewMouseRightButtonDown">
                                     <ListBox.ContextMenu><ContextMenu Opened="CandidateClusterMenu_Opened"/></ListBox.ContextMenu>
                                     <ListBox.ItemTemplate><DataTemplate><DockPanel Margin="3">
-                                        <Image Width="48" Height="48" Source="{Binding RepresentativeThumbnailPath}" Stretch="UniformToFill" Margin="0,0,8,0"/>
+                                        <Image Width="48" Height="48" Source="{Binding RepresentativeThumbnailSource}" Stretch="UniformToFill" Margin="0,0,8,0"/>
                                         <TextBlock Text="{Binding Summary}" VerticalAlignment="Center"/>
                                     </DockPanel></DataTemplate></ListBox.ItemTemplate>
                                 </ListBox>
@@ -512,7 +512,7 @@
                                 <ListBox.ItemTemplate><DataTemplate><Border Width="145" Margin="5" Padding="5" BorderBrush="{DynamicResource {x:Static SystemColors.ControlDarkBrushKey}}" BorderThickness="1">
                                     <StackPanel>
                                         <Grid Height="112" Background="{DynamicResource {x:Static SystemColors.ControlBrushKey}}">
-                                            <Image Source="{Binding FaceThumbnailPath}" Stretch="UniformToFill"/>
+                                            <Image Source="{Binding FaceThumbnailSource}" Stretch="UniformToFill"/>
                                             <Border HorizontalAlignment="Left" VerticalAlignment="Top" Margin="3" Padding="5,2"
                                                     Background="{DynamicResource {x:Static SystemColors.ControlBrushKey}}" CornerRadius="9"
                                                     Visibility="{Binding IsBurstStack, Converter={StaticResource BoolToVis}}">
@@ -647,7 +647,7 @@
                             <ListBox ItemsSource="{Binding Frames}" ScrollViewer.HorizontalScrollBarVisibility="Disabled">
                                 <ListBox.ItemsPanel><ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate></ListBox.ItemsPanel>
                                 <ListBox.ItemTemplate><DataTemplate><Border Width="170" Margin="5" BorderBrush="{DynamicResource {x:Static SystemColors.ControlDarkBrushKey}}" BorderThickness="1" Padding="4"><StackPanel>
-                                    <Image Source="{Binding Path}" Height="105" Stretch="Uniform"/><TextBlock Text="{Binding Timestamp}" HorizontalAlignment="Center" Margin="0,4,0,0"/>
+                                    <Image Source="{Binding Source}" Loaded="VideoKeyframeImage_Loaded" Height="105" Stretch="Uniform"/><TextBlock Text="{Binding Timestamp}" HorizontalAlignment="Center" Margin="0,4,0,0"/>
                                 </StackPanel></Border></DataTemplate></ListBox.ItemTemplate>
                             </ListBox>
                         </TabItem>

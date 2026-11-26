@@ -6,6 +6,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media.Imaging;
 using Picer.App.Infrastructure;
+using Picer.App.Services;
 using Picer.Core.Models;
 using Picer.Core.Vision;
 
@@ -353,7 +354,7 @@ public partial class PhotoClassificationWindow : Window
             if (path is not null && File.Exists(path))
             {
                 row.PreviewPath = path;
-                image.Source = LoadPreview(path);
+                image.Source = LoadPreview(AppServices.RemoteThumbnails.OpenReadPath(path));
             }
         }
         catch (OperationCanceledException) { }
@@ -362,16 +363,9 @@ public partial class PhotoClassificationWindow : Window
         finally { row.PreviewLoading = false; }
     }
 
-    private static BitmapImage LoadPreview(string path)
+    private static BitmapImage LoadPreview(Stream source)
     {
-        var bitmap = new BitmapImage();
-        bitmap.BeginInit();
-        bitmap.CacheOption = BitmapCacheOption.OnLoad;
-        bitmap.DecodePixelWidth = 256;
-        bitmap.UriSource = new Uri(path, UriKind.Absolute);
-        bitmap.EndInit();
-        bitmap.Freeze();
-        return bitmap;
+        return ThumbnailBitmapLoader.Load(source);
     }
 
     private async void Confirm_Click(object sender, RoutedEventArgs e) =>

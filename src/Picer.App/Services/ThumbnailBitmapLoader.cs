@@ -11,7 +11,7 @@ internal static class ThumbnailBitmapLoader
     {
         var path = cache.TryGet(record) ?? await cache.GetOrDownloadAsync(record, source, token, prefetch);
         if (path is null) return null;
-        try { return await Task.Run(() => Load(path), token); }
+        try { return await Task.Run(() => Load(cache.OpenReadPath(path)), token); }
         catch (OperationCanceledException) { throw; }
         catch { cache.Invalidate(record); throw; }
     }
@@ -19,7 +19,13 @@ internal static class ThumbnailBitmapLoader
     {
         // Own the stream explicitly: a failed WPF URI decode can otherwise
         // retain a file handle and prevent invalidating the corrupt cache.
-        using var source = File.OpenRead(path);
+        return Load(File.OpenRead(path));
+    }
+
+    public static BitmapImage Load(Stream source)
+    {
+        using (source)
+        {
         var image = new BitmapImage();
         image.BeginInit();
         image.CacheOption = BitmapCacheOption.OnLoad;
@@ -28,5 +34,6 @@ internal static class ThumbnailBitmapLoader
         image.EndInit();
         image.Freeze();
         return image;
+        }
     }
 }

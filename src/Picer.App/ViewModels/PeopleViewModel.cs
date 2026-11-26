@@ -15,6 +15,7 @@ using Picer.Core.Indexing;
 using Picer.Core.Models;
 using Picer.App.Views;
 using System.Windows;
+using System.Windows.Media.Imaging;
 using Picer.App.Infrastructure;
 using Picer.Core.Security;
 using Picer.Core.Video;
@@ -87,7 +88,9 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         _unavailableReason = unavailableReason;
     }
 
-    private async Task<string?> GetFaceThumbnailAsync(UnassignedFaceRecord face, CancellationToken cancellationToken = default)
+    private sealed record FaceThumbnailResult(string? Path, BitmapImage? Bitmap);
+
+    private async Task<FaceThumbnailResult> GetFaceThumbnailAsync(UnassignedFaceRecord face, CancellationToken cancellationToken = default)
     {
         if (_mediaGateway is not null && _services.ServiceMode)
         {
@@ -100,16 +103,18 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
                 var decoded = await Picer.App.Services.ThumbnailBitmapLoader.LoadRemoteAsync(_services.RemoteThumbnails, key,
                     token => legacy is not null ? Task.FromResult<Stream?>(File.OpenRead(legacy))
                         : _mediaGateway.OpenFaceThumbnailAsync(face.FaceId, cancellationToken: token), cancellationToken).ConfigureAwait(false);
-                return decoded is null ? null : _services.RemoteThumbnails.TryGet(key);
+                if (decoded is not null && legacy is not null)
+                    try { File.Delete(legacy); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+                return new(null, decoded);
             }
             catch (Exception exception) when (exception is IOException or HttpRequestException or InvalidOperationException)
             {
                 AppLogger.Warn($"Remote face thumbnail failed face={face.FaceId}: {exception.Message}");
-                return null;
+                return new(null, null);
             }
             finally { _thumbnailGate.Release(); }
         }
-        return await _faceThumbnails.GetOrCreateAsync(face, cancellationToken).ConfigureAwait(false);
+        return new(await _faceThumbnails.GetOrCreateAsync(face, cancellationToken).ConfigureAwait(false), null);
     }
 
     public ObservableCollection<PersonSummary> People { get; } = [];
@@ -869,7 +874,7 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             var item = new CandidateClusterViewModel(cluster)
             {
                 RepresentativeThumbnailPath = cluster.Faces.FirstOrDefault() is { } representative
-                    ? _faceThumbnails.GetCachedPath(representative.FaceId)
+                    ? _services.ServiceMode ? null : _faceThumbnails.GetCachedPath(representative.FaceId)
                     : null
             };
             CandidateClusters.Add(item);
@@ -2527,8 +2532,8 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
 
     private async Task LoadFaceThumbnailAsync(UnassignedFaceViewModel item)
     {
-        var path = await GetFaceThumbnailAsync(item.Record);
-        if (path is not null && UnassignedFaces.Contains(item)) item.FaceThumbnailPath = path;
+        var image = await GetFaceThumbnailAsync(item.Record);
+        if (UnassignedFaces.Contains(item)) item.SetThumbnail(image.Path, image.Bitmap);
     }
 
 
@@ -2536,14 +2541,14 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
     {
         var representative = item.Faces.FirstOrDefault();
         if (representative is null) return;
-        var path = await GetFaceThumbnailAsync(representative);
-        if (path is not null && CandidateClusters.Contains(item)) item.RepresentativeThumbnailPath = path;
+        var image = await GetFaceThumbnailAsync(representative);
+        if (CandidateClusters.Contains(item)) item.SetRepresentativeThumbnail(image.Path, image.Bitmap);
     }
 
     private async Task LoadClusterMemberThumbnailAsync(UnassignedFaceViewModel item)
     {
-        var path = await GetFaceThumbnailAsync(item.Record);
-        if (path is not null && SelectedClusterFaces.Contains(item)) item.FaceThumbnailPath = path;
+        var image = await GetFaceThumbnailAsync(item.Record);
+        if (SelectedClusterFaces.Contains(item)) item.SetThumbnail(image.Path, image.Bitmap);
     }
 
     partial void OnSelectedPersonChanged(PersonSummary? value)
@@ -2645,12 +2650,12 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
 
     private async Task LoadAssignedFaceThumbnailAsync(UnassignedFaceViewModel item)
     {
-        var path = await GetFaceThumbnailAsync(item.Record);
-        if (path is not null && AssignedFaces.Contains(item)) item.FaceThumbnailPath = path;
+        var image = await GetFaceThumbnailAsync(item.Record);
+        if (AssignedFaces.Contains(item)) item.SetThumbnail(image.Path, image.Bitmap);
     }
 
     private UnassignedFaceViewModel CreateFaceItem(UnassignedFaceRecord record) =>
-        new(record, _faceThumbnails.GetCachedPath(record.FaceId) ?? GetSafePreviewPath(record));
+        new(record, _services.ServiceMode ? null : _faceThumbnails.GetCachedPath(record.FaceId) ?? GetSafePreviewPath(record));
 
     private async Task<IReadOnlyList<UnassignedFaceViewModel>> BuildBurstAwareFaceItemsAsync(
         IReadOnlyList<UnassignedFaceRecord> records, CancellationToken cancellationToken)
@@ -2879,9 +2884,9 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
             await _faceCropLoadGate.WaitAsync(cancellationToken);
             acquired = true;
             if (!DisplayedFaces.Contains(item)) return;
-            var path = await GetFaceThumbnailAsync(item.Record, cancellationToken);
+            var image = await GetFaceThumbnailAsync(item.Record, cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
-            if (path is not null && DisplayedFaces.Contains(item)) item.FaceThumbnailPath = path;
+            if (DisplayedFaces.Contains(item)) item.SetThumbnail(image.Path, image.Bitmap);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
         catch (Exception exception) when (exception is IOException or HttpRequestException or InvalidOperationException or UnauthorizedAccessException)
@@ -2962,8 +2967,16 @@ public partial class UnassignedFaceViewModel(UnassignedFaceRecord record, string
     private string? _faceThumbnailPath = initialThumbnailPath;
 
     [ObservableProperty]
+    private BitmapImage? _faceThumbnailBitmap;
+
+    public object? FaceThumbnailSource => (object?)FaceThumbnailBitmap ?? FaceThumbnailPath;
+    partial void OnFaceThumbnailPathChanged(string? value) => OnPropertyChanged(nameof(FaceThumbnailSource));
+    partial void OnFaceThumbnailBitmapChanged(BitmapImage? value) => OnPropertyChanged(nameof(FaceThumbnailSource));
+    public void SetThumbnail(string? path, BitmapImage? bitmap) { FaceThumbnailPath = path; FaceThumbnailBitmap = bitmap; }
+
+    [ObservableProperty]
     private bool _isThumbnailLoading;
-    public bool HasThumbnail => !string.IsNullOrWhiteSpace(FaceThumbnailPath);
+    public bool HasThumbnail => FaceThumbnailBitmap is not null || !string.IsNullOrWhiteSpace(FaceThumbnailPath);
 
     [ObservableProperty]
     private bool _isAutomaticSuggestion = string.Equals(record.AssignmentState, "suggested", StringComparison.Ordinal);
@@ -2987,4 +3000,12 @@ public partial class CandidateClusterViewModel(FaceCandidateClusterRecord record
 
     [ObservableProperty]
     private string? _representativeThumbnailPath;
+
+    [ObservableProperty]
+    private BitmapImage? _representativeThumbnailBitmap;
+    public object? RepresentativeThumbnailSource => (object?)RepresentativeThumbnailBitmap ?? RepresentativeThumbnailPath;
+    partial void OnRepresentativeThumbnailPathChanged(string? value) => OnPropertyChanged(nameof(RepresentativeThumbnailSource));
+    partial void OnRepresentativeThumbnailBitmapChanged(BitmapImage? value) => OnPropertyChanged(nameof(RepresentativeThumbnailSource));
+    public void SetRepresentativeThumbnail(string? path, BitmapImage? bitmap)
+    { RepresentativeThumbnailPath = path; RepresentativeThumbnailBitmap = bitmap; }
 }
