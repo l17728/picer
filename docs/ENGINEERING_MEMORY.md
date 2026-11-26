@@ -62,4 +62,4 @@
 
 ### 2026-11-26 GUI 远程媒体缓存加密
 
-远程 GUI emote-thumbs 现使用 DPAPI CurrentUser 稳定密钥和 PICERENC2 加密；缩略图、人脸裁剪、视频关键帧统一从共享缓存解密读取，旧 JPEG 缓存后台/按需迁移。定向测试 25/25、Debug 严格构建通过。范围和限制见 docs/CLIENT_MEDIA_CACHE_ENCRYPTION_2026-11-26.md。正式 Release 路径和 SHA-256 在构建后补录。视频拼图缓存尚未加密；本条不代表 Relay SDD 全部闭合。
+ServiceMode 的共享 remote-thumbs 现使用 Windows DPAPI CurrentUser 稳定密钥和 PICERENC2 加密；缩略图、人脸裁剪、视频关键帧统一从共享缓存解密读取，旧 JPEG 缓存后台/按需迁移。定向测试 25/25、Debug 严格构建通过。源码提交 2490d07 已推送 origin/main。Release 构建路径：D:\picer\src\Picer.App\artifacts\builds\client-media-cache-2026-11-26\Release\net8.0-windows\win-x64\Picer.App.exe；SHA-256：3251AF66932E18DF48748D4916DFA3C1052259A37672B844AA213F40838D1BD9。PID 22676 正在运行，Responding=True，标题指向 47-103-99-229.sslip.io:8445。视频拼图缓存仍未加密；Relay SDD 仍未全部闭合。详细范围见 docs/CLIENT_MEDIA_CACHE_ENCRYPTION_2026-11-26.md。

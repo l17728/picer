@@ -12,7 +12,8 @@
 
 - `dotnet build picer.sln -c Debug --no-restore --warnaserror`：通过，0 警告、0 错误。
 - 定向测试（RemoteThumbnailCache、MediaFileCipher、ClientMediaCacheKeyStore、VideoFaceCausal）：25/25 通过。
-- 当前正式 GUI 使用隔离 Release 输出构建；完成后在此补录提交、完整路径及 SHA-256。
+- Release：`D:\picer\src\Picer.App\artifacts\builds\client-media-cache-2026-11-26\Release\net8.0-windows\win-x64\Picer.App.exe`，SHA-256 `3251AF66932E18DF48748D4916DFA3C1052259A37672B844AA213F40838D1BD9`，嵌入源码提交 `2490d07`。`dotnet build src/Picer.App/Picer.App.csproj -c Release --no-restore --warnaserror -p:BaseOutputPath=artifacts/builds/client-media-cache-2026-11-26/`：0 警告、0 错误。
+- 已关闭前一个 GUI 并从上述 EXE 可见启动。运行 PID `22676`，主窗口句柄非零且 `Responding=True`，标题 `Picer - 图片管理（远程：47-103-99-229.sslip.io:8445）`。CUA 对旧默认路径的窗口归属缓存未能附加截图；Windows 进程路径核验确认实际运行的是上述新构建。
 
 ## 尚未覆盖
 
