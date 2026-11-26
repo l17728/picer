@@ -1,13 +1,16 @@
 ﻿using Picer.Core.Imaging;
 using System.Text;
 using Picer.Core.Models;
+using Picer.Core.Security;
 using Picer.Core.Vision;
 
 namespace Picer.Core.Video;
 
 public sealed class VideoSummaryService(VideoRepository repository, string cacheDirectory,
-    Func<Action, CancellationToken, Task>? databaseWork = null, Func<VideoKeyframe, Stream>? openFrame = null)
+    Func<Action, CancellationToken, Task>? databaseWork = null, Func<VideoKeyframe, Stream>? openFrame = null,
+    MediaFileCipher? montageCipher = null) : IDisposable
 {
+    private readonly MediaFileCipher? _montageCipher = montageCipher;
     private readonly SemaphoreSlim _databaseGate = new(1, 1);
     private static readonly object ContentGateLock = new();
     private static readonly Dictionary<(string Database, long Content), ContentGate> ContentGates = [];
@@ -67,6 +70,7 @@ public sealed class VideoSummaryService(VideoRepository repository, string cache
         IReadOnlyList<VideoKeyframe>? framesOverride, CancellationToken cancellationToken, CloudVisionRunPolicy runPolicy)
     {
         var stage = AnalysisStage.Preprocess;
+        string? plaintextMontagePath = null;
         try
         {
             VideoKeyframe[] frames = [];
@@ -84,7 +88,36 @@ public sealed class VideoSummaryService(VideoRepository repository, string cache
             var contentKey = video.Sha256 is { Length: 64 } hash && hash.All(Uri.IsHexDigit)
                 ? hash.ToLowerInvariant() : "content-" + currentContentId.ToString(System.Globalization.CultureInfo.InvariantCulture);
             var montagePath = Path.Combine(cacheDirectory, $"video-{video.Id}-{contentKey}-{video.FileSize}-{video.ModifiedUtc.Ticks}.jpg");
-            if (!File.Exists(montagePath)) await CreateMontageAsync(frames, montagePath, cancellationToken, openFrame).ConfigureAwait(false);
+            if (!File.Exists(montagePath))
+            {
+                var outputPath = _montageCipher is null ? montagePath : montagePath + "." + Guid.NewGuid().ToString("N") + ".plain.tmp";
+                try
+                {
+                    await CreateMontageAsync(frames, outputPath, cancellationToken, openFrame).ConfigureAwait(false);
+                    if (_montageCipher is not null) ProtectMontage(outputPath, montagePath);
+                }
+                finally { if (_montageCipher is not null) TryDelete(outputPath); }
+            }
+
+            var requestMontagePath = montagePath;
+            if (_montageCipher is not null)
+            {
+                var stored = await File.ReadAllBytesAsync(montagePath, cancellationToken).ConfigureAwait(false);
+                byte[]? plaintext = null;
+                try
+                {
+                    plaintext = _montageCipher.UnprotectOrReadLegacy(stored, Path.GetFileName(montagePath), out var encrypted);
+                    if (!encrypted) ProtectMontageBytes(montagePath, plaintext);
+                    plaintextMontagePath = Path.Combine(Path.GetTempPath(), "picer-video-summary-" + Guid.NewGuid().ToString("N") + ".jpg");
+                    await File.WriteAllBytesAsync(plaintextMontagePath, plaintext, cancellationToken).ConfigureAwait(false);
+                }
+                finally
+                {
+                    System.Security.Cryptography.CryptographicOperations.ZeroMemory(stored);
+                    if (plaintext is not null) System.Security.Cryptography.CryptographicOperations.ZeroMemory(plaintext);
+                }
+                requestMontagePath = plaintextMontagePath;
+            }
 
             var transcript = ExtractTranscript(transcriptJson);
             var context = new StringBuilder("这是按时间顺序排列的视频关键帧拼图，请生成整段视频的融合摘要，而不是逐图描述。");
@@ -92,10 +125,10 @@ public sealed class VideoSummaryService(VideoRepository repository, string cache
             if (runPolicy.IncludePreciseGps && !string.IsNullOrWhiteSpace(video.Gps))
                 context.Append("\n视频位置上下文：").Append(video.Gps);
             context.Append("\n不得根据人脸猜测姓名或亲属关系。");
-            var info = new FileInfo(montagePath);
+            var info = new FileInfo(requestMontagePath);
             var request = new CloudVisionRequest(new ImageRecord
             {
-                Path = montagePath, FileSize = info.Length, ModifiedUtc = info.LastWriteTimeUtc,
+                Path = requestMontagePath, FileSize = info.Length, ModifiedUtc = info.LastWriteTimeUtc,
                 Width = 1280, Height = 720
             }, null, [], context.ToString());
             var requestId = Guid.NewGuid().ToString("N");
@@ -136,6 +169,58 @@ public sealed class VideoSummaryService(VideoRepository repository, string cache
             Logging.AnalysisFailureDiagnostics.Record("video_" + stage, video.Id, exception, cancellationToken.IsCancellationRequested);
             throw AnalysisStageException.Wrap(stage, exception);
         }
+        finally { if (plaintextMontagePath is not null) TryDelete(plaintextMontagePath); }
+    }
+
+    public (int Migrated, int Failed) ProtectExistingMontages(CancellationToken cancellationToken = default)
+    {
+        if (_montageCipher is null || !Directory.Exists(cacheDirectory)) return (0, 0);
+        var migrated = 0;
+        var failed = 0;
+        foreach (var path in Directory.EnumerateFiles(cacheDirectory, "video-*.jpg", SearchOption.TopDirectoryOnly))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                var bytes = File.ReadAllBytes(path);
+                try
+                {
+                    if (_montageCipher.IsEncrypted(bytes)) continue;
+                    ProtectMontageBytes(path, bytes);
+                    migrated++;
+                }
+                finally { System.Security.Cryptography.CryptographicOperations.ZeroMemory(bytes); }
+            }
+            catch (OperationCanceledException) { throw; }
+            catch { failed++; }
+        }
+        return (migrated, failed);
+    }
+
+    private void ProtectMontage(string plaintextPath, string destination)
+    {
+        var bytes = File.ReadAllBytes(plaintextPath);
+        try { ProtectMontageBytes(destination, bytes); }
+        finally { System.Security.Cryptography.CryptographicOperations.ZeroMemory(bytes); }
+    }
+
+    private void ProtectMontageBytes(string destination, ReadOnlySpan<byte> plaintext)
+    {
+        var encrypted = _montageCipher!.Protect(plaintext, Path.GetFileName(destination));
+        var temporary = destination + "." + Guid.NewGuid().ToString("N") + ".part";
+        try { File.WriteAllBytes(temporary, encrypted); File.Move(temporary, destination, overwrite: true); }
+        finally
+        {
+            System.Security.Cryptography.CryptographicOperations.ZeroMemory(encrypted);
+            TryDelete(temporary);
+        }
+    }
+
+    private static void TryDelete(string path)
+    {
+        try { if (File.Exists(path)) File.Delete(path); }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        { Logging.AnalysisDiagnosticLog.Warn($"Video summary temporary cleanup deferred; errorType={exception.GetType().Name}; hresult={exception.HResult}"); }
     }
 
     private static async Task CreateMontageAsync(IReadOnlyList<VideoKeyframe> frames, string output,
@@ -192,4 +277,6 @@ public sealed class VideoSummaryService(VideoRepository repository, string cache
                 foreach (var child in element.EnumerateArray()) Walk(child, texts);
         }
     }
+
+    public void Dispose() => _montageCipher?.Dispose();
 }

@@ -111,6 +111,7 @@ public static partial class AppServices
     public static ClipSemanticService? ClipSemantic { get; private set; }
     public static string? ClipUnavailableReason { get; private set; }
     private static IImageFaceAnalyzer? FaceAnalyzer { get; set; }
+    private static Picer.Core.Security.MediaFileCipher? RemoteVideoSummaryCipher { get; set; }
     /// <summary>The service-backed face analyzer in remote mode, or null when inference runs locally.</summary>
     public static IImageFaceAnalyzer? RemoteFaceAnalyzer => ServiceMode ? FaceAnalyzer : null;
 
@@ -155,6 +156,7 @@ public static partial class AppServices
             {
                 Thumbnails = new ThumbnailService(Path.Combine(RemoteDataRoot, "remote-thumbs"), cipher: new Picer.Core.Security.MediaFileCipher(remoteMediaKey));
                 RemoteThumbnails = new RemoteThumbnailCache(Path.Combine(RemoteDataRoot, "remote-thumbs"), new Picer.Core.Security.MediaFileCipher(remoteMediaKey));
+                RemoteVideoSummaryCipher = new Picer.Core.Security.MediaFileCipher(remoteMediaKey);
             }
             finally { System.Security.Cryptography.CryptographicOperations.ZeroMemory(remoteMediaKey); }
             _ = Task.Run(() =>
@@ -188,7 +190,18 @@ public static partial class AppServices
             VideoIndex = new VideoIndexService(Db, Videos);
             VideoSummaries = new VideoSummaryService(Videos, Path.Combine(RemoteDataRoot, "remote-video-summary-cache"),
                 (work, token) => Infrastructure.UiWork.RunDatabaseAsync(work, token),
-                frame => RemoteThumbnails.IsCachePath(frame.Path) ? RemoteThumbnails.OpenReadPath(frame.Path) : File.OpenRead(frame.Path));
+                frame => RemoteThumbnails.IsCachePath(frame.Path) ? RemoteThumbnails.OpenReadPath(frame.Path) : File.OpenRead(frame.Path),
+                RemoteVideoSummaryCipher);
+            _ = Task.Run(() =>
+            {
+                try
+                {
+                    var migration = VideoSummaries.ProtectExistingMontages();
+                    if (migration.Migrated > 0 || migration.Failed > 0)
+                        AppLogger.Info($"Remote video summary cache protection completed; migrated={migration.Migrated}; failed={migration.Failed}");
+                }
+                catch (Exception exception) { AppLogger.Error($"Remote video summary cache protection failed; error={exception.GetType().Name}", exception); }
+            });
             ClipRepository = new ClipSemanticRepository(Db);
             FlorenceResults = new FlorenceResultRepository(Db);
             // Remote mode still needs a read-only timeline analyzer so the
@@ -1027,6 +1040,7 @@ public static partial class AppServices
             (Gateway as IDisposable)?.Dispose();
             (RemoteThumbnails as IDisposable)?.Dispose();
             (Thumbnails as IDisposable)?.Dispose();
+            VideoSummaries.Dispose();
             SyncClient?.Dispose();
             (FaceAnalyzer as IDisposable)?.Dispose();
             FaceTraining?.Dispose();

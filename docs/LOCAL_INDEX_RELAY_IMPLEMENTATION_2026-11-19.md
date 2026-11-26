@@ -119,3 +119,7 @@ IndexService 已存在以 `space_id` 为核心的多租户授权和运行时隔�
 ### 2026-11-26 IndexService 缩略图缓存静态加密
 
 IndexService 缩略图缓存已加入每数据根的稳定密钥、AES-256-GCM/XChaCha20-Poly1305 算法回退、按缓存文件名绑定的认证数据、HTTP 读取解密、旧明文缓存惰性迁移和启动后台迁移。已部署 ID `20261126T044027575Z`，Linux x64 IndexService SHA-256 `1f888396e0ab37bd90a1a1e010bbcda058227014276db0624c5885afa3efbab0`。完整范围、测试边界与尚未加密的媒体/客户端缓存见[缩略图缓存加密报告](MEDIA_CACHE_ENCRYPTION_2026-11-26.md)。这只完成服务器缩略图磁盘缓存一项，不能表述为 Relay 媒体加密已闭环。
+
+### 2026-11-26 GUI 远程派生媒体缓存静态加密
+
+此条更新前述“客户端缓存仍未加密”的状态：GUI ServiceMode 的共享远程缩略图、人脸裁剪、视频关键帧和视频摘要拼图现使用同一 DPAPI CurrentUser 数据密钥，磁盘缓存采用 PICERENC2 认证加密；旧缩略图和拼图会后台或按需迁移。视频摘要为兼容当前模型文件路径接口，会短暂解密到系统临时目录，任务完成/异常/取消时删除；强杀或系统崩溃时可能残留。具体证据见[GUI 媒体缓存加密报告](CLIENT_MEDIA_CACHE_ENCRYPTION_2026-11-26.md)。这闭合当前发现的 GUI 派生媒体缓存静态加密缺项，不等于端到端 Relay 加密、零落盘或 RELAY-01 至 RELAY-40 全部完成。

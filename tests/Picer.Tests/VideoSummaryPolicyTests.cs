@@ -1,6 +1,7 @@
 using Microsoft.Data.Sqlite;
 using Picer.Core.Data;
 using Picer.Core.Imaging;
+using Picer.Core.Security;
 using Picer.Core.Video;
 using Picer.Core.Vision;
 
@@ -63,6 +64,65 @@ public sealed class VideoSummaryPolicyTests : IDisposable
         AssertNoBilling();
     }
 
+    [Fact]
+    public async Task RemoteSummaryMontageIsEncryptedAtRestAndTemporaryPlaintextIsRemoved()
+    {
+        var frames = await CreateFramesAsync();
+        var cache = Path.Combine(_root, "encrypted-cache");
+        var key = System.Security.Cryptography.RandomNumberGenerator.GetBytes(32);
+        var analyzer = new Analyzer { CaptureRequestImage = true };
+        try
+        {
+            using (var service = new VideoSummaryService(_repository, cache, montageCipher: new MediaFileCipher(key)))
+            {
+                await service.AnalyzeAsync(_video, analyzer, frames);
+                Assert.NotNull(analyzer.Request);
+                Assert.False(File.Exists(analyzer.Request!.Image.Path));
+            }
+
+            var montage = Assert.Single(Directory.EnumerateFiles(cache, "video-*.jpg"));
+            var stored = await File.ReadAllBytesAsync(montage);
+            using var cipher = new MediaFileCipher(key);
+            Assert.True(cipher.IsEncrypted(stored));
+            var plaintext = cipher.UnprotectOrReadLegacy(stored, Path.GetFileName(montage), out _);
+            try
+            {
+                Assert.Equal([0xff, 0xd8], plaintext[..2].Select(value => (int)value).ToArray());
+                Assert.Equal([0xff, 0xd8], analyzer.CapturedImage![..2].Select(value => (int)value).ToArray());
+            }
+            finally
+            {
+                System.Security.Cryptography.CryptographicOperations.ZeroMemory(stored);
+                System.Security.Cryptography.CryptographicOperations.ZeroMemory(plaintext);
+            }
+        }
+        finally { System.Security.Cryptography.CryptographicOperations.ZeroMemory(key); }
+    }
+
+    [Fact]
+    public async Task ExistingPlaintextSummaryMontageIsMigrated()
+    {
+        var frames = await CreateFramesAsync();
+        var cache = Path.Combine(_root, "legacy-cache");
+        using (var legacy = new VideoSummaryService(_repository, cache))
+            await legacy.AnalyzeAsync(_video, _analyzer, frames);
+        var montage = Assert.Single(Directory.EnumerateFiles(cache, "video-*.jpg"));
+        Assert.Equal([0xff, 0xd8], (await File.ReadAllBytesAsync(montage))[..2].Select(value => (int)value).ToArray());
+
+        var key = System.Security.Cryptography.RandomNumberGenerator.GetBytes(32);
+        try
+        {
+            using var encrypted = new VideoSummaryService(_repository, cache, montageCipher: new MediaFileCipher(key));
+            Assert.Equal((1, 0), encrypted.ProtectExistingMontages());
+            var stored = await File.ReadAllBytesAsync(montage);
+            using var verifier = new MediaFileCipher(key);
+            try { Assert.True(verifier.IsEncrypted(stored)); }
+            finally { System.Security.Cryptography.CryptographicOperations.ZeroMemory(stored); }
+            Assert.Equal((0, 0), encrypted.ProtectExistingMontages());
+        }
+        finally { System.Security.Cryptography.CryptographicOperations.ZeroMemory(key); }
+    }
+
     private async Task<VideoKeyframe[]> CreateFramesAsync()
     {
         var path = Path.Combine(_root, "frame.jpg");
@@ -83,9 +143,12 @@ public sealed class VideoSummaryPolicyTests : IDisposable
         public string ModelVersion => "test-v1";
         public string PromptVersion => "v1";
         public CloudVisionRequest? Request { get; private set; }
+        public bool CaptureRequestImage { get; init; }
+        public byte[]? CapturedImage { get; private set; }
         public Task<CloudVisionResult> AnalyzeAsync(CloudVisionRequest request, CancellationToken token)
         {
             Request = request;
+            if (CaptureRequestImage) CapturedImage = File.ReadAllBytes(request.Image.Path);
             return Task.FromResult(new CloudVisionResult("description", [], [], [], []));
         }
     }
