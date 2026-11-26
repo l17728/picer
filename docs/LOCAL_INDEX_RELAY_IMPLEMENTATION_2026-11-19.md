@@ -90,7 +90,8 @@ IndexService 已存在以 `space_id` 为核心的多租户授权和运行时隔�
 - 新增签名 P-256 临时 ECDH 交换，绑定 space、session、双方设备 ID 和有效期；根据双方已认证设备签名公钥验证交换，HKDF-SHA256 派生方向分离的 AES-256-GCM 密钥。
 - 密文帧 AAD 绑定租户、双方设备、session、单调序列号、request ID、幂等键、帧类型与过期时间；请求正文/路径可放在加密 payload。限制明文帧 2 MiB，接收端具备 4096 序号滑动重放窗，允许并发帧乱序。
 - `RelayRequestMultiplexer` 在一个加密 session 上并行执行关联请求，默认最多 32 个在途、可配置上限 256；超时/取消移除 pending 项并尽力发出加密取消帧，迟到响应丢弃。
-- `RelaySessionCryptoTests` 5/5；连接器/凭据和协议合并测试 9/9；整解方案严格构建 0 警告/错误。Release IndexService DLL SHA-256 `7B6F5FF4C14EC83E8952FBDA5F919FC1E0957273642E7F7DA7DE93B65B44E128`。
+- 新增 `RelayWireProtocol` 二进制 WebSocket envelope，最大 3 MiB，支持分片接收和并发发送串行化；仅传递密钥交换与密文帧，不解析数据正文。
+- `RelaySessionCryptoTests` 5/5；wire 测试 2/2；连接器/凭据和协议合并测试 11/11；整解方案严格构建 0 警告/错误。Release IndexService DLL SHA-256 `E4FE9A7D1F25E8EB292D6E086C3A46CF952B25E42BA742C093A1F40BEEF7249B`。
 - 该切片尚未接入 Relay WebSocket；当前交换仅是可调用的 Core 协议原语，可信 peer key 的账号目录分发、云端路由、分块响应流、本机 IndexService 请求处理、写事务持久幂等账本、GUI 接入及压力/撤销验收仍未完成。生产环境没有部署或启用数据帧；见[协议原语说明](LOCAL_INDEX_RELAY_PROTOCOL_V1_2026-11-26.md)。
 
 ### 2026-11-25 远程 GUI 直读服务端索引的增量

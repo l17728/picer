@@ -91,5 +91,6 @@ ServiceMode 的共享远程缩略图、人脸裁剪、视频关键帧和视频�
 
 - Core 新增设备签名临时 ECDH、方向分离 HKDF-SHA256/AES-256-GCM 会话密钥、绑定 tenant/device/session/request/idempotency 的密文帧及序号滑动重放窗口。peer 签名公钥必须来自已认证的账号设备目录；帧正文/路径不应明文发送。
 - 新增 `RelayRequestMultiplexer`，为共享 session 上的加密请求做 request ID/幂等键响应关联，默认并行上限 32、最大 256；超时/取消清理 pending 并尽力发送取消帧。
-- 验证：整解方案严格 Debug 构建 0 警告/错误；Relay 凭据/connector/加密协议/多路复用测试 9/9；IndexService Release SHA-256 `7B6F5FF4C14EC83E8952FBDA5F919FC1E0957273642E7F7DA7DE93B65B44E128`。
+- 新增受限二进制 WebSocket wire envelope，承载签名密钥交换和密文帧，最大 3 MiB，分片读取、串行发送。
+- 验证：整解方案严格 Debug 构建 0 警告/错误；Relay 凭据/connector/加密协议/多路复用/wire 测试 11/11；IndexService Release SHA-256 `E4FE9A7D1F25E8EB292D6E086C3A46CF952B25E42BA742C093A1F40BEEF7249B`。
 - 原语尚未接入生产 Relay socket；peer key 发现、云路由/分块流、GUI 与本机服务数据流、持久写幂等和负载/撤销验收仍缺。未部署生产。详细边界见 `docs/LOCAL_INDEX_RELAY_PROTOCOL_V1_2026-11-26.md`。

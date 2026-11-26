@@ -16,9 +16,10 @@ The AES-GCM associated data binds version, session, space, sender, recipient, se
 
 - Primitive implementation: `src/Picer.Core/Identity/RelaySessionCrypto.cs`.
 - `src/Picer.Core/Identity/RelayRequestMultiplexer.cs` correlates concurrent requests by request ID and idempotency key, bounds in-flight work (32 by default, max 256), handles timeout/cancellation and releases pending capacity. Request timeout is capped at five minutes to match frame expiry. A late response for an expired/cancelled request is discarded.
+- `src/Picer.Core/Identity/RelayWireProtocol.cs` defines bounded binary WebSocket envelopes for signed key exchanges and encrypted frames; it accepts fragmented binary messages up to 3 MiB and serializes concurrent sends on one socket.
 - Tests cover signed two-party agreement, bidirectional encryption, frame binding, tamper detection, invalid peer identity, expiry, replay, out-of-order sequence acceptance, concurrent response correlation, capacity bounds, and timeout cleanup.
-- Debug full solution build: 0 warnings, 0 errors. Relay credential/connector and protocol tests: 9/9 passed.
-- Release artifact path: `server/Picer.IndexService/bin/Release/net8.0/Picer.IndexService.dll`; SHA-256 `7B6F5FF4C14EC83E8952FBDA5F919FC1E0957273642E7F7DA7DE93B65B44E128`.
+- Debug full solution build: 0 warnings, 0 errors. Relay credential/connector and protocol tests: 11/11 passed.
+- Release artifact path: `server/Picer.IndexService/bin/Release/net8.0/Picer.IndexService.dll`; SHA-256 `E4FE9A7D1F25E8EB292D6E086C3A46CF952B25E42BA742C093A1F40BEEF7249B`.
 - Idempotency key is cryptographically bound to a request frame, but no durable request ledger or exactly-once write execution exists yet. This must be implemented at the local IndexService transaction boundary before write operations are routed.
 - The multiplexer currently resolves one response frame per request. Chunk-stream aggregation, peer key lookup, account-service routing, GUI integration, cancellation propagation at the local IndexService, durable replay state, throughput/backpressure enforcement across tenants, and complete tenant revocation behavior remain unimplemented.
 
