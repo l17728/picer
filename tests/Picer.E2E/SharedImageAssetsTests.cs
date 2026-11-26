@@ -4,6 +4,7 @@ using System.Net.Http;
 using System.Security.Cryptography;
 using Picer.App.Services;
 using Picer.Core.Gateway;
+using Picer.Core.Security;
 
 namespace Picer.E2E;
 
@@ -86,6 +87,49 @@ public sealed class SharedImageAssetsTests
             Assert.Equal(2, handler.Calls);
         }
         finally { Directory.Delete(root, true); }
+    }
+
+    [Fact]
+    public async Task LegacyRemoteKeyframeIsRemovedAfterEncryptedSharedCacheMigration()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "picer-keyframe-migration-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var key = RandomNumberGenerator.GetBytes(32);
+        try
+        {
+            var data = Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX1sAAAAASUVORK5CYII=");
+            var handler = new Handler(data);
+            using var client = new HttpClient(handler) { BaseAddress = new Uri("https://fixture.invalid/") };
+            using var gateway = new HttpIndexGateway(client);
+            using var cache = new RemoteThumbnailCache(root, new MediaFileCipher(key));
+            var services = new Picer.App.ClientServices { Gateway = gateway, RemoteThumbnails = cache, RemoteVideoCacheRoot = root };
+            var video = new Picer.Core.Video.VideoRecord(7, 1, "remote.mp4", 10, DateTime.UtcNow, 1, 10, 10, null, null, "active") { Sha256 = new string('a', 64) };
+            var frame = new Picer.Core.Video.VideoKeyframe(0, "remote-frame.jpg", 15, 11);
+            var legacy = Path.Combine(root, "remote-video-keyframes", "7", "v2-11-0-15.jpg");
+            Directory.CreateDirectory(Path.GetDirectoryName(legacy)!);
+            await File.WriteAllBytesAsync(legacy, data);
+
+            var cached = await RemoteKeyframeAssets.GetAsync(services, video, frame, 0, default);
+
+            Assert.NotNull(cached);
+            Assert.False(File.Exists(legacy));
+            Assert.Equal(0, handler.Calls);
+            var stored = await File.ReadAllBytesAsync(cached!);
+            using var verifier = new MediaFileCipher(key);
+            Assert.True(verifier.IsEncrypted(stored));
+            var plaintext = verifier.UnprotectOrReadLegacy(stored, Path.GetFileName(cached!), out _);
+            try { Assert.Equal(data, plaintext); }
+            finally
+            {
+                CryptographicOperations.ZeroMemory(stored);
+                CryptographicOperations.ZeroMemory(plaintext);
+            }
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(key);
+            Directory.Delete(root, true);
+        }
     }
 
     [Fact]

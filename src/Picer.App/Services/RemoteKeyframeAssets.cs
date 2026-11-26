@@ -21,6 +21,10 @@ internal static class RemoteKeyframeAssets
             async cancellation => File.Exists(legacy) ? File.OpenRead(legacy)
                 : (frame.Id > 0 ? await gateway.OpenVideoKeyframeAsync(frame.Id, cancellation) : null)
                     ?? await gateway.OpenVideoKeyframeByOrdinalAsync(video.Id, ordinal, cancellation), token, prefetch);
+        if (image is not null && File.Exists(legacy))
+            try { File.Delete(legacy); }
+            catch (IOException exception) { Picer.Core.Logging.AppLogger.Warn($"Legacy remote keyframe cleanup deferred; video={video.Id}; frame={frame.Id}; type={exception.GetType().Name}"); }
+            catch (UnauthorizedAccessException exception) { Picer.Core.Logging.AppLogger.Warn($"Legacy remote keyframe cleanup deferred; video={video.Id}; frame={frame.Id}; type={exception.GetType().Name}"); }
         return image is null ? null : services.RemoteThumbnails.TryGet(key);
     }
 }
