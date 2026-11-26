@@ -18,6 +18,7 @@ public partial class App : Application
     private readonly CancellationTokenSource _coldStartSyncCts = new();
     private Task? _coldStartSync;
     private int _coldStartSyncStarted;
+    private int _legacyKeyframeMigrationStarted;
     private static readonly string LogPath = Path.Combine(AppPaths.DataRoot, "logs", "crash.log");
     private static readonly object CrashLogLock = new();
     private static string? _lastCrashFingerprint;
@@ -168,6 +169,42 @@ public partial class App : Application
         if (AppServices.ContinuousSyncEnabled &&
             (AppServices.ServiceMode || AppServices.SyncClient is not null || AppServices.LocalSpaceSyncConfigured))
             _coldStartSync = Task.Run(() => ColdStartSynchronizationAsync(_coldStartSyncCts.Token));
+    }
+
+    internal void StartLegacyRemoteKeyframeMigrationAfterInitialLoad()
+    {
+        if (!AppServices.ServiceMode || Interlocked.Exchange(ref _legacyKeyframeMigrationStarted, 1) != 0)
+            return;
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var client = AppServices.GetClientServices();
+                var metadata = await UiWork.ReadSnapshotAsync("RemoteKeyframeCache.StartupMigrationMetadata", AppServices.Db, database =>
+                {
+                    var repository = new Picer.Core.Video.VideoRepository(database);
+                    return repository.GetAll().ToDictionary(video => video.Id,
+                        video => (video, repository.GetKeyframes(video.Id, existingOnly: false).ToArray()));
+                }, _coldStartSyncCts.Token).ConfigureAwait(false);
+
+                if (metadata.Count == 0 || metadata.Values.All(entry => entry.Item2.Length == 0))
+                {
+                    LogInfo("Legacy remote keyframe cache migration deferred; reason=video metadata unavailable");
+                    Interlocked.Exchange(ref _legacyKeyframeMigrationStarted, 0);
+                    return;
+                }
+
+                LogInfo($"Legacy remote keyframe cache migration started; videos={metadata.Count}; frames={metadata.Values.Sum(entry => entry.Item2.Length)}");
+                var result = await RemoteKeyframeAssets.MigrateLegacyCacheAsync(client, metadata, _coldStartSyncCts.Token).ConfigureAwait(false);
+                LogInfo($"Legacy remote keyframe cache migration completed; migrated={result.Migrated}; discarded={result.Discarded}; failed={result.Failed}");
+            }
+            catch (Exception exception)
+            {
+                Interlocked.Exchange(ref _legacyKeyframeMigrationStarted, 0);
+                LogCrash("Legacy remote keyframe cache migration failed", exception);
+            }
+        });
     }
 
     private static void StartConfiguredMediaAgent()
@@ -325,17 +362,7 @@ public partial class App : Application
                 await Task.Delay(250, timeout.Token);
                 await _mainViewModel.RefreshFromRemoteMirrorAsync();
             }
-            if (AppServices.ServiceMode)
-            {
-                var keyframeMetadata = await UiWork.ReadSnapshotAsync("RemoteKeyframeCache.MigrationMetadata", AppServices.Videos.Database, database =>
-                {
-                    var repository = new Picer.Core.Video.VideoRepository(database);
-                    return repository.GetAll().ToDictionary(video => video.Id,
-                        video => (video, repository.GetKeyframes(video.Id, existingOnly: false).ToArray()));
-                }, timeout.Token);
-                var migration = await RemoteKeyframeAssets.MigrateLegacyCacheAsync(AppServices.GetClientServices(), keyframeMetadata, timeout.Token);
-                LogInfo($"Legacy remote keyframe cache migration completed; migrated={migration.Migrated}; discarded={migration.Discarded}; failed={migration.Failed}");
-            }
+            StartLegacyRemoteKeyframeMigrationAfterInitialLoad();
             LogInfo("远程索引镜像同步完成");
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
