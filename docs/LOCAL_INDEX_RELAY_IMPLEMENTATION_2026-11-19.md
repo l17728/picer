@@ -85,6 +85,13 @@ IndexService 已存在以 `space_id` 为核心的多租户授权和运行时隔�
 - 配对/凭据/心跳/关停定向测试 4/4；Debug 整解方案严格构建 0 警告/错误；IndexService Release 0 警告/错误，DLL SHA-256 `F4F73443837A1F33AA223D02CBE76662A56574E7BBF3C731A4F4A7B08E2150DD`。详细边界见[本机 Connector 运行时报告](LOCAL_INDEX_RELAY_CONNECTOR_RUNTIME_2026-11-26.md)。
 - 仍未实现请求/响应多路复用、GUI 查询路由、端到端密文 payload、数据请求幂等和恢复、生产配对入口及完整 tenant/device/session 验收。由于 socket 目前仅传心跳，本阶段没有部署到生产服务；不得将完整 Relay 或 RELAY-01 至 RELAY-40 标为完成。
 
+### 2026-11-26 端到端加密会话与密文帧原语
+
+- 新增签名 P-256 临时 ECDH 交换，绑定 space、session、双方设备 ID 和有效期；根据双方已认证设备签名公钥验证交换，HKDF-SHA256 派生方向分离的 AES-256-GCM 密钥。
+- 密文帧 AAD 绑定租户、双方设备、session、单调序列号、request ID、幂等键、帧类型与过期时间；请求正文/路径可放在加密 payload。限制明文帧 2 MiB，接收端具备 4096 序号滑动重放窗，允许并发帧乱序。
+- `RelaySessionCryptoTests` 3/3；连接器/凭据和协议合并测试 7/7；整解方案严格构建 0 警告/错误。Release IndexService DLL SHA-256 `9B6F6495740D546196615A30619C0644302B0A9A0D15DD8FCBD63E740EA0FFE2`。
+- 该切片尚未接入 Relay WebSocket；当前交换仅是可调用的 Core 协议原语，可信 peer key 的账号目录分发、云端路由、多路复用、写事务持久幂等账本、GUI/IndexService 接入及压力/撤销验收仍未完成。生产环境没有部署或启用数据帧；见[协议原语说明](LOCAL_INDEX_RELAY_PROTOCOL_V1_2026-11-26.md)。
+
 ### 2026-11-25 远程 GUI 直读服务端索引的增量
 
 - 主画廊搜索/翻页、目录树的来源/目录、目录照片/视频和视频列表/详情已增加 HTTP IndexService 直读路径；这些浏览操作不再等待本地镜像同步。

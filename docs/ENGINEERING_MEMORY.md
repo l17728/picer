@@ -86,3 +86,9 @@ ServiceMode 的共享远程缩略图、人脸裁剪、视频关键帧和视频�
 - 本地 IndexService 已实现持久化 Relay 凭据、设备公私钥绑定校验、Unix 0700/0600 权限、配对导入 API 和单一后台 WebSocket 连接器。连接器使用证书 SPKI pin/DPoP，15 秒心跳及退避重连；状态可从 bearer-token 保护的 `/api/index-relay/v1/status` 查询。缺少凭据时保持禁用，隔离租户服务不启动连接器。
 - 验证：Debug 整解方案严格构建 0 警告/错误；凭据与 connector 端到端测试 4/4；IndexService Release 0 警告/错误。正式产物路径 `server/Picer.IndexService/bin/Release/net8.0/Picer.IndexService.dll`，SHA-256 `F4F73443837A1F33AA223D02CBE76662A56574E7BBF3C731A4F4A7B08E2150DD`。
 - 尚无索引请求多路复用、数据 payload 加密、GUI 路由和生产服务配对入口。当前生产服务未部署此构建（只有心跳协议，未承载查询），不能称 Relay 迁移或 RELAY-01 至 RELAY-40 完成。详细记录：`docs/LOCAL_INDEX_RELAY_CONNECTOR_RUNTIME_2026-11-26.md`。
+
+### 2026-11-26 Relay 加密协议原语
+
+- Core 新增设备签名临时 ECDH、方向分离 HKDF-SHA256/AES-256-GCM 会话密钥、绑定 tenant/device/session/request/idempotency 的密文帧及序号滑动重放窗口。peer 签名公钥必须来自已认证的账号设备目录；帧正文/路径不应明文发送。
+- 验证：整解方案严格 Debug 构建 0 警告/错误；Relay 凭据/connector 和加密协议测试 7/7；IndexService Release SHA-256 `9B6F6495740D546196615A30619C0644302B0A9A0D15DD8FCBD63E740EA0FFE2`。
+- 原语尚未接入生产 Relay socket；peer key 发现、云路由/多路复用、GUI 与本机服务数据流、持久写幂等和负载/撤销验收仍缺。未部署生产。详细边界见 `docs/LOCAL_INDEX_RELAY_PROTOCOL_V1_2026-11-26.md`。
