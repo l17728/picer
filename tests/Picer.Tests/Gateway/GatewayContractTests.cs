@@ -4,6 +4,7 @@ using System.Net.WebSockets;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
+using System.Security.Cryptography;
 using Microsoft.AspNetCore.Builder;
 using Picer.Core.Data;
 using Picer.Core.Gateway;
@@ -88,7 +89,7 @@ public sealed class GatewayServiceFixture : IDisposable
             assignment.ExecuteNonQuery();
         }
 
-        Thumbnails = new ThumbnailService(Path.Combine(Root, "thumbs"));
+        Thumbnails = new ThumbnailService(Path.Combine(Root, "local-thumbs"));
         var instance = IndexServiceHost.Build(Root, port: 0, bearerToken: BearerToken);
         _app = instance.App;
         BaseUrl = IndexServiceHost.StartAsync(_app).GetAwaiter().GetResult();
@@ -1128,10 +1129,42 @@ public sealed class GatewayContractTests(GatewayServiceFixture fixture) : IClass
             client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", "picer-test-token");
             using var response = await client.GetAsync($"api/gateway/v1/thumbs/{image.Id}");
             response.EnsureSuccessStatusCode();
-            Assert.NotEmpty(await response.Content.ReadAsByteArrayAsync());
+            var responseBytes = await response.Content.ReadAsByteArrayAsync();
+            Assert.NotEmpty(responseBytes);
+            using (var decoded = RasterImage.Load(responseBytes)) Assert.Equal(256, decoded.Width);
             await responseTask;
         }
         finally { File.Move(hiddenPath, originalPath); }
+    }
+
+    [Fact]
+    public async Task ServiceThumbnailCacheIsEncryptedAtRestAndServedAsJpeg()
+    {
+        var image = fixture.Db.GetImages(fixture.SourceId).First();
+        var cacheRoot = Path.Combine(fixture.Root, "thumbs");
+        foreach (var file in Directory.EnumerateFiles(cacheRoot)) File.Delete(file);
+        using var handler = new HttpClientHandler { ServerCertificateCustomValidationCallback = (_, _, _, _) => true };
+        using var client = new HttpClient(handler) { BaseAddress = new Uri(fixture.BaseUrl) };
+        client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", "picer-test-token");
+
+        using var response = await client.GetAsync($"api/gateway/v1/thumbs/{image.Id}");
+        response.EnsureSuccessStatusCode();
+        var responseBytes = await response.Content.ReadAsByteArrayAsync();
+        using (var decodedResponse = RasterImage.Load(responseBytes)) Assert.Equal(256, decodedResponse.Width);
+
+        var cachePath = Directory.GetFiles(cacheRoot).Single();
+        var encryptedCache = await File.ReadAllBytesAsync(cachePath);
+        Assert.NotEqual(new byte[] { 0xFF, 0xD8 }, encryptedCache[..2]);
+        var key = MediaCacheKeyStore.LoadOrCreate(fixture.Root, "standalone");
+        try
+        {
+            using var cipher = new Picer.Core.Security.MediaFileCipher(key);
+            var decryptedCache = cipher.UnprotectOrReadLegacy(encryptedCache, Path.GetFileName(cachePath), out var encrypted);
+            Assert.True(encrypted);
+            using var decodedCache = RasterImage.Load(decryptedCache);
+            Assert.Equal(256, decodedCache.Width);
+        }
+        finally { CryptographicOperations.ZeroMemory(key); }
     }
 
     private static async Task SendWsAsync(ClientWebSocket socket, object value)

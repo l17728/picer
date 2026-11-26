@@ -54,9 +54,9 @@ public sealed class LocalGateway(PicerDatabase db, ThumbnailService thumbnails, 
             try
             {
                 var cached = thumbnails.GetOrCreate(record.Path, imageId, record.Sha256);
-                return cached is not null && File.Exists(cached) ? File.OpenRead(cached) : null;
+                return cached is not null && File.Exists(cached) ? thumbnails.OpenRead(cached) : null;
             }
-            catch (Exception exception) when (exception is IOException or InvalidOperationException or NotSupportedException) { return null; }
+            catch (Exception exception) when (exception is IOException or InvalidOperationException or NotSupportedException or System.Security.Cryptography.CryptographicException) { return null; }
         }, cancellationToken).ConfigureAwait(false);
     }
 

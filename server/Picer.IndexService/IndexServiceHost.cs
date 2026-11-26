@@ -229,7 +229,7 @@ public sealed class IndexApiHandlers(PicerDatabase db, ThumbnailService thumbnai
         try
         {
             var cached = thumbnails.GetOrCreate(record.Path, id);
-            Stream? stream = cached is not null && File.Exists(cached) ? File.OpenRead(cached) : null;
+            Stream? stream = cached is not null && File.Exists(cached) ? thumbnails.OpenRead(cached) : null;
             return Task.FromResult(stream);
         }
         catch (Exception exception) when (exception is IOException or InvalidOperationException or NotSupportedException)
@@ -640,7 +640,11 @@ public static class IndexServiceHost
         if (!isolatedSpace) AppLogger.Initialize(Path.Combine(dataRoot, "logs"));
         AppLogger.Info("Picer.IndexService 启动开始");
         var db = new PicerDatabase(Path.Combine(dataRoot, "picer.db"));
-        var thumbnails = new ThumbnailService(Path.Combine(dataRoot, "thumbs"));
+        var mediaScope = isolatedSpace ? Path.GetFileName(Path.GetFullPath(dataRoot)) : "standalone";
+        var mediaKey = MediaCacheKeyStore.LoadOrCreate(dataRoot, mediaScope);
+        var mediaCipher = new Picer.Core.Security.MediaFileCipher(mediaKey);
+        System.Security.Cryptography.CryptographicOperations.ZeroMemory(mediaKey);
+        var thumbnails = new ThumbnailService(Path.Combine(dataRoot, "thumbs"), cipher: mediaCipher);
         var certificate = ServiceSecurity.EnsureHttpsCertificate(dataRoot);
         var token = bearerToken ?? ServiceSecurity.ResolveToken(dataRoot);
 
@@ -707,6 +711,20 @@ public static class IndexServiceHost
         var mediaPreviews = new MediaPreviewCache();
         var app = builder.Build();
         app.Lifetime.ApplicationStopping.Register(agents.StopMediaConnections);
+        app.Lifetime.ApplicationStarted.Register(() => _ = Task.Run(() =>
+        {
+            try
+            {
+                var migration = thumbnails.ProtectExistingCacheFiles(app.Lifetime.ApplicationStopping);
+                if (migration.Migrated > 0 || migration.Failed > 0)
+                    AppLogger.Info($"Legacy thumbnail cache protection completed; migrated={migration.Migrated}; failed={migration.Failed}");
+            }
+            catch (OperationCanceledException) { }
+            catch (Exception exception)
+            {
+                AppLogger.Error($"Legacy thumbnail cache protection failed; error={exception.GetType().Name}", exception);
+            }
+        }, app.Lifetime.ApplicationStopping));
         var maintenance = new BackgroundConsistencyScheduler(new Picer.Core.Indexing.MediaConsistencyMaintenance(
             db.OpenIndependentConnection, agents.VerifyExistingAsync, Path.Combine(dataRoot, "consistency-checkpoint.json")));
         if (!isolatedSpace && Environment.GetEnvironmentVariable("PICER_BACKGROUND_INDEX_CHECK") != "0")
@@ -1875,6 +1893,7 @@ async function load(){const [c,g]=await Promise.all([fetch('/api/service/v1/capa
         {
             AppLogger.Info("Picer.IndexService 已停止");
             maintenance.Dispose();
+            thumbnails.Dispose();
             db.Dispose();
         });
         return new IndexServiceInstance(app, certificate, handlers, engine, jobs)
