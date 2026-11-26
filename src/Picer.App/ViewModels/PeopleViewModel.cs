@@ -321,6 +321,15 @@ public partial class PeopleViewModel : ObservableObject, IDisposable
         StatusText = "模型空间已加载，正在后台加载人物分类数据…";
         AppLogger.Info($"People model options ready: count={FaceModelOptions.Count}; elapsedMs={initializationTimer.ElapsedMilliseconds}");
         await RefreshAsync();
+        if (_services.ServiceMode)
+        {
+            // Remote browsing is a read of the service's authoritative index.
+            // Do not use this device's optional mirror to decide whether to
+            // upload a training snapshot or trigger a remote reclassification.
+            StatusText = "人物数据已从照片空间索引加载";
+            AppLogger.Info("People page initialization completed from service index; skipped local mirror training and organize checks");
+            return;
+        }
         _ = PublishEvaluationSnapshotAsync();
 
         var summary = await UiWork.ReadSnapshotAsync("People.Summary", _database, reader => new VisionAnalysisRepository(reader).GetSummary());
