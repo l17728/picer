@@ -40,9 +40,9 @@ public sealed partial class ClassificationRepository(PicerDatabase database)
 
     public ClassificationTaxonomySnapshot Taxonomy()
     {
-        var payload = Scalar("SELECT payload FROM classification_v2_taxonomy WHERE id=1");
-        if (payload is not null) return Decode<ClassificationTaxonomySnapshot>(payload);
         var preset = ClassificationPreset.Load();
+        var payload = Scalar("SELECT payload FROM classification_v2_taxonomy WHERE id=1");
+        if (payload is not null) return preset.Upgrade(Decode<ClassificationTaxonomySnapshot>(payload));
         return new(1, 1, preset.Labels, preset.Edges, preset.Labels.Where(l => l.Assignable).Select(l => new ClassificationDefinitionVersion(l.Id, 1)).ToArray());
     }
 

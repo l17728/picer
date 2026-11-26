@@ -1,5 +1,5 @@
 {
-  "Version": "family-taxonomy-v1",
+  "Version": "family-taxonomy-v2",
   "Labels": [
     {
       "Id": "nav.subject",
@@ -1895,6 +1895,191 @@
       ],
       "Assignable": true,
       "Active": true
+    },
+    {
+      "Id": "subject.animal.rabbit",
+      "Dimension": "subject",
+      "Name": "兔类",
+      "Definition": "可辨认真实兔子的外形、耳部或典型姿态",
+      "Exclusions": "毛绒玩具、雕塑及仅有兔子图案不算真实兔类",
+      "Aliases": [
+        "兔子",
+        "野兔"
+      ],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "subject.animal.rodent",
+      "Dimension": "subject",
+      "Name": "小型啮齿宠物",
+      "Definition": "可辨认仓鼠、豚鼠等真实小型啮齿动物",
+      "Exclusions": "老鼠图案、玩具及无法确认的幼小动物不算",
+      "Aliases": [
+        "仓鼠",
+        "豚鼠"
+      ],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "subject.animal.reptile",
+      "Dimension": "subject",
+      "Name": "爬行动物",
+      "Definition": "可辨认龟、蜥蜴、蛇等真实爬行动物",
+      "Exclusions": "玩具、模型或仅凭环境推断不算",
+      "Aliases": [
+        "爬虫",
+        "龟"
+      ],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "object.food.vegetable",
+      "Dimension": "object",
+      "Name": "蔬菜",
+      "Definition": "可见可辨认的蔬菜作为食材、菜品或主要拍摄对象",
+      "Exclusions": "绿色植物背景、装饰图案及无法辨认的配菜不算",
+      "Aliases": [
+        "蔬菜",
+        "青菜"
+      ],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "object.food.meat",
+      "Dimension": "object",
+      "Name": "肉类",
+      "Definition": "可见可辨认的肉类食材或以肉类为主要内容的菜品",
+      "Exclusions": "颜色相似的面点、植物性替代品及微小配料不算",
+      "Aliases": [
+        "肉",
+        "肉菜"
+      ],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "object.food.seafood",
+      "Dimension": "object",
+      "Name": "海鲜",
+      "Definition": "可见可辨认的鱼虾蟹贝等水产食材或菜品",
+      "Exclusions": "水族动物、海边场景及无法辨认的配料不算",
+      "Aliases": [
+        "水产",
+        "鱼虾"
+      ],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "object.food.noodles",
+      "Dimension": "object",
+      "Name": "面食",
+      "Definition": "面条、面包、饺子、馒头等面粉主食清晰可见",
+      "Exclusions": "仅有少量装饰面条或不可辨认配菜不算",
+      "Aliases": [
+        "面条",
+        "面点"
+      ],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "object.food.hotpot",
+      "Dimension": "object",
+      "Name": "火锅",
+      "Definition": "可见火锅锅具、涮煮方式或明确火锅桌面场景",
+      "Exclusions": "普通汤锅、单独食材或无法确认的聚餐不算",
+      "Aliases": [
+        "火锅"
+      ],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "object.food.baked_goods",
+      "Dimension": "object",
+      "Name": "烘焙点心",
+      "Definition": "面包、蛋糕、饼干等烘焙食品为清晰主体",
+      "Exclusions": "仅有包装、图案或无法确认的甜点不算",
+      "Aliases": [
+        "烘焙",
+        "面包",
+        "蛋糕"
+      ],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "place.scenic_area",
+      "Dimension": "place",
+      "Name": "景区",
+      "Definition": "可见景区标识、观景设施或具有明确游览属性的场所",
+      "Exclusions": "仅凭山水或室外环境不能推断为景区",
+      "Aliases": [
+        "景区",
+        "旅游景点"
+      ],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "place.landmark",
+      "Dimension": "place",
+      "Name": "地标",
+      "Definition": "具有可辨识外形或标识的知名地标性建筑或地点",
+      "Exclusions": "普通建筑、远景中不清晰的建筑不算",
+      "Aliases": [
+        "地标",
+        "标志性建筑"
+      ],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "activity.sightseeing",
+      "Dimension": "activity",
+      "Name": "观光游览",
+      "Definition": "画面显示正在观景、游览或参观场所的行为证据",
+      "Exclusions": "仅在景区拍摄但未见游览行为不算",
+      "Aliases": [
+        "观光",
+        "游览",
+        "参观"
+      ],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "event.concert",
+      "Dimension": "event",
+      "Name": "演出现场",
+      "Definition": "舞台表演、观众席或现场演出元素清晰可见",
+      "Exclusions": "仅有乐器或日常舞蹈练习不算",
+      "Aliases": [
+        "演唱会",
+        "音乐会",
+        "演出"
+      ],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "activity.photography",
+      "Dimension": "activity",
+      "Name": "拍摄摄影",
+      "Definition": "可见拍照、摄像、摆放摄影设备或明确的拍摄行为",
+      "Exclusions": "仅出现相机物品但无人拍摄不算",
+      "Aliases": [
+        "摄影",
+        "拍照",
+        "摄像"
+      ],
+      "Assignable": true,
+      "Active": true
     }
   ],
   "Edges": [
@@ -2852,6 +3037,81 @@
       "ParentId": "scene.forest",
       "ChildId": "activity.camping",
       "Kind": "Related"
+    },
+    {
+      "ParentId": "subject.animal",
+      "ChildId": "subject.animal.rabbit",
+      "Kind": "IsA"
+    },
+    {
+      "ParentId": "subject.animal",
+      "ChildId": "subject.animal.rodent",
+      "Kind": "IsA"
+    },
+    {
+      "ParentId": "subject.animal",
+      "ChildId": "subject.animal.reptile",
+      "Kind": "IsA"
+    },
+    {
+      "ParentId": "object.food",
+      "ChildId": "object.food.vegetable",
+      "Kind": "IsA"
+    },
+    {
+      "ParentId": "object.food",
+      "ChildId": "object.food.meat",
+      "Kind": "IsA"
+    },
+    {
+      "ParentId": "object.food",
+      "ChildId": "object.food.seafood",
+      "Kind": "IsA"
+    },
+    {
+      "ParentId": "object.food",
+      "ChildId": "object.food.noodles",
+      "Kind": "IsA"
+    },
+    {
+      "ParentId": "object.food",
+      "ChildId": "object.food.hotpot",
+      "Kind": "IsA"
+    },
+    {
+      "ParentId": "object.food",
+      "ChildId": "object.food.baked_goods",
+      "Kind": "IsA"
+    },
+    {
+      "ParentId": "nav.place",
+      "ChildId": "place.scenic_area",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.place",
+      "ChildId": "place.landmark",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.activity",
+      "ChildId": "activity.sightseeing",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "event.travel",
+      "ChildId": "activity.sightseeing",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.event",
+      "ChildId": "event.concert",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.activity",
+      "ChildId": "activity.photography",
+      "Kind": "Browse"
     }
   ]
 }

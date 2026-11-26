@@ -15,9 +15,9 @@ public class ClassificationV2Tests
             labels = ids.Select(id => new { labelId = id, support = "supported", evidenceIds = new[] { "image:current" } }), proposals = Array.Empty<object>()
         });
         var result = ClassificationModel.DecodeResult(Json(true, "subject.people", "scene.outdoor"), taxonomy);
-        Assert.Equal(179, result.Labels.Count);
+        Assert.Equal(preset.Labels.Count(label => label.Active && label.Assignable), result.Labels.Count);
         Assert.Equal(2, result.Labels.Count(l => l.Support == "supported"));
-        Assert.Equal(177, result.Labels.Count(l => l.Support == "absent"));
+        Assert.Equal(preset.Labels.Count(label => label.Active && label.Assignable) - 2, result.Labels.Count(l => l.Support == "absent"));
         Assert.Throws<InvalidDataException>(() => ClassificationModel.DecodeResult(Json(false), taxonomy));
         Assert.Throws<InvalidDataException>(() => ClassificationModel.DecodeResult(Json(true, "unknown"), taxonomy));
         Assert.Throws<InvalidDataException>(() => ClassificationModel.DecodeResult(Json(true, "subject.people", "subject.people"), taxonomy));
@@ -47,14 +47,14 @@ public class ClassificationV2Tests
             Assert.Contains("人物", text);
             Assert.DoesNotContain("\\u", text);
             using var decoded = System.Text.Json.JsonDocument.Parse(text);
-            Assert.Equal(179, decoded.RootElement.GetProperty("labels").GetArrayLength());
+            Assert.Equal(preset.Labels.Count(label => label.Active && label.Assignable), decoded.RootElement.GetProperty("labels").GetArrayLength());
             Assert.Equal("户外花园与人物", decoded.RootElement.GetProperty("untrustedEvidence").GetProperty("description:fixture").GetProperty("summary").GetString());
             var result = new ClassificationResult("classification-result-v1", ClassificationInputFingerprint.Compute(context.Input),
                 taxonomy.Labels.Where(l => l.Assignable && l.Active).Select(l => new ClassificationLabelEvaluation(l.Id, "absent", [])).ToArray(), []);
             var response = System.Text.Json.JsonSerializer.Serialize(new { choices = new[] { new { message = new { content = System.Text.Json.JsonSerializer.Serialize(result) } } } });
             return Task.FromResult(response);
         });
-        Assert.Equal(179, (await model.ClassifyAsync(context, taxonomy, new(true, "fixture", "local", false), default)).Labels.Count);
+        Assert.Equal(preset.Labels.Count(label => label.Active && label.Assignable), (await model.ClassifyAsync(context, taxonomy, new(true, "fixture", "local", false), default)).Labels.Count);
     }
     private static ClassificationInput Input() => new("epoch", "owner", "sha256:" + new string('a', 64),
         [], [], [], "model", "prep", "prompt", [new("subject.people", 1)], 1, "candidate");
@@ -76,7 +76,7 @@ public class ClassificationV2Tests
         { padding = new string('x', 1100000), choices = new[] { new { delta = new { content } } } }) + "\n\ndata: [DONE]\n\n";
         var model = new ClassificationModel((_, _) => Task.FromResult(new byte[] { 255, 216, 255, 217 }),
             (_, _, _) => Task.FromResult(envelope));
-        Assert.Equal(179, (await model.ClassifyAsync(context, taxonomy, new(true, "fixture", "local", false), default)).Labels.Count);
+        Assert.Equal(preset.Labels.Count(label => label.Active && label.Assignable), (await model.ClassifyAsync(context, taxonomy, new(true, "fixture", "local", false), default)).Labels.Count);
     }
 
     [Fact]
@@ -106,8 +106,8 @@ public class ClassificationV2Tests
     public void PresetHasDefinedAssignableLabelsAndAmbiguousLegacyAliases()
     {
         var graph = Graph();
-        Assert.Equal(188, graph.Labels.Count);
-        Assert.Equal(179, graph.Labels.Values.Count(x => x.Assignable));
+        Assert.Equal(ClassificationPreset.Load().Labels.Count, graph.Labels.Count);
+        Assert.Equal(ClassificationPreset.Load().Labels.Count(x => x.Assignable), graph.Labels.Values.Count(x => x.Assignable));
         Assert.All(graph.Labels.Values.Where(x => x.Assignable), x => Assert.False(string.IsNullOrWhiteSpace(x.Exclusions)));
         Assert.Equal(new[] { "subject.group", "subject.group_portrait" }, graph.ResolveAlias("合影"));
         Assert.Equal(new[] { "subject.people", "subject.portrait" }, graph.ResolveAlias("人像"));

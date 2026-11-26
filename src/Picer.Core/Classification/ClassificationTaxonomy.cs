@@ -134,6 +134,42 @@ public sealed record ClassificationPreset(string Version, IReadOnlyList<Classifi
 {
     public ClassificationTaxonomy CreateTaxonomy() => new(Labels, Edges);
 
+    /// <summary>
+    /// Adds newly shipped default labels to an existing user taxonomy without overwriting
+    /// user definitions, deactivations, redirects, or customized navigation. Missing
+    /// definitions are added too, so incremental classification re-evaluates old photos.
+    /// </summary>
+    public ClassificationTaxonomySnapshot Upgrade(ClassificationTaxonomySnapshot current)
+    {
+        ArgumentNullException.ThrowIfNull(current);
+        var labels = current.Labels.ToDictionary(label => label.Id, StringComparer.Ordinal);
+        var additions = Labels.Where(label => !labels.ContainsKey(label.Id)).ToArray();
+        foreach (var label in additions) labels.Add(label.Id, label);
+
+        var addedIds = additions.Select(label => label.Id).ToHashSet(StringComparer.Ordinal);
+        var edges = current.Edges.ToHashSet();
+        foreach (var edge in Edges.Where(edge => addedIds.Contains(edge.ParentId) || addedIds.Contains(edge.ChildId)))
+            if (labels.ContainsKey(edge.ParentId) && labels.ContainsKey(edge.ChildId)) edges.Add(edge);
+
+        var definitions = current.Definitions.ToDictionary(value => value.LabelId, StringComparer.Ordinal);
+        var missingDefinitions = labels.Values.Where(label => label.Assignable && !definitions.ContainsKey(label.Id))
+            .Select(label => new ClassificationDefinitionVersion(label.Id, 1)).ToArray();
+        if (additions.Length == 0 && missingDefinitions.Length == 0) return current;
+        foreach (var definition in missingDefinitions) definitions.Add(definition.LabelId, definition);
+
+        var upgraded = current with
+        {
+            Revision = checked(current.Revision + 1),
+            DiscoveryRevision = checked(current.DiscoveryRevision + 1),
+            Labels = labels.Values.OrderBy(label => label.Id, StringComparer.Ordinal).ToArray(),
+            Edges = edges.OrderBy(edge => edge.ParentId, StringComparer.Ordinal).ThenBy(edge => edge.ChildId, StringComparer.Ordinal)
+                .ThenBy(edge => edge.Kind).ToArray(),
+            Definitions = definitions.Values.OrderBy(value => value.LabelId, StringComparer.Ordinal).ToArray()
+        };
+        _ = new ClassificationTaxonomy(upgraded.Labels, upgraded.Edges);
+        return upgraded;
+    }
+
     public static ClassificationPreset Load()
     {
         using var stream = typeof(ClassificationPreset).Assembly.GetManifestResourceStream("Picer.Classification.presets-v1.json")
@@ -142,7 +178,7 @@ public sealed record ClassificationPreset(string Version, IReadOnlyList<Classifi
         options.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter());
         var preset = JsonSerializer.Deserialize<ClassificationPreset>(stream, options)
             ?? throw new InvalidDataException("classification_preset_invalid");
-        if (preset.Version != "family-taxonomy-v1") throw new InvalidDataException("classification_preset_version");
+        if (preset.Version != "family-taxonomy-v2") throw new InvalidDataException("classification_preset_version");
         _ = preset.CreateTaxonomy();
         return preset;
     }
