@@ -10,6 +10,83 @@ namespace Picer.E2E;
 public sealed class ClassificationV2UiTests
 {
     [Fact]
+    public async Task GuiStartsJobAndRetriesOnlyFailedPhoto()
+    {
+        var root = Directory.CreateTempSubdirectory("picer-retry-ui-").FullName;
+        var photo = Path.Combine(root, "fixture.png");
+        var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+        listener.Start();
+        var port = ((System.Net.IPEndPoint)listener.LocalEndpoint).Port;
+        using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(2));
+        using var db = new PicerDatabase(Path.Combine(root, "picer.db"));
+        var source = db.AddSource(root);
+        db.UpsertImage(new ImageRecord { SourceId = source.Id, Path = photo, FileSize = 69, IndexedUtc = DateTime.UtcNow, ModifiedUtc = DateTime.UtcNow });
+        var repo = new ClassificationRepository(db);
+        repo.Configure(new(true, "fixture", "local", false));
+        var directory = Path.GetDirectoryName(typeof(Picer.App.App).Assembly.Location)!;
+        var executable = Environment.GetEnvironmentVariable("PICER_E2E_GUI_EXE") ?? Path.Combine(directory, "Picer.App.exe");
+        using var process = Process.Start(new ProcessStartInfo(executable)
+        {
+            UseShellExecute = false,
+            Environment = { ["PICER_DATA_ROOT"] = root, ["PICER_BOOTSTRAP_ROOT"] = Path.Combine(root, "bootstrap"),
+                ["PICER_LOCAL_MODEL_ENDPOINT"] = $"http://127.0.0.1:{port}/chat" }
+        })!;
+        try
+        {
+            AutomationElement Find(string name, ControlType type) => Wait(() => AutomationElement.RootElement.FindFirst(TreeScope.Descendants,
+                new AndCondition(new PropertyCondition(AutomationElement.ProcessIdProperty, process.Id),
+                    new PropertyCondition(AutomationElement.ControlTypeProperty, type),
+                    new PropertyCondition(AutomationElement.NameProperty, name))));
+            ((ExpandCollapsePattern)Find("AI 功能菜单", ControlType.MenuItem).GetCurrentPattern(ExpandCollapsePattern.Pattern)).Expand();
+            ((InvokePattern)Find("照片分类与审核", ControlType.MenuItem).GetCurrentPattern(InvokePattern.Pattern)).Invoke();
+            ((InvokePattern)Find("开始处理", ControlType.Button).GetCurrentPattern(InvokePattern.Pattern)).Invoke();
+            Assert.True(SpinWait.SpinUntil(() => repo.LatestJob()?.Failed == 1, TimeSpan.FromSeconds(30)));
+            var job = repo.LatestJob()!;
+            File.WriteAllBytes(photo, Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGNgYGAAAAAEAAH2FzhVAAAAAElFTkSuQmCC"));
+            var window = Find("照片分类与审核", ControlType.Window);
+            var refresh = window.FindFirst(TreeScope.Descendants, new PropertyCondition(AutomationElement.NameProperty, "刷新"));
+            ((InvokePattern)refresh.GetCurrentPattern(InvokePattern.Pattern)).Invoke();
+            var retry = Find("重试本任务失败项", ControlType.Button);
+            Assert.True(SpinWait.SpinUntil(() => retry.Current.IsEnabled, TimeSpan.FromSeconds(15)));
+            ((InvokePattern)retry.GetCurrentPattern(InvokePattern.Pattern)).Invoke();
+            using var socket = await listener.AcceptTcpClientAsync(timeout.Token);
+            using var stream = socket.GetStream();
+            using var reader = new StreamReader(stream, System.Text.Encoding.UTF8, false, leaveOpen: true);
+            int length = 0;
+            while (await reader.ReadLineAsync(timeout.Token) is { Length: > 0 } line)
+                if (line.StartsWith("Content-Length:", StringComparison.OrdinalIgnoreCase)) length = int.Parse(line[15..]);
+            Assert.InRange(length, 1, 2000000);
+            // System.Text.Json serializes this fixture's HTTP body as ASCII (including escaped Chinese).
+            var body = new char[length];
+            await reader.ReadBlockAsync(body, timeout.Token);
+            using var payload = System.Text.Json.JsonDocument.Parse(new string(body));
+            using var input = System.Text.Json.JsonDocument.Parse(payload.RootElement.GetProperty("messages")[1].GetProperty("content")[0].GetProperty("text").GetString()!);
+            var result = System.Text.Json.JsonSerializer.Serialize(new { schemaVersion = "classification-indexed-v1",
+                inputFingerprint = input.RootElement.GetProperty("inputFingerprint").GetString(), evaluatedAll = true,
+                supported = new[] { 0 }, uncertain = Array.Empty<int>(), conflicting = Array.Empty<int>(), proposals = Array.Empty<object>() });
+            var response = System.Text.Json.JsonSerializer.Serialize(new { choices = new[] { new { message = new { content = result } } } });
+            await stream.WriteAsync(System.Text.Encoding.ASCII.GetBytes($"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {response.Length}\r\nConnection: close\r\n\r\n{response}"), timeout.Token);
+            Assert.True(SpinWait.SpinUntil(() => repo.Job(job.Id).Succeeded == 1, TimeSpan.FromSeconds(20)));
+            Assert.Equal(0, repo.Job(job.Id).Failed);
+            Assert.Equal(2, repo.Job(job.Id).UsedCalls);
+            ((InvokePattern)refresh.GetCurrentPattern(InvokePattern.Pattern)).Invoke();
+            var treeItem = Wait(() => window.FindFirst(TreeScope.Descendants,
+                new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.TreeItem)));
+            ((SelectionItemPattern)treeItem.GetCurrentPattern(SelectionItemPattern.Pattern)).Select();
+            Assert.NotNull(Wait(() => window.FindFirst(TreeScope.Descendants, new AndCondition(
+                new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Text),
+                new PropertyCondition(AutomationElement.NameProperty, "fixture.png")))));
+        }
+        finally
+        {
+            listener.Stop();
+            if (!process.HasExited) { process.CloseMainWindow(); if (!process.WaitForExit(5000)) process.Kill(true); }
+            db.Dispose();
+            try { Directory.Delete(root, true); } catch (IOException) { }
+        }
+    }
+
+    [Fact]
     public void IndependentGuiExposesTreeTogglePreviewAndScanWithoutModelCalls()
     {
         var root = Path.Combine(Path.GetTempPath(), "picer-v2-uia-" + Guid.NewGuid().ToString("N"));
