@@ -102,3 +102,5 @@ ServiceMode 的共享远程缩略图、人脸裁剪、视频关键帧和视频�
 - IndexService 已部署到 `47.103.99.229`，部署号 `20261127T091020602Z`，SHA-256 `37717a1ac859942679c4f5819d08a6b26c9428a15169af6ae60d77954ae6c86f`。
 - GUI Release 构建位于 `src/Picer.App/artifacts/builds/classification-tree-counts-memory-fix-2026-11-27/Picer.App.exe`，SHA-256 `A8591586B0078B4A20E0A81579444F6B44E076A9550DEED281DED44910590E19`。当时 Windows 处于锁屏状态，未启动该构建；请勿将旧版运行窗口误认为此构建。
 - 后续运行发现模型 JSON/证据格式错误，`fc86b4c` 将这些输出校验错误改为受 3 次尝试与调用预算约束的重试；该修复部署号 `20261127T093743195Z`，SHA-256 `c64e6627ac9483c07adcc4876e0e00aaf268dc4c03cfba5b4d382f6128061e81`。锁屏解除前不要尝试自动启动或切换 GUI。
+
+- 2026-11-27 后续收尾：Retry 修复部署后分类任务继续运行，最新观测为 8 成功、4 失败、8,590 待处理、1 运行中。独立发布的 GUI 位于 `src/Picer.App/artifacts/builds/classification-tree-retry-2026-11-27/publish/Picer.App.exe`，SHA-256 `15E5E5D90AAD49ADFF862622E3D9F3E786942C43EC308BFE35042F0BA5B1F189`；窗口启动/视觉验收仍待解锁桌面后完成。
