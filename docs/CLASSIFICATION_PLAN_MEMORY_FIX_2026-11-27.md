@@ -29,6 +29,13 @@
 - GUI Release：`src/Picer.App/artifacts/builds/classification-tree-counts-memory-fix-2026-11-27/Picer.App.exe`，SHA-256 `A8591586B0078B4A20E0A81579444F6B44E076A9550DEED281DED44910590E19`；配套 `Picer.App.dll` SHA-256 `EC908803DD32DB3DC52231410B48F4A19185D29F4D073B775822DD25FA49B71B`。
 - GUI 本地启动验收尚未完成：检查时 Windows 处于锁屏状态；屏幕上仍有旧构建窗口。不要把旧窗口当作本次 GUI 构建。
 
+## 模型输出失败重试补强
+
+- 真实任务暴露模型输出格式错误：JSON 无效、证据 ID 无效。旧逻辑将这些瞬态模型输出错误直接记为永久失败。
+- `ClassificationWorker` 现对 JSON 解析错误及输出/证据校验错误启用原有最多 3 次重试和退避；每次尝试仍计入配置的任务调用预算。媒体读取失败仍不盲目重试。
+- 严格 Debug 整解方案构建：0 警告、0 错误；分类生命周期筛选：41 通过、0 失败。
+- 此重试补强的生产部署记录待补。
+
 ## 保护条件
 
 分类输出仍是建议标签；用户确认的标签不会被自动覆盖。服务器端分类仍按当前配置使用本地 MediaAgent 到本机模型端点的路由。

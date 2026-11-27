@@ -250,6 +250,23 @@ public sealed class ClassificationV2RuntimeTests : IDisposable
         Assert.NotEmpty(lease.Input.Metadata);
     }
 
+    [Theory]
+    [InlineData("classification_output_invalid", true)]
+    [InlineData("classification_output_incomplete", true)]
+    [InlineData("classification_evidence_invalid", true)]
+    [InlineData("classification_proposal_invalid", true)]
+    [InlineData("classification_media_unavailable", false)]
+    public void ModelOutputValidationFailuresAreRetryableWithinTheExistingAttemptLimit(string code, bool expected)
+    {
+        Assert.Equal(expected, ClassificationWorker.IsRetryableFailure(new InvalidDataException(code)));
+    }
+
+    [Fact]
+    public void MalformedModelJsonIsRetryableWithinTheExistingAttemptLimit()
+    {
+        Assert.True(ClassificationWorker.IsRetryableFailure(new System.Text.Json.JsonException()));
+    }
+
     [Fact]
     public void IncompleteModelOutputNeverAdvancesSuccess()
     {

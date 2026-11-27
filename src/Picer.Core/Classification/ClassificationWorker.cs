@@ -45,7 +45,7 @@ public sealed class ClassificationWorker(Func<PicerDatabase> openDatabase, IClas
         {
             if (authorization is not null && !authorization.IsCurrent(lease.Actor))
             { using var revokedDb = openDatabase(); new ClassificationRepository(revokedDb).BlockAuthorization(lease); return true; }
-            var retry = exception is HttpRequestException or TimeoutException or OperationCanceledException;
+            var retry = IsRetryableFailure(exception);
             var code = exception is System.Text.Json.JsonException ? "classification_json_invalid"
                 : exception is InvalidDataException && exception.Message.StartsWith("classification_", StringComparison.Ordinal)
                 ? exception.Message : retry ? "classification_transport_failed" : "classification_failed";
@@ -55,6 +55,11 @@ public sealed class ClassificationWorker(Func<PicerDatabase> openDatabase, IClas
         }
         return true;
     }
+
+    internal static bool IsRetryableFailure(Exception exception) => exception is HttpRequestException or TimeoutException or OperationCanceledException
+        or System.Text.Json.JsonException
+        || exception is InvalidDataException invalid && invalid.Message is "classification_output_invalid"
+            or "classification_output_incomplete" or "classification_evidence_invalid" or "classification_proposal_invalid";
 
     private async Task<bool> ProcessClusterAsync(CancellationToken cancellationToken)
     {
