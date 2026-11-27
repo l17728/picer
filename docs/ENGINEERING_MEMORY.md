@@ -94,3 +94,10 @@ ServiceMode 的共享远程缩略图、人脸裁剪、视频关键帧和视频�
 - 新增受限二进制 WebSocket wire envelope，承载签名密钥交换和密文帧，最大 3 MiB，分片读取、串行发送。
 - 验证：整解方案严格 Debug 构建 0 警告/错误；Relay 凭据/connector/加密协议/多路复用/wire 测试 11/11；IndexService Release SHA-256 `E4FE9A7D1F25E8EB292D6E086C3A46CF952B25E42BA742C093A1F40BEEF7249B`。
 - 原语尚未接入生产 Relay socket；peer key 发现、云路由/分块流、GUI 与本机服务数据流、持久写幂等和负载/撤销验收仍缺。未部署生产。详细边界见 `docs/LOCAL_INDEX_RELAY_PROTOCOL_V1_2026-11-26.md`。
+
+### 2026-11-27 分类标签树与增量计划
+
+- 分类预设包含 230 个节点、212 个可赋标签和 289 条导航边；照片支持多标签，树节点只显示有照片的类别并显示去重计数。详情见 `docs/PHOTO_CLASSIFICATION_TAG_COVERAGE_2026-11-27.md`。
+- 增量计划曾一次性保留全部照片上下文并触发 1.8 GiB 服务器的 OOM。提交 `83e5053` 改为 200 张分页计算，计划只持久化照片 ID/指纹/原因；任务启动时按 100 张分页重建并核验输入。35 项分类生命周期测试通过。
+- IndexService 已部署到 `47.103.99.229`，部署号 `20261127T091020602Z`，SHA-256 `37717a1ac859942679c4f5819d08a6b26c9428a15169af6ae60d77954ae6c86f`。
+- GUI Release 构建位于 `src/Picer.App/artifacts/builds/classification-tree-counts-memory-fix-2026-11-27/Picer.App.exe`，SHA-256 `A8591586B0078B4A20E0A81579444F6B44E076A9550DEED281DED44910590E19`。当时 Windows 处于锁屏状态，未启动该构建；请勿将旧版运行窗口误认为此构建。

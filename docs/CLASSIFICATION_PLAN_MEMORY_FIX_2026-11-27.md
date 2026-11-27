@@ -15,7 +15,18 @@
 
 - `dotnet build picer.sln -c Debug --no-restore --warnaserror`：0 警告、0 错误。
 - 分类生命周期筛选测试：35 通过、0 失败，其中新增 205 张照片跨页计划与启动回归用例。
-- 远端计划接口和实际任务创建需在部署修复后继续验证。
+- 远端分类树读取成功：230 个节点、212 个可赋标签、289 条导航边。
+- 真实远端计划创建成功：8,603 张照片全部进入计划，耗时约 4.5 秒；在修复前同一请求会触发 OOM 并杀掉服务进程。
+- 真实远端任务已创建并运行：预算沿用当前配置的最多 100 次模型调用；最近一次观察为成功 1、失败 0、待处理 8,601、运行中 1。模型配置为本机端点且 `AllowRemote=false`。
+- 修复后服务器保持 active，最近内核日志没有新的 OOM 记录；主机可用内存约 730 MiB。
+
+## 构建与部署记录
+
+- 源码提交：`83e5053ab5595afabd6d1fec3197e055a72dbb62`，已推送至 `origin/main`。
+- Linux x64 IndexService：部署包 `artifacts/indexservice-deploy/20261127T091020602Z/publish/Picer.IndexService`，SHA-256 `37717a1ac859942679c4f5819d08a6b26c9428a15169af6ae60d77954ae6c86f`。
+- 生产部署：服务器 `47.103.99.229`，部署号 `20261127T091020602Z`，健康/版本检查通过；回滚备份位于 `/opt/picer-index.backup-20261127T091020602Z`。
+- GUI Release：`src/Picer.App/artifacts/builds/classification-tree-counts-memory-fix-2026-11-27/Picer.App.exe`，SHA-256 `A8591586B0078B4A20E0A81579444F6B44E076A9550DEED281DED44910590E19`；配套 `Picer.App.dll` SHA-256 `EC908803DD32DB3DC52231410B48F4A19185D29F4D073B775822DD25FA49B71B`。
+- GUI 本地启动验收尚未完成：检查时 Windows 处于锁屏状态；屏幕上仍有旧构建窗口。不要把旧窗口当作本次 GUI 构建。
 
 ## 保护条件
 
