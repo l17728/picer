@@ -1,5 +1,7 @@
 # Picer 工程记忆：提交、构建与 GUI 基线
 
+2026-11-28 分类窗口重试入口已进入正式 Release，功能提交 `16a9667`。程序路径、哈希、生产部署和真实窗口测试记录见 [分类窗口重试验收](CLASSIFICATION_GUI_RETRY_2026-11-28.md)。
+
 ## 必须遵守
 
 1. 每完成一个可验证功能，立即创建 Conventional Commit 并推送到 `origin/main`。
