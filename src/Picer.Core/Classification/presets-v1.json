@@ -2080,6 +2080,286 @@
       ],
       "Assignable": true,
       "Active": true
+    },
+    {
+      "Id": "nav.environment.indoor_home",
+      "Dimension": "environment",
+      "Name": "家居房间",
+      "Definition": "用于浏览住宅内部的具体房间",
+      "Exclusions": "",
+      "Aliases": [],
+      "Assignable": false,
+      "Active": true
+    },
+    {
+      "Id": "nav.environment.indoor_public",
+      "Dimension": "environment",
+      "Name": "室内公共场所",
+      "Definition": "用于浏览住宅以外的室内场所",
+      "Exclusions": "",
+      "Aliases": [],
+      "Assignable": false,
+      "Active": true
+    },
+    {
+      "Id": "nav.environment.outdoor_nature",
+      "Dimension": "environment",
+      "Name": "自然户外",
+      "Definition": "用于浏览户外自然地貌与水域",
+      "Exclusions": "",
+      "Aliases": [],
+      "Assignable": false,
+      "Active": true
+    },
+    {
+      "Id": "nav.environment.outdoor_urban",
+      "Dimension": "environment",
+      "Name": "城市户外",
+      "Definition": "用于浏览城市街道与户外建筑空间",
+      "Exclusions": "",
+      "Aliases": [],
+      "Assignable": false,
+      "Active": true
+    },
+    {
+      "Id": "nav.environment.outdoor_places",
+      "Dimension": "environment",
+      "Name": "户外场所",
+      "Definition": "用于浏览公园、景区与户外游览场所",
+      "Exclusions": "",
+      "Aliases": [],
+      "Assignable": false,
+      "Active": true
+    },
+    {
+      "Id": "nav.environment.weather",
+      "Dimension": "environment",
+      "Name": "天气",
+      "Definition": "用于浏览照片中有可见证据的天气现象",
+      "Exclusions": "",
+      "Aliases": [],
+      "Assignable": false,
+      "Active": true
+    },
+    {
+      "Id": "nav.environment.time",
+      "Dimension": "environment",
+      "Name": "光照时段",
+      "Definition": "用于浏览可从画面光线确认的时段",
+      "Exclusions": "",
+      "Aliases": [],
+      "Assignable": false,
+      "Active": true
+    },
+    {
+      "Id": "nav.environment.season",
+      "Dimension": "environment",
+      "Name": "季节",
+      "Definition": "用于浏览具有明确画面依据的季节",
+      "Exclusions": "",
+      "Aliases": [],
+      "Assignable": false,
+      "Active": true
+    },
+    {
+      "Id": "nav.environment.lighting",
+      "Dimension": "environment",
+      "Name": "光线条件",
+      "Definition": "用于浏览画面中可见的光源和照度条件",
+      "Exclusions": "",
+      "Aliases": [],
+      "Assignable": false,
+      "Active": true
+    },
+    {
+      "Id": "place.home.entryway",
+      "Dimension": "place",
+      "Name": "玄关",
+      "Definition": "可见住宅入口、鞋柜或明确的入户过渡空间",
+      "Exclusions": "普通走廊或门口局部不足以确认住宅玄关",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "place.home.hallway",
+      "Dimension": "place",
+      "Name": "家中走廊",
+      "Definition": "可见住宅内部连接房间的走廊空间",
+      "Exclusions": "公共建筑走廊不属于家中走廊",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "place.home.child_room",
+      "Dimension": "place",
+      "Name": "儿童房",
+      "Definition": "可见儿童房的专属布置、家具或玩具组合",
+      "Exclusions": "仅有儿童或单件玩具不足以确认儿童房",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "place.home.playroom",
+      "Dimension": "place",
+      "Name": "家庭游戏室",
+      "Definition": "可见家庭室内游戏空间及成组游乐设施或玩具",
+      "Exclusions": "普通客厅里出现单件玩具不足以确认游戏室",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "place.home.laundry_room",
+      "Dimension": "place",
+      "Name": "洗衣房",
+      "Definition": "可见家庭洗衣机、烘干机或明确洗衣空间",
+      "Exclusions": "单件清洁用品不足以确认洗衣房",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "place.home.garage",
+      "Dimension": "place",
+      "Name": "家庭车库",
+      "Definition": "可见住宅附属车库及其明确结构或用途",
+      "Exclusions": "停车场或单独车辆不属于家庭车库",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "place.home.stairwell",
+      "Dimension": "place",
+      "Name": "家中楼梯间",
+      "Definition": "可见住宅内部楼梯及其家庭空间环境",
+      "Exclusions": "公共建筑楼梯不属于家中楼梯间",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "place.home.storage_room",
+      "Dimension": "place",
+      "Name": "储藏室",
+      "Definition": "可见住宅储物间、储物架及明确的储藏空间",
+      "Exclusions": "杂物出现在普通房间不足以确认储藏室",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "place.gym",
+      "Dimension": "place",
+      "Name": "健身房",
+      "Definition": "可见室内健身器材或明确的健身房环境",
+      "Exclusions": "户外运动或家中单件器材不足以确认",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "place.indoor_pool",
+      "Dimension": "place",
+      "Name": "室内泳池",
+      "Definition": "可见室内泳池水面与封闭场馆结构",
+      "Exclusions": "户外泳池、浴缸或自然水域不属于室内泳池",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "environment.season.spring",
+      "Dimension": "environment",
+      "Name": "春季",
+      "Definition": "可见明确春季物候线索，如集中花开与新生植被",
+      "Exclusions": "仅凭拍摄日期、人物衣着或单朵花不能确认",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "environment.season.summer",
+      "Dimension": "environment",
+      "Name": "夏季",
+      "Definition": "可见明确夏季环境线索，如繁茂植被与强烈季节性场景组合",
+      "Exclusions": "仅凭拍摄日期、肤色或短袖衣着不能确认",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "environment.season.autumn",
+      "Dimension": "environment",
+      "Name": "秋季",
+      "Definition": "可见成片秋叶变色、落叶或明确秋收景象",
+      "Exclusions": "单片黄叶或暖色滤镜不足以确认",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "environment.season.winter",
+      "Dimension": "environment",
+      "Name": "冬季",
+      "Definition": "可见明确冬季环境线索，如积雪、霜冻或典型冬季植被状态",
+      "Exclusions": "仅凭拍摄日期或厚衣服不能确认",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "environment.windy",
+      "Dimension": "environment",
+      "Name": "大风",
+      "Definition": "可见树木、旗帜、衣物等明显受风状态",
+      "Exclusions": "头发凌乱、模糊或摇摄效果不足以确认",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "environment.storm",
+      "Dimension": "environment",
+      "Name": "雷暴",
+      "Definition": "可见闪电或强降雨与雷暴云等明确迹象",
+      "Exclusions": "普通乌云或雨天不足以确认雷暴",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "environment.natural_light",
+      "Dimension": "environment",
+      "Name": "自然光",
+      "Definition": "画面主体由窗光、天光或日光等自然光照亮",
+      "Exclusions": "仅凭场景在室内或室外不能确认主要光源",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "environment.artificial_light",
+      "Dimension": "environment",
+      "Name": "人工照明",
+      "Definition": "可见灯具或明确由室内灯光、路灯等人工光源照亮",
+      "Exclusions": "仅凭夜间或画面明亮不能确认人工光源",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
+    },
+    {
+      "Id": "environment.low_light",
+      "Dimension": "environment",
+      "Name": "弱光环境",
+      "Definition": "画面整体处于明显昏暗的拍摄光照环境",
+      "Exclusions": "单纯曝光不足、滤镜或屏幕截图不足以确认",
+      "Aliases": [],
+      "Assignable": true,
+      "Active": true
     }
   ],
   "Edges": [
@@ -3111,6 +3391,421 @@
     {
       "ParentId": "nav.activity",
       "ChildId": "activity.photography",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "scene.indoor",
+      "ChildId": "nav.environment.indoor_home",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "scene.indoor",
+      "ChildId": "nav.environment.indoor_public",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.environment.indoor_home",
+      "ChildId": "place.home",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "place.home",
+      "ChildId": "place.home.entryway",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "place.home",
+      "ChildId": "place.home.hallway",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "place.home",
+      "ChildId": "place.home.child_room",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "place.home",
+      "ChildId": "place.home.playroom",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "place.home",
+      "ChildId": "place.home.laundry_room",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "place.home",
+      "ChildId": "place.home.garage",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "place.home",
+      "ChildId": "place.home.stairwell",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "place.home",
+      "ChildId": "place.home.storage_room",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.environment.indoor_public",
+      "ChildId": "place.restaurant",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.environment.indoor_public",
+      "ChildId": "place.cafe",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.environment.indoor_public",
+      "ChildId": "place.teahouse",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.environment.indoor_public",
+      "ChildId": "place.classroom",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.environment.indoor_public",
+      "ChildId": "place.library",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.environment.indoor_public",
+      "ChildId": "place.office",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.environment.indoor_public",
+      "ChildId": "place.mall",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.environment.indoor_public",
+      "ChildId": "place.supermarket",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.environment.indoor_public",
+      "ChildId": "place.medical",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.environment.indoor_public",
+      "ChildId": "place.hotel",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.environment.indoor_public",
+      "ChildId": "place.guesthouse",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.environment.indoor_public",
+      "ChildId": "place.museum",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.environment.indoor_public",
+      "ChildId": "place.exhibition",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.environment.indoor_public",
+      "ChildId": "place.theater",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.environment.indoor_public",
+      "ChildId": "place.stadium",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.environment.indoor_public",
+      "ChildId": "place.carriage",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.environment.indoor_public",
+      "ChildId": "place.aircraft_cabin",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.environment.indoor_public",
+      "ChildId": "place.gym",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.environment.indoor_public",
+      "ChildId": "place.indoor_pool",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "scene.outdoor",
+      "ChildId": "nav.environment.outdoor_nature",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "scene.outdoor",
+      "ChildId": "nav.environment.outdoor_urban",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "scene.outdoor",
+      "ChildId": "nav.environment.outdoor_places",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.environment.outdoor_nature",
+      "ChildId": "scene.landscape",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.environment.outdoor_nature",
+      "ChildId": "scene.grassland",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.environment.outdoor_nature",
+      "ChildId": "scene.woodland",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.environment.outdoor_nature",
+      "ChildId": "scene.forest",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.environment.outdoor_nature",
+      "ChildId": "scene.mountain",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.environment.outdoor_nature",
+      "ChildId": "scene.water",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.environment.outdoor_nature",
+      "ChildId": "scene.coast",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.environment.outdoor_nature",
+      "ChildId": "scene.wetland",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.environment.outdoor_nature",
+      "ChildId": "scene.desert",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.environment.outdoor_nature",
+      "ChildId": "scene.snow",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.environment.outdoor_nature",
+      "ChildId": "scene.glacier",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.environment.outdoor_nature",
+      "ChildId": "scene.farmland",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.environment.outdoor_nature",
+      "ChildId": "scene.sky",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.environment.outdoor_nature",
+      "ChildId": "scene.beach",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.environment.outdoor_urban",
+      "ChildId": "scene.city",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.environment.outdoor_urban",
+      "ChildId": "object.building.bridge",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.environment.outdoor_urban",
+      "ChildId": "object.building.road",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.environment.outdoor_urban",
+      "ChildId": "object.building.street",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.environment.outdoor_urban",
+      "ChildId": "object.building.square",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.environment.outdoor_urban",
+      "ChildId": "object.building.garden",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.environment.outdoor_urban",
+      "ChildId": "object.building.wall",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.environment.outdoor_urban",
+      "ChildId": "object.building.tunnel",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.environment.outdoor_urban",
+      "ChildId": "object.building.dam",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.environment.outdoor_urban",
+      "ChildId": "object.building.pier",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.environment.outdoor_urban",
+      "ChildId": "object.building.monument",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.environment.outdoor_places",
+      "ChildId": "place.park",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.environment.outdoor_places",
+      "ChildId": "place.zoo",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.environment.outdoor_places",
+      "ChildId": "place.scenic_area",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.environment.outdoor_places",
+      "ChildId": "place.landmark",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.environment",
+      "ChildId": "nav.environment.weather",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.environment",
+      "ChildId": "nav.environment.time",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.environment",
+      "ChildId": "nav.environment.season",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.environment",
+      "ChildId": "nav.environment.lighting",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.environment.weather",
+      "ChildId": "environment.sunny",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.environment.weather",
+      "ChildId": "environment.overcast",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.environment.weather",
+      "ChildId": "environment.rain",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.environment.weather",
+      "ChildId": "environment.snowfall",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.environment.weather",
+      "ChildId": "environment.fog",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.environment.weather",
+      "ChildId": "environment.windy",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.environment.weather",
+      "ChildId": "environment.storm",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.environment.time",
+      "ChildId": "environment.day",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.environment.time",
+      "ChildId": "environment.sunrise_sunset",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.environment.time",
+      "ChildId": "scene.night",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.environment.season",
+      "ChildId": "environment.season.spring",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.environment.season",
+      "ChildId": "environment.season.summer",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.environment.season",
+      "ChildId": "environment.season.autumn",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.environment.season",
+      "ChildId": "environment.season.winter",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.environment.lighting",
+      "ChildId": "environment.natural_light",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.environment.lighting",
+      "ChildId": "environment.artificial_light",
+      "Kind": "Browse"
+    },
+    {
+      "ParentId": "nav.environment.lighting",
+      "ChildId": "environment.low_light",
       "Kind": "Browse"
     }
   ]

@@ -40,7 +40,7 @@ public partial class ClassificationBrowserWindow : Window
         {
             _browse = await BrowsePage(null);
             _taxonomy = _browse.Taxonomy;
-            if (rebuildTree) BuildLabelTree();
+            if (rebuildTree && BuildLabelTree()) _browse = await BrowsePage(null);
             _rows.Clear();
             foreach (var photo in _browse.Photos) _rows.Add(new PhotoRow(photo, _taxonomy, _closed.Token));
             Photos.ItemsSource = _rows;
@@ -84,64 +84,70 @@ public partial class ClassificationBrowserWindow : Window
         finally { _loadingMore = false; }
     }
 
-    private void BuildLabelTree()
+    private bool BuildLabelTree()
     {
-        if (_taxonomy is null) return;
+        if (_taxonomy is null) return false;
         // A rebuild must never undo what the user did to the tree: remember which nodes were
         // expanded or collapsed and which one was selected, then put that state back.
         var wasExpanded = new Dictionary<string, bool>(StringComparer.Ordinal);
         foreach (var item in TreeNodes())
-            if (item.Tag is string[] ids) wasExpanded[string.Join("|", ids)] = item.IsExpanded;
-        var selectedKey = LabelTree.SelectedItem is TreeViewItem { Tag: string[] selectedIds } ? string.Join("|", selectedIds) : null;
+            if (item.Tag is TreeNodeSelection selection) wasExpanded[selection.Key] = item.IsExpanded;
+        var selectedKey = LabelTree.SelectedItem is TreeViewItem { Tag: TreeNodeSelection selectedTag } ? selectedTag.Key : null;
         LabelTree.Items.Clear();
         var counts = _browse?.Counts;
-        // A node stays visible while it is selected even if its count drops to zero, so a live
-        // selection never disappears from under the user.
-        bool VisibleLeaf(ClassificationLabel label) =>
-            counts is null || label.Id == _selectedLabelId || _selectedFilterIds.Contains(label.Id) || counts.GetValueOrDefault(label.Id) > 0;
-        var roots = new List<TreeViewItem>();
-        foreach (var group in _taxonomy.Labels.Where(x => x.Active).GroupBy(x => x.Dimension).OrderBy(x => x.Key))
+        var graph = new ClassificationTaxonomy(_taxonomy.Labels, _taxonomy.Edges);
+        var labels = _taxonomy.Labels.Where(label => label.Active).ToDictionary(label => label.Id, StringComparer.Ordinal);
+        var children = labels.Keys.ToDictionary(id => id, _ => new List<string>(), StringComparer.Ordinal);
+        var parents = labels.Keys.ToDictionary(id => id, _ => new List<string>(), StringComparer.Ordinal);
+        foreach (var edge in _taxonomy.Edges.Where(edge => edge.Kind != TaxonomyEdgeKind.Related))
         {
-            var groupIds = group.Where(x => x.Assignable && !x.Id.StartsWith("nav.", StringComparison.Ordinal))
-                .Select(x => x.Id).Distinct(StringComparer.Ordinal).ToArray();
-            var dimensionCount = counts?.GetValueOrDefault(ClassificationCountKeys.Dimension(group.Key)) ?? 0;
-            if (counts is not null && dimensionCount == 0 && !groupIds.Any(_selectedFilterIds.Contains)) continue;
-            var root = new TreeViewItem { Header = $"{group.Key}（{dimensionCount}）", IsExpanded = true, Tag = groupIds };
-            var people = group.Where(x => x.Id.StartsWith("person.confirmed.", StringComparison.Ordinal)).OrderBy(x => x.Name)
-                .Where(VisibleLeaf).ToArray();
-            if (people.Length > 0)
+            if (!labels.ContainsKey(edge.ParentId) || !labels.ContainsKey(edge.ChildId)) continue;
+            children[edge.ParentId].Add(edge.ChildId);
+            parents[edge.ChildId].Add(edge.ParentId);
+        }
+        bool HasPhotos(string id) => counts is null || counts.GetValueOrDefault(id) > 0;
+        string[] MatchingIds(string id) => graph.Expand(id).Where(child => labels.TryGetValue(child, out var label) && label.Assignable)
+            .Order(StringComparer.Ordinal).ToArray();
+        var roots = new List<TreeViewItem>();
+        foreach (var group in labels.Values.GroupBy(label => label.Dimension).OrderBy(group => group.Key))
+        {
+            var navigationRootId = "nav." + group.Key;
+            var hasNavigationRoot = labels.ContainsKey(navigationRootId);
+            var groupIds = hasNavigationRoot
+                ? MatchingIds(navigationRootId).Where(HasPhotos).ToArray()
+                : group.Where(label => label.Assignable && HasPhotos(label.Id)).Select(label => label.Id)
+                    .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
+            var dimensionCount = hasNavigationRoot
+                ? counts?.GetValueOrDefault(navigationRootId) ?? 0
+                : counts?.GetValueOrDefault(ClassificationCountKeys.Dimension(group.Key)) ?? 0;
+            if (dimensionCount == 0 || groupIds.Length == 0) continue;
+            var root = new TreeViewItem
             {
-                var named = new TreeViewItem
-                {
-                    Header = $"已命名人物（{counts?.GetValueOrDefault(ClassificationCountKeys.NamedPeople) ?? 0}）",
-                    Tag = people.Select(x => x.Id).ToArray(), IsExpanded = true
-                };
-                foreach (var label in people)
-                    named.Items.Add(new TreeViewItem { Header = Header(label), Tag = new[] { label.Id } });
-                root.Items.Add(named);
+                Header = $"{DimensionName(group.Key)}（{dimensionCount}）", IsExpanded = true,
+                Tag = new TreeNodeSelection("dimension:" + group.Key, groupIds, null)
+            };
+            // The preset's nav.<dimension> root defines the smart-album tree. Cross-dimension
+            // Browse edges intentionally make a place (for example a park) visible under both
+            // Place and Outdoor; each node's count is the distinct photo union of its subtree.
+            if (hasNavigationRoot && HasPhotos(navigationRootId))
+                root.Items.Add(CreateNode(labels[navigationRootId], new HashSet<string>(StringComparer.Ordinal)));
+            else
+            {
+                var rootsInDimension = group.Where(label => HasPhotos(label.Id)
+                    && !parents[label.Id].Any(parent => labels.TryGetValue(parent, out var parentLabel)
+                        && parentLabel.Dimension == group.Key && HasPhotos(parent)))
+                    .OrderBy(label => label.Name, StringComparer.Ordinal).ThenBy(label => label.Id, StringComparer.Ordinal);
+                foreach (var label in rootsInDimension) root.Items.Add(CreateNode(label, new HashSet<string>(StringComparer.Ordinal)));
             }
-            foreach (var label in group.Where(x => !x.Id.StartsWith("person.confirmed.", StringComparison.Ordinal)).OrderBy(x => x.Name).Where(VisibleLeaf))
-                root.Items.Add(new TreeViewItem { Header = Header(label), Tag = new[] { label.Id } });
             roots.Add(root);
         }
-        // When nothing has been classified yet, show the full taxonomy with zero counts instead
-        // of an empty tree that looks broken.
-        if (roots.Count == 0 && counts is not null)
-            foreach (var group in _taxonomy.Labels.Where(x => x.Active).GroupBy(x => x.Dimension).OrderBy(x => x.Key))
-            {
-                var groupIds = group.Where(x => x.Assignable && !x.Id.StartsWith("nav.", StringComparison.Ordinal))
-                    .Select(x => x.Id).Distinct(StringComparer.Ordinal).ToArray();
-                var root = new TreeViewItem { Header = $"{group.Key}（0）", IsExpanded = true, Tag = groupIds };
-                foreach (var label in group.Where(x => !x.Id.StartsWith("person.confirmed.", StringComparison.Ordinal)).OrderBy(x => x.Name))
-                    root.Items.Add(new TreeViewItem { Header = Header(label), Tag = new[] { label.Id } });
-                roots.Add(root);
-            }
         foreach (var root in roots) LabelTree.Items.Add(root);
         foreach (var item in TreeNodes())
-            if (item.Tag is string[] ids && wasExpanded.TryGetValue(string.Join("|", ids), out var expanded)) item.IsExpanded = expanded;
+            if (item.Tag is TreeNodeSelection selection && wasExpanded.TryGetValue(selection.Key, out var expanded)) item.IsExpanded = expanded;
+        var selectionReset = false;
         if (selectedKey is not null)
         {
-            var selected = TreeNodes().FirstOrDefault(item => item.Tag is string[] ids && string.Join("|", ids) == selectedKey);
+            var selected = TreeNodes().FirstOrDefault(item => item.Tag is TreeNodeSelection selection && selection.Key == selectedKey);
             if (selected is not null)
             {
                 // Re-selecting raises SelectedItemChanged; the photo list is reloaded right after this.
@@ -149,10 +155,45 @@ public partial class ClassificationBrowserWindow : Window
                 try { selected.IsSelected = true; }
                 finally { _restoringSelection = false; }
             }
+            else
+            {
+                _selectedLabelId = null;
+                _selectedFilterIds = Array.Empty<string>();
+                selectionReset = true;
+            }
         }
-        return;
+        SetDecisionButtons(_selectedLabelId is not null);
+        return selectionReset;
 
-        string Header(ClassificationLabel label) => $"{label.Name}（{counts?.GetValueOrDefault(label.Id) ?? 0}）";
+        TreeViewItem CreateNode(ClassificationLabel label, HashSet<string> ancestors)
+        {
+            if (!ancestors.Add(label.Id)) return new TreeViewItem { Header = $"{label.Name}（{counts?.GetValueOrDefault(label.Id) ?? 0}）" };
+            var matchingIds = MatchingIds(label.Id);
+            var node = new TreeViewItem
+            {
+                Header = $"{label.Name}（{counts?.GetValueOrDefault(label.Id) ?? 0}）",
+                Tag = new TreeNodeSelection(label.Id, matchingIds, label.Assignable ? label.Id : null)
+            };
+            foreach (var child in children[label.Id].Distinct(StringComparer.Ordinal)
+                .Where(child => labels.TryGetValue(child, out var childLabel) && HasPhotos(childLabel.Id))
+                .Select(child => labels[child]).OrderBy(child => child.Name, StringComparer.Ordinal).ThenBy(child => child.Id, StringComparer.Ordinal))
+                node.Items.Add(CreateNode(child, new HashSet<string>(ancestors, StringComparer.Ordinal)));
+            return node;
+        }
+    }
+
+    private static string DimensionName(string dimension) => dimension switch
+    {
+        "subject" => "人物与主体", "nature" => "自然与风景", "place" => "地点与空间",
+        "architecture" => "城市与建筑", "activity" => "活动", "event" => "事件与节日",
+        "object" => "物品与食物", "environment" => "环境与光线", "document" => "文档资料",
+        _ => dimension
+    };
+
+    private void SetDecisionButtons(bool enabled)
+    {
+        ConfirmClassificationButton.IsEnabled = enabled;
+        RejectClassificationButton.IsEnabled = enabled;
     }
 
     private IEnumerable<TreeViewItem> TreeNodes() => LabelTree.Items.OfType<TreeViewItem>().SelectMany(SelfAndDescendants);
@@ -166,10 +207,11 @@ public partial class ClassificationBrowserWindow : Window
     private async void LabelTree_SelectedItemChanged(object sender, RoutedPropertyChangedEventArgs<object> e)
     {
         if (_restoringSelection) return;
-        if (e.NewValue is TreeViewItem { Tag: string[] ids })
+        if (e.NewValue is TreeViewItem { Tag: TreeNodeSelection selection })
         {
-            _selectedFilterIds = ids;
-            _selectedLabelId = ids.Length == 1 ? ids[0] : null;
+            _selectedFilterIds = selection.FilterIds;
+            _selectedLabelId = selection.DecisionLabelId;
+            SetDecisionButtons(_selectedLabelId is not null);
             // Selecting a node only changes which photos are listed; the tree stays exactly as it is.
             await RefreshAsync(rebuildTree: false);
         }
@@ -237,4 +279,6 @@ public partial class ClassificationBrowserWindow : Window
             Preview = new ImageItemViewModel(new ImageRecord { Id = photo.ImageId, Path = photo.Path, ThumbPath = photo.ThumbnailPath, ContentSha256 = photo.ContentIdentity }, token, AppServices.GetClientServices());
         }
     }
+
+    private sealed record TreeNodeSelection(string Key, string[] FilterIds, string? DecisionLabelId);
 }
