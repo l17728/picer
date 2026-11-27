@@ -23,12 +23,25 @@ public sealed partial class ClassificationRepository
             var id = Guid.NewGuid().ToString("N");
             Execute("INSERT INTO classification_v2_jobs VALUES($id,$request,$plan,'queued',$config,$budget,0,$now,$now,$actor)",
                 ("$id", id), ("$request", requestId), ("$plan", planId), ("$config", Encode(configuration)), ("$budget", configuration.MaximumCalls), ("$now", Now), ("$actor", actor));
-            foreach (var item in plan.Items)
-                Execute("""
-                    INSERT INTO classification_v2_items(job_id,image_id,fingerprint,input,state)
-                    VALUES($job,$image,$fingerprint,$input,CASE WHEN EXISTS(
-                        SELECT 1 FROM classification_v2_items WHERE image_id=$image AND state IN ('pending','leased')) THEN 'waiting' ELSE 'pending' END)
-                    """, ("$job", id), ("$image", item.ImageId), ("$fingerprint", item.Fingerprint), ("$input", Encode(item.Input)));
+            const int inputPageSize = 100;
+            foreach (var page in plan.Items.Chunk(inputPageSize))
+            {
+                var missing = page.Where(item => item.Input is null).Select(item => item.ImageId).ToArray();
+                var currentInputs = missing.Length == 0 ? new Dictionary<long, ClassificationContext>()
+                    : Contexts(configuration, imageIds: missing).ToDictionary(context => context.Image.Id);
+                foreach (var item in page)
+                {
+                    var input = item.Input ?? currentInputs.GetValueOrDefault(item.ImageId)?.Input
+                        ?? throw new InvalidOperationException("classification_plan_stale");
+                    if (ClassificationInputFingerprint.Compute(input) != item.Fingerprint)
+                        throw new InvalidOperationException("classification_plan_stale");
+                    Execute("""
+                        INSERT INTO classification_v2_items(job_id,image_id,fingerprint,input,state)
+                        VALUES($job,$image,$fingerprint,$input,CASE WHEN EXISTS(
+                            SELECT 1 FROM classification_v2_items WHERE image_id=$image AND state IN ('pending','leased')) THEN 'waiting' ELSE 'pending' END)
+                        """, ("$job", id), ("$image", item.ImageId), ("$fingerprint", item.Fingerprint), ("$input", Encode(input)));
+                }
+            }
             FinishJobs();
             return Job(id);
         });

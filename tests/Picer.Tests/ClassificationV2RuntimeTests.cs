@@ -235,6 +235,22 @@ public sealed class ClassificationV2RuntimeTests : IDisposable
     }
 
     [Fact]
+    public void IncrementalPlanPagesContextsAndRebuildsInputsWhenStarting()
+    {
+        for (var i = 0; i < 205; i++) Add($"page-{i:D3}.jpg");
+
+        var plan = _repo.Plan(Request(), Config);
+        Assert.Equal(205, plan.Total);
+        Assert.Equal(205, plan.Items.Count);
+        Assert.All(plan.Items, item => Assert.Null(item.Input));
+
+        var job = _repo.Start(plan.Id, Request());
+        Assert.Equal(205, job.Total);
+        var lease = Assert.IsType<ClassificationLease>(_repo.Claim());
+        Assert.NotEmpty(lease.Input.Metadata);
+    }
+
+    [Fact]
     public void IncompleteModelOutputNeverAdvancesSuccess()
     {
         Add("photo.jpg"); Start(); var lease = _repo.Claim()!;

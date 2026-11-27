@@ -15,7 +15,7 @@ public sealed record ClassificationResult(string SchemaVersion, string InputFing
     IReadOnlyList<ClassificationLabelEvaluation> Labels, IReadOnlyList<ClassificationProposalDraft> Proposals);
 public sealed record ClassificationProposalDraft(string Name, string Dimension, string Definition, string Exclusions,
     IReadOnlyList<string> ParentIds, IReadOnlyList<string> EvidenceIds);
-public sealed record ClassificationPlanItem(long ImageId, string Fingerprint, ClassificationInput Input, ClassificationUpdateReason Reasons);
+public sealed record ClassificationPlanItem(long ImageId, string Fingerprint, ClassificationInput? Input, ClassificationUpdateReason Reasons);
 public sealed record ClassificationPlan(string Id, string RequestId, string Epoch, long TaxonomyRevision,
     DateTimeOffset ExpiresAt, ClassificationConfiguration Configuration, int Total, int Unchanged,
     IReadOnlyList<ClassificationPlanItem> Items, long InputRevision = 0, int Deferred = 0);

@@ -70,10 +70,14 @@ public sealed partial class ClassificationRepository(PicerDatabase database)
             throw new ArgumentException("classification_remote_not_authorized");
     }
 
-    public IReadOnlyList<ClassificationContext> Contexts(ClassificationConfiguration configuration, long? onlyImage = null)
+    public IReadOnlyList<ClassificationContext> Contexts(ClassificationConfiguration configuration, long? onlyImage = null,
+        long afterImageId = 0, int limit = 0, IReadOnlyCollection<long>? imageIds = null)
     {
+        if (afterImageId < 0 || limit < 0 || onlyImage is not null && imageIds is not null)
+            throw new ArgumentOutOfRangeException(nameof(afterImageId));
         var taxonomy = Taxonomy();
         var epoch = Epoch;
+        var idsJson = imageIds is null ? null : JsonSerializer.Serialize(imageIds);
         var images = new List<(ImageRecord Image, string Owner, string Identity)>();
         using (var command = Sql("""
             SELECT i.id,i.source_id,i.path,i.file_size,i.modified_utc,i.sha256,i.width,i.height,i.taken_utc,i.camera,i.gps,i.thumb_path,
@@ -82,8 +86,11 @@ public sealed partial class ClassificationRepository(PicerDatabase database)
                      ELSE 'local:'||$epoch||':'||COALESCE(v.version_id,CAST(i.id AS TEXT)||':'||i.file_size||':'||i.modified_utc) END
             FROM images i LEFT JOIN sync_image_owners o ON o.image_id=i.id
             LEFT JOIN photo_metadata_file_versions v ON v.image_id=i.id
-            WHERE i.status='active' AND ($id IS NULL OR i.id=$id) ORDER BY i.id
-            """, ("$epoch", epoch), ("$id", onlyImage)))
+            WHERE i.status='active' AND ($id IS NULL OR i.id=$id)
+              AND ($ids IS NULL OR EXISTS(SELECT 1 FROM json_each($ids) selected WHERE CAST(selected.value AS INTEGER)=i.id))
+              AND ($after=0 OR i.id>$after)
+            ORDER BY i.id LIMIT CASE WHEN $limit=0 THEN -1 ELSE $limit END
+            """, ("$epoch", epoch), ("$id", onlyImage), ("$ids", idsJson), ("$after", afterImageId), ("$limit", limit)))
         using (var r = command.ExecuteReader())
             while (r.Read()) images.Add((new ImageRecord { Id = r.GetInt64(0), SourceId = r.GetInt64(1), Path = r.GetString(2),
                 FileSize = r.GetInt64(3), ModifiedUtc = DateTime.Parse(r.GetString(4), null, DateTimeStyles.RoundtripKind),
@@ -91,14 +98,19 @@ public sealed partial class ClassificationRepository(PicerDatabase database)
                 TakenUtc = r.IsDBNull(8) ? null : DateTime.Parse(r.GetString(8), null, DateTimeStyles.RoundtripKind),
                 Camera = r.IsDBNull(9) ? null : r.GetString(9), Gps = r.IsDBNull(10) ? null : r.GetString(10),
                 ThumbPath = r.IsDBNull(11) ? null : r.GetString(11) }, r.GetString(12), r.GetString(13)));
+        var throughImageId = images.Count == 0 ? 0 : images[^1].Image.Id;
         var descriptions = new Dictionary<long, Dictionary<string, string>>();
         using (var command = Sql("""
             SELECT a.image_id,a.provider,a.model_version,a.prompt_version,a.result_json,a.source_file_size,a.source_modified_utc
             FROM cloud_vision_analyses a JOIN images i ON i.id=a.image_id
             WHERE i.status='active' AND a.status='completed' AND a.result_json IS NOT NULL
               AND a.source_file_size=i.file_size AND picer_same_instant(a.source_modified_utc,i.modified_utc)
-              AND ($id IS NULL OR i.id=$id) ORDER BY a.image_id,a.provider
-            """, ("$id", onlyImage)))
+              AND ($id IS NULL OR i.id=$id)
+              AND ($ids IS NULL OR EXISTS(SELECT 1 FROM json_each($ids) selected WHERE CAST(selected.value AS INTEGER)=a.image_id))
+              AND ($after=0 OR a.image_id>$after)
+              AND ($limit=0 OR a.image_id <= $through)
+            ORDER BY a.image_id,a.provider
+            """, ("$id", onlyImage), ("$ids", idsJson), ("$after", afterImageId), ("$limit", limit), ("$through", throughImageId)))
         using (var r = command.ExecuteReader())
             while (r.Read())
             {
@@ -110,8 +122,12 @@ public sealed partial class ClassificationRepository(PicerDatabase database)
         using (var command = Sql("""
             SELECT f.image_id,a.person_id,a.face_id,a.updated_utc FROM detected_faces f
             JOIN face_person_assignments a ON a.face_id=f.id AND a.state='confirmed'
-            WHERE f.is_archived=0 AND ($id IS NULL OR f.image_id=$id) ORDER BY f.image_id,a.face_id
-            """, ("$id", onlyImage)))
+            WHERE f.is_archived=0 AND ($id IS NULL OR f.image_id=$id)
+              AND ($ids IS NULL OR EXISTS(SELECT 1 FROM json_each($ids) selected WHERE CAST(selected.value AS INTEGER)=f.image_id))
+              AND ($after=0 OR f.image_id>$after)
+              AND ($limit=0 OR f.image_id <= $through)
+            ORDER BY f.image_id,a.face_id
+            """, ("$id", onlyImage), ("$ids", idsJson), ("$after", afterImageId), ("$limit", limit), ("$through", throughImageId)))
         using (var r = command.ExecuteReader())
             while (r.Read())
             {
@@ -150,31 +166,43 @@ public sealed partial class ClassificationRepository(PicerDatabase database)
             var successes = new Dictionary<long, string>();
             using (var command = Sql("SELECT image_id,success_fingerprint FROM classification_v2_work WHERE success_fingerprint IS NOT NULL"))
             using (var rows = command.ExecuteReader()) while (rows.Read()) successes[rows.GetInt64(0)] = rows.GetString(1);
-            var contexts = Contexts(configuration);
             var computeFingerprint = ClassificationInputFingerprint.CreateBatchComputer(Taxonomy().Definitions);
             var failures = new Dictionary<long, (string Fingerprint, string? RetryAfter)>();
             using (var command = Sql("SELECT image_id,attempt_fingerprint,retry_after FROM classification_v2_work WHERE outcome='failed' AND attempt_fingerprint IS NOT NULL"))
             using (var rows = command.ExecuteReader()) while (rows.Read()) failures[rows.GetInt64(0)] = (rows.GetString(1), rows.IsDBNull(2) ? null : rows.GetString(2));
             var items = new List<ClassificationPlanItem>();
             var deferred = 0;
-            foreach (var context in contexts)
+            var total = 0;
+            var unchanged = 0;
+            long afterImageId = 0;
+            const int planPageSize = 200;
+            while (true)
             {
-                var fingerprint = computeFingerprint(context.Input);
-                if (successes.GetValueOrDefault(context.Image.Id) == fingerprint && !failures.ContainsKey(context.Image.Id)) continue;
-                var previous = successes.ContainsKey(context.Image.Id)
-                    ? Scalar("SELECT success_input FROM classification_v2_work WHERE image_id=$id", ("$id", context.Image.Id)) : null;
-                var decision = ClassificationIncrementalPlanner.Decide(context.Input, previous is null ? null : Decode<ClassificationInput>(previous));
-                if (failures.TryGetValue(context.Image.Id, out var failed) && failed.Fingerprint == decision.DesiredFingerprint)
+                var contexts = Contexts(configuration, afterImageId: afterImageId, limit: planPageSize);
+                if (contexts.Count == 0) break;
+                total += contexts.Count;
+                foreach (var context in contexts)
                 {
-                    if (!retryFailures && (failed.RetryAfter is null || DateTimeOffset.Parse(failed.RetryAfter, CultureInfo.InvariantCulture) > DateTimeOffset.UtcNow))
-                    { deferred++; continue; }
-                    decision = decision with { Action = ClassificationPlanAction.Enqueue, Reasons = decision.Reasons | ClassificationUpdateReason.RetryDue };
+                    afterImageId = context.Image.Id;
+                    var fingerprint = computeFingerprint(context.Input);
+                    if (successes.GetValueOrDefault(context.Image.Id) == fingerprint && !failures.ContainsKey(context.Image.Id))
+                    { unchanged++; continue; }
+                    var previous = successes.ContainsKey(context.Image.Id)
+                        ? Scalar("SELECT success_input FROM classification_v2_work WHERE image_id=$id", ("$id", context.Image.Id)) : null;
+                    var decision = ClassificationIncrementalPlanner.Decide(context.Input, previous is null ? null : Decode<ClassificationInput>(previous));
+                    if (failures.TryGetValue(context.Image.Id, out var failed) && failed.Fingerprint == decision.DesiredFingerprint)
+                    {
+                        if (!retryFailures && (failed.RetryAfter is null || DateTimeOffset.Parse(failed.RetryAfter, CultureInfo.InvariantCulture) > DateTimeOffset.UtcNow))
+                        { deferred++; continue; }
+                        decision = decision with { Action = ClassificationPlanAction.Enqueue, Reasons = decision.Reasons | ClassificationUpdateReason.RetryDue };
+                    }
+                    if (decision.Action != ClassificationPlanAction.Skip)
+                        items.Add(new(context.Image.Id, decision.DesiredFingerprint, null, decision.Reasons));
+                    else unchanged++;
                 }
-                if (decision.Action != ClassificationPlanAction.Skip)
-                    items.Add(new(context.Image.Id, decision.DesiredFingerprint, context.Input, decision.Reasons));
             }
             plan = new ClassificationPlan(Guid.NewGuid().ToString("N"), requestId, Epoch, Taxonomy().Revision,
-                DateTimeOffset.UtcNow.AddMinutes(30), configuration, contexts.Count, contexts.Count - items.Count - deferred, items,
+                DateTimeOffset.UtcNow.AddMinutes(30), configuration, total, unchanged, items,
                 long.Parse(Scalar("SELECT input_revision FROM classification_v2_revision WHERE id=1")!, CultureInfo.InvariantCulture), deferred);
             }
             finally { _transaction = null; }
