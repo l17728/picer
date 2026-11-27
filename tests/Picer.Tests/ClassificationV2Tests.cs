@@ -54,6 +54,30 @@ public class ClassificationV2Tests
     }
 
     [Fact]
+    public void IndexedSparseOutputMapsCompactIndicesToValidatedLabelIds()
+    {
+        var preset = ClassificationPreset.Load();
+        var taxonomy = new ClassificationTaxonomySnapshot(1, 1, preset.Labels, preset.Edges, []);
+        var expected = preset.Labels.Where(label => label.Active && label.Assignable).ToArray();
+        string Json(int[] supported, int[] uncertain, int[] conflicting, bool evaluated = true)
+            => System.Text.Json.JsonSerializer.Serialize(new
+            {
+                schemaVersion = "classification-indexed-v1", inputFingerprint = "fingerprint", evaluatedAll = evaluated,
+                supported, uncertain, conflicting, proposals = Array.Empty<object>()
+            });
+        var result = ClassificationModel.DecodeResult(Json([0], [1], [2]), taxonomy);
+        Assert.Equal(expected[0].Id, result.Labels[0].LabelId);
+        Assert.Equal("supported", result.Labels[0].Support);
+        Assert.Equal(new[] { "image:current" }, result.Labels[0].EvidenceIds);
+        Assert.Equal("uncertain", result.Labels[1].Support);
+        Assert.Equal("conflicting", result.Labels[2].Support);
+        Assert.All(result.Labels.Skip(3), label => Assert.Equal("absent", label.Support));
+        Assert.Throws<InvalidDataException>(() => ClassificationModel.DecodeResult(Json([0], [0], []), taxonomy));
+        Assert.Throws<InvalidDataException>(() => ClassificationModel.DecodeResult(Json([expected.Length], [], []), taxonomy));
+        Assert.Throws<InvalidDataException>(() => ClassificationModel.DecodeResult(Json([], [], [], evaluated: false), taxonomy));
+    }
+
+    [Fact]
     public void DeletedPersonFilterMatchesNothingInsteadOfBroadeningResults()
     {
         var filter = new CompiledClassificationFilter(Graph(), new([new(ClassificationMatchMode.All, ["person.confirmed.123"])], []));

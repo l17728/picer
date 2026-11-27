@@ -112,3 +112,10 @@ ServiceMode 的共享远程缩略图、人脸裁剪、视频关键帧和视频�
 - 真实任务配置调用上限为 10,000（更正早先 100 的错误记录）；最后观测成功 39、失败 28、待处理 8,534、运行中 2，125 次调用已用。
 - 最新 GUI Release：`src/Picer.App/artifacts/builds/classification-tree-final-2026-11-27/publish/Picer.App.exe`，SHA-256 `5C589E1F7BE2AE7B10D1EA7135B457960C7A17EB9B20240486BDCA1E5FE533D7`。Windows 锁屏未解除，未启动视觉验收。
 - 14:33 UTC 最新复查：最终补丁部署后仍有一条 `classification_json_invalid`，不能认为模型失败问题已解决；任务状态成功 39、失败 28、待处理 8,535、运行中 1，调用 126/10,000。下次应添加不记录模型正文的安全诊断（JSON 行/字节位置、响应长度、think 标记、结束原因），再确定是否截断或包装格式问题。
+
+### 2026-11-27 分类响应截断根因与修复
+
+- 生产安全诊断证明 Qwen3 输出到达配置的 8,192 token 上限时 JSON 尚未闭合（响应 23–24 KiB，起始为 JSON、末尾无闭合）；根因是逐标签对象输出太长。
+- `ClassificationModel` 使用 `classification-indexed-v1` 紧凑整数数组并在服务端映射回 taxonomy 标签 ID；保留完整性、重复/越界、证据、指纹校验和旧 sparse-v1 兼容。
+- 严格 Debug 构建 0 警告/错误；定向测试 2+4 项通过，分类运行时 41 项通过。生产部署 `20261127T145017286Z`，binary SHA-256 `a1aa28d77ef886f355bd53ab15543d46265e884d5d3116cff8e77f79759560edc`。部署后成功由 39 增至 44，失败仍为 30，待处理 8,527，运行中 2，使用 137/10,000 调用；旧失败待当前任务结束后定向重试。
+- GUI 构建：`src/Picer.App/artifacts/builds/classification-tree-compact-classifier-2026-11-27/publish/Picer.App.exe`，SHA-256 `8C472B615DF04CAD577165447CCE27F76F62DE99D623EC7F370E63AE4126CC80`；仍待桌面解锁后启动验收。

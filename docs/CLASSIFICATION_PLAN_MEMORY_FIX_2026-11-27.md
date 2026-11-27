@@ -57,3 +57,12 @@
 - 最新 GUI 发布路径：`src/Picer.App/artifacts/builds/classification-tree-final-2026-11-27/publish/Picer.App.exe`，SHA-256 `5C589E1F7BE2AE7B10D1EA7135B457960C7A17EB9B20240486BDCA1E5FE533D7`；`Picer.App.dll` SHA-256 `A7030B35C451A95713B3DC7219D6D51CFA01A6390FA59A9D6C17FCA2A40B73A6`。实际窗口启动和视觉验收仍待桌面解锁。
 
 - 2026-11-27 14:33 UTC 复查：最终补丁部署后仍出现 1 条 `classification_json_invalid`（约 194 秒），说明 Qwen3 标记和 JSON 外层提取还没有证明能消除底层格式失败；最新任务状态为成功 39、失败 28、待处理 8,535、运行中 1、已用调用 126/10,000。需要继续基于响应元数据定位截断/生成格式，不能声称已彻底修复。
+
+## 2026-11-27 截断根因修复与生产观察
+
+- 安全诊断确认模型正文在 JSON 对象尚未闭合时到达 8,192-token 输出上限：典型响应 23–24 KiB，`startsWithJson=true`、`endsWithJson=false`，`jsonByte` 等于响应尾部；没有思考标签。根因是冗长的逐项标签结构输出被截断，而非索引、目录、凭据或源 Agent 连接。
+- 已改为 `classification-indexed-v1` 紧凑返回：模型只返回 supported/uncertain/conflicting 的整数索引数组；服务器按本次 taxonomy 的稳定顺序映射回标签 ID，再检查越界、重复、完整评估和证据。单项证据由服务器绑定到 `image:current`，分类内容的用户确认流程不变。仍保留旧 sparse v1 响应解码兼容。
+- 验证：索引格式映射/拒绝重复或越界等定向测试 2/2；Qwen3/包裹 JSON 定向测试 4/4；ClassificationV2RuntimeTests 41/41；严格 Debug 整解方案 0 警告、0 错误。
+- 紧凑输出服务已部署到 `47.103.99.229`：部署号 `20261127T145017286Z`，SHA-256 `a1aa28d77ef886f35578740a5be82884734ae2408d2c07a71982f6f0ef7c362a`；健康/版本校验通过，回滚备份 `/opt/picer-index.backup-20261127T145017286Z`。
+- 紧凑输出部署后的任务观测：成功从 39 增至 44，失败维持 30，待处理 8,527，运行中 2，调用 137/10,000。旧 30 个失败仍需待当前任务收敛后通过 `RetryFailures` 计划重试；当前没有把它们标为已恢复。
+- 最新 GUI Release 路径：`src/Picer.App/artifacts/builds/classification-tree-compact-classifier-2026-11-27/publish/Picer.App.exe`，SHA-256 `8C472B615DF04CAD577165447CCE27F76F62DE99D623EC7F370E63AE4126CC80`；`Picer.App.dll` SHA-256 `91989D2407ACA65B2C14D62EF5C0087C43E3DDC5C532967208687E477CD002A6`。窗口启动和分类树视觉验收仍因 Windows 锁屏未完成。
