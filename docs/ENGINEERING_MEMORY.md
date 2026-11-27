@@ -119,3 +119,4 @@ ServiceMode 的共享远程缩略图、人脸裁剪、视频关键帧和视频�
 - `ClassificationModel` 使用 `classification-indexed-v1` 紧凑整数数组并在服务端映射回 taxonomy 标签 ID；保留完整性、重复/越界、证据、指纹校验和旧 sparse-v1 兼容。
 - 严格 Debug 构建 0 警告/错误；定向测试 2+4 项通过，分类运行时 41 项通过。生产部署 `20261127T145017286Z`，binary SHA-256 `a1aa28d77ef886f355bd53ab15543d46265e884d5d3116cff8e77f79759560edc`。部署后成功由 39 增至 44，失败仍为 30，待处理 8,527，运行中 2，使用 137/10,000 调用；旧失败待当前任务结束后定向重试。
 - GUI 构建：`src/Picer.App/artifacts/builds/classification-tree-compact-classifier-2026-11-27/publish/Picer.App.exe`，SHA-256 `8C472B615DF04CAD577165447CCE27F76F62DE99D623EC7F370E63AE4126CC80`；仍待桌面解锁后启动验收。
+- 14:57 UTC 观察：分类任务成功 47、失败 30、待处理 8,525、运行中 1，140/10,000 调用；紧凑索引输出上线后有连续新增成功且未见新增截断日志。任务仍在继续，30 个历史失败尚未定向重试。

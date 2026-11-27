@@ -66,3 +66,4 @@
 - 紧凑输出服务已部署到 `47.103.99.229`：部署号 `20261127T145017286Z`，SHA-256 `a1aa28d77ef886f35578740a5be82884734ae2408d2c07a71982f6f0ef7c362a`；健康/版本校验通过，回滚备份 `/opt/picer-index.backup-20261127T145017286Z`。
 - 紧凑输出部署后的任务观测：成功从 39 增至 44，失败维持 30，待处理 8,527，运行中 2，调用 137/10,000。旧 30 个失败仍需待当前任务收敛后通过 `RetryFailures` 计划重试；当前没有把它们标为已恢复。
 - 最新 GUI Release 路径：`src/Picer.App/artifacts/builds/classification-tree-compact-classifier-2026-11-27/publish/Picer.App.exe`，SHA-256 `8C472B615DF04CAD577165447CCE27F76F62DE99D623EC7F370E63AE4126CC80`；`Picer.App.dll` SHA-256 `91989D2407ACA65B2C14D62EF5C0087C43E3DDC5C532967208687E477CD002A6`。窗口启动和分类树视觉验收仍因 Windows 锁屏未完成。
+- 14:57 UTC 追加观察：成功 47、失败 30、待处理 8,525、运行中 1，调用 140/10,000。自紧凑索引格式部署以来已有连续新增成功，失败数仍稳定在 30；服务器日志尾部没有新增 JSON 截断诊断。旧失败项和大批待处理项仍在运行中。
