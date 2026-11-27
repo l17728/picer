@@ -104,3 +104,11 @@ ServiceMode 的共享远程缩略图、人脸裁剪、视频关键帧和视频�
 - 后续运行发现模型 JSON/证据格式错误，`fc86b4c` 将这些输出校验错误改为受 3 次尝试与调用预算约束的重试；该修复部署号 `20261127T093743195Z`，SHA-256 `c64e6627ac9483c07adcc4876e0e00aaf268dc4c03cfba5b4d382f6128061e81`。锁屏解除前不要尝试自动启动或切换 GUI。
 
 - 2026-11-27 后续收尾：Retry 修复部署后分类任务继续运行，最新观测为 8 成功、4 失败、8,590 待处理、1 运行中。独立发布的 GUI 位于 `src/Picer.App/artifacts/builds/classification-tree-retry-2026-11-27/publish/Picer.App.exe`，SHA-256 `15E5E5D90AAD49ADFF862622E3D9F3E786942C43EC308BFE35042F0BA5B1F189`；窗口启动/视觉验收仍待解锁桌面后完成。
+
+### 2026-11-27 分类模型与最终 GUI 构建
+
+- 分类服务最后部署号 `20261127T142427110Z`，SHA-256 `08ecaa87d7710d16a628d80ac6aeaf8aa0c4d53cd4fe124d0806115208f79c59`；健康和版本验收通过，数据库回滚备份保留。
+- Qwen3 JSON 输出修复对 Qwen3 多模态用户消息末尾加 `/no_think`，解码器仅提取一个平衡 JSON 对象后继续执行严格校验。运行时 41 项通过，定向用例 4 项通过，Debug 整解方案严格构建 0 警告/错误。生产实际错误率仍需观察。
+- 真实任务配置调用上限为 10,000（更正早先 100 的错误记录）；最后观测成功 39、失败 28、待处理 8,534、运行中 2，125 次调用已用。
+- 最新 GUI Release：`src/Picer.App/artifacts/builds/classification-tree-final-2026-11-27/publish/Picer.App.exe`，SHA-256 `5C589E1F7BE2AE7B10D1EA7135B457960C7A17EB9B20240486BDCA1E5FE533D7`。Windows 锁屏未解除，未启动视觉验收。
+- 14:33 UTC 最新复查：最终补丁部署后仍有一条 `classification_json_invalid`，不能认为模型失败问题已解决；任务状态成功 39、失败 28、待处理 8,535、运行中 1，调用 126/10,000。下次应添加不记录模型正文的安全诊断（JSON 行/字节位置、响应长度、think 标记、结束原因），再确定是否截断或包装格式问题。

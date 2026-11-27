@@ -35,6 +35,12 @@ public sealed class ClassificationModel(
             inputFingerprint = fingerprint,
             untrustedEvidence = ModelEvidence(context.Evidence)
         };
+        var userContent = new List<object>
+        {
+            new { type = "text", text = JsonSerializer.Serialize(input, ModelJson) },
+            new { type = "image_url", image_url = new { url = "data:image/jpeg;base64," + Convert.ToBase64String(jpeg) } }
+        };
+        if (RequiresNoThinkMode(configuration.Model)) userContent.Add(new { type = "text", text = "/no_think" });
         var payload = JsonSerializer.SerializeToUtf8Bytes(new
         {
             model = configuration.Model, temperature = 0, stream = true, max_tokens = configuration.MaximumOutputTokens,
@@ -42,11 +48,7 @@ public sealed class ClassificationModel(
             messages = new object[]
             {
                 new { role = "system", content = Prompt },
-                new { role = "user", content = new object[]
-                {
-                    new { type = "text", text = JsonSerializer.Serialize(input, ModelJson) },
-                    new { type = "image_url", image_url = new { url = "data:image/jpeg;base64," + Convert.ToBase64String(jpeg) } }
-                } }
+                new { role = "user", content = userContent }
             }
         });
         authorizeNetwork?.Invoke(context.Actor);
@@ -62,6 +64,7 @@ public sealed class ClassificationModel(
 
     internal static ClassificationResult DecodeResult(string content, ClassificationTaxonomySnapshot taxonomy)
     {
+        content = ExtractJsonObject(content);
         using var document = JsonDocument.Parse(content);
         if (!document.RootElement.TryGetProperty("schemaVersion", out var schema) || schema.GetString() != "classification-sparse-v1")
             return ClassificationRepository.Decode<ClassificationResult>(content);
@@ -73,6 +76,32 @@ public sealed class ClassificationModel(
         var explicitLabels = sparse.Labels.ToDictionary(l => l.LabelId, StringComparer.Ordinal);
         return new("classification-result-v1", sparse.InputFingerprint,
             expected.Select(id => explicitLabels.GetValueOrDefault(id) ?? new ClassificationLabelEvaluation(id, "absent", [])).ToArray(), sparse.Proposals);
+    }
+
+    private static string ExtractJsonObject(string content)
+    {
+        var thinkingEnd = content.LastIndexOf("</think>", StringComparison.OrdinalIgnoreCase);
+        if (thinkingEnd >= 0) content = content[(thinkingEnd + "</think>".Length)..];
+        var start = content.IndexOf('{');
+        if (start < 0) return content;
+        var inString = false;
+        var escaped = false;
+        var depth = 0;
+        for (var index = start; index < content.Length; index++)
+        {
+            var character = content[index];
+            if (inString)
+            {
+                if (escaped) escaped = false;
+                else if (character == '\\') escaped = true;
+                else if (character == '"') inString = false;
+                continue;
+            }
+            if (character == '"') inString = true;
+            else if (character == '{') depth++;
+            else if (character == '}' && --depth == 0) return content[start..(index + 1)];
+        }
+        return content[start..];
     }
 
     private sealed record SparseResult(string SchemaVersion, string InputFingerprint, bool EvaluatedAll,
@@ -106,6 +135,8 @@ public sealed class ClassificationModel(
         "exclusions":"排除与不确定边界","parentIds":["输入中已有的导航或标签ID"],"evidenceIds":["image:current"]}。
         新类建议不自动成为照片标签。无合适新主题返回空数组。
         """;
+
+    internal static bool RequiresNoThinkMode(string model) => model.Contains("Qwen3", StringComparison.OrdinalIgnoreCase);
 
     public async Task<ClassificationClusterResult> ClusterAsync(ClassificationClusterTask task, ClassificationTaxonomySnapshot taxonomy, CancellationToken cancellationToken)
     {

@@ -4,6 +4,33 @@ namespace Picer.Tests;
 
 public class ClassificationV2Tests
 {
+    [Theory]
+    [InlineData("Qwen/Qwen3-VL-8B-Instruct-GGUF:Q4_K_M", true)]
+    [InlineData("fixture-model", false)]
+    public void RequiresNoThinkModeOnlyForQwen3Models(string model, bool expected)
+        => Assert.Equal(expected, ClassificationModel.RequiresNoThinkMode(model));
+
+    [Fact]
+    public async Task Qwen3NoThinkMarkerIsLastUserContentPart()
+    {
+        var preset = ClassificationPreset.Load();
+        var taxonomy = new ClassificationTaxonomySnapshot(1, 1, preset.Labels, preset.Edges, []);
+        var context = new ClassificationContext(new(), Input(), new Dictionary<string, string> { ["image:current"] = "fixture" });
+        var model = new ClassificationModel((_, _) => Task.FromResult(new byte[] { 255, 216, 255, 217 }), (_, bytes, _) =>
+        {
+            using var payload = System.Text.Json.JsonDocument.Parse(bytes);
+            var parts = payload.RootElement.GetProperty("messages")[1].GetProperty("content");
+            var finalPart = parts[parts.GetArrayLength() - 1];
+            Assert.Equal("text", finalPart.GetProperty("type").GetString());
+            Assert.Equal("/no_think", finalPart.GetProperty("text").GetString());
+            var result = new ClassificationResult("classification-result-v1", ClassificationInputFingerprint.Compute(context.Input),
+                taxonomy.Labels.Where(label => label.Active && label.Assignable).Select(label => new ClassificationLabelEvaluation(label.Id, "absent", [])).ToArray(), []);
+            return Task.FromResult(System.Text.Json.JsonSerializer.Serialize(new
+            { choices = new[] { new { message = new { content = System.Text.Json.JsonSerializer.Serialize(result) } } } }));
+        });
+        await model.ClassifyAsync(context, taxonomy, new(true, "Qwen/Qwen3-VL-8B-Instruct-GGUF:Q4_K_M", "local", false), default);
+    }
+
     [Fact]
     public void SparseModelOutputRequiresCompleteEvaluationAndKnownUniqueLabels()
     {
@@ -15,7 +42,10 @@ public class ClassificationV2Tests
             labels = ids.Select(id => new { labelId = id, support = "supported", evidenceIds = new[] { "image:current" } }), proposals = Array.Empty<object>()
         });
         var result = ClassificationModel.DecodeResult(Json(true, "subject.people", "scene.outdoor"), taxonomy);
+        var wrapped = ClassificationModel.DecodeResult("<think>checking {untrusted reasoning}</think>\nResult:\n" + Json(true, "subject.people", "scene.outdoor") + "\nDone.", taxonomy);
         Assert.Equal(preset.Labels.Count(label => label.Active && label.Assignable), result.Labels.Count);
+        Assert.Equal(result.Labels.Select(label => (label.LabelId, label.Support)),
+            wrapped.Labels.Select(label => (label.LabelId, label.Support)));
         Assert.Equal(2, result.Labels.Count(l => l.Support == "supported"));
         Assert.Equal(preset.Labels.Count(label => label.Active && label.Assignable) - 2, result.Labels.Count(l => l.Support == "absent"));
         Assert.Throws<InvalidDataException>(() => ClassificationModel.DecodeResult(Json(false), taxonomy));

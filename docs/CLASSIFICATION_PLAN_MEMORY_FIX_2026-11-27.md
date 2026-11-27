@@ -46,3 +46,14 @@
 - 服务器持久化任务继续运行；最新状态：成功 8、失败 4、待处理 8,590、运行中 1（总计 8,603）。原任务调用预算保持不变，已失败的 4 项产生于重试修复部署前，需在当前批次/预算窗口后另行定向重试；没有把它们标记为已恢复。
 - 最新 GUI 已用独立输出目录发布成功，避免覆盖被旧 GUI 锁定的默认 Release 目录：`src/Picer.App/artifacts/builds/classification-tree-retry-2026-11-27/publish/Picer.App.exe`，SHA-256 `15E5E5D90AAD49ADFF862622E3D9F3E786942C43EC308BFE35042F0BA5B1F189`；配套 DLL SHA-256 `A8C69EDF353412545BC483C915D5C0C7AF084EF245DB07AD5E9928A9CB6BC382`。
 - GUI 尚未启动验收：此前桌面处于锁屏状态，且旧 GUI 仍占用标准 Release 输出。需要解锁桌面后再检查实际窗口并切换到上述构建；不能把旧窗口当作新版。
+
+## 2026-11-27 Qwen3 响应格式与最新收尾记录
+
+- 审计运行配置后更正：`MaximumCalls=10000`，上一节“100 次”记录有误；任务状态本身也报告 `maximumCalls=10000`。
+- 生产日志显示模型失败集中于 `classification_json_invalid`，单次耗时约 2–4 分钟；重试只重复相同问题。将 `/no_think` 放在 system 内容后仍出现 JSON 解析失败，因此改为只对 Qwen3 模型把标记放在多模态 user 内容末尾，并在 JSON 解码前只提取一个平衡的 JSON 对象。标签 ID、完整评估、指纹和证据校验保持严格；前后思考文本不会被保存。
+- 回归验证：Qwen3 标记/JSON 外层文本定向测试 4/4 通过；分类运行时筛选 41/41 通过；`dotnet build picer.sln -c Debug --no-restore --warnaserror` 为 0 警告、0 错误。
+- 最终服务补丁已部署至新服务器：部署号 `20261127T142427110Z`，Linux x64 二进制 SHA-256 `08ecaa87d7710d16a628d80ac6aeaf8aa0c4d53cd4fe124d0806115208f79c59`，数据库/健康/版本验收通过，备份 `/opt/picer-index.backup-20261127T142427110Z`。
+- 部署后任务状态最后观测：成功 39、失败 28、待处理 8,534、运行中 2、已用调用 125/10,000。新补丁部署后尚无足够完成样本证明模型输出失败率下降；不能标记该性能/质量问题已验收解决。
+- 最新 GUI 发布路径：`src/Picer.App/artifacts/builds/classification-tree-final-2026-11-27/publish/Picer.App.exe`，SHA-256 `5C589E1F7BE2AE7B10D1EA7135B457960C7A17EB9B20240486BDCA1E5FE533D7`；`Picer.App.dll` SHA-256 `A7030B35C451A95713B3DC7219D6D51CFA01A6390FA59A9D6C17FCA2A40B73A6`。实际窗口启动和视觉验收仍待桌面解锁。
+
+- 2026-11-27 14:33 UTC 复查：最终补丁部署后仍出现 1 条 `classification_json_invalid`（约 194 秒），说明 Qwen3 标记和 JSON 外层提取还没有证明能消除底层格式失败；最新任务状态为成功 39、失败 28、待处理 8,535、运行中 1、已用调用 126/10,000。需要继续基于响应元数据定位截断/生成格式，不能声称已彻底修复。
