@@ -304,6 +304,26 @@ public sealed class ClassificationV2RuntimeTests : IDisposable
     }
 
     [Fact]
+    public void RetryFailedReopensOnlyFailedItemsAndKeepsCallBudget()
+    {
+        Add("success.jpg"); Add("retry.jpg");
+        var job = Start();
+        var first = _repo.Claim()!;
+        Assert.True(_repo.Publish(first, Result(first)));
+        var failed = _repo.Claim()!;
+        _repo.Fail(failed, "classification_json_invalid", false);
+        _repo.Control(job.Id, "retry-failed");
+        _repo.Control(job.Id, "retry-failed");
+        var retry = _repo.Claim()!;
+        Assert.Equal(failed.ImageId, retry.ImageId);
+        Assert.Equal(job.Id, retry.JobId);
+        Assert.True(_repo.Publish(retry, Result(retry)));
+        Assert.Null(_repo.Claim());
+        Assert.Equal(2, _repo.Job(job.Id).Succeeded);
+        Assert.Equal(3, _repo.Job(job.Id).UsedCalls);
+    }
+
+    [Fact]
     public void PauseCancelAndBudgetAreDurable()
     {
         Add("a.jpg"); Add("b.jpg"); _repo.Configure(Config with { MaximumCalls = 1 });

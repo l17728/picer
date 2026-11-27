@@ -23,11 +23,13 @@ public partial class ClassificationBrowserWindow : Window
     private readonly ObservableCollection<PhotoRow> _rows = new();
     private bool _loadingMore;
     private bool _restoringSelection;
+    private ClassificationJob? _job;
+    private bool _retrying;
 
     public ClassificationBrowserWindow()
     {
         InitializeComponent();
-        Loaded += async (_, _) => await RefreshAsync();
+        Loaded += async (_, _) => await Task.WhenAll(RefreshAsync(), RefreshJobAsync());
         Closed += (_, _) => { _closed.Cancel(); _client.Dispose(); _closed.Dispose(); };
     }
 
@@ -217,7 +219,32 @@ public partial class ClassificationBrowserWindow : Window
         }
     }
     private async void FilterChanged(object sender, RoutedEventArgs e) { if (IsLoaded) await RefreshAsync(); }
-    private async void Refresh_Click(object sender, RoutedEventArgs e) => await RefreshAsync();
+    private async void Refresh_Click(object sender, RoutedEventArgs e) => await Task.WhenAll(RefreshAsync(), RefreshJobAsync());
+    private async Task RefreshJobAsync()
+    {
+        try { ShowJob(await _client.Latest(_closed.Token)); }
+        catch (Exception ex) { ShowJob(null); JobStatus.Text = "任务状态读取失败：" + ex.Message; }
+    }
+    private void ShowJob(ClassificationJob? job)
+    {
+        _job = job;
+        JobStatus.Text = job is null ? "暂无分类任务" : $"最近任务：成功 {job.Succeeded}，失败或已过期 {job.Failed}，排队 {job.Pending}，处理中 {job.Running}，已用调用 {job.UsedCalls}/{job.MaximumCalls}";
+        RetryFailed.IsEnabled = !_retrying && job is { Failed: > 0, State: "running" or "queued" or "partial_failed" } && job.UsedCalls < job.MaximumCalls;
+    }
+    private async void RetryFailed_Click(object sender, RoutedEventArgs e)
+    {
+        if (_retrying || _job is not { } job) return;
+        _retrying = true;
+        RetryFailed.IsEnabled = false;
+        try
+        {
+            var updated = await _client.Control(job.Id, "retry-failed", _closed.Token);
+            ShowJob(updated);
+            Feedback.Text = "已检查本任务失败项，请刷新查看处理进度。";
+        }
+        catch (Exception ex) { Feedback.Text = "重试失败：" + ex.Message; }
+        finally { _retrying = false; await RefreshJobAsync(); }
+    }
     private async void LoadMore_Click(object sender, RoutedEventArgs e) => await LoadMoreAsync();
     private async void Photos_ScrollChanged(object sender, ScrollChangedEventArgs e)
     {
@@ -230,7 +257,7 @@ public partial class ClassificationBrowserWindow : Window
     }
     private async void Start_Click(object sender, RoutedEventArgs e)
     {
-        try { var plan = await _client.Plan(_closed.Token); var job = await _client.Start(plan.Id, _closed.Token); Feedback.Text = $"分类任务已启动：{job.Total} 张照片"; }
+        try { var plan = await _client.Plan(_closed.Token); var job = await _client.Start(plan.Id, _closed.Token); ShowJob(job); Feedback.Text = $"分类任务已启动：{job.Total} 张照片"; }
         catch (Exception ex) { Feedback.Text = "启动失败：" + ex.Message; }
     }
     private void SelectAll_Click(object sender, RoutedEventArgs e) { foreach (var row in Photos.Items.OfType<PhotoRow>()) row.Selected = true; }

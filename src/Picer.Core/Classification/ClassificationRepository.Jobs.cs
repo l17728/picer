@@ -68,15 +68,25 @@ public sealed partial class ClassificationRepository
 
     public void Control(string id, string operation, string? actor = null) => Write(() =>
     {
-        if (operation is not ("pause" or "resume" or "cancel")) throw new ArgumentException("classification_operation_invalid");
+        if (operation is not ("pause" or "resume" or "cancel" or "retry-failed")) throw new ArgumentException("classification_operation_invalid");
         var job = Job(id);
-        if (job.State is "completed" or "partial_failed" or "cancelled") return 0;
-        if (operation == "resume")
+        if (operation == "retry-failed" && job.State is not ("running" or "queued" or "partial_failed"))
+            throw new InvalidOperationException("classification_job_not_retryable");
+        if (operation != "retry-failed" && job.State is ("completed" or "partial_failed" or "cancelled")) return 0;
+        if (operation is "resume" or "retry-failed")
         {
             var config = Configuration();
             if (config is null || !config.Enabled || Encode(config) != Scalar("SELECT config FROM classification_v2_jobs WHERE id=$id", ("$id", id)))
                 throw new InvalidOperationException("classification_configuration_changed");
             if (job.UsedCalls >= job.MaximumCalls) throw new InvalidOperationException("classification_budget_exhausted");
+        }
+        if (operation == "retry-failed")
+        {
+            // Claim promotes waiting items only when no other job owns that photo.
+            var count = Execute("UPDATE classification_v2_items SET state='waiting',attempts=0,error_code=NULL WHERE job_id=$id AND state='failed'", ("$id", id));
+            if (count > 0)
+                Execute("UPDATE classification_v2_jobs SET state='queued',updated_utc=$now,actor=$actor WHERE id=$id", ("$id", id), ("$now", Now), ("$actor", actor));
+            return count;
         }
         Execute("UPDATE classification_v2_jobs SET state=$state,updated_utc=$now WHERE id=$id", ("$state", operation == "cancel" ? "cancelled" : operation == "pause" ? "paused" : "queued"), ("$id", id), ("$now", Now));
         if (operation == "resume") Execute("UPDATE classification_v2_jobs SET actor=$actor WHERE id=$id", ("$actor", actor), ("$id", id));

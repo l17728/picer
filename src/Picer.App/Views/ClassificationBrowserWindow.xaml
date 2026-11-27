@@ -11,10 +11,12 @@
           <Button Content="增量扫描" Click="Scan_Click" Padding="12,4" Margin="4,0"/>
           <Button Content="刷新" Click="Refresh_Click" Padding="12,4" Margin="4,0"/>
           <Button Content="开始处理" Click="Start_Click" Padding="12,4" Margin="4,0"/>
+          <Button x:Name="RetryFailed" Content="重试本任务失败项" Click="RetryFailed_Click" IsEnabled="False" Padding="12,4" Margin="4,0"/>
           <Button Content="加载更多" Click="LoadMore_Click" Padding="12,4" Margin="4,0"/>
         </WrapPanel>
       </DockPanel>
     </Border>
+    <TextBlock DockPanel.Dock="Top" x:Name="JobStatus" Margin="0,0,0,6"/>
     <Grid>
       <Grid.ColumnDefinitions><ColumnDefinition Width="280"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
       <Border Grid.Column="0" BorderBrush="#D6DCE5" BorderThickness="1" Padding="8" Margin="0,0,10,0">
