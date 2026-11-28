@@ -20,6 +20,9 @@ public class ClassificationV2Tests
         {
             using var payload = System.Text.Json.JsonDocument.Parse(bytes);
             var parts = payload.RootElement.GetProperty("messages")[1].GetProperty("content");
+            using var input = System.Text.Json.JsonDocument.Parse(parts[0].GetProperty("text").GetString()!);
+            Assert.Equal(taxonomy.Labels.Where(label => label.Active && label.Assignable).Select(label => label.Id),
+                input.RootElement.GetProperty("labels").EnumerateArray().Select(label => label.GetProperty("Id").GetString()));
             var finalPart = parts[parts.GetArrayLength() - 1];
             Assert.Equal("text", finalPart.GetProperty("type").GetString());
             Assert.Equal("/no_think", finalPart.GetProperty("text").GetString());

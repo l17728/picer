@@ -6,7 +6,10 @@ public static class ClassificationOutputValidator
     {
         if (result.SchemaVersion != "classification-result-v1" || result.InputFingerprint != ClassificationInputFingerprint.Compute(context.Input)
             || result.Labels is null || result.Proposals is null || result.Proposals.Count > 4)
+        {
+            Picer.Core.Logging.AppLogger.Warn($"Classification result contract; schemaMatches={result.SchemaVersion == "classification-result-v1"}; fingerprintMatches={result.InputFingerprint == ClassificationInputFingerprint.Compute(context.Input)}; labels={result.Labels?.Count}; proposals={result.Proposals?.Count}");
             throw new InvalidDataException("classification_output_invalid");
+        }
         var expected = taxonomy.Labels.Where(l => l.Active && l.Assignable).Select(l => l.Id).ToHashSet(StringComparer.Ordinal);
         if (result.Labels.Count != expected.Count || !result.Labels.Select(l => l.LabelId).ToHashSet(StringComparer.Ordinal).SetEquals(expected))
             throw new InvalidDataException("classification_output_incomplete");
