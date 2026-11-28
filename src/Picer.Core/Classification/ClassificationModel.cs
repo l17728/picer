@@ -71,7 +71,9 @@ public sealed partial class ClassificationModel(
         {
             // Greedy decoding repeatedly exhausted the output window on real multi-label photos.
             payload["top_p"] = 0.88;
-            payload["seed"] = context.RetryIncompleteOutput ? 43 : 42;
+            // Replaying the same invalid response wastes a metered attempt. The job
+            // counter advances on every claim, including after a manual retry.
+            payload["seed"] = context.RetryIncompleteOutput ? 42 + Math.Max(1, context.JobCallNumber) : 42;
         }
         authorizeNetwork?.Invoke(context.Actor);
         var response = await send(configuration, JsonSerializer.SerializeToUtf8Bytes(payload), cancellationToken).ConfigureAwait(false);
@@ -174,9 +176,13 @@ public sealed partial class ClassificationModel(
             return ClassificationRepository.Decode<ClassificationResult>(content);
         var sparse = ClassificationRepository.Decode<SparseResult>(content);
         var expected = taxonomy.Labels.Where(l => l.Active && l.Assignable).Select(l => l.Id).ToHashSet(StringComparer.Ordinal);
-        if (!sparse.EvaluatedAll || sparse.Labels is null || sparse.Labels.Count > expected.Count
-            || sparse.Labels.Any(l => !expected.Contains(l.LabelId)) || sparse.Labels.Select(l => l.LabelId).Distinct(StringComparer.Ordinal).Count() != sparse.Labels.Count)
+        var unknown = sparse.Labels?.Count(label => !expected.Contains(label.LabelId));
+        var distinct = sparse.Labels?.Select(label => label.LabelId).Distinct(StringComparer.Ordinal).Count();
+        if (!sparse.EvaluatedAll || sparse.Labels is null || unknown != 0 || distinct != sparse.Labels.Count)
+        {
+            Picer.Core.Logging.AppLogger.Warn($"Classification sparse contract; evaluatedAll={sparse.EvaluatedAll}; labels={sparse.Labels?.Count}; unknown={unknown}; distinct={distinct}");
             throw new InvalidDataException("classification_output_incomplete");
+        }
         var explicitLabels = sparse.Labels.ToDictionary(l => l.LabelId, StringComparer.Ordinal);
         if (sparse.Surface == "paper_text_only")
         {

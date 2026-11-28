@@ -78,7 +78,7 @@ public sealed partial class ClassificationModel
             || !root.TryGetProperty("additionalIds", out var extras) || extras.ValueKind != JsonValueKind.Array
             || !root.TryGetProperty("inputFingerprint", out var fingerprint) || fingerprint.ValueKind != JsonValueKind.String
             || !root.TryGetProperty("proposals", out var proposals) || proposals.ValueKind != JsonValueKind.Array)
-            throw new InvalidDataException("classification_output_incomplete");
+            throw ReviewIncomplete("envelope");
         var pending = candidates.Select(label => label.Id).ToHashSet(StringComparer.Ordinal);
         var active = taxonomy.Labels.Where(label => label.Active && label.Assignable).Select(label => label.Id).ToArray();
         var other = active.Except(pending).ToHashSet(StringComparer.Ordinal);
@@ -86,17 +86,23 @@ public sealed partial class ClassificationModel
         foreach (var check in checks.EnumerateObject())
         {
             if (!pending.Remove(check.Name) || check.Value.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
-                throw new InvalidDataException("classification_output_incomplete");
+                throw ReviewIncomplete("invalid_or_duplicate_check");
             if (check.Value.GetBoolean()) positive.Add(check.Name);
         }
-        if (pending.Count != 0) throw new InvalidDataException("classification_output_incomplete");
+        if (pending.Count != 0) throw ReviewIncomplete("missing_check");
         foreach (var extra in extras.EnumerateArray())
         {
-            if (extra.ValueKind != JsonValueKind.String || !other.Remove(extra.GetString()!)) throw new InvalidDataException("classification_output_incomplete");
+            if (extra.ValueKind != JsonValueKind.String || !other.Remove(extra.GetString()!)) throw ReviewIncomplete("invalid_or_duplicate_extra");
             positive.Add(extra.GetString()!);
         }
         return new("classification-result-v1", fingerprint.GetString()!, active.Select(id => positive.Contains(id)
             ? new ClassificationLabelEvaluation(id, "supported", ["image:current"]) : new ClassificationLabelEvaluation(id, "absent", [])).ToArray(),
             proposals.Deserialize<ClassificationProposalDraft[]>(ClassificationRepository.Json)!);
     }
+    private static InvalidDataException ReviewIncomplete(string reason)
+    {
+        Picer.Core.Logging.AppLogger.Warn($"Classification description review rejected; reason={reason}");
+        return new InvalidDataException("classification_output_incomplete");
+    }
+
 }

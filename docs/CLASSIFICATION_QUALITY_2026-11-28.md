@@ -51,3 +51,7 @@ Release 构建目录为 C:\Users\a\AppData\Local\Picer\engineering-backups\relay
 桌面全量测试发现，打开分类审核窗口时，后台截图修复结束后会再次读取聚类设置，可能覆盖用户正在编辑的值及冲突检查使用的版本。后台列表刷新也可能覆盖操作反馈。窗口现在仅在截图修复实际更改分类时刷新列表，保留用户看到的设置版本和操作反馈。用户主动切换页签或刷新时仍会显示最新计数。
 
 Release 构建零警告、零错误。历史拒绝恢复与聚类设置冲突、新标签审核与分类树切换的 3 项桌面回归全部通过。验证程序为 C:\Users\a\AppData\Local\Picer\engineering-backups\relay-photo-20261128\verification\src\Picer.App\bin\Release\net8.0-windows\win-x64\Picer.App.exe。EXE SHA-256 为 c9b648189d74449e3f0706410d5abfeec77a5b4a34070fca8ee509254fe33dc3，同目录 Picer.App.dll 为 fbf647163a642462deeb8201a6c605bf92c6500d6b5890a10ee78608ad9ac450。
+
+### 分类模型无效输出重试
+
+生产任务中第 24 张照片连续返回不完整结果，旧版本对结构化重试始终使用相同采样种子。现将事务中已计费的任务调用序号用于重试采样，首次仍使用 42。结构错误日志仅记录固定原因、计数或布尔值。新增测试模拟连续三次无效响应，核对种子、费用和失败状态。分类专项 92 项全部通过。上文同一正式构建路径的 EXE SHA-256 为 2f009948937950840d6c5b4719d723e36f5ad7070001539f6ff0064a7bb1b8b6，Picer.Core.dll 为 dc9ef9ee6b4c3466f144511a0ace2f1709886728d811bd022ca758fce9293f6c，构建零警告、零错误。

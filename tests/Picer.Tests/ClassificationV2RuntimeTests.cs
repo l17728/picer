@@ -75,6 +75,33 @@ public sealed class ClassificationV2RuntimeTests : IDisposable
     }
 
     [Fact]
+    public async Task ReclaimedMalformedResponsesUseDifferentSamplingSeedsWithinTheJobBudget()
+    {
+        Add("sample.jpg");
+        var config = Config with { Model = "Qwen3", MaximumCalls = 3 };
+        _repo.Configure(config);
+        var job = _repo.Start(_repo.Plan(Request(), config).Id, Request());
+        var seeds = new List<int>();
+        var model = new ClassificationModel((_, _) => Task.FromResult(new byte[] { 255, 216, 255, 217 }), (_, bytes, _) =>
+        {
+            using var request = System.Text.Json.JsonDocument.Parse(bytes);
+            seeds.Add(request.RootElement.GetProperty("seed").GetInt32());
+            return Task.FromResult("""{"choices":[{"message":{"content":"{"}}]}""");
+        });
+        var worker = new ClassificationWorker(_db.OpenIndependentConnection, model);
+        for (int attempt = 0; attempt < 3; attempt++)
+        {
+            Assert.True(await worker.ProcessOneAsync(default));
+            using var ready = _db.Command("UPDATE classification_v2_work SET retry_after=NULL");
+            ready.ExecuteNonQuery();
+        }
+        Assert.Equal(42, seeds[0]);
+        Assert.Equal(3, seeds.Distinct().Count());
+        Assert.Equal(3, _repo.Job(job.Id).UsedCalls);
+        Assert.Equal(1, _repo.Job(job.Id).Failed);
+    }
+
+    [Fact]
     public void RetrievalUsesCurrentMachineLabelsOnlyWhenSuggestionsAllowed()
     {
         var id = Add("recall.jpg");

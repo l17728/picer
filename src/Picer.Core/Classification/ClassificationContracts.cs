@@ -12,6 +12,7 @@ public sealed record ClassificationContext(ImageRecord Image, ClassificationInpu
     IReadOnlyDictionary<string, string> Evidence, string? Actor = null)
 {
     public bool RetryIncompleteOutput { get; init; }
+    public int JobCallNumber { get; init; }
 }
 public sealed record ClassificationLabelEvaluation(string LabelId, string Support, IReadOnlyList<string> EvidenceIds);
 public sealed record ClassificationResult(string SchemaVersion, string InputFingerprint,
@@ -35,6 +36,7 @@ public sealed record ClassificationJob(string Id, string State, int Total, int S
 public sealed record ClassificationLease(string JobId, long ImageId, string Token, string Fingerprint, ClassificationInput Input, string? Actor = null)
 {
     public bool RetryIncompleteOutput { get; init; }
+    public int JobCallNumber { get; init; }
 }
 public sealed record ClassificationCoverage(int Total, int Confirmed, int Suggested, int Legacy, int WithoutContent,
     int Unprocessed, int PendingUpdate, int Failed, int AnalyzedUnclassified, int WithoutDescription, int WithPeople,

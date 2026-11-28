@@ -114,7 +114,7 @@ public sealed partial class ClassificationRepository
         FinishJobs();
         using var select = Sql("""
             SELECT i.job_id,i.image_id,i.fingerprint,i.input,j.config,
-                   CASE WHEN w.attempt_fingerprint=i.fingerprint AND w.error_code IN ('classification_output_incomplete','classification_json_invalid') THEN 1 ELSE 0 END
+                   CASE WHEN w.attempt_fingerprint=i.fingerprint AND w.error_code IN ('classification_output_incomplete','classification_json_invalid') THEN 1 ELSE 0 END,j.used+1
             FROM classification_v2_items i
             JOIN classification_v2_jobs j ON j.id=i.job_id
             LEFT JOIN classification_v2_work w ON w.image_id=i.image_id
@@ -125,12 +125,13 @@ public sealed partial class ClassificationRepository
                 WHERE p.plan_id LIKE 'representatives:%' AND p.state IN ('queued','running') AND r.state IN ('pending','waiting')
             ) DESC,j.created_utc,i.image_id LIMIT 1
             """, ("$now", Now));
-        string job; long image; string fingerprint; ClassificationInput input; string config; bool retryIncompleteOutput;
+        string job; long image; string fingerprint; ClassificationInput input; string config; bool retryIncompleteOutput; int callNumber;
         using (var r = select.ExecuteReader())
         {
             if (!r.Read()) return null;
             job = r.GetString(0); image = r.GetInt64(1); fingerprint = r.GetString(2); input = Decode<ClassificationInput>(r.GetString(3)); config = r.GetString(4);
             retryIncompleteOutput = r.GetBoolean(5);
+            callNumber = r.GetInt32(6);
         }
         if (Configuration() is not { Enabled: true } settings || Encode(settings) != config)
         { Execute("UPDATE classification_v2_jobs SET state='paused' WHERE id=$id", ("$id", job)); return null; }
@@ -138,7 +139,7 @@ public sealed partial class ClassificationRepository
         Execute("UPDATE classification_v2_items SET state='leased',lease=$lease,lease_until=$until,attempts=attempts+1 WHERE job_id=$job AND image_id=$image", ("$lease", token), ("$until", DateTimeOffset.UtcNow.AddMinutes(6).ToString("O")), ("$job", job), ("$image", image));
         Execute("UPDATE classification_v2_jobs SET state='running',used=used+1,updated_utc=$now WHERE id=$id", ("$id", job), ("$now", Now));
         return new ClassificationLease(job, image, token, fingerprint, input, Scalar("SELECT actor FROM classification_v2_jobs WHERE id=$id", ("$id", job)))
-            { RetryIncompleteOutput = retryIncompleteOutput };
+            { RetryIncompleteOutput = retryIncompleteOutput, JobCallNumber = callNumber };
     });
 
     public ClassificationConfiguration JobConfiguration(string id) => Decode<ClassificationConfiguration>(

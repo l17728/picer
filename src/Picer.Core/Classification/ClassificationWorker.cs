@@ -33,7 +33,7 @@ public sealed class ClassificationWorker(Func<PicerDatabase> openDatabase, IClas
             }
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeout.CancelAfter(TimeSpan.FromMinutes(5));
-            var result = await RunAuthorized(lease.Actor, token => model.ClassifyAsync(context with { Actor = lease.Actor, RetryIncompleteOutput = lease.RetryIncompleteOutput }, taxonomy, config, token), timeout.Token).ConfigureAwait(false);
+            var result = await RunAuthorized(lease.Actor, token => model.ClassifyAsync(context with { Actor = lease.Actor, RetryIncompleteOutput = lease.RetryIncompleteOutput, JobCallNumber = lease.JobCallNumber }, taxonomy, config, token), timeout.Token).ConfigureAwait(false);
             Commit(lease.Actor, () => { using var db = openDatabase(); new ClassificationRepository(db).Publish(lease, result); });
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
