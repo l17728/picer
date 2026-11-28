@@ -202,6 +202,28 @@ public sealed partial class AccountStore
             ("$data", device.DataEpoch), ("$membership", device.MembershipVersion), ("$now", Now))) == 1;
     }
 
+    internal RelayPeerIdentity? ResolveRelayPeer(AuthorizedDevice caller, string deviceId)
+    {
+        var (kind, scope) = caller.Kind switch
+        {
+            "gui" when caller.Allows("index.read") => ("index-service", RelayConnectorScopes),
+            "index-service" when caller.Allows(RelayConnectorScopes) => ("gui", "index.read"),
+            _ => throw new UnauthorizedAccessException("relay_peer_lookup_forbidden")
+        };
+        if (!Guid.TryParseExact(deviceId, "N", out _)) return null;
+        using var connection = Open();
+        using var command = Command(connection, null, """
+            SELECT g.public_key FROM device_grants g JOIN accounts a ON a.id=g.account_id
+            JOIN spaces s ON s.id=g.space_id JOIN memberships m ON m.space_id=s.id AND m.account_id=a.id
+            WHERE g.space_id=$space AND g.device_id=$device AND g.kind=$kind AND g.state='active'
+            AND instr(' '||g.scope||' ',' '||$scope||' ')>0 AND a.disabled=0 AND s.state='active'
+            AND EXISTS(SELECT 1 FROM sessions t WHERE t.grant_id=g.id AND t.revoked=0
+                AND t.refresh_expires>$now AND t.absolute_expires>$now AND t.security_epoch=a.security_epoch
+                AND t.auth_epoch=s.auth_epoch AND t.membership_version=m.version)
+            """, ("$space", caller.SpaceId), ("$device", deviceId), ("$kind", kind), ("$scope", scope), ("$now", Now));
+        return command.ExecuteScalar() is string key ? new(caller.SpaceId, deviceId, kind, key) : null;
+    }
+
     private void SaveResponse(SqliteConnection connection, SqliteTransaction transaction, string key, string attemptId, DeviceSession response)
     {
         Execute(connection, transaction, "DELETE FROM credential_responses WHERE expires<$now", ("$now", Now));

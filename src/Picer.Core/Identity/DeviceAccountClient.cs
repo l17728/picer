@@ -12,6 +12,7 @@ public sealed record DeviceConnection(string Origin, string ServiceId, string Sp
 public sealed record ServiceDiscovery(int Version, string ServiceId, string Origin, string SpkiPin, string SigningKey,
     string EnrollmentEndpoint, string AccountEndpoint);
 public sealed record EnrollmentStarted(string RequestId, string ApprovalUrl, int ExpiresIn);
+public sealed record RelayPeerIdentity(string SpaceId, string DeviceId, string Kind, string PublicKey);
 
 /// <summary>One client per device grant. Refresh state is persisted before transmission so interrupted retries keep their attempt ID.</summary>
 public sealed class DeviceAccountClient : IDisposable
@@ -28,6 +29,48 @@ public sealed class DeviceAccountClient : IDisposable
     private readonly Func<CancellationToken, Task<IDisposable>>? _acquireRefreshLease;
     public DeviceConnection Connection => Volatile.Read(ref _connection);
     public HttpClient SpaceClient => _space;
+
+    public async Task<IReadOnlyList<RelayPeerIdentity>> ListRelayConnectorsAsync(CancellationToken cancellationToken) =>
+        await SpaceClient.GetFromJsonAsync<RelayPeerIdentity[]>("api/index/v1/peers", DeviceAuthorization.Json,
+            cancellationToken).ConfigureAwait(false) ?? throw new InvalidDataException("relay_directory_invalid");
+
+    public RelayKeyExchangeOffer CreateRelayOffer(string sessionId, string peerDeviceId)
+    {
+        var connection = Connection;
+        var session = connection.Session ?? throw new InvalidOperationException("device_session_required");
+        var (initiator, responder) = connection.ClientKind switch
+        {
+            "gui" => (session.DeviceId, peerDeviceId),
+            "index-service" => (peerDeviceId, session.DeviceId),
+            _ => throw new UnauthorizedAccessException("relay_device_kind_invalid")
+        };
+        lock (_keyGate)
+            return RelayKeyExchangeOffer.Create(session.SpaceId, sessionId, initiator, responder, session.DeviceId, _key);
+    }
+
+    public async Task<RelaySessionCryptoContext> AcceptRelayPeerAsync(RelayKeyExchangeOffer local, RelayKeyExchange remote,
+        CancellationToken cancellationToken)
+    {
+        var session = Connection.Session ?? throw new InvalidOperationException("device_session_required");
+        var share = local.Share;
+        if (share.SpaceId != session.SpaceId || share.SenderDeviceId != session.DeviceId)
+            throw new InvalidDataException("relay_local_identity_mismatch");
+        var peerId = share.InitiatorDeviceId == session.DeviceId ? share.ResponderDeviceId : share.InitiatorDeviceId;
+        var identity = await ResolveRelayPeerAsync(peerId, cancellationToken).ConfigureAwait(false);
+        return local.AcceptPeer(remote, identity.PublicKey);
+    }
+
+    public async Task<RelayPeerIdentity> ResolveRelayPeerAsync(string peerDeviceId, CancellationToken cancellationToken)
+    {
+        if (!Guid.TryParseExact(peerDeviceId, "N", out _)) throw new ArgumentException("relay_peer_id_invalid", nameof(peerDeviceId));
+        var peer = await SpaceClient.GetFromJsonAsync<RelayPeerIdentity>("api/index/v1/peers/" + peerDeviceId,
+            DeviceAuthorization.Json, cancellationToken).ConfigureAwait(false);
+        var expectedKind = Connection.ClientKind == "gui" ? "index-service" : "gui";
+        if (peer is null || peer.SpaceId != Connection.Session?.SpaceId || peer.DeviceId != peerDeviceId || peer.Kind != expectedKind)
+            throw new InvalidDataException("relay_peer_identity_invalid");
+        using var key = DeviceAuthorization.ReadPublicKey(peer.PublicKey);
+        return peer;
+    }
 
     public async Task<ClientWebSocket> ConnectWebSocketAsync(string relativePath, CancellationToken cancellationToken = default)
     {

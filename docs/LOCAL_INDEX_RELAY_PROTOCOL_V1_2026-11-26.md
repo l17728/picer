@@ -21,9 +21,17 @@ The AES-GCM associated data binds version, session, space, sender, recipient, se
 - Debug full solution build: 0 warnings, 0 errors. Relay credential/connector and protocol tests: 11/11 passed.
 - Release artifact path: `server/Picer.IndexService/bin/Release/net8.0/Picer.IndexService.dll`; SHA-256 `E4FE9A7D1F25E8EB292D6E086C3A46CF952B25E42BA742C093A1F40BEEF7249B`.
 - Idempotency key is cryptographically bound to a request frame, but no durable request ledger or exactly-once write execution exists yet. This must be implemented at the local IndexService transaction boundary before write operations are routed.
-- The multiplexer accepts single-frame and bounded multi-frame responses. Peer key lookup, account-service routing, GUI integration, cancellation propagation at the local IndexService, durable replay state, throughput/backpressure enforcement across tenants, and complete tenant revocation behavior remain unimplemented.
+- The multiplexer accepts single-frame and bounded multi-frame responses. Account-service data routing, GUI integration, cancellation propagation at the local IndexService, durable replay state, throughput/backpressure enforcement across tenants, and complete tenant revocation behavior remain unimplemented.
 
 Do not enable data forwarding until those pieces are integrated and the E2E cases for RELAY-03, 09, 14, 17, 18, 20, 21, 33, and 35 pass. The protocol layer alone is not full end-to-end Relay acceptance.
+
+### 2026-11-28 在线设备发现与握手身份验证
+
+空间内的 GUI 可调用 `GET api/index/v1/peers` 枚举已连接且授权有效的本机 IndexService。双方按目标设备 ID 调用 `GET api/index/v1/peers/{deviceId}` 查询对方已注册的签名公钥。账号服务校验设备角色、空间成员关系、授权和会话有效期，响应禁用缓存。GUI 与本机 IndexService 分别用自己的设备密钥签署临时密钥，再用本次查询的公钥验证对方签名。
+
+使用隔离的真实 HTTPS 账号服务和已配对客户端验证了在线发现、双向查询、密钥协商、密文解密、跨空间隔离、撤销后的目录移除与控制连接断开。Release 定向测试 15 项通过。此测试在客户端间传递握手消息和密文，账号服务尚未承载这些数据帧。
+
+Release 构建文件为 `D:\picer\server\Picer.IndexService\bin\Release\net8.0\Picer.IndexService.dll`（SHA-256 `23F57EFD953AF8FB64EFDC7127DBD29B21E83F6C55A626EEDE8C1A316AD1B25E`）和 `D:\picer\src\Picer.Core\bin\Release\net8.0\Picer.Core.dll`（SHA-256 `72FEB0EECFE6B6A308EAEAEDA967288A89966C6AC99ACB9BAD5DC7BE33C6BF65`）。
 
 2026-11-28 验证了请求排队超时。并发槽位用尽时，等待时间计入同一个请求期限。排队超时不会发送请求帧或取消帧，已占用槽位的请求可以继续执行。相关协议测试 5 项通过。
 

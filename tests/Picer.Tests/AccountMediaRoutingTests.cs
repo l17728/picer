@@ -51,11 +51,43 @@ public sealed class AccountMediaRoutingTests
             Assert.Equal(RelayConnectorProtocol.HeartbeatAck, acknowledgement.Type);
             Assert.True(registry.GetStatus(client.Connection.Session!.GrantId)!.LastHeartbeatUtc >= connected.LastHeartbeatUtc);
 
+            using var guiKey = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+            async Task<DeviceAccountClient> PairGui(string owner, string spaceId)
+            {
+                var request = Guid.NewGuid().ToString("N");
+                instance.Accounts.CreateEnrollment(new(request, DeviceAuthorization.ExportPublicKey(guiKey), "GUI", "gui"));
+                var approval = instance.Accounts.ApproveEnrollment(owner, request, spaceId, origin, pin, signing, false, false);
+                var gui = new DeviceAccountClient(new(origin, instance.Accounts.ServiceId, pin,
+                    DeviceAuthorization.ExportPublicKey(signing), "test", request, "GUI", "gui"), guiKey, _ => { });
+                await gui.ImportAsync(DeviceAuthorization.WriteFileDocument(approval), deadline.Token);
+                return gui;
+            }
+            using var gui = await PairGui(account, space.Id);
+            var otherAccount = instance.Accounts.Register("other-relay-owner", "other-relay-password-123!", "其他空间");
+            using var outside = await PairGui(otherAccount, Assert.Single(instance.Accounts.ListSpaces(otherAccount)).Id);
+            var peer = await gui.ResolveRelayPeerAsync(connected.DeviceId, deadline.Token);
+            Assert.Equal(peer, Assert.Single(await gui.ListRelayConnectorsAsync(deadline.Token)));
+            Assert.Empty(await outside.ListRelayConnectorsAsync(deadline.Token));
+            Assert.Equal(DeviceAuthorization.ExportPublicKey(key), peer.PublicKey);
+            var reverse = await client.ResolveRelayPeerAsync(gui.Connection.Session!.DeviceId, deadline.Token);
+            Assert.Equal(DeviceAuthorization.ExportPublicKey(guiKey), reverse.PublicKey);
+            using var guiOffer = gui.CreateRelayOffer(Guid.NewGuid().ToString("N"), connected.DeviceId);
+            using var serviceOffer = client.CreateRelayOffer(guiOffer.Share.SessionId, reverse.DeviceId);
+            using var guiSession = await gui.AcceptRelayPeerAsync(guiOffer, serviceOffer.Share, deadline.Token);
+            using var serviceSession = await client.AcceptRelayPeerAsync(serviceOffer, guiOffer.Share, deadline.Token);
+            var queryFrame = guiSession.Encrypt("request", Guid.NewGuid(), Guid.NewGuid(), "read"u8);
+            Assert.Equal("read"u8.ToArray(), serviceSession.Decrypt(queryFrame, new RelayReplayWindow()));
+            var outsideDenied = await Assert.ThrowsAsync<HttpRequestException>(() => outside.ResolveRelayPeerAsync(connected.DeviceId, deadline.Token));
+            Assert.Equal(HttpStatusCode.NotFound, outsideDenied.StatusCode);
+
             using var denied = await client.SpaceClient.GetAsync("health", deadline.Token);
             Assert.Equal(HttpStatusCode.Forbidden, denied.StatusCode);
             await Assert.ThrowsAsync<UnauthorizedAccessException>(() => client.ConnectWebSocketAsync("api/agent/v1/connect", deadline.Token));
 
             instance.Accounts.Revoke(account, client.Connection.Session.GrantId);
+            var revoked = await Assert.ThrowsAsync<HttpRequestException>(() => gui.ResolveRelayPeerAsync(connected.DeviceId, deadline.Token));
+            Assert.Equal(HttpStatusCode.NotFound, revoked.StatusCode);
+            Assert.Empty(await gui.ListRelayConnectorsAsync(deadline.Token));
             using var revocationDeadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
             await Assert.ThrowsAsync<WebSocketException>(() => RelayConnectorProtocol.ReceiveAsync(socket, revocationDeadline.Token));
             Assert.Null(registry.GetStatus(client.Connection.Session.GrantId));

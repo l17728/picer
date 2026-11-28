@@ -104,6 +104,23 @@ public static class AccountServiceHost
             using var admission = app.Services.GetRequiredService<SpaceRequestAdmission>().TryEnter(device, relative);
             if (admission is null) { context.Response.Headers.RetryAfter = "2"; return Results.StatusCode(429); }
             const string snapshotPrefix = "/api/sync/v2/read-snapshots/";
+            const string relayPeerPrefix = "/api/index/v1/peers/";
+            if (context.Request.Method == "GET" && relative == "/api/index/v1/peers")
+            {
+                context.Response.Headers.CacheControl = "no-store";
+                if (device.Kind != "gui" || !device.Allows("index.read")) return Results.StatusCode(403);
+                var registry = app.Services.GetRequiredService<IndexRelayConnectorRegistry>();
+                var peers = registry.ConnectedDeviceIds(spaceId).Select(id => accounts.ResolveRelayPeer(device, id))
+                    .OfType<RelayPeerIdentity>().ToArray();
+                return Results.Json(peers);
+            }
+            if (context.Request.Method == "GET" && relative.StartsWith(relayPeerPrefix, StringComparison.Ordinal))
+            {
+                context.Response.Headers.CacheControl = "no-store";
+                if (device.Kind is not ("gui" or "index-service")) return Results.StatusCode(403);
+                var peer = accounts.ResolveRelayPeer(device, relative[relayPeerPrefix.Length..]);
+                return peer is null ? Results.NotFound() : Results.Json(peer);
+            }
             if (context.Request.Method == "POST" && relative == "/api/sync/v2/descriptions/changes")
             {
                 if (!device.Allows("index.read") || device.Kind != "gui") return Results.StatusCode(403);

@@ -17,6 +17,10 @@ public sealed class IndexRelayConnectorRegistry
         _connectors.TryGetValue(grantId, out var connector) && connector.Socket.State == WebSocketState.Open
             ? connector.Status : null;
 
+    public IReadOnlyList<string> ConnectedDeviceIds(string spaceId) =>
+        _connectors.Values.Where(c => c.Status.SpaceId == spaceId && c.Socket.State == WebSocketState.Open)
+            .Select(c => c.Status.DeviceId).Order(StringComparer.Ordinal).ToArray();
+
     public async Task ConnectAsync(HttpContext context, AuthorizedDevice device, CancellationToken cancellationToken)
     {
         if (!context.WebSockets.IsWebSocketRequest)
