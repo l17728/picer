@@ -75,6 +75,34 @@ public sealed class ClassificationV2RuntimeTests : IDisposable
     }
 
     [Fact]
+    public void ActiveJobRechecksOnlyCurrentSaturatedResultsOnce()
+    {
+        Add("broad.jpg"); Add("ordinary.jpg"); Add("queued.jpg");
+        var job = Start();
+        var first = _repo.Claim()!;
+        Assert.True(_repo.Publish(first, Result(first, "scene.outdoor")));
+        var second = _repo.Claim()!;
+        Assert.True(_repo.Publish(second, Result(second, "scene.outdoor")));
+        // Reproduce the old persisted suggestion set without weakening the new validator.
+        var labels = _repo.Taxonomy().Labels.Where(label => label.Active && label.Assignable).Take(167);
+        foreach (var label in labels)
+        {
+            using var insert = _db.Command("INSERT OR IGNORE INTO classification_v2_labels VALUES($image,$label)");
+            insert.Parameters.AddWithValue("$image", first.ImageId);
+            insert.Parameters.AddWithValue("$label", label.Id);
+            insert.ExecuteNonQuery();
+        }
+        _repo.Control(job.Id, "recheck-saturated");
+        _repo.Control(job.Id, "recheck-saturated");
+        Assert.Equal(1, _repo.Job(job.Id).Succeeded);
+        var retry = _repo.Claim()!;
+        Assert.Equal(first.ImageId, retry.ImageId);
+        Assert.True(_repo.Publish(retry, Result(retry, "scene.outdoor")));
+        Assert.Equal(2, _repo.Job(job.Id).Succeeded);
+        Assert.Equal(3, _repo.Job(job.Id).UsedCalls);
+    }
+
+    [Fact]
     public async Task ReclaimedMalformedResponsesUseDifferentSamplingSeedsWithinTheJobBudget()
     {
         Add("sample.jpg");

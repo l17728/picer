@@ -2,6 +2,8 @@ namespace Picer.Core.Classification;
 
 public static class ClassificationOutputValidator
 {
+    internal static bool IsSaturated(int supported, int eligible) => eligible >= 100 && supported * 4L >= eligible * 3L;
+
     public static void Validate(ClassificationResult result, ClassificationContext context, ClassificationTaxonomySnapshot taxonomy)
     {
         if (result.SchemaVersion != "classification-result-v1" || result.InputFingerprint != ClassificationInputFingerprint.Compute(context.Input)
@@ -21,7 +23,7 @@ public static class ClassificationOutputValidator
         // Near-total coverage of a large household taxonomy reproduced indiscriminate
         // model output. Request a fresh judgment before publishing any of its labels.
         var supportedCount = result.Labels.Count(label => label.Support == "supported");
-        if (expected.Count >= 100 && supportedCount * 10L >= expected.Count * 9L)
+        if (IsSaturated(supportedCount, expected.Count))
         {
             Picer.Core.Logging.AppLogger.Warn($"Classification saturated response; supported={supportedCount}; assignable={expected.Count}");
             throw new InvalidDataException("classification_output_incomplete");

@@ -68,6 +68,31 @@ public sealed partial class ClassificationRepository
 
     public void Control(string id, string operation, string? actor = null) => Write(() =>
     {
+        if (operation == "recheck-saturated")
+        {
+            var current = Job(id);
+            if (current.State is not ("running" or "queued") || current.UsedCalls >= current.MaximumCalls)
+                throw new InvalidOperationException("classification_job_not_retryable");
+            var images = new List<long>();
+            using (var query = Sql("""
+                SELECT i.image_id, (SELECT COUNT(*) FROM classification_v2_labels l WHERE l.image_id=i.image_id),
+                    json_array_length(r.payload,'$.Labels')
+                FROM classification_v2_items i
+                JOIN classification_v2_results r ON r.image_id=i.image_id AND r.fingerprint=i.fingerprint
+                JOIN classification_v2_work w ON w.image_id=i.image_id AND w.success_fingerprint=i.fingerprint
+                WHERE i.job_id=$job AND i.state='succeeded'
+                """, ("$job", id)))
+            using (var reader = query.ExecuteReader())
+                while (reader.Read())
+                    if (!reader.IsDBNull(2) && ClassificationOutputValidator.IsSaturated(reader.GetInt32(1), reader.GetInt32(2)))
+                        images.Add(reader.GetInt64(0));
+            foreach (var image in images)
+            {
+                Execute("UPDATE classification_v2_work SET success_fingerprint=NULL,outcome='unprocessed',error_code='classification_output_incomplete',retry_after=NULL WHERE image_id=$image", ("$image", image));
+                Execute("UPDATE classification_v2_items SET state='waiting',attempts=0,error_code=NULL WHERE job_id=$job AND image_id=$image", ("$job", id), ("$image", image));
+            }
+            return images.Count;
+        }
         if (operation is not ("pause" or "resume" or "cancel" or "retry-failed")) throw new ArgumentException("classification_operation_invalid");
         var job = Job(id);
         if (operation == "retry-failed" && job.State is not ("running" or "queued" or "partial_failed"))

@@ -36,6 +36,8 @@ public sealed partial class ClassificationModel
         return active.Where(label => matches.Contains(label.Id)).ToArray();
     }
 
+    private const int MaximumReviewExtras = 12;
+
     private const string ReviewInstruction = """
         重新看当前图片。以下是索引描述提及的候选，请逐项判断真实画面里是否看得到。描述、纸面文字或插图提到一个概念不足以确认。
         返回 classification-reviewed-v1。checks 是以每个候选 ID 为键、true 或 false 为值的对象。全部不符时可以全部为 false。
@@ -56,7 +58,7 @@ public sealed partial class ClassificationModel
         var ids = candidates.Select(label => label.Id).ToArray();
         var remaining = active.Select(label => label.Id).Except(ids, StringComparer.Ordinal).ToArray();
         object extras = remaining.Length == 0 ? new { type = "array", maxItems = 0 } :
-            new { type = "array", items = new { type = "string", @enum = remaining }, maxItems = remaining.Length };
+            new { type = "array", items = new { type = "string", @enum = remaining }, maxItems = Math.Min(remaining.Length, MaximumReviewExtras) };
         var schema = new { type = "object", properties = new {
             observation = new { type = "string", maxLength = 160 },
             schemaVersion = new { type = "string", @enum = new[] { "classification-reviewed-v1" } },
@@ -90,9 +92,10 @@ public sealed partial class ClassificationModel
             if (check.Value.GetBoolean()) positive.Add(check.Name);
         }
         if (pending.Count != 0) throw ReviewIncomplete("missing_check");
+        if (extras.GetArrayLength() > MaximumReviewExtras) throw ReviewIncomplete("too_many_extras");
         foreach (var extra in extras.EnumerateArray())
         {
-            if (extra.ValueKind != JsonValueKind.String || !other.Remove(extra.GetString()!)) throw ReviewIncomplete("invalid_or_duplicate_extra");
+            if (extra.ValueKind != JsonValueKind.String || !other.Contains(extra.GetString()!)) throw ReviewIncomplete("invalid_extra");
             positive.Add(extra.GetString()!);
         }
         return new("classification-result-v1", fingerprint.GetString()!, active.Select(id => positive.Contains(id)

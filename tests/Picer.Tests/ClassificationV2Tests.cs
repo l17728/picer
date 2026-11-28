@@ -109,6 +109,11 @@ public class ClassificationV2Tests
         var accepted = ClassificationModel.DecodeReview(Encode("scene.outdoor"), taxonomy, candidates);
         Assert.Equal(new[] { "place.playground", "scene.outdoor" }, accepted.Labels.Where(label => label.Support == "supported").Select(label => label.LabelId).Order().ToArray());
         Assert.Throws<InvalidDataException>(() => ClassificationModel.DecodeReview(Encode("place.playground"), taxonomy, candidates));
+        var repeated = ClassificationModel.DecodeReview(Encode("scene.outdoor", "scene.outdoor"), taxonomy, candidates);
+        Assert.Single(repeated.Labels.Where(label => label.Support == "supported" && label.LabelId == "scene.outdoor"));
+        var copiedVocabulary = taxonomy.Labels.Where(label => label.Active && label.Assignable && !judgments.ContainsKey(label.Id))
+            .Select(label => label.Id).Take(13).ToArray();
+        Assert.Throws<InvalidDataException>(() => ClassificationModel.DecodeReview(Encode(copiedVocabulary), taxonomy, candidates));
         judgments.Remove("place.playground");
         Assert.Throws<InvalidDataException>(() => ClassificationModel.DecodeReview(Encode(), taxonomy, candidates));
     }
