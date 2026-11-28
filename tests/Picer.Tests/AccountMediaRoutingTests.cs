@@ -24,7 +24,7 @@ public sealed class AccountMediaRoutingTests
         using var listener = new TcpListener(IPAddress.Loopback, 0);
         listener.Start(); var port = ((IPEndPoint)listener.LocalEndpoint).Port; listener.Stop();
         var origin = $"https://127.0.0.1:{port}";
-        var instance = AccountServiceHost.Build(Path.Combine(root, "service"), origin, port);
+        var instance = AccountServiceHost.Build(Path.Combine(root, "service"), origin, port, enableRelayData: true);
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(45));
         try
         {
@@ -72,11 +72,35 @@ public sealed class AccountMediaRoutingTests
             var reverse = await client.ResolveRelayPeerAsync(gui.Connection.Session!.DeviceId, deadline.Token);
             Assert.Equal(DeviceAuthorization.ExportPublicKey(guiKey), reverse.PublicKey);
             using var guiOffer = gui.CreateRelayOffer(Guid.NewGuid().ToString("N"), connected.DeviceId);
-            using var serviceOffer = client.CreateRelayOffer(guiOffer.Share.SessionId, reverse.DeviceId);
-            using var guiSession = await gui.AcceptRelayPeerAsync(guiOffer, serviceOffer.Share, deadline.Token);
-            using var serviceSession = await client.AcceptRelayPeerAsync(serviceOffer, guiOffer.Share, deadline.Token);
-            var queryFrame = guiSession.Encrypt("request", Guid.NewGuid(), Guid.NewGuid(), "read"u8);
-            Assert.Equal("read"u8.ToArray(), serviceSession.Decrypt(queryFrame, new RelayReplayWindow()));
+            using var guiData = await gui.ConnectRelayDataAsync(guiOffer.Share.SessionId, connected.DeviceId, deadline.Token);
+            var invite = Assert.Single(await client.PendingRelaySessionsAsync(deadline.Token));
+            Assert.Equal(reverse.DeviceId, invite.GuiDeviceId);
+            using var serviceData = await client.ConnectRelayDataAsync(invite.SessionId, invite.GuiDeviceId, deadline.Token);
+            using var serviceOffer = client.CreateRelayOffer(invite.SessionId, invite.GuiDeviceId);
+            using var guiWire = new RelayWireSocket(guiData);
+            using var serviceWire = new RelayWireSocket(serviceData);
+            await guiWire.SendAsync(RelayWireProtocol.ForKeyExchange(guiOffer.Share), deadline.Token);
+            await serviceWire.SendAsync(RelayWireProtocol.ForKeyExchange(serviceOffer.Share), deadline.Token);
+            using var guiSession = await gui.AcceptRelayPeerAsync(guiOffer, (await guiWire.ReceiveAsync(deadline.Token)).KeyExchange!, deadline.Token);
+            using var serviceSession = await client.AcceptRelayPeerAsync(serviceOffer, (await serviceWire.ReceiveAsync(deadline.Token)).KeyExchange!, deadline.Token);
+            var request = Guid.NewGuid();
+            var operation = Guid.NewGuid();
+            await guiWire.SendAsync(RelayWireProtocol.ForEncryptedFrame(guiSession.Encrypt("request", request, operation, "read"u8)), deadline.Token);
+            var query = (await serviceWire.ReceiveAsync(deadline.Token)).EncryptedFrame!;
+            Assert.Equal("read"u8.ToArray(), serviceSession.Decrypt(query, new RelayReplayWindow()));
+            await serviceWire.SendAsync(RelayWireProtocol.ForEncryptedFrame(serviceSession.Encrypt("response", request, operation, "result"u8)), deadline.Token);
+            var reply = (await guiWire.ReceiveAsync(deadline.Token)).EncryptedFrame!;
+            Assert.Equal("result"u8.ToArray(), guiSession.Decrypt(reply, new RelayReplayWindow()));
+            await Assert.ThrowsAsync<WebSocketException>(() => outside.ConnectRelayDataAsync(Guid.NewGuid().ToString("N"),
+                connected.DeviceId, deadline.Token));
+            // A second valid socket pair cannot carry the signed exchange belonging to the first session.
+            var otherSession = Guid.NewGuid().ToString("N");
+            using var otherGuiSocket = await gui.ConnectRelayDataAsync(otherSession, connected.DeviceId, deadline.Token);
+            using var otherServiceSocket = await client.ConnectRelayDataAsync(otherSession, reverse.DeviceId, deadline.Token);
+            using var otherGuiWire = new RelayWireSocket(otherGuiSocket);
+            using var otherServiceWire = new RelayWireSocket(otherServiceSocket);
+            await otherGuiWire.SendAsync(RelayWireProtocol.ForKeyExchange(guiOffer.Share), deadline.Token);
+            await Assert.ThrowsAsync<WebSocketException>(() => otherServiceWire.ReceiveAsync(deadline.Token));
             var outsideDenied = await Assert.ThrowsAsync<HttpRequestException>(() => outside.ResolveRelayPeerAsync(connected.DeviceId, deadline.Token));
             Assert.Equal(HttpStatusCode.NotFound, outsideDenied.StatusCode);
 
@@ -90,6 +114,7 @@ public sealed class AccountMediaRoutingTests
             Assert.Empty(await gui.ListRelayConnectorsAsync(deadline.Token));
             using var revocationDeadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
             await Assert.ThrowsAsync<WebSocketException>(() => RelayConnectorProtocol.ReceiveAsync(socket, revocationDeadline.Token));
+            await Assert.ThrowsAsync<WebSocketException>(() => guiWire.ReceiveAsync(revocationDeadline.Token));
             Assert.Null(registry.GetStatus(client.Connection.Session.GrantId));
         }
         finally

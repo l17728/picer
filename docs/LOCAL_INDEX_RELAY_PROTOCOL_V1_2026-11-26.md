@@ -1,6 +1,6 @@
 # Relay protocol v1 cryptographic frame primitives (2026-11-26)
 
-This implementation slice defines cryptographic primitives only. The cloud Relay still accepts heartbeat frames only; these frames are not yet routed over a production socket and no GUI query path uses them.
+账号服务支持在隔离验收中转发握手及加密数据帧，生产配置仍仅启用控制通道。正式 GUI 查询与本机索引请求处理尚待接入。
 
 ## Key agreement
 
@@ -21,9 +21,15 @@ The AES-GCM associated data binds version, session, space, sender, recipient, se
 - Debug full solution build: 0 warnings, 0 errors. Relay credential/connector and protocol tests: 11/11 passed.
 - Release artifact path: `server/Picer.IndexService/bin/Release/net8.0/Picer.IndexService.dll`; SHA-256 `E4FE9A7D1F25E8EB292D6E086C3A46CF952B25E42BA742C093A1F40BEEF7249B`.
 - Idempotency key is cryptographically bound to a request frame, but no durable request ledger or exactly-once write execution exists yet. This must be implemented at the local IndexService transaction boundary before write operations are routed.
-- The multiplexer accepts single-frame and bounded multi-frame responses. Account-service data routing, GUI integration, cancellation propagation at the local IndexService, durable replay state, throughput/backpressure enforcement across tenants, and complete tenant revocation behavior remain unimplemented.
+- The multiplexer accepts single-frame and bounded multi-frame responses. GUI integration, local service dispatch and cancellation propagation, durable replay state, throughput/backpressure acceptance across tenants, and complete tenant revocation acceptance remain outstanding.
 
 Do not enable data forwarding until those pieces are integrated and the E2E cases for RELAY-03, 09, 14, 17, 18, 20, 21, 33, and 35 pass. The protocol layer alone is not full end-to-end Relay acceptance.
+
+### 2026-11-28 账号服务双向密文转发
+
+GUI 以目标设备和会话 ID 发起出站 WebSocket。本机 IndexService 可以通过邀请接口发现待连接的 GUI，用自己的设备凭据加入同一会话。两个端点在同一空间内分别通过身份校验，配对等待上限为 45 秒。控制连接继续用于心跳，数据连接可以承载多次请求。账号服务核对每个方向的空间、会话及收发设备，首帧必须是签名密钥交换，后续只能转发密文帧。任一端退出都会取消配对端的接收；授权撤销沿用账号服务的撤销观察机制。
+
+隔离 HTTPS 测试使用真实 WebSocket 发送双向签名交换、一条加密请求及其加密响应，验证撤销连接。测试正文为固定样例，真实索引查询还需接入本机处理器。Release 构建位于 `D:\picer\server\Picer.IndexService\bin\Release\net8.0\Picer.IndexService.dll`（SHA-256 `7536C295ECC403D94F3B18E26F3D3B63ED5CACE5BC4C9DA19DC6B7A831D85A08`）及 `D:\picer\src\Picer.Core\bin\Release\net8.0\Picer.Core.dll`（SHA-256 `0E000A1E979992BEBD16DA898874E2C1C7958DA1F9CE7132F8E780D86080D456`）。
 
 ### 2026-11-28 在线设备发现与握手身份验证
 

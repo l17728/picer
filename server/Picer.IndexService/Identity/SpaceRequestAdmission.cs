@@ -10,6 +10,7 @@ public sealed class SpaceRequestAdmission
     {
         var category = path == "/api/sync/v2/notifications" ? "notification"
             : path == "/api/index/v1/connect" ? "relay"
+            : path.StartsWith("/api/index/v1/sessions/", StringComparison.Ordinal) ? "relay-data"
             : path.StartsWith("/api/agent/", StringComparison.Ordinal) ? "agent"
             : path.Contains("/assets/", StringComparison.Ordinal)
                 || path.StartsWith("/api/gateway/v1/thumbs/", StringComparison.Ordinal)
@@ -23,6 +24,7 @@ public sealed class SpaceRequestAdmission
         {
             "agent" => (Node: 128, Space: 32, Device: 10),
             "relay" => (Node: 128, Space: 16, Device: 1),
+            "relay-data" => (Node: 128, Space: 32, Device: 8),
             "media" => (Node: 32, Space: 8, Device: 4),
             "write" => (Node: 8, Space: 2, Device: 1),
             "notification" => (Node: 64, Space: 16, Device: 1),

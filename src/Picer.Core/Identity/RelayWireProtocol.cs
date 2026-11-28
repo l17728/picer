@@ -44,8 +44,8 @@ public static class RelayWireProtocol
         {
             if (message.KeyExchange is not { } share || message.EncryptedFrame is not null || share.Version != CurrentVersion ||
                 share.SessionId != message.SessionId || !Guid.TryParseExact(share.SpaceId, "N", out _) ||
-                !Guid.TryParseExact(share.SenderDeviceId, "N", out _) || share.Signature.Length > 512 ||
-                share.EphemeralPublicKey.Length > 1024 || share.Nonce.Length > 128)
+                !Guid.TryParseExact(share.SenderDeviceId, "N", out _) || share.Signature is not { Length: > 0 and <= 512 } ||
+                share.EphemeralPublicKey is not { Length: > 0 and <= 1024 } || share.Nonce is not { Length: > 0 and <= 128 })
                 throw new InvalidDataException("relay_wire_key_exchange_invalid");
             return;
         }

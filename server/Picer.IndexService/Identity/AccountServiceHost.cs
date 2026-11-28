@@ -11,7 +11,7 @@ public sealed record AccountServiceInstance(WebApplication App, AccountStore Acc
 public static class AccountServiceHost
 {
     public static AccountServiceInstance Build(string root, string publicOrigin, int port = 8445,
-        IPAddress? bindAddress = null, bool allowRegistration = true)
+        IPAddress? bindAddress = null, bool allowRegistration = true, bool enableRelayData = false)
     {
         publicOrigin = DeviceAuthorization.NormalizeOrigin(publicOrigin);
         Directory.CreateDirectory(root);
@@ -42,6 +42,7 @@ public static class AccountServiceHost
         builder.Services.AddSingleton<SpaceReadSnapshots>();
         builder.Services.AddSingleton<SpaceWebSocketRelay>();
         builder.Services.AddSingleton<IndexRelayConnectorRegistry>();
+        builder.Services.AddSingleton<IndexRelayDataSessions>();
         builder.Services.AddSingleton<SpaceRequestAdmission>();
         var app = builder.Build();
         _ = app.Services.GetRequiredService<AccountRuntimeLease>();
@@ -104,6 +105,31 @@ public static class AccountServiceHost
             using var admission = app.Services.GetRequiredService<SpaceRequestAdmission>().TryEnter(device, relative);
             if (admission is null) { context.Response.Headers.RetryAfter = "2"; return Results.StatusCode(429); }
             const string snapshotPrefix = "/api/sync/v2/read-snapshots/";
+            const string sessionPrefix = "/api/index/v1/sessions/";
+            if (context.Request.Method == "GET" && relative == "/api/index/v1/invitations")
+            {
+                if (!enableRelayData) return Results.NotFound();
+                if (device.Kind != "index-service" || !device.Allows("relay.connect")) return Results.StatusCode(403);
+                context.Response.Headers.CacheControl = "no-store";
+                return Results.Json(app.Services.GetRequiredService<IndexRelayDataSessions>().Pending(device));
+            }
+            if (context.Request.Method == "GET" && relative.StartsWith(sessionPrefix, StringComparison.Ordinal))
+            {
+                if (!enableRelayData) return Results.NotFound();
+                var parts = relative[sessionPrefix.Length..].Split('/');
+                if (parts.Length != 2 || !Guid.TryParseExact(parts[0], "N", out _) || !Guid.TryParseExact(parts[1], "N", out _))
+                    return Results.NotFound();
+                if (device.Kind is not ("gui" or "index-service")) return Results.StatusCode(403);
+                if (accounts.ResolveRelayPeer(device, parts[1]) is null) return Results.NotFound();
+                var serviceId = device.Kind == "gui" ? parts[1] : device.DeviceId;
+                if (!app.Services.GetRequiredService<IndexRelayConnectorRegistry>().ConnectedDeviceIds(spaceId).Contains(serviceId))
+                    return Results.NotFound();
+                using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(context.RequestAborted);
+                var sessionObserver = ObserveRevocationAsync(accounts, device, lifetime);
+                try { await app.Services.GetRequiredService<IndexRelayDataSessions>().ConnectAsync(context, device, parts[0], parts[1], lifetime.Token); }
+                finally { await lifetime.CancelAsync(); await sessionObserver; }
+                return Results.Empty;
+            }
             const string relayPeerPrefix = "/api/index/v1/peers/";
             if (context.Request.Method == "GET" && relative == "/api/index/v1/peers")
             {

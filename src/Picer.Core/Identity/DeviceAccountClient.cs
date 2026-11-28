@@ -13,6 +13,7 @@ public sealed record ServiceDiscovery(int Version, string ServiceId, string Orig
     string EnrollmentEndpoint, string AccountEndpoint);
 public sealed record EnrollmentStarted(string RequestId, string ApprovalUrl, int ExpiresIn);
 public sealed record RelayPeerIdentity(string SpaceId, string DeviceId, string Kind, string PublicKey);
+public sealed record RelaySessionInvitation(string SessionId, string GuiDeviceId);
 
 /// <summary>One client per device grant. Refresh state is persisted before transmission so interrupted retries keep their attempt ID.</summary>
 public sealed class DeviceAccountClient : IDisposable
@@ -29,6 +30,20 @@ public sealed class DeviceAccountClient : IDisposable
     private readonly Func<CancellationToken, Task<IDisposable>>? _acquireRefreshLease;
     public DeviceConnection Connection => Volatile.Read(ref _connection);
     public HttpClient SpaceClient => _space;
+
+    public async Task<IReadOnlyList<RelaySessionInvitation>> PendingRelaySessionsAsync(CancellationToken token) =>
+        await SpaceClient.GetFromJsonAsync<RelaySessionInvitation[]>("api/index/v1/invitations", DeviceAuthorization.Json, token)
+            .ConfigureAwait(false) ?? throw new InvalidDataException("relay_invitations_invalid");
+
+    public async Task<ClientWebSocket> ConnectRelayDataAsync(string sessionId, string peerDeviceId, CancellationToken token)
+    {
+        if (!Guid.TryParseExact(sessionId, "N", out _) || !Guid.TryParseExact(peerDeviceId, "N", out _))
+            throw new ArgumentException("relay_session_binding_invalid");
+        var session = await SessionAsync(token);
+        var scope = Connection.ClientKind switch { "gui" => "index.read", "index-service" => "relay.connect", _ => null };
+        if (scope is null || !session.Scope.Split(' ').Contains(scope)) throw new UnauthorizedAccessException("relay_scope_required");
+        return await OpenSocketAsync($"api/index/v1/sessions/{sessionId}/{peerDeviceId}", session, token);
+    }
 
     public async Task<IReadOnlyList<RelayPeerIdentity>> ListRelayConnectorsAsync(CancellationToken cancellationToken) =>
         await SpaceClient.GetFromJsonAsync<RelayPeerIdentity[]>("api/index/v1/peers", DeviceAuthorization.Json,
@@ -85,6 +100,11 @@ public sealed class DeviceAccountClient : IDisposable
             : Connection.ClientKind == "agent" && session.Scope.Split(' ').Contains("source.serve");
         if (!authorized)
             throw new UnauthorizedAccessException(indexRelayConnector ? "index_service_relay_authorization_required" : "agent_authorization_required");
+        return await OpenSocketAsync(relativePath, session, cancellationToken);
+    }
+
+    private async Task<ClientWebSocket> OpenSocketAsync(string relativePath, DeviceSession session, CancellationToken cancellationToken)
+    {
         var endpoint = new Uri(DeviceAuthorization.SpaceAddress(Connection.Origin, session.SpaceId) + "/" + relativePath);
         var socket = new ClientWebSocket();
         var pin = Convert.FromBase64String(Connection.SpkiPin);
