@@ -424,14 +424,26 @@ public sealed class DesktopSmokeTests
                     new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.TabItem))
                 .Cast<AutomationElement>().First(item => item.Current.Name.Contains("人物"));
             Assert.True(peopleTab.TryGetCurrentPattern(SelectionItemPattern.Pattern, out var selection));
-            var visible = Stopwatch.StartNew();
+            var requested = Stopwatch.GetTimestamp();
             ((SelectionItemPattern)selection).Select();
             var skeletonBudget = string.Equals(Environment.GetEnvironmentVariable("CI"), "true", StringComparison.OrdinalIgnoreCase)
                 ? TimeSpan.FromSeconds(4)
                 : TimeSpan.FromSeconds(2);
             var pending = WaitForElement(window, "待处理人脸", skeletonBudget);
+            var observed = Stopwatch.GetTimestamp();
             Assert.NotNull(pending);
-            Assert.True(visible.Elapsed < skeletonBudget, $"人物页骨架显示耗时 {visible.Elapsed}");
+            // Windows UI Automation can take two seconds to deliver Select while the WPF
+            // dispatcher remains idle. Measure delivery and page response independently.
+            const string marker = "People page selected; timestamp=";
+            var entry = Directory.GetFiles(Path.Combine(isolatedData, "logs"), "picer-*.log")
+                .SelectMany(File.ReadAllLines).Last(line => line.Contains(marker, StringComparison.Ordinal));
+            var selected = long.Parse(entry[(entry.IndexOf(marker, StringComparison.Ordinal) + marker.Length)..],
+                System.Globalization.CultureInfo.InvariantCulture);
+            Assert.InRange(selected, requested, observed);
+            var delivery = Stopwatch.GetElapsedTime(requested, selected);
+            var visible = Stopwatch.GetElapsedTime(selected, observed);
+            Assert.True(delivery < TimeSpan.FromSeconds(5), $"人物页选择指令传递耗时 {delivery}");
+            Assert.True(visible < skeletonBudget, $"人物页骨架显示耗时 {visible}");
 
             var peopleList = WaitForElement(window, "已命名人物下拉列表", TimeSpan.FromSeconds(5));
             Assert.NotNull(peopleList);

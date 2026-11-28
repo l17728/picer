@@ -502,7 +502,11 @@ public partial class MainWindow : Window
     private async void MainTabs_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (!ReferenceEquals(e.Source, MainTabs) || DataContext is not MainViewModel) return;
-        if (MainTabs.SelectedIndex == 2) await _mainVm.People.InitializePageAsync();
+        if (MainTabs.SelectedIndex == 2)
+        {
+            AppLogger.Info($"People page selected; timestamp={Stopwatch.GetTimestamp()}");
+            await _mainVm.People.InitializePageAsync();
+        }
         else if (MainTabs.SelectedIndex == 3) await _mainVm.Semantic.InitializePageAsync();
     }
 
