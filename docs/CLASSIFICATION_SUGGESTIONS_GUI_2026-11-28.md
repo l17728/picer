@@ -8,3 +8,7 @@
 
 正式 GUI 路径为 `D:\picer\src\Picer.App\bin\Release\net8.0-windows\win-x64\Picer.App.exe`。EXE SHA-256 为 `7E198CAA66D6C3D83FF8D522697FDBCF0265CE579B7882A47F825CAA0CF8BA9B`，配套 DLL 为 `6FCF124CB79A73805AD1C758D022B13BC341D373C609F842EAB5D64B115661F3`。
 生产部署号为 20261128T013021185Z，服务器 47.103.99.229 已通过健康和版本校验。部署后通过账号读取分类服务成功，原图库任务仍在运行。
+
+同日复核单张照片的模型请求时发现，输出协议允许建议引用已有可分配标签作为父节点，而请求只提供了这些标签的数字索引。提交 `775f9b4` 补齐可分配标签的 ID，并保持照片匹配结果使用紧凑索引。请求载荷测试检查每个 ID 与当前分类体系一致。新增诊断仅记录结构、计数和指纹是否一致，不记录模型原文。Debug 整解方案严格构建通过，分类相关 Debug 测试 79 项、Release 定向测试 36 项通过。
+
+生产部署 `20261128T015510974Z` 已验证健康、版本与 SHA-256。Linux 正式构建位于 `artifacts/indexservice-deploy/20261128T015510974Z/publish/Picer.IndexService`，SHA-256 为 `71d7a88f483fb400ed499d2dc073d146f40bbbd6d8f9ba90a613437e9460980a`。这次更新在服务端生效。
