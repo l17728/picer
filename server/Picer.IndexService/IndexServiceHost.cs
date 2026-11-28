@@ -74,6 +74,7 @@ public sealed class IndexApiHandlers(PicerDatabase db, ThumbnailService thumbnai
             ? db.ReadSnapshot(reader => GatewayBrowseQueries.Directories(reader, token), token)
             : GatewayBrowseQueries.Directories(db, token), token);
     internal PicerDatabase OpenSpaceConnection() => db.OpenIndependentConnection();
+    internal IndexApiHandlers ForReadConnection(PicerDatabase reader) => new(reader, thumbnails, new VideoRepository(reader));
     internal void DisposeDatabase() => db.Dispose();
     public Func<long, CancellationToken, Task<bool>>? VideoPurgeHandler { get; set; }
     public Task<bool> PurgeVideoAsync(long id, CancellationToken token)

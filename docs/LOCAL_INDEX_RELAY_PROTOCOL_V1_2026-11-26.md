@@ -21,9 +21,17 @@ The AES-GCM associated data binds version, session, space, sender, recipient, se
 - Debug full solution build: 0 warnings, 0 errors. Relay credential/connector and protocol tests: 11/11 passed.
 - Release artifact path: `server/Picer.IndexService/bin/Release/net8.0/Picer.IndexService.dll`; SHA-256 `E4FE9A7D1F25E8EB292D6E086C3A46CF952B25E42BA742C093A1F40BEEF7249B`.
 - Idempotency key is cryptographically bound to a request frame, but no durable request ledger or exactly-once write execution exists yet. This must be implemented at the local IndexService transaction boundary before write operations are routed.
-- The multiplexer accepts single-frame and bounded multi-frame responses. GUI integration, cancellation of executing local queries, additional media and write operations, durable replay state, throughput/backpressure acceptance across tenants, and complete tenant revocation acceptance remain outstanding.
+- The multiplexer accepts single-frame and bounded multi-frame responses. GUI integration, additional media and write operations, durable replay state, throughput/backpressure acceptance across tenants, and complete tenant revocation acceptance remain outstanding.
 
 Do not enable data forwarding until those pieces are integrated and the E2E cases for RELAY-03, 09, 14, 17, 18, 20, 21, 33, and 35 pass. The protocol layer alone is not full end-to-end Relay acceptance.
+
+### 2026-11-28 并发读取和取消
+
+本机连接器在处理查询期间持续接收数据帧，每个请求有独立 SQLite 连接和取消令牌。已认证的 cancel 帧需要匹配执行中的请求 ID 和幂等键；请求过期或连接关闭也会取消执行。只读处理器将令牌传给支持取消的搜索和目录查询；同步接口在读取前后检查取消。会话最多同时执行 32 个请求。正在写出的 WebSocket 帧使用连接级令牌保证帧完整，关闭客户端会等待活动调用退出再释放加密上下文。
+
+隔离账号服务的两个独立 GUI 客户端凭据同时向一个本机连接器发出六个搜索请求，分别请求一条和两条数据，各自返回与本机查询一致的有序记录。在请求执行器的可控慢任务测试中，显式取消或到期都中断了目标任务，另一个请求继续完成；错误的幂等键无法取消目标。Release 定向测试 17 项通过，Debug 整解方案严格构建通过。这些测试覆盖查询并发，RELAY-14 还需要包含媒体和描述操作的验收。
+
+Release 文件为 `D:\picer\src\Picer.Core\bin\Release\net8.0\Picer.Core.dll`（SHA-256 `D7D948E0F78145C2DEB8464624D1EE67376CD904D12D6C6DCEED2D6D5BC81BBB`）和 `D:\picer\server\Picer.IndexService\bin\Release\net8.0\Picer.IndexService.dll`（SHA-256 `A998090728CD9BDCDF6E27EACE2FA795FA84175071664116E5B9DE50CD5F98A7`）。
 
 ### 2026-11-28 本机索引查询与自动接入
 

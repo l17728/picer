@@ -15,6 +15,10 @@ public sealed class RelayIndexHttpHandler : HttpMessageHandler
     private readonly RelayRequestMultiplexer _requests;
     private readonly CancellationTokenSource _closed = new();
     private readonly Task _reader;
+    private readonly object _lifetime = new();
+    private readonly TaskCompletionSource _idle = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private int _active;
+    private bool _disposing;
 
     private RelayIndexHttpHandler(ClientWebSocket socket, RelayWireSocket wire, RelaySessionCryptoContext session)
     {
@@ -22,7 +26,7 @@ public sealed class RelayIndexHttpHandler : HttpMessageHandler
         _wire = wire;
         _session = session;
         _requests = new(session, new RelayReplayWindow(), (frame, token) =>
-            wire.SendAsync(RelayWireProtocol.ForEncryptedFrame(frame), token));
+            wire.SendAsync(RelayWireProtocol.ForEncryptedFrame(frame), token, _closed.Token));
         _reader = ReadAsync();
     }
 
@@ -49,11 +53,25 @@ public sealed class RelayIndexHttpHandler : HttpMessageHandler
         var path = request.RequestUri!.PathAndQuery.TrimStart('/');
         if (!RelayIndexQuery.IsSupported(request.Method.Method, path))
             return new(HttpStatusCode.NotImplemented);
-        if (_reader.IsCompleted) throw new HttpRequestException("relay_connection_closed");
-        JsonElement? body = request.Content is null ? null : await request.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: token);
-        var query = JsonSerializer.SerializeToUtf8Bytes(new RelayIndexQuery(request.Method.Method, path, body), DeviceAuthorization.Json);
-        var response = await _requests.RequestAsync(Guid.NewGuid(), query, token);
-        return new(HttpStatusCode.OK) { Content = new ByteArrayContent(response) };
+        lock (_lifetime)
+        {
+            ObjectDisposedException.ThrowIf(_disposing, this);
+            if (_reader.IsCompleted) throw new HttpRequestException("relay_connection_closed");
+            _active++;
+        }
+        try
+        {
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(token, _closed.Token);
+            JsonElement? body = request.Content is null ? null : await request.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: linked.Token).ConfigureAwait(false);
+            var query = JsonSerializer.SerializeToUtf8Bytes(new RelayIndexQuery(request.Method.Method, path, body), DeviceAuthorization.Json);
+            var response = await _requests.RequestAsync(Guid.NewGuid(), query, linked.Token).ConfigureAwait(false);
+            return new(HttpStatusCode.OK) { Content = new ByteArrayContent(response) };
+        }
+        finally
+        {
+            lock (_lifetime)
+                if (--_active == 0 && _disposing) _idle.TrySetResult();
+        }
     }
 
     private async Task ReadAsync()
@@ -72,11 +90,17 @@ public sealed class RelayIndexHttpHandler : HttpMessageHandler
 
     protected override void Dispose(bool disposing)
     {
-        if (disposing && !_closed.IsCancellationRequested)
+        if (disposing)
         {
+            lock (_lifetime)
+            {
+                if (_disposing) return;
+                _disposing = true;
+                if (_active == 0) _idle.TrySetResult();
+            }
             _closed.Cancel();
             _socket.Abort();
-            _reader.GetAwaiter().GetResult();
+            Task.WhenAll(_reader, _idle.Task).GetAwaiter().GetResult();
             _wire.Dispose();
             _session.Dispose();
             _socket.Dispose();

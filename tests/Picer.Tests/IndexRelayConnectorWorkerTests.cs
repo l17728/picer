@@ -68,12 +68,22 @@ public sealed class IndexRelayConnectorWorkerTests
             Assert.True(worker.State.Connected);
             Assert.True(worker.State.LastHeartbeatUtc <= DateTimeOffset.UtcNow);
 
-            var request = Guid.NewGuid().ToString("N");
-            using var guiKey = ECDsa.Create(ECCurve.NamedCurves.nistP256);
-            accountService.Accounts.CreateEnrollment(new(request, DeviceAuthorization.ExportPublicKey(guiKey), "GUI", "gui"));
-            var approved = accountService.Accounts.ApproveEnrollment(account, request, space.Id, origin, pin, serverSigningKey, false, false);
-            using var gui = new DeviceAccountClient(new(origin, discovery.ServiceId, pin, discovery.SigningKey, "test", request, "GUI", "gui"), guiKey, _ => { });
-            await gui.ImportAsync(DeviceAuthorization.WriteFileDocument(approved), deadline.Token);
+            async Task<DeviceAccountClient> PairGuiAsync()
+            {
+                var request = Guid.NewGuid().ToString("N");
+                var key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+                var client = new DeviceAccountClient(new(origin, discovery.ServiceId, pin, discovery.SigningKey, "test", request, "GUI", "gui"), key, _ => { });
+                try
+                {
+                    accountService.Accounts.CreateEnrollment(new(request, DeviceAuthorization.ExportPublicKey(key), "GUI", "gui"));
+                    var approved = accountService.Accounts.ApproveEnrollment(account, request, space.Id, origin, pin, serverSigningKey, false, false);
+                    await client.ImportAsync(DeviceAuthorization.WriteFileDocument(approved), deadline.Token);
+                    return client;
+                }
+                catch { client.Dispose(); throw; }
+            }
+            using var gui = await PairGuiAsync();
+            using var secondGui = await PairGuiAsync();
             var target = Assert.Single(await gui.ListRelayConnectorsAsync(deadline.Token));
             using (var gateway = await RelayIndexHttpHandler.ConnectAsync(gui, target.DeviceId, deadline.Token))
             {
@@ -86,6 +96,12 @@ public sealed class IndexRelayConnectorWorkerTests
                 Assert.Equal(Assert.Single(handlers.ListSources()).Path, Assert.Single(await gateway.ListSourcesAsync(deadline.Token)).Path);
                 var filters = new SearchFilters();
                 var direct = await handlers.SearchAsync(new(filters, 2, null), deadline.Token);
+                using var secondGateway = await RelayIndexHttpHandler.ConnectAsync(secondGui, target.DeviceId, deadline.Token);
+                var concurrent = await Task.WhenAll(Enumerable.Range(0, 6).Select(i =>
+                    i % 2 == 0 ? gateway.SearchAsync(filters, 2, cancellationToken: deadline.Token)
+                        : secondGateway.SearchAsync(filters, 1, cancellationToken: deadline.Token)));
+                for (var i = 0; i < concurrent.Length; i++)
+                    Assert.Equal(direct.Items.Take(i % 2 == 0 ? 2 : 1).Select(item => item.Path), concurrent[i].Items.Select(item => item.Path));
                 var first = await gateway.SearchAsync(filters, 1, cancellationToken: deadline.Token);
                 Assert.NotNull(first.NextCursor);
                 var next = await gateway.SearchAsync(filters, 1, first.NextCursor, deadline.Token);

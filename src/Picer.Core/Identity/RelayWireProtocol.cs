@@ -69,11 +69,14 @@ public sealed class RelayWireSocket(WebSocket socket) : IDisposable
 {
     private readonly SemaphoreSlim _sendGate = new(1, 1);
 
-    public async Task SendAsync(RelayWireMessage message, CancellationToken cancellationToken = default)
+    public Task SendAsync(RelayWireMessage message, CancellationToken cancellationToken = default) =>
+        SendAsync(message, cancellationToken, cancellationToken);
+
+    public async Task SendAsync(RelayWireMessage message, CancellationToken admissionToken, CancellationToken socketToken)
     {
         var bytes = RelayWireProtocol.Encode(message);
-        await _sendGate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try { await socket.SendAsync(bytes.AsMemory(), WebSocketMessageType.Binary, true, cancellationToken).ConfigureAwait(false); }
+        await _sendGate.WaitAsync(admissionToken).ConfigureAwait(false);
+        try { await socket.SendAsync(bytes.AsMemory(), WebSocketMessageType.Binary, true, socketToken).ConfigureAwait(false); }
         finally { _sendGate.Release(); }
     }
 

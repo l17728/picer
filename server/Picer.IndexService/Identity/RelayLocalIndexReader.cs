@@ -17,39 +17,43 @@ internal sealed class RelayLocalIndexReader(IndexApiHandlers handlers)
         var other = (await wire.ReceiveAsync(handshake.Token)).KeyExchange ?? throw new InvalidDataException("relay_exchange_required");
         using var crypto = await client.AcceptRelayPeerAsync(offer, other, handshake.Token);
         var replay = new RelayReplayWindow();
+        await using var queries = new RelayExecutingQueries(token);
         while (true)
         {
-            var frame = (await wire.ReceiveAsync(token)).EncryptedFrame ?? throw new InvalidDataException("relay_request_required");
+            var frame = (await wire.ReceiveAsync(queries.SessionToken)).EncryptedFrame ?? throw new InvalidDataException("relay_request_required");
             var plain = crypto.Decrypt(frame, replay);
             var requestId = Guid.ParseExact(frame.RequestId, "N");
             var operation = Guid.ParseExact(frame.IdempotencyKey, "N");
             try
             {
-                if (frame.Kind == "cancel") continue;
+                if (frame.Kind == "cancel")
+                {
+                    await queries.CancelAsync(requestId, operation);
+                    continue;
+                }
                 if (frame.Kind != "request") throw new InvalidDataException("relay_request_required");
-                await client.ResolveRelayPeerAsync(invite.GuiDeviceId, token);
                 var query = DeviceAuthorization.ReadDocument<RelayIndexQuery>(plain, 64 * 1024);
                 if (!RelayIndexQuery.IsSupported(query.Method, query.Path) || query.Method == "GET" && query.Body is not null)
                     throw new InvalidDataException("relay_query_unsupported");
-                object value = query.Path switch
+                if (!queries.TryStart(requestId, operation, frame.ExpiresUtc, async requestToken =>
                 {
-                    "health" => handlers.Health(),
-                    "api/gateway/v1/sources" => handlers.ListSources(),
-                    "api/gateway/v1/directories" => await handlers.ListDirectoriesAsync(token),
-                    "api/gateway/v1/albums" => handlers.ListAlbums(),
-                    "api/gateway/v1/tags" => handlers.ListTags(),
-                    "api/gateway/v1/browser-metadata" => handlers.GetBrowseMetadata(),
-                    "api/gateway/v1/search" => await handlers.SearchAsync(ReadBody<GatewaySearchRequest>(query), token),
-                    "api/gateway/v1/video-search" => await SearchVideosAsync(ReadBody<GatewayVideoSearchRequest>(query), token),
-                    _ => throw new InvalidDataException("relay_query_unsupported")
-                };
-                var result = JsonSerializer.SerializeToUtf8Bytes(value, DeviceAuthorization.Json);
-                try
-                {
-                    await RelayResponseFrames.SendAsync(crypto, requestId, operation, result,
-                        (part, ct) => wire.SendAsync(RelayWireProtocol.ForEncryptedFrame(part), ct), token);
-                }
-                finally { CryptographicOperations.ZeroMemory(result); }
+                    await client.ResolveRelayPeerAsync(invite.GuiDeviceId, requestToken);
+                    try
+                    {
+                        var result = await ReadAsync(query, requestToken);
+                        try
+                        {
+                            await RelayResponseFrames.SendAsync(crypto, requestId, operation, result,
+                                (part, ct) => wire.SendAsync(RelayWireProtocol.ForEncryptedFrame(part), ct, queries.SessionToken), requestToken);
+                        }
+                        finally { CryptographicOperations.ZeroMemory(result); }
+                    }
+                    catch (Exception e) when (e is JsonException or InvalidDataException or ArgumentException or FormatException)
+                    {
+                        await wire.SendAsync(RelayWireProtocol.ForEncryptedFrame(crypto.Encrypt("error", requestId, operation, [])), queries.SessionToken);
+                    }
+                }))
+                    await wire.SendAsync(RelayWireProtocol.ForEncryptedFrame(crypto.Encrypt("error", requestId, operation, [])), queries.SessionToken);
             }
             catch (Exception e) when (e is JsonException or InvalidDataException or ArgumentException or FormatException)
             {
@@ -62,6 +66,27 @@ internal sealed class RelayLocalIndexReader(IndexApiHandlers handlers)
     private static T ReadBody<T>(RelayIndexQuery query) where T : class =>
         query.Body?.Deserialize<T>(DeviceAuthorization.Json) ?? throw new InvalidDataException("relay_query_body_invalid");
 
-    private Task<Picer.Core.Gateway.GatewayVideoPage> SearchVideosAsync(GatewayVideoSearchRequest request, CancellationToken token) =>
-        handlers.SearchVideosAsync(request.Query, request.PageSize, request.Cursor, token);
+    private async Task<byte[]> ReadAsync(RelayIndexQuery query, CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+        using var db = handlers.OpenSpaceConnection();
+        var reader = handlers.ForReadConnection(db);
+        object value = query.Path switch
+        {
+            "health" => reader.Health(),
+            "api/gateway/v1/sources" => reader.ListSources(),
+            "api/gateway/v1/directories" => await reader.ListDirectoriesAsync(token),
+            "api/gateway/v1/albums" => reader.ListAlbums(),
+            "api/gateway/v1/tags" => reader.ListTags(),
+            "api/gateway/v1/browser-metadata" => reader.GetBrowseMetadata(),
+            "api/gateway/v1/search" => await reader.SearchAsync(ReadBody<GatewaySearchRequest>(query), token),
+            "api/gateway/v1/video-search" => await SearchVideosAsync(ReadBody<GatewayVideoSearchRequest>(query)),
+            _ => throw new InvalidDataException("relay_query_unsupported")
+        };
+        token.ThrowIfCancellationRequested();
+        return JsonSerializer.SerializeToUtf8Bytes(value, DeviceAuthorization.Json);
+
+        Task<Picer.Core.Gateway.GatewayVideoPage> SearchVideosAsync(GatewayVideoSearchRequest request) =>
+            reader.SearchVideosAsync(request.Query, request.PageSize, request.Cursor, token);
+    }
 }
