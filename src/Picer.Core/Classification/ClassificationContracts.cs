@@ -9,7 +9,10 @@ public sealed record ClassificationTaxonomySnapshot(long Revision, long Discover
     IReadOnlyList<ClassificationLabel> Labels, IReadOnlyList<ClassificationEdge> Edges,
     IReadOnlyList<ClassificationDefinitionVersion> Definitions);
 public sealed record ClassificationContext(ImageRecord Image, ClassificationInput Input,
-    IReadOnlyDictionary<string, string> Evidence, string? Actor = null);
+    IReadOnlyDictionary<string, string> Evidence, string? Actor = null)
+{
+    public bool RetryIncompleteOutput { get; init; }
+}
 public sealed record ClassificationLabelEvaluation(string LabelId, string Support, IReadOnlyList<string> EvidenceIds);
 public sealed record ClassificationResult(string SchemaVersion, string InputFingerprint,
     IReadOnlyList<ClassificationLabelEvaluation> Labels, IReadOnlyList<ClassificationProposalDraft> Proposals);
@@ -29,7 +32,10 @@ public sealed record ClassificationPlanPreview(string Id, int Total, int Unchang
 }
 public sealed record ClassificationJob(string Id, string State, int Total, int Succeeded, int Failed, int Pending,
     int Running, int UsedCalls, int MaximumCalls);
-public sealed record ClassificationLease(string JobId, long ImageId, string Token, string Fingerprint, ClassificationInput Input, string? Actor = null);
+public sealed record ClassificationLease(string JobId, long ImageId, string Token, string Fingerprint, ClassificationInput Input, string? Actor = null)
+{
+    public bool RetryIncompleteOutput { get; init; }
+}
 public sealed record ClassificationCoverage(int Total, int Confirmed, int Suggested, int Legacy, int WithoutContent,
     int Unprocessed, int PendingUpdate, int Failed, int AnalyzedUnclassified, int WithoutDescription, int WithPeople,
     int LegacySuggested = 0, int EvidenceDerived = 0);

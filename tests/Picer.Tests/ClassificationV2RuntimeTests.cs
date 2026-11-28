@@ -33,6 +33,44 @@ public sealed class ClassificationV2RuntimeTests : IDisposable
     { var plan = _repo.Plan(Request(), Config); return _repo.Start(plan.Id, Request()); }
 
     [Fact]
+    public async Task RetryOfOverlappingLabelGroupsRequestsOneJudgmentPerLabel()
+    {
+        Add("review.jpg");
+        var job = Start();
+        var prompts = new List<string>();
+        var model = new ClassificationModel((_, _) => Task.FromResult(new byte[] { 255, 216, 255, 217 }), (_, payload, _) =>
+        {
+            using var request = System.Text.Json.JsonDocument.Parse(payload);
+            var messages = request.RootElement.GetProperty("messages");
+            prompts.Add(messages[0].GetProperty("content").GetString()!);
+            using var input = System.Text.Json.JsonDocument.Parse(messages[1].GetProperty("content")[0].GetProperty("text").GetString()!);
+            var fingerprint = input.RootElement.GetProperty("inputFingerprint").GetString();
+            var response = prompts.Count == 1
+                ? System.Text.Json.JsonSerializer.Serialize(new { schemaVersion = "classification-indexed-v1", inputFingerprint = fingerprint,
+                    evaluatedAll = true, supported = new[] { 0 }, uncertain = new[] { 0 }, conflicting = Array.Empty<int>(), proposals = Array.Empty<object>() })
+                : System.Text.Json.JsonSerializer.Serialize(new { schemaVersion = "classification-sparse-v1", inputFingerprint = fingerprint,
+                    evaluatedAll = true, labels = new[] { new { labelId = "scene.outdoor", support = "supported", evidenceIds = new[] { "image:current" } } },
+                    proposals = Array.Empty<object>() });
+            return Task.FromResult(System.Text.Json.JsonSerializer.Serialize(new { choices = new[] { new { message = new { content = response } } } }));
+        });
+        var worker = new ClassificationWorker(_db.OpenIndependentConnection, model);
+        Assert.True(await worker.ProcessOneAsync(default));
+        Assert.Equal(0, _repo.Job(job.Id).Succeeded);
+        Assert.Equal(1, _repo.Job(job.Id).Pending);
+        // Advance the retry window without sleeping or changing its production limit.
+        using (var ready = _db.Command("UPDATE classification_v2_work SET retry_after=NULL")) ready.ExecuteNonQuery();
+        Assert.True(await worker.ProcessOneAsync(default));
+        Assert.Equal(2, prompts.Count);
+        Assert.Contains("classification-indexed-v1", prompts[0]);
+        Assert.DoesNotContain("classification-sparse-v1", prompts[0]);
+        Assert.Contains("classification-sparse-v1", prompts[1]);
+        Assert.DoesNotContain("classification-indexed-v1", prompts[1]);
+        Assert.Equal(1, _repo.Job(job.Id).Succeeded);
+        Assert.Equal(2, _repo.Job(job.Id).UsedCalls);
+        Assert.Equal(new[] { "scene.outdoor" }, Assert.Single(_repo.Browse(new(new([], []))).Photos).SuggestedIds);
+    }
+
+    [Fact]
     public void RetrievalUsesCurrentMachineLabelsOnlyWhenSuggestionsAllowed()
     {
         var id = Add("recall.jpg");
