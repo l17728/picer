@@ -103,6 +103,25 @@ public sealed class ClassificationV2RuntimeTests : IDisposable
     }
 
     [Fact]
+    public void SeasonalReviewRequeuesThreeSeasonSuggestionAndKeepsOrdinaryResults()
+    {
+        Add("track.jpg"); Add("spring.jpg"); Add("queued.jpg");
+        var job = Start();
+        var track = _repo.Claim()!;
+        Assert.True(_repo.Publish(track, Result(track, "environment.season.spring", "environment.season.summer", "environment.season.autumn")));
+        var spring = _repo.Claim()!;
+        Assert.True(_repo.Publish(spring, Result(spring, "environment.season.spring")));
+        _repo.Control(job.Id, "recheck-conditions");
+        Assert.Equal(1, _repo.Job(job.Id).Succeeded);
+        var retry = _repo.Claim()!;
+        Assert.Equal(track.ImageId, retry.ImageId);
+        Assert.True(retry.RetryIncompleteOutput);
+        Assert.True(_repo.Publish(retry, Result(retry, "activity.running")));
+        _repo.Control(job.Id, "recheck-conditions");
+        Assert.Equal(2, _repo.Job(job.Id).Succeeded);
+    }
+
+    [Fact]
     public async Task ReclaimedMalformedResponsesUseDifferentSamplingSeedsWithinTheJobBudget()
     {
         Add("sample.jpg");

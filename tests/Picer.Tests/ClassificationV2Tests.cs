@@ -96,20 +96,22 @@ public class ClassificationV2Tests
         var judgments = candidates.ToDictionary(label => label.Id, _ => false);
         string Encode(params string[] extras) => System.Text.Json.JsonSerializer.Serialize(new
         {
-            schemaVersion = "classification-reviewed-v1",
+            schemaVersion = "classification-reviewed-v2",
             inputFingerprint = "sample",
             evaluatedAll = true,
             checks = judgments,
-            additionalIds = extras,
+            additionalSubjects = extras,
             proposals = Array.Empty<object>()
         });
         var rejected = ClassificationModel.DecodeReview(Encode(), taxonomy, candidates);
         Assert.All(rejected.Labels, label => Assert.Equal("absent", label.Support));
         judgments["place.playground"] = true;
-        var accepted = ClassificationModel.DecodeReview(Encode("scene.outdoor"), taxonomy, candidates);
+        var accepted = ClassificationModel.DecodeReview(Encode("户外"), taxonomy, candidates);
         Assert.Equal(new[] { "place.playground", "scene.outdoor" }, accepted.Labels.Where(label => label.Support == "supported").Select(label => label.LabelId).Order().ToArray());
-        Assert.Throws<InvalidDataException>(() => ClassificationModel.DecodeReview(Encode("place.playground"), taxonomy, candidates));
-        var repeated = ClassificationModel.DecodeReview(Encode("scene.outdoor", "scene.outdoor"), taxonomy, candidates);
+        judgments["place.playground"] = false;
+        var checkedNegative = ClassificationModel.DecodeReview(Encode("操场", "不存在的名称"), taxonomy, candidates);
+        Assert.All(checkedNegative.Labels, label => Assert.Equal("absent", label.Support));
+        var repeated = ClassificationModel.DecodeReview(Encode("户外", "户外"), taxonomy, candidates);
         Assert.Single(repeated.Labels.Where(label => label.Support == "supported" && label.LabelId == "scene.outdoor"));
         var copiedVocabulary = taxonomy.Labels.Where(label => label.Active && label.Assignable && !judgments.ContainsKey(label.Id))
             .Select(label => label.Id).Take(13).ToArray();
@@ -118,8 +120,10 @@ public class ClassificationV2Tests
         Assert.Throws<InvalidDataException>(() => ClassificationModel.DecodeReview(Encode(), taxonomy, candidates));
     }
 
-    [Fact]
-    public async Task EmptyFirstPassWithDescribedSubjectsRequiresIndependentVisualReview()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task EmptyOrMultiSeasonFirstPassWithDescribedSubjectsRequiresIndependentVisualReview(bool multiSeason)
     {
         var preset = ClassificationPreset.Load();
         var taxonomy = new ClassificationTaxonomySnapshot(1, 1, preset.Labels, preset.Edges, []);
@@ -130,12 +134,14 @@ public class ClassificationV2Tests
         });
         var fingerprint = ClassificationInputFingerprint.Compute(context.Input);
         var checks = ClassificationModel.DescriptionCandidates(context, taxonomy).ToDictionary(label => label.Id, _ => false);
+        var firstLabels = (multiSeason ? new[] { "environment.season.spring", "environment.season.summer", "environment.season.autumn" } : Array.Empty<string>())
+            .Select(id => new { labelId = id, support = "supported", evidenceIds = new[] { "image:current" } });
         var attempts = 0;
         var model = new ClassificationModel((_, _) => Task.FromResult(new byte[] { 255, 216, 255, 217 }), (_, _, _) =>
         {
             var content = ++attempts == 1
-                ? System.Text.Json.JsonSerializer.Serialize(new { schemaVersion = "classification-sparse-v1", inputFingerprint = fingerprint, evaluatedAll = true, labels = Array.Empty<object>(), proposals = Array.Empty<object>() })
-                : System.Text.Json.JsonSerializer.Serialize(new { schemaVersion = "classification-reviewed-v1", inputFingerprint = fingerprint, evaluatedAll = true, checks, additionalIds = Array.Empty<string>(), proposals = Array.Empty<object>() });
+                ? System.Text.Json.JsonSerializer.Serialize(new { schemaVersion = "classification-sparse-v1", inputFingerprint = fingerprint, evaluatedAll = true, labels = firstLabels, proposals = Array.Empty<object>() })
+                : System.Text.Json.JsonSerializer.Serialize(new { schemaVersion = "classification-reviewed-v2", inputFingerprint = fingerprint, evaluatedAll = true, checks, additionalSubjects = Array.Empty<string>(), proposals = Array.Empty<object>() });
             return Task.FromResult(System.Text.Json.JsonSerializer.Serialize(new { choices = new[] { new { message = new { content } } } }));
         });
         var config = new ClassificationConfiguration(true, "Qwen3", "local", false);
@@ -157,6 +163,15 @@ public class ClassificationV2Tests
             labels = ids.Select(id => new { labelId = id, support = "supported", evidenceIds = new[] { "image:current" } }), proposals = Array.Empty<object>()
         });
         var result = ClassificationModel.DecodeResult(Json(true, "subject.people", "scene.outdoor"), taxonomy);
+        var duplicate = Json(true, "scene.outdoor", "scene.outdoor");
+        var repeated = ClassificationModel.DecodeResult(duplicate, taxonomy, retry: true);
+        Assert.Single(repeated.Labels.Where(label => label.Support == "supported"));
+        var contradictory = System.Text.Json.Nodes.JsonNode.Parse(duplicate)!;
+        contradictory["labels"]![1]!["support"] = "conflicting";
+        Assert.Throws<InvalidDataException>(() => ClassificationModel.DecodeResult(contradictory.ToJsonString(), taxonomy, retry: true));
+        contradictory["labels"]![1]!["support"] = "supported";
+        contradictory["labels"]![1]!["evidenceIds"]![0] = "description:other";
+        Assert.Throws<InvalidDataException>(() => ClassificationModel.DecodeResult(contradictory.ToJsonString(), taxonomy, retry: true));
         var wrapped = ClassificationModel.DecodeResult("<think>checking {untrusted reasoning}</think>\nResult:\n" + Json(true, "subject.people", "scene.outdoor") + "\nDone.", taxonomy);
         Assert.Equal(preset.Labels.Count(label => label.Active && label.Assignable), result.Labels.Count);
         Assert.Equal(result.Labels.Select(label => (label.LabelId, label.Support)),

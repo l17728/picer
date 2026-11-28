@@ -68,7 +68,7 @@ public sealed partial class ClassificationRepository
 
     public void Control(string id, string operation, string? actor = null) => Write(() =>
     {
-        if (operation == "recheck-saturated")
+        if (operation is "recheck-saturated" or "recheck-conditions")
         {
             var current = Job(id);
             if (current.State is not ("running" or "queued") || current.UsedCalls >= current.MaximumCalls)
@@ -76,7 +76,8 @@ public sealed partial class ClassificationRepository
             var images = new List<long>();
             using (var query = Sql("""
                 SELECT i.image_id, (SELECT COUNT(*) FROM classification_v2_labels l WHERE l.image_id=i.image_id),
-                    json_array_length(r.payload,'$.Labels')
+                    json_array_length(r.payload,'$.Labels'),
+                    (SELECT COUNT(*) FROM classification_v2_labels l WHERE l.image_id=i.image_id AND l.label_id GLOB 'environment.season.*')
                 FROM classification_v2_items i
                 JOIN classification_v2_results r ON r.image_id=i.image_id AND r.fingerprint=i.fingerprint
                 JOIN classification_v2_work w ON w.image_id=i.image_id AND w.success_fingerprint=i.fingerprint
@@ -84,7 +85,8 @@ public sealed partial class ClassificationRepository
                 """, ("$job", id)))
             using (var reader = query.ExecuteReader())
                 while (reader.Read())
-                    if (!reader.IsDBNull(2) && ClassificationOutputValidator.IsSaturated(reader.GetInt32(1), reader.GetInt32(2)))
+                    if (operation == "recheck-conditions" ? reader.GetInt32(3) >= 3
+                        : !reader.IsDBNull(2) && ClassificationOutputValidator.IsSaturated(reader.GetInt32(1), reader.GetInt32(2)))
                         images.Add(reader.GetInt64(0));
             foreach (var image in images)
             {

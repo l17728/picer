@@ -29,6 +29,9 @@ public sealed partial class ClassificationModel
         var active = taxonomy.Labels.Where(label => label.Active && label.Assignable).ToArray();
         var matches = active.Where(label => label.Aliases.Append(label.Name).Any(name => name.Length > 1
             && terms.Any(term => term.Contains(name, StringComparison.OrdinalIgnoreCase)))).Select(label => label.Id).ToHashSet(StringComparer.Ordinal);
+        if (matches.Count > 0)
+            foreach (var label in active.Where(label => label.Id is "subject.people" or "subject.group"))
+                matches.Add(label.Id);
         var parents = taxonomy.Edges.Where(edge => edge.Kind == TaxonomyEdgeKind.IsA).ToLookup(edge => edge.ChildId, edge => edge.ParentId);
         var queue = new Queue<string>(matches);
         while (queue.TryDequeue(out var child))
@@ -39,10 +42,10 @@ public sealed partial class ClassificationModel
     private const int MaximumReviewExtras = 12;
 
     private const string ReviewInstruction = """
-        重新看当前图片。以下是索引描述提及的候选，请逐项判断真实画面里是否看得到。描述、纸面文字或插图提到一个概念不足以确认。
-        返回 classification-reviewed-v1。checks 是以每个候选 ID 为键、true 或 false 为值的对象。全部不符时可以全部为 false。
-        另有明确可见的词表标签可写入 additionalIds；不要重复 checks。保留 inputFingerprint、evaluatedAll 和 proposals。
-        候选 [ID,名称,定义,排除条件]：
+        重新看当前图片。以下是待核对的人物与描述候选，请逐项判断真实画面里是否看得到。描述、纸面文字或插图提到一个概念不足以确认。
+        返回 classification-reviewed-v2。checks 是以每个候选 ID 为键、true 或 false 为值的对象。全部不符时可以全部为 false。
+        另有明确可见的主题可在 additionalSubjects 自由写简短中文名称，没有则填空数组。季节和天气需要画面中有独特可见的证据。保留 inputFingerprint、evaluatedAll 和 proposals。
+        候选 [ID,名称,定义,排除条件,维度]：
         """;
 
     private static object ProposalFormat()
@@ -53,20 +56,18 @@ public sealed partial class ClassificationModel
             required = new[] { "name", "dimension", "definition", "exclusions", "parentIds", "evidenceIds" }, additionalProperties = false };
     }
 
-    private static object ReviewFormat(ClassificationLabel[] candidates, ClassificationLabel[] active, string fingerprint)
+    private static object ReviewFormat(ClassificationLabel[] candidates, string fingerprint)
     {
         var ids = candidates.Select(label => label.Id).ToArray();
-        var remaining = active.Select(label => label.Id).Except(ids, StringComparer.Ordinal).ToArray();
-        object extras = remaining.Length == 0 ? new { type = "array", maxItems = 0 } :
-            new { type = "array", items = new { type = "string", @enum = remaining }, maxItems = Math.Min(remaining.Length, MaximumReviewExtras) };
+        var extras = new { type = "array", items = new { type = "string", minLength = 1, maxLength = 40 }, maxItems = MaximumReviewExtras };
         var schema = new { type = "object", properties = new {
             observation = new { type = "string", maxLength = 160 },
-            schemaVersion = new { type = "string", @enum = new[] { "classification-reviewed-v1" } },
+            schemaVersion = new { type = "string", @enum = new[] { "classification-reviewed-v2" } },
             inputFingerprint = new { type = "string", @enum = new[] { fingerprint } },
             evaluatedAll = new { type = "boolean" },
             checks = new { type = "object", properties = ids.ToDictionary(id => id, _ => new { type = "boolean" }), required = ids, additionalProperties = false },
-            additionalIds = extras, proposals = new { type = "array", items = ProposalFormat(), maxItems = 4 } },
-            required = new[] { "observation", "schemaVersion", "inputFingerprint", "evaluatedAll", "checks", "additionalIds", "proposals" }, additionalProperties = false };
+            additionalSubjects = extras, proposals = new { type = "array", items = ProposalFormat(), maxItems = 4 } },
+            required = new[] { "observation", "schemaVersion", "inputFingerprint", "evaluatedAll", "checks", "additionalSubjects", "proposals" }, additionalProperties = false };
         return new { type = "json_schema", json_schema = new { name = "review_visible_photo_topics", schema } };
     }
 
@@ -74,16 +75,18 @@ public sealed partial class ClassificationModel
     {
         using var document = JsonDocument.Parse(ExtractJsonObject(content));
         var root = document.RootElement;
-        if (!root.TryGetProperty("schemaVersion", out var version) || version.ValueKind != JsonValueKind.String || version.GetString() != "classification-reviewed-v1"
+        if (!root.TryGetProperty("schemaVersion", out var version) || version.ValueKind != JsonValueKind.String || version.GetString() != "classification-reviewed-v2"
             || !root.TryGetProperty("evaluatedAll", out var complete) || complete.ValueKind != JsonValueKind.True
             || !root.TryGetProperty("checks", out var checks) || checks.ValueKind != JsonValueKind.Object
-            || !root.TryGetProperty("additionalIds", out var extras) || extras.ValueKind != JsonValueKind.Array
+            || !root.TryGetProperty("additionalSubjects", out var extras) || extras.ValueKind != JsonValueKind.Array
             || !root.TryGetProperty("inputFingerprint", out var fingerprint) || fingerprint.ValueKind != JsonValueKind.String
             || !root.TryGetProperty("proposals", out var proposals) || proposals.ValueKind != JsonValueKind.Array)
             throw ReviewIncomplete("envelope");
         var pending = candidates.Select(label => label.Id).ToHashSet(StringComparer.Ordinal);
         var active = taxonomy.Labels.Where(label => label.Active && label.Assignable).Select(label => label.Id).ToArray();
-        var other = active.Except(pending).ToHashSet(StringComparer.Ordinal);
+        var names = taxonomy.Labels.Where(label => label.Active && label.Assignable)
+            .SelectMany(label => label.Aliases.Append(label.Name).Distinct(StringComparer.OrdinalIgnoreCase)
+                .Select(name => (Name: name, label.Id))).ToLookup(pair => pair.Name, pair => pair.Id, StringComparer.OrdinalIgnoreCase);
         var positive = new HashSet<string>(StringComparer.Ordinal);
         foreach (var check in checks.EnumerateObject())
         {
@@ -95,8 +98,10 @@ public sealed partial class ClassificationModel
         if (extras.GetArrayLength() > MaximumReviewExtras) throw ReviewIncomplete("too_many_extras");
         foreach (var extra in extras.EnumerateArray())
         {
-            if (extra.ValueKind != JsonValueKind.String || !other.Contains(extra.GetString()!)) throw ReviewIncomplete("invalid_extra");
-            positive.Add(extra.GetString()!);
+            if (extra.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(extra.GetString()) || extra.GetString()!.Length > 40)
+                throw ReviewIncomplete("invalid_extra");
+            var matches = names[extra.GetString()!.Trim()].ToArray();
+            if (matches.Length == 1 && !checks.TryGetProperty(matches[0], out _)) positive.Add(matches[0]);
         }
         return new("classification-result-v1", fingerprint.GetString()!, active.Select(id => positive.Contains(id)
             ? new ClassificationLabelEvaluation(id, "supported", ["image:current"]) : new ClassificationLabelEvaluation(id, "absent", [])).ToArray(),
