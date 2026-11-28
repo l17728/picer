@@ -41,9 +41,9 @@ public sealed partial class ClassificationModel
 
     private const int MaximumReviewExtras = 12;
 
-    private const string ReviewInstruction = """
+    private static string ReviewInstruction(bool distinguishDepictions) => $$"""
         重新看当前图片。以下是待核对的人物与描述候选，请逐项判断真实画面里是否看得到。描述、纸面文字或插图提到一个概念不足以确认。
-        返回 classification-reviewed-v2。checks 是以每个候选 ID 为键、true 或 false 为值的对象。全部不符时可以全部为 false。
+        返回 classification-reviewed-v2。checks 是以每个候选 ID 为键、{{(distinguishDepictions ? "visible、depiction_only 或 absent" : "true 或 false")}} 为值的对象。全部不符时可以全部为 {{(distinguishDepictions ? "absent" : "false")}}。
         另有明确可见的主题可在 additionalSubjects 自由写简短中文名称，没有则填空数组。季节和天气需要画面中有独特可见的证据。保留 inputFingerprint、evaluatedAll 和 proposals。
         候选 [ID,名称,定义,排除条件,维度]：
         """;
@@ -56,7 +56,7 @@ public sealed partial class ClassificationModel
             required = new[] { "name", "dimension", "definition", "exclusions", "parentIds", "evidenceIds" }, additionalProperties = false };
     }
 
-    private static object ReviewFormat(ClassificationLabel[] candidates, string fingerprint, ClassificationTaxonomySnapshot? emptyReview)
+    private static object ReviewFormat(ClassificationLabel[] candidates, string fingerprint, ClassificationTaxonomySnapshot? emptyReview, bool distinguishDepictions)
     {
         var ids = candidates.Select(label => label.Id).ToArray();
         var extras = new { type = "array", items = new { type = "string", minLength = 1, maxLength = 40 }, maxItems = MaximumReviewExtras };
@@ -75,14 +75,16 @@ public sealed partial class ClassificationModel
         properties["schemaVersion"] = new { type = "string", @enum = new[] { "classification-reviewed-v2" } };
         properties["inputFingerprint"] = new { type = "string", @enum = new[] { fingerprint } };
         properties["evaluatedAll"] = new { type = "boolean" };
-        properties["checks"] = new { type = "object", properties = ids.ToDictionary(id => id, _ => new { type = "boolean" }), required = ids, additionalProperties = false };
+        object checkStatus = !distinguishDepictions ? new { type = "boolean" } :
+            new { type = "string", @enum = new[] { "visible", "depiction_only", "absent" } };
+        properties["checks"] = new { type = "object", properties = ids.ToDictionary(id => id, _ => checkStatus), required = ids, additionalProperties = false };
         properties["additionalSubjects"] = extras;
         properties["proposals"] = new { type = "array", items = ProposalFormat(), maxItems = 4 };
         var schema = new { type = "object", properties, required = properties.Keys, additionalProperties = false };
         return new { type = "json_schema", json_schema = new { name = "review_visible_photo_topics", schema } };
     }
 
-    internal static ClassificationResult DecodeReview(string content, ClassificationTaxonomySnapshot taxonomy, ClassificationLabel[] candidates, bool emptyReview = false)
+    internal static ClassificationResult DecodeReview(string content, ClassificationTaxonomySnapshot taxonomy, ClassificationLabel[] candidates, bool emptyReview = false, bool distinguishDepictions = false)
     {
         using var document = JsonDocument.Parse(ExtractJsonObject(content));
         var root = document.RootElement;
@@ -101,9 +103,18 @@ public sealed partial class ClassificationModel
         var positive = new HashSet<string>(StringComparer.Ordinal);
         foreach (var check in checks.EnumerateObject())
         {
-            if (!pending.Remove(check.Name) || check.Value.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
-                throw ReviewIncomplete("invalid_or_duplicate_check");
-            if (check.Value.GetBoolean()) positive.Add(check.Name);
+            if (!pending.Remove(check.Name)) throw ReviewIncomplete("invalid_or_duplicate_check");
+            if (distinguishDepictions)
+            {
+                if (check.Value.ValueKind != JsonValueKind.String || check.Value.GetString() is not ("visible" or "depiction_only" or "absent"))
+                    throw ReviewIncomplete("invalid_subject_check");
+                if (check.Value.GetString() == "visible") positive.Add(check.Name);
+            }
+            else
+            {
+                if (check.Value.ValueKind is not (JsonValueKind.True or JsonValueKind.False)) throw ReviewIncomplete("invalid_check");
+                if (check.Value.GetBoolean()) positive.Add(check.Name);
+            }
         }
         if (pending.Count != 0) throw ReviewIncomplete("missing_check");
         if (extras.GetArrayLength() > MaximumReviewExtras) throw ReviewIncomplete("too_many_extras");
@@ -127,7 +138,8 @@ public sealed partial class ClassificationModel
                     ? name.GetString()!.Trim() : throw ReviewIncomplete("missing_primary_subject_name");
             var matches = names[term].ToArray();
             if (matches.Length == 1 && !checks.TryGetProperty(matches[0], out _)) positive.Add(matches[0]);
-            if (term.Length is > 0 and <= 32 && positive.Count == 0 && drafts.Length == 0 && matches.Length == 0
+            if (term.Length is > 0 and <= 32 && drafts.Length == 0 && matches.Length == 0
+                && !taxonomy.Labels.Any(label => label.Active && !label.Assignable && label.Aliases.Append(label.Name).Contains(term, StringComparer.OrdinalIgnoreCase))
                 && subject.TryGetProperty("parentId", out var parentId) && parentId.ValueKind == JsonValueKind.String
                 && taxonomy.Labels.SingleOrDefault(label => label.Active && !label.Assignable && label.Id == parentId.GetString()) is { } parent
                 && subject.TryGetProperty("visible", out var visible) && visible.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(visible.GetString())

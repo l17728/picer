@@ -20,6 +20,7 @@ public sealed record ClassificationResult(string SchemaVersion, string InputFing
     IReadOnlyList<ClassificationLabelEvaluation> Labels, IReadOnlyList<ClassificationProposalDraft> Proposals)
 {
     public bool VisuallyReviewed { get; init; }
+    public bool PrimarySubjectReviewed { get; init; }
 }
 public sealed record ClassificationProposalDraft(string Name, string Dimension, string Definition, string Exclusions,
     IReadOnlyList<string> ParentIds, IReadOnlyList<string> EvidenceIds);

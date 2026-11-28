@@ -82,7 +82,7 @@ public sealed partial class ClassificationRepository
                 JOIN classification_v2_results r ON r.image_id=i.image_id AND r.fingerprint=i.fingerprint
                 JOIN classification_v2_work w ON w.image_id=i.image_id AND w.success_fingerprint=i.fingerprint
                 WHERE i.job_id=$job AND (i.state='succeeded' AND $empty=0 OR i.state='analyzed_unclassified' AND $empty=1
-                    AND COALESCE(json_extract(r.payload,'$.VisuallyReviewed'),0)=0 AND json_array_length(r.payload,'$.Proposals')=0)
+                    AND COALESCE(json_extract(r.payload,'$.PrimarySubjectReviewed'),0)=0 AND json_array_length(r.payload,'$.Proposals')=0)
                 """, ("$job", id), ("$empty", operation == "recheck-empty")))
             using (var reader = query.ExecuteReader())
                 while (reader.Read())

@@ -91,3 +91,9 @@ Release 分类专项 93 项全部通过。正式 GUI 构建零警告、零错误
 正式 Release 路径 C:\Users\a\AppData\Local\Picer\engineering-backups\relay-photo-20261128\verification\src\Picer.App\bin\Release\net8.0-windows\win-x64\Picer.App.exe ，EXE SHA-256 为 b0baf567c3b2e339cb9f4b4a7f6457ee6f156528e012f8f308fda0257aa711e3 ，Picer.Core.dll 为 33a3d995a60dacaf3a30e88d2d3bce831012fcff01d2136add29ba79bcea93bd 。构建零警告、零错误。分类专项 97 项、正式 GUI 分类端到端 3 项通过。
 
 功能提交 0018257 已部署到 47.103.99.229，部署号 20261128T182559817Z，服务二进制 SHA-256 为 04e02efdfaad64cad469a9fba9e15ae818bf9d9290a63bd192cb18f50a67fe7a。五个数据库、版本和健康检查通过。停止对照探测后，通过模型服务运行指标观察到三个不同的线上请求各命中 6,586 个输入 token，分别新处理 1,606、1,603、1,610 个 token，确认正式队列已使用共享前缀。
+
+### 描述候选之外的主体建议
+
+第 114 张为带花纹的杯子。旧结果仅经过描述候选的是非核对便记为已复核，保存了零标签和零提案。即使识别出新主体，背景已有标签时也会跳过主体提案。现按是否实际完成主体复核记录状态，结构化空结果优先进入主体复核。已知主题和导航名称继续复用；具备可见特征、排除边界和有效父节点的未知主体可单独形成待审建议，同时保留符合的背景标签。有描述候选的主体复核区分实物、图案和缺席，仅实物判断贡献该候选标签。
+
+第 114 张实图复测得到室内和杯具待审建议，未把杯身花纹计为真实花卉。无描述二维码样本仍产生二维码建议，纯色空白图零标签、零建议。Release 分类专项 97 项及正式 GUI 分类端到端 3 项通过，构建零警告、零错误。正式路径 C:\Users\a\AppData\Local\Picer\engineering-backups\relay-photo-20261128\verification\src\Picer.App\bin\Release\net8.0-windows\win-x64\Picer.App.exe ，EXE SHA-256 为 599daa295da1abb4b2f2d3d220ae341a2cb89e9c8cd5f8891202849158c7c83e ，Picer.Core.dll 为 3ba75be0b8e1000d9c68f9d9f28ce53dec3803f4aa57e4f4fd9bc52cbb51e574 。

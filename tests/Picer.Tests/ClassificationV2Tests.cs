@@ -126,18 +126,21 @@ public class ClassificationV2Tests
     {
         var preset = ClassificationPreset.Load();
         var taxonomy = new ClassificationTaxonomySnapshot(1, 1, preset.Labels, preset.Edges, []);
-        var candidates = taxonomy.Labels.Where(label => label.Id is "document.screen_photo" or "document.screenshot").ToArray();
+        var candidates = taxonomy.Labels.Where(label => label.Id is "document.screen_photo" or "document.screenshot" or "object.flower").ToArray();
         ClassificationResult Review(string name, bool display)
         {
             var content = System.Text.Json.JsonSerializer.Serialize(new { schemaVersion = "classification-reviewed-v2",
                 inputFingerprint = "fixture", evaluatedAll = true, additionalSubjects = Array.Empty<string>(), proposals = Array.Empty<object>(),
-                checks = candidates.ToDictionary(label => label.Id, _ => display),
+                checks = candidates.ToDictionary(label => label.Id, label => label.Id == "object.flower" ? "depiction_only" : display ? "visible" : "absent"),
                 primarySubject = new { kind = name.Length == 0 ? "none" : "visible_subject", name, visible = "可见方形矩阵和定位图案", boundary = "普通装饰格不计", parentId = "nav.document" } });
-            return ClassificationModel.DecodeReview(content, taxonomy, candidates, emptyReview: true);
+            return ClassificationModel.DecodeReview(content, taxonomy, candidates, emptyReview: true, distinguishDepictions: true);
         }
         var novel = Review("二维码", false);
         Assert.Equal("二维码", Assert.Single(novel.Proposals).Name);
         Assert.DoesNotContain(novel.Labels, label => label.Support == "supported");
+        var novelOnDisplay = Review("二维码", true);
+        Assert.Equal("二维码", Assert.Single(novelOnDisplay.Proposals).Name);
+        Assert.Contains(novelOnDisplay.Labels, label => label.LabelId == "document.screen_photo" && label.Support == "supported");
         Assert.Empty(Review("", false).Proposals);
         var known = Review("户外", false);
         Assert.Empty(known.Proposals);
@@ -160,23 +163,38 @@ public class ClassificationV2Tests
             ["image:current"] = "fixture"
         });
         var fingerprint = ClassificationInputFingerprint.Compute(context.Input);
-        var checks = ClassificationModel.DescriptionCandidates(context, taxonomy).ToDictionary(label => label.Id, _ => false);
         var firstLabels = (multiSeason ? new[] { "environment.season.spring", "environment.season.summer", "environment.season.autumn" } : Array.Empty<string>())
             .Select(id => new { labelId = id, support = "supported", evidenceIds = new[] { "image:current" } });
         var attempts = 0;
-        var model = new ClassificationModel((_, _) => Task.FromResult(new byte[] { 255, 216, 255, 217 }), (_, _, _) =>
+        var model = new ClassificationModel((_, _) => Task.FromResult(new byte[] { 255, 216, 255, 217 }), (_, bytes, _) =>
         {
-            var content = ++attempts == 1
-                ? System.Text.Json.JsonSerializer.Serialize(new { schemaVersion = "classification-sparse-v1", inputFingerprint = fingerprint, evaluatedAll = true, labels = firstLabels, proposals = Array.Empty<object>() })
-                : System.Text.Json.JsonSerializer.Serialize(new { schemaVersion = "classification-reviewed-v2", inputFingerprint = fingerprint, evaluatedAll = true, checks, additionalSubjects = Array.Empty<string>(), proposals = Array.Empty<object>() });
+            using var wire = System.Text.Json.JsonDocument.Parse(bytes);
+            string content;
+            if (++attempts == 1)
+                content = System.Text.Json.JsonSerializer.Serialize(new { schemaVersion = "classification-sparse-v1", inputFingerprint = fingerprint, evaluatedAll = true, labels = firstLabels, proposals = Array.Empty<object>() });
+            else
+            {
+                var props = wire.RootElement.GetProperty("response_format").GetProperty("json_schema").GetProperty("schema").GetProperty("properties");
+                var checks = props.GetProperty("checks").GetProperty("properties").EnumerateObject()
+                    .ToDictionary(field => field.Name, field => field.Value.GetProperty("type").GetString() == "string" ? (object)"absent" : false);
+                content = System.Text.Json.JsonSerializer.Serialize(new { schemaVersion = "classification-reviewed-v2", inputFingerprint = fingerprint,
+                    evaluatedAll = true, checks, additionalSubjects = Array.Empty<string>(), proposals = Array.Empty<object>(), primarySubject = new { kind = "none" } });
+            }
             return Task.FromResult(System.Text.Json.JsonSerializer.Serialize(new { choices = new[] { new { message = new { content } } } }));
         });
         var config = new ClassificationConfiguration(true, "Qwen3", "local", false);
         var first = await Assert.ThrowsAsync<InvalidDataException>(() => model.ClassifyAsync(context, taxonomy, config, default));
-        Assert.Equal("classification_output_incomplete", first.Message);
-        var second = await model.ClassifyAsync(context with { RetryIncompleteOutput = true }, taxonomy, config, default);
-        Assert.DoesNotContain(second.Labels, label => label.Support == "supported");
-        Assert.Equal(2, attempts);
+        Assert.Equal(multiSeason ? "classification_output_incomplete" : "classification_empty_needs_review", first.Message);
+        var retry = context with { RetryIncompleteOutput = true };
+        if (multiSeason)
+        {
+            var empty = await Assert.ThrowsAsync<InvalidDataException>(() => model.ClassifyAsync(retry, taxonomy, config, default));
+            Assert.Equal("classification_empty_needs_review", empty.Message);
+        }
+        var reviewed = await model.ClassifyAsync(retry with { ReviewEmpty = true }, taxonomy, config, default);
+        Assert.DoesNotContain(reviewed.Labels, label => label.Support == "supported");
+        Assert.True(reviewed.PrimarySubjectReviewed);
+        Assert.Equal(multiSeason ? 3 : 2, attempts);
     }
 
     [Fact]
