@@ -213,7 +213,7 @@ public sealed partial class AccountStore
         if (!Guid.TryParseExact(deviceId, "N", out _)) return null;
         using var connection = Open();
         using var command = Command(connection, null, """
-            SELECT g.public_key FROM device_grants g JOIN accounts a ON a.id=g.account_id
+            SELECT g.public_key,g.scope FROM device_grants g JOIN accounts a ON a.id=g.account_id
             JOIN spaces s ON s.id=g.space_id JOIN memberships m ON m.space_id=s.id AND m.account_id=a.id
             WHERE g.space_id=$space AND g.device_id=$device AND g.kind=$kind AND g.state='active'
             AND instr(' '||g.scope||' ',' '||$scope||' ')>0 AND a.disabled=0 AND s.state='active'
@@ -221,7 +221,8 @@ public sealed partial class AccountStore
                 AND t.refresh_expires>$now AND t.absolute_expires>$now AND t.security_epoch=a.security_epoch
                 AND t.auth_epoch=s.auth_epoch AND t.membership_version=m.version)
             """, ("$space", caller.SpaceId), ("$device", deviceId), ("$kind", kind), ("$scope", scope), ("$now", Now));
-        return command.ExecuteScalar() is string key ? new(caller.SpaceId, deviceId, kind, key) : null;
+        using var reader = command.ExecuteReader();
+        return reader.Read() ? new(caller.SpaceId, deviceId, kind, reader.GetString(0), reader.GetString(1)) : null;
     }
 
     private void SaveResponse(SqliteConnection connection, SqliteTransaction transaction, string key, string attemptId, DeviceSession response)

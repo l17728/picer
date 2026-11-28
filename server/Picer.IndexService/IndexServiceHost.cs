@@ -74,7 +74,9 @@ public sealed class IndexApiHandlers(PicerDatabase db, ThumbnailService thumbnai
             ? db.ReadSnapshot(reader => GatewayBrowseQueries.Directories(reader, token), token)
             : GatewayBrowseQueries.Directories(db, token), token);
     internal PicerDatabase OpenSpaceConnection() => db.OpenIndependentConnection();
-    internal IndexApiHandlers ForReadConnection(PicerDatabase reader) => new(reader, thumbnails, new VideoRepository(reader));
+    internal IndexApiHandlers ForReadConnection(PicerDatabase reader) => new(reader, thumbnails, new VideoRepository(reader))
+        { AgentPhotoPreview = AgentPhotoPreview };
+    internal Func<ImageRecord, string?, int, CancellationToken, Task<byte[]>>? AgentPhotoPreview { get; set; }
     internal void DisposeDatabase() => db.Dispose();
     public Func<long, CancellationToken, Task<bool>>? VideoPurgeHandler { get; set; }
     public Task<bool> PurgeVideoAsync(long id, CancellationToken token)
@@ -722,6 +724,12 @@ public static class IndexServiceHost
         }
         var agents = new AgentConnectionRegistry(journal, savedServiceConfig, isolatedSpace);
         var mediaPreviews = new MediaPreviewCache();
+        handlers.AgentPhotoPreview = (image, agentId, size, ct) =>
+        {
+            var key = $"photo:{agentId}:{image.Sha256 ?? image.Path}:{image.FileSize}:{image.ModifiedUtc.Ticks}:{size}";
+            return mediaPreviews.GetAsync(key, token => MediaAssetResults.PreviewAsync(agents, agentId,
+                IndexApiHandlers.NormalizeAgentPath(image.Path), size, token), ct);
+        };
         var app = builder.Build();
         app.Lifetime.ApplicationStopping.Register(agents.StopMediaConnections);
         app.Lifetime.ApplicationStarted.Register(() => _ = Task.Run(() =>
@@ -972,8 +980,7 @@ async function load(){const [c,g]=await Promise.all([fetch('/api/service/v1/capa
                 var image = await handlers.GetAsync(id, cancellationToken);
                 if (image is not null)
                 {
-                    var key = $"photo:{agentId}:{image.Sha256 ?? image.Path}:{image.FileSize}:{image.ModifiedUtc.Ticks}:256";
-                    var bytes = await mediaPreviews.GetAsync(key, token => MediaAssetResults.PreviewAsync(agents, agentId, IndexApiHandlers.NormalizeAgentPath(image.Path), 256, token), cancellationToken);
+                    var bytes = await handlers.AgentPhotoPreview(image, agentId, 256, cancellationToken);
                     stream = new MemoryStream(bytes, writable: false);
                     trace.Mark("preview_ready", bytes.Length);
                 }
@@ -985,9 +992,8 @@ async function load(){const [c,g]=await Promise.all([fetch('/api/service/v1/capa
             if (isolatedSpace) agentId = Identity.SpaceSourceRouting.Resolve(db, $"/api/gateway/v1/previews/{id}") ?? agentId;
             var image = await handlers.GetAsync(id, cancellationToken);
             if (image is null) return Results.NotFound();
-            var key = $"photo:{agentId}:{image.Sha256 ?? image.Path}:{image.FileSize}:{image.ModifiedUtc.Ticks}:1600";
             byte[] bytes;
-            try { bytes = await mediaPreviews.GetAsync(key, token => MediaAssetResults.PreviewAsync(agents, agentId, IndexApiHandlers.NormalizeAgentPath(image.Path), 1600, token), cancellationToken); }
+            try { bytes = await handlers.AgentPhotoPreview(image, agentId, 1600, cancellationToken); }
             catch (Exception exception) when (exception is IOException or TimeoutException or WebSocketException or InvalidOperationException)
             {
                 AppLogger.Warn($"Photo preview request failed; imageId={id}; agentSelected={(agentId is null ? "none" : "yes")}; errorType={exception.GetType().Name}; message={exception.Message}");

@@ -62,3 +62,11 @@ Release 构建文件为 `D:\picer\server\Picer.IndexService\bin\Release\net8.0\P
 协议层支持在同一请求内返回最多 8 MiB。正文不超过 2 MiB 时沿用单个 response 帧；更大的正文全部使用 chunk 帧。每块的加密正文以两个大端序 32 位整数起始，依次表示总长度和字节偏移。除末块外，每块数据长度均为 2 MiB 减 8 字节。发送端逐帧等待传输，接收端核对请求、幂等键、总长度和连续偏移，收齐才交付。单个复用器为未收齐响应预留的空间合计上限为 32 MiB。该协议适用于有界响应，任意长度的媒体流仍需独立验收。
 
 Release 定向测试涵盖空响应、单帧临界值、超过单帧一个字节、8 MiB 完整传输、超过上限及缺首块。帧经过加密、线上格式编解码、解密与组装。正式构建路径为 `D:\picer\src\Picer.Core\bin\Release\net8.0\Picer.Core.dll`，本阶段 SHA-256 为 `003D5D6057C13C6044746E3C12BA0DD5C3C66A19B61A508999F24C9B36ABC4E3`。
+
+### 2026-11-28 Relay 照片缩略图及授权预览
+
+账号目录返回对端当前登记的权限，连接器对照片缩略图核对 thumb.read，对 1600 像素预览核对 media.read。缩略图复用本机 IndexService 的缩略图文件与解密读取路径；需要来源端生成时，沿用普通服务端点的 MediaAgent 预览接口和缓存。媒体状态码与 JPEG 在加密通道内传输。客户端媒体缓存作用域包含服务空间、目标 IndexService 与 GUI 设备。
+
+隔离图库测试使用 640×320 的 JPEG，首次经 Relay 取得 256×128 缩略图。独占原文件期间，第二个客户端仍读到相同 JPEG，磁盘上的加密缓存字节保持一致。无媒体读取权限的设备请求大预览得到 403，未触发来源回调；授权设备得到可解码的大预览。此项用文件读取回调代替来源设备；真实驻留程序的原图范围读取以及正式 GUI 双击仍待验收。
+
+正式工程所在的 D 盘在复验期间从 Windows 掉线。九个修改文件在掉线前保存到了 C 盘，并覆盖到从主线提交 aba6ef0 检出的独立验证工作区。该工作区的 19 项 Release 定向测试全部通过。验证构建路径为 C:\Users\a\AppData\Local\Picer\engineering-backups\relay-photo-20261128\verification\src\Picer.Core\bin\Release\net8.0\Picer.Core.dll（SHA-256 08E04429DC15A0B985A5ABD6120B193EB0CAE000AAF2BECC70CA94D4608D80B9），同检出的 server\Picer.IndexService\bin\Release\net8.0\Picer.IndexService.dll SHA-256 为 466EDAE38435D82A83A4C5C568863E83CF647D2968CF3C53EA64881E793B8DD6。正式 GUI 的启动路径保持在 D 盘。

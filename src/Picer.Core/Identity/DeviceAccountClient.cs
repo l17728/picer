@@ -12,7 +12,7 @@ public sealed record DeviceConnection(string Origin, string ServiceId, string Sp
 public sealed record ServiceDiscovery(int Version, string ServiceId, string Origin, string SpkiPin, string SigningKey,
     string EnrollmentEndpoint, string AccountEndpoint);
 public sealed record EnrollmentStarted(string RequestId, string ApprovalUrl, int ExpiresIn);
-public sealed record RelayPeerIdentity(string SpaceId, string DeviceId, string Kind, string PublicKey);
+public sealed record RelayPeerIdentity(string SpaceId, string DeviceId, string Kind, string PublicKey, string Scope = "");
 public sealed record RelaySessionInvitation(string SessionId, string GuiDeviceId);
 
 /// <summary>One client per device grant. Refresh state is persisted before transmission so interrupted retries keep their attempt ID.</summary>

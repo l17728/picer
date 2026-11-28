@@ -15,16 +15,18 @@ public sealed class RelayIndexHttpHandler : HttpMessageHandler
     private readonly RelayRequestMultiplexer _requests;
     private readonly CancellationTokenSource _closed = new();
     private readonly Task _reader;
+    private readonly Uri _baseAddress;
     private readonly object _lifetime = new();
     private readonly TaskCompletionSource _idle = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private int _active;
     private bool _disposing;
 
-    private RelayIndexHttpHandler(ClientWebSocket socket, RelayWireSocket wire, RelaySessionCryptoContext session)
+    private RelayIndexHttpHandler(ClientWebSocket socket, RelayWireSocket wire, RelaySessionCryptoContext session, Uri baseAddress)
     {
         _socket = socket;
         _wire = wire;
         _session = session;
+        _baseAddress = baseAddress;
         _requests = new(session, new RelayReplayWindow(), (frame, token) =>
             wire.SendAsync(RelayWireProtocol.ForEncryptedFrame(frame), token, _closed.Token));
         _reader = ReadAsync();
@@ -42,15 +44,17 @@ public sealed class RelayIndexHttpHandler : HttpMessageHandler
             await wire.SendAsync(RelayWireProtocol.ForKeyExchange(offer.Share), deadline.Token);
             var remote = (await wire.ReceiveAsync(deadline.Token)).KeyExchange ?? throw new InvalidDataException("relay_exchange_required");
             var session = await account.AcceptRelayPeerAsync(offer, remote, deadline.Token);
-            var handler = new RelayIndexHttpHandler(socket, wire, session);
-            return new HttpIndexGateway(new HttpClient(handler) { BaseAddress = new Uri(account.Connection.Origin) }, ownsClient: true);
+            var address = new Uri(DeviceAuthorization.SpaceAddress(account.Connection.Origin, offer.Share.SpaceId) +
+                "/relay/" + serviceId + "/" + offer.Share.SenderDeviceId + "/");
+            var handler = new RelayIndexHttpHandler(socket, wire, session, address);
+            return new HttpIndexGateway(new HttpClient(handler) { BaseAddress = address }, ownsClient: true);
         }
         catch { wire.Dispose(); socket.Dispose(); throw; }
     }
 
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
     {
-        var path = request.RequestUri!.PathAndQuery.TrimStart('/');
+        var path = _baseAddress.MakeRelativeUri(request.RequestUri!).ToString();
         if (!RelayIndexQuery.IsSupported(request.Method.Method, path))
             return new(HttpStatusCode.NotImplemented);
         lock (_lifetime)
@@ -65,6 +69,7 @@ public sealed class RelayIndexHttpHandler : HttpMessageHandler
             JsonElement? body = request.Content is null ? null : await request.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: linked.Token).ConfigureAwait(false);
             var query = JsonSerializer.SerializeToUtf8Bytes(new RelayIndexQuery(request.Method.Method, path, body), DeviceAuthorization.Json);
             var response = await _requests.RequestAsync(Guid.NewGuid(), query, linked.Token).ConfigureAwait(false);
+            if (RelayIndexQuery.TryPhoto(path, out _, out _)) return RelayPhotoResponse.Decode(response);
             return new(HttpStatusCode.OK) { Content = new ByteArrayContent(response) };
         }
         finally

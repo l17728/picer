@@ -1,4 +1,6 @@
 using System.Security.Cryptography;
+using System.Net;
+using System.Net.WebSockets;
 using System.Text.Json;
 using Picer.Core.Identity;
 
@@ -37,10 +39,10 @@ internal sealed class RelayLocalIndexReader(IndexApiHandlers handlers)
                     throw new InvalidDataException("relay_query_unsupported");
                 if (!queries.TryStart(requestId, operation, frame.ExpiresUtc, async requestToken =>
                 {
-                    await client.ResolveRelayPeerAsync(invite.GuiDeviceId, requestToken);
+                    var peer = await client.ResolveRelayPeerAsync(invite.GuiDeviceId, requestToken);
                     try
                     {
-                        var result = await ReadAsync(query, requestToken);
+                        var result = await ReadAsync(query, peer, requestToken);
                         try
                         {
                             await RelayResponseFrames.SendAsync(crypto, requestId, operation, result,
@@ -66,11 +68,32 @@ internal sealed class RelayLocalIndexReader(IndexApiHandlers handlers)
     private static T ReadBody<T>(RelayIndexQuery query) where T : class =>
         query.Body?.Deserialize<T>(DeviceAuthorization.Json) ?? throw new InvalidDataException("relay_query_body_invalid");
 
-    private async Task<byte[]> ReadAsync(RelayIndexQuery query, CancellationToken token)
+    private async Task<byte[]> ReadAsync(RelayIndexQuery query, RelayPeerIdentity peer, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
         using var db = handlers.OpenSpaceConnection();
         var reader = handlers.ForReadConnection(db);
+        if (RelayIndexQuery.TryPhoto(query.Path, out var id, out var preview))
+        {
+            if (!peer.Scope.Split(' ').Contains(preview ? "media.read" : "thumb.read", StringComparer.Ordinal))
+                return RelayPhotoResponse.Status(HttpStatusCode.Forbidden);
+            try
+            {
+                if (!preview)
+                {
+                    await using var local = await reader.OpenThumbnailAsync(id, token);
+                    if (local is not null) return await RelayPhotoResponse.ReadAsync(local, token);
+                }
+                var image = await reader.GetAsync(id, token);
+                if (image is null) return RelayPhotoResponse.Status(HttpStatusCode.NotFound);
+                if (reader.AgentPhotoPreview is null) return RelayPhotoResponse.Status(HttpStatusCode.ServiceUnavailable);
+                var jpeg = await reader.AgentPhotoPreview(image, null, preview ? 1600 : 256, token);
+                using var stream = new MemoryStream(jpeg, writable: false);
+                return await RelayPhotoResponse.ReadAsync(stream, token);
+            }
+            catch (Exception e) when (e is IOException or TimeoutException or WebSocketException or InvalidOperationException)
+            { return RelayPhotoResponse.Status(HttpStatusCode.ServiceUnavailable); }
+        }
         object value = query.Path switch
         {
             "health" => reader.Health(),

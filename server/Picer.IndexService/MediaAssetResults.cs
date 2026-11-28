@@ -15,7 +15,7 @@ internal static class MediaAssetResults
         }
         catch (Exception exception) when (exception is IOException or TimeoutException or System.Net.WebSockets.WebSocketException)
         {
-            AppLogger.Info($"Persistent media preview fell back; path={path}; errorType={exception.GetType().Name}");
+            AppLogger.Info($"Persistent media preview fell back; errorType={exception.GetType().Name}");
         }
         if (persistent is { Length: > 0 }) return persistent;
         await using var stream = await agents.OpenMediaAsync(agentId, path, size, token);
