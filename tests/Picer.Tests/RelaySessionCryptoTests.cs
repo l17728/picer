@@ -82,6 +82,22 @@ public sealed class RelaySessionCryptoTests
         Assert.Equal(2, requestSends);
         Assert.Equal(2, cancelSends);
         Assert.Equal(0, multiplexer.PendingCount);
+
+        using var activeCancellation = new CancellationTokenSource();
+        var active = multiplexer.RequestAsync(Guid.NewGuid(), new byte[] { 3 }, activeCancellation.Token, TimeSpan.FromMinutes(1));
+        try
+        {
+            var timeout = await Assert.ThrowsAsync<TimeoutException>(() => multiplexer.RequestAsync(Guid.NewGuid(), new byte[] { 4 })
+                .WaitAsync(TimeSpan.FromSeconds(2), CancellationToken.None));
+            Assert.Equal("relay_request_timed_out", timeout.Message);
+            Assert.Equal(1, multiplexer.PendingCount);
+            Assert.Equal(3, requestSends);
+        }
+        finally
+        {
+            activeCancellation.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => active);
+        }
     }
 
     [Fact]

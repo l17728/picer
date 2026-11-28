@@ -41,7 +41,14 @@ public sealed class RelayRequestMultiplexer : IDisposable
         var effectiveTimeout = timeout ?? _defaultTimeout;
         if (effectiveTimeout <= TimeSpan.Zero || effectiveTimeout > TimeSpan.FromMinutes(5))
             throw new ArgumentOutOfRangeException(nameof(timeout));
-        await _capacity.WaitAsync(cancellationToken).ConfigureAwait(false);
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _shutdown.Token);
+        deadline.CancelAfter(effectiveTimeout);
+        try { await _capacity.WaitAsync(deadline.Token).ConfigureAwait(false); }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            ObjectDisposedException.ThrowIf(_shutdown.IsCancellationRequested, this);
+            throw new TimeoutException("relay_request_timed_out");
+        }
         if (Volatile.Read(ref _disposed) != 0)
         {
             _capacity.Release();
@@ -56,8 +63,6 @@ public sealed class RelayRequestMultiplexer : IDisposable
         }
 
         var sent = false;
-        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _shutdown.Token);
-        deadline.CancelAfter(effectiveTimeout);
         try
         {
             var request = _crypto.Encrypt("request", requestId, idempotencyKey, payload.Span, lifetime: effectiveTimeout);
