@@ -113,8 +113,10 @@ try {
     }
 } finally { $inputStream.Dispose() }
 $assemble = "set -eu; cat '$remoteParts'/part-* > '$remoteArchive'; printf '%s  %s\n' '$archiveHash' '$remoteArchive' | sha256sum --check -; rm -f '$remoteParts'/part-*; rmdir '$remoteParts'"
-Invoke-Native $ssh ($sshArgs + @($target, "bash -c '$assemble'"))
-Invoke-Native $scp ($scpArgs + @($remoteScript, "${target}:$remoteScriptPath"))
+Invoke-Native $ssh ($sshArgs + @($target, $assemble))
+$uploadScript = Join-Path $OutputRoot "$deploymentId\deploy-indexservice-linux.sh"
+[System.IO.File]::WriteAllText($uploadScript, [System.IO.File]::ReadAllText($remoteScript).Replace("`r`n", "`n"), $utf8NoBom)
+Invoke-Native $scp ($scpArgs + @($uploadScript, "${target}:$remoteScriptPath"))
 
 Write-Host 'Running remote atomic upgrade and waiting for health/version verification...'
 Invoke-Native $ssh ($sshArgs + @($target, $remoteCommand))
