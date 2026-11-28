@@ -13,3 +13,8 @@
 使用本机 Qwen3-VL-8B 与 212 个正式候选标签。原版对灰色空白图先返回不完整结果，切换格式后返回截断 JSON。修复后两种格式都返回零标签。合成英文购物收据仅命中 document.receipt。另从正式服务读取两张此前各获 212 个标签的照片作为模型输入，每张返回 1 个标签。此抽样仅使用图片，线上工作线程还会输入索引描述等证据，须单独验收。
 
 Release 构建目录为 C:\Users\a\AppData\Local\Picer\engineering-backups\relay-photo-20261128\verification\src\Picer.Core\bin\Release\net8.0。服务交付时另核对发布包版本及哈希。
+## 正式构建与服务发布
+
+源代码提交为 27acf520df7e3d752c4e33c62de258ef2e3ac6f1。Release 分类回归 86 项全部通过，覆盖饱和响应退回重判和重算后人工确认仍保留。Windows x64 GUI 在恢复工作区 src/Picer.App/bin/Release/net8.0-windows/win-x64/Picer.App.exe 构建通过，零警告、零错误。EXE SHA-256 为 255a7e0d59ae302b5c0abd156c24627367065dc1d28e1fd81f203096b9e817a6，随附 Picer.Core.dll 为 7e86b370016b7f1f6b91ae614ab571e87a6388fa4c90b95a98895dee739a4e30。
+
+47.103.99.229 部署号为 20261128T120914244Z，服务二进制 SHA-256 为 d4f4d48c2d2a24ac8dc4d099a8bce9c7087b81aeec04742920b22906e787c591。部署程序检查了 5 个数据库、健康接口及版本标识。生产增量计划列出全部 8,603 张待重新核对，沿用原任务剩余的 8,062 次调用额度。
