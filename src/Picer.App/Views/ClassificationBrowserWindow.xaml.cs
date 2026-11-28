@@ -14,20 +14,26 @@ namespace Picer.App.Views;
 
 public partial class ClassificationBrowserWindow : Window
 {
-    private readonly ClassificationV2Client _client = new();
+    private readonly ClassificationV2Client _client;
     private readonly CancellationTokenSource _closed = new();
     private ClassificationTaxonomySnapshot? _taxonomy;
     private ClassificationBrowseResult? _browse;
     private string? _selectedLabelId;
     private IReadOnlyList<string> _selectedFilterIds = Array.Empty<string>();
     private readonly ObservableCollection<PhotoRow> _rows = new();
+    private long _browseVersion;
+    private bool _needsTreeRebuild;
+    private bool _refreshing;
     private bool _loadingMore;
     private bool _restoringSelection;
     private ClassificationJob? _job;
     private bool _retrying;
 
-    public ClassificationBrowserWindow()
+    public ClassificationBrowserWindow() : this(new ClassificationV2Client()) { }
+
+    internal ClassificationBrowserWindow(ClassificationV2Client client)
     {
+        _client = client;
         InitializeComponent();
         Loaded += async (_, _) => await Task.WhenAll(RefreshAsync(), RefreshJobAsync());
         Closed += (_, _) => { _closed.Cancel(); _client.Dispose(); _closed.Dispose(); };
@@ -36,20 +42,42 @@ public partial class ClassificationBrowserWindow : Window
     // rebuildTree: the taxonomy and the per-label counts do not depend on which node is selected,
     // so selecting a node only reloads the photo list. The tree is rebuilt only when its nodes or
     // counts can have changed (first load, filter toggles, refresh, decisions, scan).
-    private async Task RefreshAsync(bool rebuildTree = true)
+    internal async Task RefreshAsync(bool rebuildTree = true)
     {
+        var version = ++_browseVersion;
+        _needsTreeRebuild |= rebuildTree;
+        _refreshing = true;
+        _loadingMore = false;
+        SetDecisionButtons(false);
         try
         {
-            _browse = await BrowsePage(null);
-            _taxonomy = _browse.Taxonomy;
-            if (rebuildTree && BuildLabelTree()) _browse = await BrowsePage(null);
+            var page = await BrowsePage(null);
+            if (version != _browseVersion || _closed.IsCancellationRequested) return;
+            _browse = page;
+            _taxonomy = page.Taxonomy;
+            if (_needsTreeRebuild)
+            {
+                _needsTreeRebuild = false;
+                if (BuildLabelTree())
+                {
+                    page = await BrowsePage(null);
+                    if (version != _browseVersion || _closed.IsCancellationRequested) return;
+                    _browse = page;
+                    _taxonomy = page.Taxonomy;
+                }
+            }
             _rows.Clear();
             foreach (var photo in _browse.Photos) _rows.Add(new PhotoRow(photo, _taxonomy, _closed.Token));
             Photos.ItemsSource = _rows;
             UpdateStatus();
+            SetDecisionButtons(_selectedLabelId is not null);
         }
         catch (OperationCanceledException) { }
-        catch (Exception ex) { Feedback.Text = "分类读取失败：" + ex.Message; }
+        catch (Exception ex)
+        {
+            if (version == _browseVersion) { _browse = null; Feedback.Text = "分类读取失败：" + ex.Message; }
+        }
+        finally { if (version == _browseVersion) _refreshing = false; }
     }
 
     private Task<ClassificationBrowseResult> BrowsePage(string? cursor)
@@ -70,20 +98,22 @@ public partial class ClassificationBrowserWindow : Window
         StatusText.Text = $"{name}：已加载 {_rows.Count} / {_browse.Matched} 张照片" + (_browse.NextCursor is null ? "" : "（继续滚动自动加载）");
     }
 
-    private async Task LoadMoreAsync()
+    internal async Task LoadMoreAsync()
     {
-        if (_loadingMore || _browse?.NextCursor is null) return;
+        if (_refreshing || _loadingMore || _browse?.NextCursor is null) return;
+        var version = _browseVersion;
         _loadingMore = true;
         try
         {
             var page = await BrowsePage(_browse.NextCursor);
+            if (version != _browseVersion || _closed.IsCancellationRequested) return;
             _browse = page;
             foreach (var photo in page.Photos) _rows.Add(new PhotoRow(photo, _taxonomy ?? page.Taxonomy, _closed.Token));
             UpdateStatus();
         }
         catch (OperationCanceledException) { }
-        catch (Exception ex) { Feedback.Text = "继续加载失败：" + ex.Message; }
-        finally { _loadingMore = false; }
+        catch (Exception ex) { if (version == _browseVersion) Feedback.Text = "继续加载失败：" + ex.Message; }
+        finally { if (version == _browseVersion) _loadingMore = false; }
     }
 
     private bool BuildLabelTree()
@@ -146,12 +176,15 @@ public partial class ClassificationBrowserWindow : Window
         foreach (var root in roots) LabelTree.Items.Add(root);
         foreach (var item in TreeNodes())
             if (item.Tag is TreeNodeSelection selection && wasExpanded.TryGetValue(selection.Key, out var expanded)) item.IsExpanded = expanded;
-        var selectionReset = false;
+        var filterChanged = false;
         if (selectedKey is not null)
         {
             var selected = TreeNodes().FirstOrDefault(item => item.Tag is TreeNodeSelection selection && selection.Key == selectedKey);
-            if (selected is not null)
+            if (selected?.Tag is TreeNodeSelection restored)
             {
+                filterChanged = !_selectedFilterIds.SequenceEqual(restored.FilterIds, StringComparer.Ordinal);
+                _selectedFilterIds = restored.FilterIds;
+                _selectedLabelId = restored.DecisionLabelId;
                 // Re-selecting raises SelectedItemChanged; the photo list is reloaded right after this.
                 _restoringSelection = true;
                 try { selected.IsSelected = true; }
@@ -161,11 +194,10 @@ public partial class ClassificationBrowserWindow : Window
             {
                 _selectedLabelId = null;
                 _selectedFilterIds = Array.Empty<string>();
-                selectionReset = true;
+                filterChanged = true;
             }
         }
-        SetDecisionButtons(_selectedLabelId is not null);
-        return selectionReset;
+        return filterChanged;
 
         TreeViewItem CreateNode(ClassificationLabel label, HashSet<string> ancestors)
         {
@@ -213,7 +245,6 @@ public partial class ClassificationBrowserWindow : Window
         {
             _selectedFilterIds = selection.FilterIds;
             _selectedLabelId = selection.DecisionLabelId;
-            SetDecisionButtons(_selectedLabelId is not null);
             // Selecting a node only changes which photos are listed; the tree stays exactly as it is.
             await RefreshAsync(rebuildTree: false);
         }

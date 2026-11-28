@@ -22,3 +22,11 @@
 功能提交为 `32a76fa`。分类客户端与桌面定向测试共 21 项通过，包含传输故障注入。两项 WPF 自动化测试随后在此提交的 Windows x64 自包含 Release 上再次通过。测试使用独立图库和回环测试模型，实测运行进程路径与所指定的 Release 一致。已验证查看候选标签、接受并匹配、分类树照片计数及点击后显示相应文件。正式用户数据目录 D:\PicerData\app-data 和正式程序所在的 D 盘仍未挂载。
 
 验证程序为 C:\Users\a\AppData\Local\Picer\engineering-backups\relay-photo-20261128\verification\src\Picer.App\bin\Release\net8.0-windows\win-x64\Picer.App.exe。EXE SHA-256 为 `AA2110843C0C53CEDC9BA6FD72CA1BD915C1B5C0AF5FB09864AE9B786EC1ABEC`；同目录 DLL 为 `429B05D959FDAB30DCBDE110B288C18ACAFF645CA2B59A0B270C7BB6B5CD2999`。从 E 盘恢复的 23 个离线组件与发布脚本指定的字节数、SHA-256 均相符，输出目录包含 12 份许可文件。此次变更在客户端生效。
+
+### 分类切换和分页响应乱序
+
+分类窗口曾在异步读取完成时直接替换照片列表，分页也会直接追加。快速选择下一个分类、分页未完成时刷新，或后台匹配触发刷新，均可能让较早的请求覆盖当前结果。窗口现在只应用当前查询的响应。查询期间暂停审核按钮，保留已发出的树重建请求；重建后重新计算所选节点覆盖的标签，包含新增子标签。
+
+在真实 WPF 分类窗口中，使用可控的 HTTP 响应顺序分别复现了较早的首页和分页最后返回；两项均验证较晚请求选出的照片保持不变。浏览分页与分类 UI 的定向测试共 8 项通过，其中 2 项显式启动本次 Windows x64 Release，覆盖接受新标签并匹配、树中数量与点选照片、独立窗口和预览。
+
+发布路径为恢复工作区 `src/Picer.App/bin/Release/net8.0-windows/win-x64/Picer.App.exe`，构建零警告、零错误；同目录 Picer.App.dll SHA-256 为 `fc53b8341f064181f7f58aa60a919283b0a0a5c2bf2d3e1959433c7704d4c2f8`。

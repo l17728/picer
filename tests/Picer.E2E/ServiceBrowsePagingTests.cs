@@ -6,6 +6,9 @@ using System.Text.Json;
 using System.Windows.Threading;
 using Picer.App;
 using Picer.App.ViewModels;
+using Picer.App.Views;
+using Picer.Core.Classification;
+using Picer.Core.Data;
 using Picer.Core.Gateway;
 using Picer.Core.Models;
 using Picer.Core.Video;
@@ -14,6 +17,57 @@ namespace Picer.E2E;
 
 public sealed class ServiceBrowsePagingTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void OlderClassificationResponseCannotReplaceOrAppendToRefreshedPhotos(bool paging) => RunSta(async () =>
+    {
+        var root = Path.Combine(Path.GetTempPath(), "picer-classification-paging-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            using var db = new PicerDatabase(Path.Combine(root, "picer.db"));
+            using var handler = new DelayedClassificationHandler(paging ? 2 : 1);
+            using var http = new HttpClient(handler) { BaseAddress = new Uri("https://fixture.invalid/") };
+            using var client = new ClassificationV2Client(http, db);
+            var window = new ClassificationBrowserWindow(client);
+            try
+            {
+                if (paging) await window.RefreshAsync();
+                var old = paging ? window.LoadMoreAsync() : window.RefreshAsync();
+                await handler.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                await window.RefreshAsync(rebuildTree: false);
+                Assert.Single(window.Photos.Items);
+                var current = window.Photos.Items[0];
+                handler.Release.TrySetResult();
+                await old;
+                Assert.Same(current, Assert.Single(window.Photos.Items));
+            }
+            finally { handler.Release.TrySetResult(); window.Close(); }
+        }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
+    });
+
+    private sealed class DelayedClassificationHandler(int delayedRequest) : HttpMessageHandler
+    {
+        private int _requests;
+        public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
+        {
+            var index = Interlocked.Increment(ref _requests);
+            if (index == delayedRequest)
+            {
+                Started.TrySetResult();
+                await Release.Task.WaitAsync(token);
+            }
+            var page = new ClassificationBrowseResult("snapshot", new(1, 1, [], [], []),
+                new(2, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0), new Dictionary<string, int>(), 2,
+                [new ClassificationPhoto(index, $"photo-{index}.jpg", null, [], "unprocessed")], "next");
+            return new(HttpStatusCode.OK) { Content = JsonContent.Create(page) };
+        }
+    }
+
     [Fact]
     public void PhotosAppearBeforeSlowVideosAndDirectoryTreeAndBothCursorsContinue() => RunSta(async () =>
     {
