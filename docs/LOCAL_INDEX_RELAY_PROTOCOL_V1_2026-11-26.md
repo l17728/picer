@@ -70,3 +70,11 @@ Release 定向测试涵盖空响应、单帧临界值、超过单帧一个字节
 隔离图库测试使用 640×320 的 JPEG，首次经 Relay 取得 256×128 缩略图。独占原文件期间，第二个客户端仍读到相同 JPEG，磁盘上的加密缓存字节保持一致。无媒体读取权限的设备请求大预览得到 403，未触发来源回调；授权设备得到可解码的大预览。此项用文件读取回调代替来源设备；真实驻留程序的原图范围读取以及正式 GUI 双击仍待验收。
 
 正式工程所在的 D 盘在复验期间从 Windows 掉线。九个修改文件在掉线前保存到了 C 盘，并覆盖到从主线提交 aba6ef0 检出的独立验证工作区。该工作区的 19 项 Release 定向测试全部通过。验证构建路径为 C:\Users\a\AppData\Local\Picer\engineering-backups\relay-photo-20261128\verification\src\Picer.Core\bin\Release\net8.0\Picer.Core.dll（SHA-256 08E04429DC15A0B985A5ABD6120B193EB0CAE000AAF2BECC70CA94D4608D80B9），同检出的 server\Picer.IndexService\bin\Release\net8.0\Picer.IndexService.dll SHA-256 为 466EDAE38435D82A83A4C5C568863E83CF647D2968CF3C53EA64881E793B8DD6。正式 GUI 的启动路径保持在 D 盘。
+
+### 2026-11-28 Relay 原图分段读取验收
+
+本机索引服务通过原有媒体网关向来源设备申请只读租约，GUI 在同一条加密连接上分段读取。每次读取核对媒体权限、会话、资源类型、资源 ID、版本及字节范围。关闭连接会释放尚未归还的租约。
+
+隔离测试启动账号服务、来源索引服务及测试代理。代理通过实际 WebSocket 协议和 MediaFileSession 读取授权目录中的 JPEG。两段响应拼接后与源文件逐字节相同。相同设备另开连接复用租约及归还后再读取均被拒绝。媒体流、Relay 及账号路由共 51 项 Release 测试通过。Debug 全解决方案按警告即错误构建通过，零警告、零错误。正式桌面的双击操作和生产部署待验收。
+
+D 盘仍离线。本次验证构建根目录为 C:\Users\a\AppData\Local\Picer\engineering-backups\relay-photo-20261128\verification。其下 src/Picer.Core/bin/Release/net8.0/Picer.Core.dll 的 SHA-256 为 4DAE56978FA71123E352E20CDB383B1C426C07E854829EFB7F3544D412776DBA，server/Picer.IndexService/bin/Release/net8.0/Picer.IndexService.dll 的 SHA-256 为 B6FAFF8794570E1AE3E27AEBBA2883812E153A32FE63731BF7E3D0A96D738740。本阶段未替换正式 GUI。

@@ -67,8 +67,19 @@ public sealed class RelayIndexHttpHandler : HttpMessageHandler
         {
             using var linked = CancellationTokenSource.CreateLinkedTokenSource(token, _closed.Token);
             JsonElement? body = request.Content is null ? null : await request.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: linked.Token).ConfigureAwait(false);
+            var asset = RelayIndexQuery.TryAsset(path, out _, out _);
+            if (asset && request.Method == HttpMethod.Get)
+            {
+                var range = request.Headers.Range;
+                var match = request.Headers.IfMatch;
+                if (range?.Unit != "bytes" || range.Ranges.Count != 1 || match.Count != 1 ||
+                    range.Ranges.First() is not { From: long from, To: long to } || to < from || to - from >= RelayResponseFrames.MaximumResponseBytes - 4096)
+                    return new(HttpStatusCode.RequestedRangeNotSatisfiable);
+                body = JsonSerializer.SerializeToElement(new RelayAssetRange(match.First().ToString(), from, (int)(to - from + 1)), DeviceAuthorization.Json);
+            }
             var query = JsonSerializer.SerializeToUtf8Bytes(new RelayIndexQuery(request.Method.Method, path, body), DeviceAuthorization.Json);
             var response = await _requests.RequestAsync(Guid.NewGuid(), query, linked.Token).ConfigureAwait(false);
+            if (asset || path == RelayIndexQuery.LeasePath) return RelayAssetResponse.Decode(response);
             if (RelayIndexQuery.TryPhoto(path, out _, out _)) return RelayPhotoResponse.Decode(response);
             return new(HttpStatusCode.OK) { Content = new ByteArrayContent(response) };
         }

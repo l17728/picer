@@ -19,6 +19,7 @@ internal sealed class RelayLocalIndexReader(IndexApiHandlers handlers)
         var other = (await wire.ReceiveAsync(handshake.Token)).KeyExchange ?? throw new InvalidDataException("relay_exchange_required");
         using var crypto = await client.AcceptRelayPeerAsync(offer, other, handshake.Token);
         var replay = new RelayReplayWindow();
+        await using var originals = new RelayOriginalMediaSession(handlers.LocalMediaGateway);
         await using var queries = new RelayExecutingQueries(token);
         while (true)
         {
@@ -35,14 +36,17 @@ internal sealed class RelayLocalIndexReader(IndexApiHandlers handlers)
                 }
                 if (frame.Kind != "request") throw new InvalidDataException("relay_request_required");
                 var query = DeviceAuthorization.ReadDocument<RelayIndexQuery>(plain, 64 * 1024);
-                if (!RelayIndexQuery.IsSupported(query.Method, query.Path) || query.Method == "GET" && query.Body is not null)
+                var asset = RelayIndexQuery.TryAsset(query.Path, out _, out _);
+                if (!RelayIndexQuery.IsSupported(query.Method, query.Path) || query.Method == "GET" && !asset && query.Body is not null)
                     throw new InvalidDataException("relay_query_unsupported");
                 if (!queries.TryStart(requestId, operation, frame.ExpiresUtc, async requestToken =>
                 {
                     var peer = await client.ResolveRelayPeerAsync(invite.GuiDeviceId, requestToken);
                     try
                     {
-                        var result = await ReadAsync(query, peer, requestToken);
+                        var result = asset || query.Path == RelayIndexQuery.LeasePath
+                            ? await originals.HandleAsync(query, peer, requestToken)
+                            : await ReadAsync(query, peer, requestToken);
                         try
                         {
                             await RelayResponseFrames.SendAsync(crypto, requestId, operation, result,

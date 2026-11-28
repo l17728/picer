@@ -602,7 +602,7 @@ public sealed class MediaStreamingTests
         }
     }
 
-    private sealed class TestAgent(GatewayServiceFixture fixture) : IAsyncDisposable
+    internal sealed class TestAgent(string root, string baseUrl, byte[] pin) : IAsyncDisposable
     {
         private readonly ClientWebSocket _control = new();
         private readonly CancellationTokenSource _stop = new();
@@ -621,10 +621,13 @@ public sealed class MediaStreamingTests
         private readonly SemaphoreSlim _sendGate = new(1, 1);
         /// <param name="persistentPreview">Advertise and answer <c>media.preview.v1</c> like the shipped agent.
         /// <c>false</c> models a resident program built before that protocol.</param>
-        public static async Task<TestAgent> StartAsync(GatewayServiceFixture fixture, bool binary = true, bool reuse = true, bool analysis = true,
-            bool persistentPreview = true)
+        public static Task<TestAgent> StartAsync(GatewayServiceFixture fixture, bool binary = true, bool reuse = true, bool analysis = true,
+            bool persistentPreview = true) => StartAsync(fixture.Root, fixture.BaseUrl, fixture.SpkiPin, binary, reuse, analysis, persistentPreview);
+
+        public static async Task<TestAgent> StartAsync(string root, string baseUrl, byte[] pin, bool binary = true, bool reuse = true,
+            bool analysis = true, bool persistentPreview = true)
         {
-            var agent = new TestAgent(fixture);
+            var agent = new TestAgent(root, baseUrl, pin);
             agent.Configure(agent._control);
             await agent._control.ConnectAsync(agent.Endpoint("api/agent/v1/connect"), agent._stop.Token);
             var capabilities = new List<string>();
@@ -636,10 +639,10 @@ public sealed class MediaStreamingTests
             await MediaWire.ReceiveJsonAsync<JsonElement>(agent._control, agent._stop.Token);
             agent._loop = agent.LoopAsync(); return agent;
         }
-        private Uri Endpoint(string path) => new(new UriBuilder(fixture.BaseUrl) { Scheme = "wss" }.Uri, path);
+        private Uri Endpoint(string path) => new(new UriBuilder(baseUrl) { Scheme = "wss" }.Uri, path);
         private void Configure(ClientWebSocket socket)
         {
-            socket.Options.RemoteCertificateValidationCallback = (_, certificate, _, _) => MediaAgentSettings.MatchesCertificate(certificate, fixture.SpkiPin);
+            socket.Options.RemoteCertificateValidationCallback = (_, certificate, _, _) => MediaAgentSettings.MatchesCertificate(certificate, pin);
             socket.Options.SetRequestHeader("Authorization", "Bearer picer-test-token");
         }
         private async Task LoopAsync()
@@ -671,8 +674,9 @@ public sealed class MediaStreamingTests
                 if (StallMedia) await Task.Delay(Timeout.InfiniteTimeSpan, _stop.Token);
                 long last = 0;
                 var requestedPath = request.GetProperty("path").GetString()!;
-                if (!File.Exists(requestedPath)) requestedPath = Path.Combine(fixture.Root, Path.GetFileName(requestedPath));
-                await MediaFileSession.ServeAsync(socket, requestedPath, [fixture.Root], request.GetProperty("previewSize").GetInt32(), "video/mp4", new MediaPreviewCache(), metrics =>
+                if (!File.Exists(requestedPath)) requestedPath = Path.Combine(root, Path.GetFileName(requestedPath));
+                var contentType = Path.GetExtension(requestedPath).Equals(".jpg", StringComparison.OrdinalIgnoreCase) ? "image/jpeg" : "video/mp4";
+                await MediaFileSession.ServeAsync(socket, requestedPath, [root], request.GetProperty("previewSize").GetInt32(), contentType, new MediaPreviewCache(), metrics =>
                 {
                     var total = long.Parse(metrics.Split(';')[0].Split('=')[1]);
                     Interlocked.Add(ref _bytes, total - last); last = total;
@@ -697,7 +701,7 @@ public sealed class MediaStreamingTests
             try
             {
                 var requestedPath = request.GetProperty("path").GetString()!;
-                if (!File.Exists(requestedPath)) requestedPath = Path.Combine(fixture.Root, Path.GetFileName(requestedPath));
+                if (!File.Exists(requestedPath)) requestedPath = Path.Combine(root, Path.GetFileName(requestedPath));
                 using var input = File.OpenRead(requestedPath);
                 Interlocked.Add(ref _bytes, input.Length);
                 using var image = RasterImage.Load(input);

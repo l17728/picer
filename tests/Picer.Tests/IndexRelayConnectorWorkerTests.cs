@@ -29,6 +29,7 @@ public sealed class IndexRelayConnectorWorkerTests
         var accountService = AccountServiceHost.Build(Path.Combine(root, "account"), origin, port, enableRelayData: true);
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         IndexRelayConnectorWorker? worker = null;
+        IndexServiceInstance? sourceService = null;
         try
         {
             await IndexServiceHost.StartAsync(accountService.App);
@@ -57,17 +58,11 @@ public sealed class IndexRelayConnectorWorkerTests
                 db.UpsertImage(new ImageRecord { SourceId = source.Id, Path = Path.Combine(root, file), FileSize = 123,
                     ModifiedUtc = DateTime.UtcNow, IndexedUtc = DateTime.UtcNow, Status = ImageStatus.Active });
             var handlers = new IndexApiHandlers(db, thumbs, new VideoRepository(db));
-            var previewRequests = 0;
-            handlers.AgentPhotoPreview = (photo, _, size, ct) =>
-            {
-                ct.ThrowIfCancellationRequested();
-                Interlocked.Increment(ref previewRequests);
-                using var image = RasterImage.Load(photo.Path);
-                image.ResizeToFit(size, size);
-                using var output = new MemoryStream();
-                image.SaveAsJpeg(output);
-                return Task.FromResult(output.ToArray());
-            };
+            sourceService = IndexServiceHost.Build(Path.Combine(root, "local-index"), port: 0, bearerToken: "picer-test-token");
+            var sourceUrl = await IndexServiceHost.StartAsync(sourceService.App);
+            await using var sourceAgent = await MediaStreamingTests.TestAgent.StartAsync(root, sourceUrl, ServiceSecurity.ComputeSpkiPin(sourceService.Certificate));
+            handlers.AgentPhotoPreview = sourceService.Handlers.AgentPhotoPreview;
+            handlers.SetLocalMediaGateway(sourceService.Handlers.LocalMediaGateway!);
             worker = new IndexRelayConnectorWorker(store, TimeSpan.FromMilliseconds(100), handlers);
             await worker.StartAsync(deadline.Token);
             var registry = accountService.App.Services.GetRequiredService<IndexRelayConnectorRegistry>();
@@ -139,12 +134,32 @@ public sealed class IndexRelayConnectorWorkerTests
                 var denied = await Assert.ThrowsAsync<HttpRequestException>(() => gateway.OpenPreviewAsync(photo.Id, deadline.Token));
                 Assert.Equal(HttpStatusCode.Forbidden, denied.StatusCode);
                 Assert.Null(await secondGateway.OpenPreviewAsync(long.MaxValue, deadline.Token));
-                Assert.Equal(0, previewRequests);
+                Assert.Equal(0, sourceAgent.PreviewRequests);
                 using var preview = await secondGateway.OpenPreviewAsync(photo.Id, deadline.Token);
                 Assert.NotNull(preview);
                 using var fullPreview = RasterImage.Load(preview);
                 Assert.True(fullPreview.Width > image.Width);
-                Assert.Equal(1, previewRequests);
+                Assert.Equal(1, sourceAgent.PreviewRequests);
+                var forbidden = await Assert.ThrowsAsync<HttpRequestException>(() => gateway.GetMediaInfoAsync(photo.Id, false, deadline.Token));
+                Assert.Equal(HttpStatusCode.Forbidden, forbidden.StatusCode);
+                var info = await secondGateway.GetMediaInfoAsync(photo.Id, false, deadline.Token);
+                Assert.True(info.SupportsStreaming);
+                using (var independent = await RelayIndexHttpHandler.ConnectAsync(secondGui, target.DeviceId, deadline.Token))
+                {
+                    await Assert.ThrowsAsync<InvalidDataException>(() => independent.OpenMediaRangeAsync(photo.Id, false, info, 0, 1, deadline.Token));
+                }
+                var original = await File.ReadAllBytesAsync(photoPath, deadline.Token);
+                Assert.Equal(original.LongLength, info.Length);
+                var half = original.Length / 2;
+                using var assembled = new MemoryStream();
+                foreach (var (offset, count) in new[] { (0, half), (half, original.Length - half) })
+                {
+                    using var block = await secondGateway.OpenMediaRangeAsync(photo.Id, false, info, offset, count, deadline.Token);
+                    await block.CopyToAsync(assembled, deadline.Token);
+                }
+                Assert.Equal(original, assembled.ToArray());
+                await secondGateway.ManageMediaLeaseAsync(info.ETag, true, deadline.Token);
+                await Assert.ThrowsAsync<InvalidDataException>(() => secondGateway.OpenMediaRangeAsync(photo.Id, false, info, 0, 1, deadline.Token));
                 var concurrent = await Task.WhenAll(Enumerable.Range(0, 6).Select(i =>
                     i % 2 == 0 ? gateway.SearchAsync(filters, 2, cancellationToken: deadline.Token)
                         : secondGateway.SearchAsync(filters, 1, cancellationToken: deadline.Token)));
@@ -169,6 +184,13 @@ public sealed class IndexRelayConnectorWorkerTests
         finally
         {
             if (worker is not null) worker.Dispose();
+            if (sourceService is not null)
+            {
+                await sourceService.App.StopAsync();
+                await sourceService.App.DisposeAsync();
+                sourceService.Certificate.Dispose();
+                sourceService.Handlers.DisposeDatabase();
+            }
             await accountService.App.StopAsync();
             await accountService.App.DisposeAsync();
             accountService.Certificate.Dispose();

@@ -77,6 +77,8 @@ public sealed class IndexApiHandlers(PicerDatabase db, ThumbnailService thumbnai
     internal IndexApiHandlers ForReadConnection(PicerDatabase reader) => new(reader, thumbnails, new VideoRepository(reader))
         { AgentPhotoPreview = AgentPhotoPreview };
     internal Func<ImageRecord, string?, int, CancellationToken, Task<byte[]>>? AgentPhotoPreview { get; set; }
+    internal IRangeMediaGateway? LocalMediaGateway { get; private set; }
+    internal void SetLocalMediaGateway(IRangeMediaGateway gateway) => LocalMediaGateway = gateway;
     internal void DisposeDatabase() => db.Dispose();
     public Func<long, CancellationToken, Task<bool>>? VideoPurgeHandler { get; set; }
     public Task<bool> PurgeVideoAsync(long id, CancellationToken token)
@@ -731,6 +733,15 @@ public static class IndexServiceHost
                 IndexApiHandlers.NormalizeAgentPath(image.Path), size, token), ct);
         };
         var app = builder.Build();
+        if (!isolatedSpace)
+        {
+            app.Lifetime.ApplicationStarted.Register(() =>
+            {
+                var media = new HttpIndexGateway(LocalAddress().AbsoluteUri, token, ServiceSecurity.ComputeSpkiPin(certificate));
+                handlers.SetLocalMediaGateway(media);
+                app.Lifetime.ApplicationStopped.Register(media.Dispose);
+            });
+        }
         app.Lifetime.ApplicationStopping.Register(agents.StopMediaConnections);
         app.Lifetime.ApplicationStarted.Register(() => _ = Task.Run(() =>
         {
@@ -836,13 +847,14 @@ async function load(){const [c,g]=await Promise.all([fetch('/api/service/v1/capa
         });
         app.MapGet("/api/service/v1/config/history", () => Results.Json(Directory.EnumerateFiles(configHistory).OrderDescending().Select(Path.GetFileName).ToArray()));
         app.MapGet("/api/service/v1/tasks", (int? limit) => Results.Json(journal.Read(Math.Clamp(limit ?? 200, 1, 2000))));
-        var taskRunner = new ServiceTaskRunner(dataRoot, journal, certificate, token, () =>
+        var taskRunner = new ServiceTaskRunner(dataRoot, journal, certificate, token, LocalAddress);
+        Uri LocalAddress()
         {
             var address = app.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>()!.Addresses.First();
             var uri = new UriBuilder(address);
             if (uri.Host is "0.0.0.0" or "[::]") uri.Host = "127.0.0.1";
             return uri.Uri;
-        });
+        }
         handlers.VideoPurgeHandler = (id, cancellationToken) => taskRunner.PurgeVideoAsync(id, async token =>
         {
             using var independent = db.OpenIndependentConnection();
