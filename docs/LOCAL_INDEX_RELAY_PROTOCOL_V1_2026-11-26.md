@@ -1,6 +1,6 @@
 # Relay protocol v1 cryptographic frame primitives (2026-11-26)
 
-账号服务支持在隔离验收中转发握手及加密数据帧，生产配置仍仅启用控制通道。正式 GUI 查询与本机索引请求处理尚待接入。
+账号服务支持在隔离验收中转发握手及加密数据帧，本机服务已处理部分索引只读请求。生产配置仍仅启用控制通道，正式 GUI 的模式选择尚待接入。
 
 ## Key agreement
 
@@ -21,9 +21,17 @@ The AES-GCM associated data binds version, session, space, sender, recipient, se
 - Debug full solution build: 0 warnings, 0 errors. Relay credential/connector and protocol tests: 11/11 passed.
 - Release artifact path: `server/Picer.IndexService/bin/Release/net8.0/Picer.IndexService.dll`; SHA-256 `E4FE9A7D1F25E8EB292D6E086C3A46CF952B25E42BA742C093A1F40BEEF7249B`.
 - Idempotency key is cryptographically bound to a request frame, but no durable request ledger or exactly-once write execution exists yet. This must be implemented at the local IndexService transaction boundary before write operations are routed.
-- The multiplexer accepts single-frame and bounded multi-frame responses. GUI integration, local service dispatch and cancellation propagation, durable replay state, throughput/backpressure acceptance across tenants, and complete tenant revocation acceptance remain outstanding.
+- The multiplexer accepts single-frame and bounded multi-frame responses. GUI integration, cancellation of executing local queries, additional media and write operations, durable replay state, throughput/backpressure acceptance across tenants, and complete tenant revocation acceptance remain outstanding.
 
 Do not enable data forwarding until those pieces are integrated and the E2E cases for RELAY-03, 09, 14, 17, 18, 20, 21, 33, and 35 pass. The protocol layer alone is not full end-to-end Relay acceptance.
+
+### 2026-11-28 本机索引查询与自动接入
+
+账号服务在控制通道的心跳确认中告知连接器有待接邀请。连接器随后建立出站数据连接、验证 GUI 的设备身份，并在每次读取前核对其空间授权。查询复用本机 IndexService 的 `IndexApiHandlers`。客户端通过 `RelayIndexHttpHandler.ConnectAsync` 取得 `HttpIndexGateway`，后续的健康、来源、目录、相册、标签、浏览元数据、照片搜索和视频搜索共用该会话。此版本支持索引读取；媒体访问、写操作和执行中取消还需独立验收。
+
+Release 测试在独立目录创建本机 SQLite 图库与账号服务，使用已配对的连接器、真实 HTTPS 和 WebSocket 查询。两条照片索引通过两次分页返回，结果与本机直接查询的顺序和路径相同。来源路径、目录汇总、健康响应也与本机结果比较；测试图库的视频页为空。定向测试 15 项通过。正式 GUI 窗口尚未参与这次测试。
+
+Release 构建路径为 `D:\picer\src\Picer.Core\bin\Release\net8.0\Picer.Core.dll`（SHA-256 `ED478F0C0B4D425AE21F605FF79E1735BFF07E0BAD9BB00B48B4A03525EF2EAD`）及 `D:\picer\server\Picer.IndexService\bin\Release\net8.0\Picer.IndexService.dll`（SHA-256 `D91D57AE6A61685FAF2E0984BD2800AD8250E3C6C15CE59C76B2FBE2421F56FC`）。
 
 ### 2026-11-28 账号服务双向密文转发
 

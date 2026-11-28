@@ -214,7 +214,7 @@ public static class AccountServiceHost
                 try
                 {
                     await app.Services.GetRequiredService<IndexRelayConnectorRegistry>()
-                        .ConnectAsync(context, device, connectorLifetime.Token);
+                        .ConnectAsync(context, device, connectorLifetime.Token, enableRelayData ? app.Services.GetRequiredService<IndexRelayDataSessions>() : null);
                     return Results.Empty;
                 }
                 finally

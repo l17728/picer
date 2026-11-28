@@ -3,7 +3,7 @@ using System.Text.Json;
 
 namespace Picer.Core.Identity;
 
-public sealed record RelayConnectorFrame(int Version, string Type);
+public sealed record RelayConnectorFrame(int Version, string Type, bool InvitationsAvailable = false);
 
 /// <summary>Heartbeat-only control frames for the persistent IndexService-to-Relay socket.</summary>
 public static class RelayConnectorProtocol
@@ -41,4 +41,8 @@ public static class RelayConnectorProtocol
 
     public static Task SendAsync(WebSocket socket, string type, CancellationToken cancellationToken) =>
         socket.SendAsync(Encode(type).AsMemory(), WebSocketMessageType.Text, true, cancellationToken).AsTask();
+
+    public static Task AcknowledgeInvitationsAsync(WebSocket socket, CancellationToken token) =>
+        socket.SendAsync(JsonSerializer.SerializeToUtf8Bytes(new RelayConnectorFrame(CurrentVersion, HeartbeatAck, true)).AsMemory(),
+            WebSocketMessageType.Text, true, token).AsTask();
 }

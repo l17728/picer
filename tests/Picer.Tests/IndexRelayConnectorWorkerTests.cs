@@ -3,6 +3,12 @@ using System.Net.Sockets;
 using System.Security.Cryptography;
 using Microsoft.Extensions.DependencyInjection;
 using Picer.Core.Identity;
+using Picer.Core.Data;
+using Picer.Core.Gateway;
+using Picer.Core.Models;
+using Picer.Core.Search;
+using Picer.Core.Thumbnails;
+using Picer.Core.Video;
 using Picer.IndexService;
 using Picer.IndexService.Identity;
 
@@ -19,7 +25,7 @@ public sealed class IndexRelayConnectorWorkerTests
         var port = ((IPEndPoint)listener.LocalEndpoint).Port;
         listener.Stop();
         var origin = $"https://127.0.0.1:{port}";
-        var accountService = AccountServiceHost.Build(Path.Combine(root, "account"), origin, port);
+        var accountService = AccountServiceHost.Build(Path.Combine(root, "account"), origin, port, enableRelayData: true);
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         IndexRelayConnectorWorker? worker = null;
         try
@@ -40,7 +46,14 @@ public sealed class IndexRelayConnectorWorkerTests
             await store.ImportAuthorizationAsync(DeviceAuthorization.WriteFileDocument(authorization), deadline.Token);
             Assert.Equal("relay.connect", store.Load().Session!.Scope);
 
-            worker = new IndexRelayConnectorWorker(store, TimeSpan.FromMilliseconds(100));
+            using var db = new PicerDatabase(Path.Combine(root, "local-index", "picer.db"));
+            using var thumbs = new ThumbnailService(Path.Combine(root, "thumbs"));
+            var source = db.AddSource(root);
+            foreach (var file in new[] { "one.jpg", "two.jpg" })
+                db.UpsertImage(new ImageRecord { SourceId = source.Id, Path = Path.Combine(root, file), FileSize = 123,
+                    ModifiedUtc = DateTime.UtcNow, IndexedUtc = DateTime.UtcNow, Status = ImageStatus.Active });
+            var handlers = new IndexApiHandlers(db, thumbs, new VideoRepository(db));
+            worker = new IndexRelayConnectorWorker(store, TimeSpan.FromMilliseconds(100), handlers);
             await worker.StartAsync(deadline.Token);
             var registry = accountService.App.Services.GetRequiredService<IndexRelayConnectorRegistry>();
             while (worker.State.LastHeartbeatUtc is null)
@@ -54,6 +67,31 @@ public sealed class IndexRelayConnectorWorkerTests
             Assert.NotNull(registry.GetStatus(grantId));
             Assert.True(worker.State.Connected);
             Assert.True(worker.State.LastHeartbeatUtc <= DateTimeOffset.UtcNow);
+
+            var request = Guid.NewGuid().ToString("N");
+            using var guiKey = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+            accountService.Accounts.CreateEnrollment(new(request, DeviceAuthorization.ExportPublicKey(guiKey), "GUI", "gui"));
+            var approved = accountService.Accounts.ApproveEnrollment(account, request, space.Id, origin, pin, serverSigningKey, false, false);
+            using var gui = new DeviceAccountClient(new(origin, discovery.ServiceId, pin, discovery.SigningKey, "test", request, "GUI", "gui"), guiKey, _ => { });
+            await gui.ImportAsync(DeviceAuthorization.WriteFileDocument(approved), deadline.Token);
+            var target = Assert.Single(await gui.ListRelayConnectorsAsync(deadline.Token));
+            using (var gateway = await RelayIndexHttpHandler.ConnectAsync(gui, target.DeviceId, deadline.Token))
+            {
+                Assert.Equal(handlers.Health(), await gateway.GetHealthAsync(deadline.Token));
+                Assert.Equal(await handlers.ListDirectoriesAsync(deadline.Token), await gateway.ListDirectoriesAsync(deadline.Token));
+                Assert.Equal(handlers.ListTags().Select(t => t.Id), (await gateway.ListTagsAsync(deadline.Token)).Select(t => t.Id));
+                Assert.Equal(handlers.ListAlbums().Select(a => a.Id), (await gateway.ListAlbumsAsync(deadline.Token)).Select(a => a.Id));
+                Assert.NotNull(await gateway.GetBrowseMetadataAsync(deadline.Token));
+                Assert.Empty((await gateway.SearchVideosAsync(new(), cancellationToken: deadline.Token)).Items);
+                Assert.Equal(Assert.Single(handlers.ListSources()).Path, Assert.Single(await gateway.ListSourcesAsync(deadline.Token)).Path);
+                var filters = new SearchFilters();
+                var direct = await handlers.SearchAsync(new(filters, 2, null), deadline.Token);
+                var first = await gateway.SearchAsync(filters, 1, cancellationToken: deadline.Token);
+                Assert.NotNull(first.NextCursor);
+                var next = await gateway.SearchAsync(filters, 1, first.NextCursor, deadline.Token);
+                Assert.Equal(2, direct.Items.Count);
+                Assert.Equal(direct.Items.Select(i => i.Path), first.Items.Concat(next.Items).Select(i => i.Path));
+            }
 
             await worker.StopAsync(deadline.Token);
             Assert.False(worker.State.Connected);

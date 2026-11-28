@@ -661,7 +661,8 @@ public static class IndexServiceHost
         {
             builder.Services.AddSingleton(new IndexRelayDeviceCredentialStore(relayCredentialPath));
             builder.Services.AddSingleton(provider => new IndexRelayConnectorWorker(
-                provider.GetRequiredService<IndexRelayDeviceCredentialStore>()));
+                provider.GetRequiredService<IndexRelayDeviceCredentialStore>(), TimeSpan.FromSeconds(15),
+                provider.GetRequiredService<IndexApiHandlers>()));
             builder.Services.AddHostedService(provider => provider.GetRequiredService<IndexRelayConnectorWorker>());
         }
         // Keep the secure loopback default for local deployments.  Cross-
@@ -677,6 +678,7 @@ public static class IndexServiceHost
 
         var videoRepository = new VideoRepository(db);
         var handlers = new IndexApiHandlers(db, thumbnails, videoRepository);
+        builder.Services.AddSingleton(handlers);
         var engine = new IndexEngine(db, new LocalStorageProvider(), thumbnails);
         var jobs = new ScanJobManager();
         var journal = new TaskJournal(dataRoot);

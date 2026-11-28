@@ -14,6 +14,7 @@ public sealed class IndexRelayConnectorWorker : BackgroundService
 {
     private readonly IndexRelayDeviceCredentialStore _credentials;
     private readonly TimeSpan _heartbeatInterval;
+    private readonly RelayLocalIndexReader? _reader;
     private static readonly TimeSpan HeartbeatTimeout = TimeSpan.FromSeconds(30);
     private readonly object _gate = new();
     private IndexRelayConnectorState _state;
@@ -21,11 +22,12 @@ public sealed class IndexRelayConnectorWorker : BackgroundService
     public IndexRelayConnectorWorker(IndexRelayDeviceCredentialStore credentials)
         : this(credentials, TimeSpan.FromSeconds(15)) { }
 
-    public IndexRelayConnectorWorker(IndexRelayDeviceCredentialStore credentials, TimeSpan heartbeatInterval)
+    public IndexRelayConnectorWorker(IndexRelayDeviceCredentialStore credentials, TimeSpan heartbeatInterval, IndexApiHandlers? handlers = null)
     {
         if (heartbeatInterval <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(heartbeatInterval));
         _credentials = credentials;
         _heartbeatInterval = heartbeatInterval;
+        _reader = handlers is null ? null : new(handlers);
         _state = new(credentials.Exists, false, null, null, 0);
     }
 
@@ -51,16 +53,33 @@ public sealed class IndexRelayConnectorWorker : BackgroundService
                 var connectedAt = DateTimeOffset.UtcNow;
                 SetState(new(true, true, connectedAt, null, 0));
                 AppLogger.Info("Index relay connector connected; control channel established");
-                while (socket.State == WebSocketState.Open && !stoppingToken.IsCancellationRequested)
+                using var sessionLifetime = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+                var sessions = new Dictionary<string, Task>(StringComparer.Ordinal);
+                try
                 {
-                    await Task.Delay(_heartbeatInterval, stoppingToken).ConfigureAwait(false);
-                    await RelayConnectorProtocol.SendAsync(socket, RelayConnectorProtocol.Heartbeat, stoppingToken).ConfigureAwait(false);
-                    using var deadline = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
-                    deadline.CancelAfter(HeartbeatTimeout);
-                    var response = await RelayConnectorProtocol.ReceiveAsync(socket, deadline.Token).ConfigureAwait(false);
-                    if (response.Type != RelayConnectorProtocol.HeartbeatAck)
-                        throw new InvalidDataException("relay_heartbeat_ack_invalid");
-                    SetState(new(true, true, connectedAt, DateTimeOffset.UtcNow, 0));
+                    while (socket.State == WebSocketState.Open && !stoppingToken.IsCancellationRequested)
+                    {
+                        await Task.Delay(_heartbeatInterval, stoppingToken).ConfigureAwait(false);
+                        await RelayConnectorProtocol.SendAsync(socket, RelayConnectorProtocol.Heartbeat, stoppingToken).ConfigureAwait(false);
+                        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+                        deadline.CancelAfter(HeartbeatTimeout);
+                        var response = await RelayConnectorProtocol.ReceiveAsync(socket, deadline.Token).ConfigureAwait(false);
+                        if (response.Type != RelayConnectorProtocol.HeartbeatAck)
+                            throw new InvalidDataException("relay_heartbeat_ack_invalid");
+                        SetState(new(true, true, connectedAt, DateTimeOffset.UtcNow, 0));
+                        if (response.InvitationsAvailable && _reader is not null)
+                        {
+                            foreach (var id in sessions.Where(p => p.Value.IsCompleted).Select(p => p.Key).ToArray()) sessions.Remove(id);
+                            foreach (var invite in await client.PendingRelaySessionsAsync(deadline.Token))
+                                if (sessions.Count < 8 && !sessions.ContainsKey(invite.SessionId))
+                                    sessions.Add(invite.SessionId, ServeInvitationAsync(client, invite, sessionLifetime.Token));
+                        }
+                    }
+                }
+                finally
+                {
+                    await sessionLifetime.CancelAsync();
+                    await Task.WhenAll(sessions.Values);
                 }
                 throw new WebSocketException(WebSocketError.ConnectionClosedPrematurely);
             }
@@ -82,4 +101,15 @@ public sealed class IndexRelayConnectorWorker : BackgroundService
     }
 
     private void SetState(IndexRelayConnectorState value) { lock (_gate) _state = value; }
+
+    private async Task ServeInvitationAsync(DeviceAccountClient client, RelaySessionInvitation invite, CancellationToken token)
+    {
+        try { await _reader!.ServeAsync(client, invite, token); }
+        catch (OperationCanceledException) { }
+        catch (WebSocketException) { }
+        catch (Exception error)
+        {
+            AppLogger.Warn($"Index relay data session ended; error={error.GetType().Name}");
+        }
+    }
 }

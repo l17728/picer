@@ -21,7 +21,7 @@ public sealed class IndexRelayConnectorRegistry
         _connectors.Values.Where(c => c.Status.SpaceId == spaceId && c.Socket.State == WebSocketState.Open)
             .Select(c => c.Status.DeviceId).Order(StringComparer.Ordinal).ToArray();
 
-    public async Task ConnectAsync(HttpContext context, AuthorizedDevice device, CancellationToken cancellationToken)
+    public async Task ConnectAsync(HttpContext context, AuthorizedDevice device, CancellationToken cancellationToken, IndexRelayDataSessions? sessions = null)
     {
         if (!context.WebSockets.IsWebSocketRequest)
         {
@@ -49,7 +49,10 @@ public sealed class IndexRelayConnectorRegistry
                 var updated = connector with { Status = connector.Status with { LastHeartbeatUtc = DateTimeOffset.UtcNow } };
                 _connectors.TryUpdate(device.GrantId, updated, connector);
                 connector = updated;
-                await RelayConnectorProtocol.SendAsync(socket, RelayConnectorProtocol.HeartbeatAck, cancellationToken).ConfigureAwait(false);
+                if (sessions is not null && sessions.Pending(device).Length > 0)
+                    await RelayConnectorProtocol.AcknowledgeInvitationsAsync(socket, cancellationToken).ConfigureAwait(false);
+                else
+                    await RelayConnectorProtocol.SendAsync(socket, RelayConnectorProtocol.HeartbeatAck, cancellationToken).ConfigureAwait(false);
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }

@@ -1,0 +1,87 @@
+using System.Net;
+using System.Net.Http.Json;
+using System.Net.WebSockets;
+using System.Text.Json;
+using Picer.Core.Identity;
+
+namespace Picer.Core.Gateway;
+
+/// <summary>Adapts gateway reads to one authenticated relay data session.</summary>
+public sealed class RelayIndexHttpHandler : HttpMessageHandler
+{
+    private readonly ClientWebSocket _socket;
+    private readonly RelayWireSocket _wire;
+    private readonly RelaySessionCryptoContext _session;
+    private readonly RelayRequestMultiplexer _requests;
+    private readonly CancellationTokenSource _closed = new();
+    private readonly Task _reader;
+
+    private RelayIndexHttpHandler(ClientWebSocket socket, RelayWireSocket wire, RelaySessionCryptoContext session)
+    {
+        _socket = socket;
+        _wire = wire;
+        _session = session;
+        _requests = new(session, new RelayReplayWindow(), (frame, token) =>
+            wire.SendAsync(RelayWireProtocol.ForEncryptedFrame(frame), token));
+        _reader = ReadAsync();
+    }
+
+    public static async Task<HttpIndexGateway> ConnectAsync(DeviceAccountClient account, string serviceId, CancellationToken token)
+    {
+        using var offer = account.CreateRelayOffer(Guid.NewGuid().ToString("N"), serviceId);
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
+        deadline.CancelAfter(TimeSpan.FromSeconds(45));
+        var socket = await account.ConnectRelayDataAsync(offer.Share.SessionId, serviceId, deadline.Token);
+        var wire = new RelayWireSocket(socket);
+        try
+        {
+            await wire.SendAsync(RelayWireProtocol.ForKeyExchange(offer.Share), deadline.Token);
+            var remote = (await wire.ReceiveAsync(deadline.Token)).KeyExchange ?? throw new InvalidDataException("relay_exchange_required");
+            var session = await account.AcceptRelayPeerAsync(offer, remote, deadline.Token);
+            var handler = new RelayIndexHttpHandler(socket, wire, session);
+            return new HttpIndexGateway(new HttpClient(handler) { BaseAddress = new Uri(account.Connection.Origin) }, ownsClient: true);
+        }
+        catch { wire.Dispose(); socket.Dispose(); throw; }
+    }
+
+    protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
+    {
+        var path = request.RequestUri!.PathAndQuery.TrimStart('/');
+        if (!RelayIndexQuery.IsSupported(request.Method.Method, path))
+            return new(HttpStatusCode.NotImplemented);
+        if (_reader.IsCompleted) throw new HttpRequestException("relay_connection_closed");
+        JsonElement? body = request.Content is null ? null : await request.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: token);
+        var query = JsonSerializer.SerializeToUtf8Bytes(new RelayIndexQuery(request.Method.Method, path, body), DeviceAuthorization.Json);
+        var response = await _requests.RequestAsync(Guid.NewGuid(), query, token);
+        return new(HttpStatusCode.OK) { Content = new ByteArrayContent(response) };
+    }
+
+    private async Task ReadAsync()
+    {
+        try
+        {
+            while (!_closed.IsCancellationRequested)
+            {
+                var message = await _wire.ReceiveAsync(_closed.Token).ConfigureAwait(false);
+                _requests.Accept(message.EncryptedFrame ?? throw new InvalidDataException("relay_response_required"));
+            }
+        }
+        catch (Exception error) { _requests.Fail(error); }
+        finally { _requests.Dispose(); }
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing && !_closed.IsCancellationRequested)
+        {
+            _closed.Cancel();
+            _socket.Abort();
+            _reader.GetAwaiter().GetResult();
+            _wire.Dispose();
+            _session.Dispose();
+            _socket.Dispose();
+            _closed.Dispose();
+        }
+        base.Dispose(disposing);
+    }
+}
