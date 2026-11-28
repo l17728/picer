@@ -114,7 +114,7 @@ public sealed partial class ClassificationRepository
         FinishJobs();
         using var select = Sql("""
             SELECT i.job_id,i.image_id,i.fingerprint,i.input,j.config,
-                   CASE WHEN w.attempt_fingerprint=i.fingerprint AND w.error_code='classification_output_incomplete' THEN 1 ELSE 0 END
+                   CASE WHEN w.attempt_fingerprint=i.fingerprint AND w.error_code IN ('classification_output_incomplete','classification_json_invalid') THEN 1 ELSE 0 END
             FROM classification_v2_items i
             JOIN classification_v2_jobs j ON j.id=i.job_id
             LEFT JOIN classification_v2_work w ON w.image_id=i.image_id

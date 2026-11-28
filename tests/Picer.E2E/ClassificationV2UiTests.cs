@@ -108,7 +108,7 @@ public sealed class ClassificationV2UiTests
                 using var input = System.Text.Json.JsonDocument.Parse(payload.RootElement.GetProperty("messages")[1].GetProperty("content")[0].GetProperty("text").GetString()!);
                 var result = System.Text.Json.JsonSerializer.Serialize(new { schemaVersion = "classification-indexed-v1",
                     inputFingerprint = input.RootElement.GetProperty("inputFingerprint").GetString(), evaluatedAll = true,
-                    supported = new[] { propose ? 0 : input.RootElement.GetProperty("labels").EnumerateArray().Single(l => l.GetProperty("Name").GetString() == "露天茶席").GetProperty("index").GetInt32() }, uncertain = Array.Empty<int>(), conflicting = Array.Empty<int>(), proposals = propose ? new[] { new ClassificationProposalDraft("露天茶席", "activity", "户外茶席活动", "单个茶杯不足以确认", ["nav.activity"], ["image:current"]) } : Array.Empty<ClassificationProposalDraft>() });
+                    supported = new[] { propose ? 0 : Array.FindIndex(input.RootElement.GetProperty("labels").EnumerateArray().ToArray(), label => label[1].GetString() == "露天茶席") }, uncertain = Array.Empty<int>(), conflicting = Array.Empty<int>(), proposals = propose ? new[] { new ClassificationProposalDraft("露天茶席", "activity", "户外茶席活动", "单个茶杯不足以确认", ["nav.activity"], ["image:current"]) } : Array.Empty<ClassificationProposalDraft>() });
                 var response = System.Text.Json.JsonSerializer.Serialize(new { choices = new[] { new { message = new { content = result } } } });
                 await stream.WriteAsync(System.Text.Encoding.ASCII.GetBytes($"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {response.Length}\r\nConnection: close\r\n\r\n{response}"), timeout.Token);
             }

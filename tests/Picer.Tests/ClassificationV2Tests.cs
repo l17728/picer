@@ -19,10 +19,17 @@ public class ClassificationV2Tests
         var model = new ClassificationModel((_, _) => Task.FromResult(new byte[] { 255, 216, 255, 217 }), (_, bytes, _) =>
         {
             using var payload = System.Text.Json.JsonDocument.Parse(bytes);
+            var format = payload.RootElement.GetProperty("response_format");
+            Assert.Equal("json_schema", format.GetProperty("type").GetString());
+            var schema = format.GetProperty("json_schema").GetProperty("schema").GetProperty("properties");
+            var allowed = schema.GetProperty("labels").GetProperty("items").GetProperty("properties").GetProperty("labelId").GetProperty("enum");
+            Assert.Equal(taxonomy.Labels.Where(label => label.Active && label.Assignable).Select(label => label.Id),
+                allowed.EnumerateArray().Select(id => id.GetString()));
+            Assert.Equal(2048, payload.RootElement.GetProperty("max_tokens").GetInt32());
             var parts = payload.RootElement.GetProperty("messages")[1].GetProperty("content");
             using var input = System.Text.Json.JsonDocument.Parse(parts[0].GetProperty("text").GetString()!);
             Assert.Equal(taxonomy.Labels.Where(label => label.Active && label.Assignable).Select(label => label.Id),
-                input.RootElement.GetProperty("labels").EnumerateArray().Select(label => label.GetProperty("Id").GetString()));
+                input.RootElement.GetProperty("labels").EnumerateArray().Select(label => label[0].GetString()));
             var finalPart = parts[parts.GetArrayLength() - 1];
             Assert.Equal("text", finalPart.GetProperty("type").GetString());
             Assert.Equal("/no_think", finalPart.GetProperty("text").GetString());

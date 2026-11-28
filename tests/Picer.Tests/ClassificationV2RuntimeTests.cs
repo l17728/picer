@@ -44,7 +44,8 @@ public sealed class ClassificationV2RuntimeTests : IDisposable
         {
             using var request = System.Text.Json.JsonDocument.Parse(payload);
             var messages = request.RootElement.GetProperty("messages");
-            prompts.Add(messages[0].GetProperty("content").GetString()!);
+            var parts = messages[1].GetProperty("content");
+            prompts.Add(parts[parts.GetArrayLength() - 1].GetProperty("text").GetString()!);
             using var input = System.Text.Json.JsonDocument.Parse(messages[1].GetProperty("content")[0].GetProperty("text").GetString()!);
             var fingerprint = input.RootElement.GetProperty("inputFingerprint").GetString();
             var response = prompts.Count == 1
@@ -64,10 +65,10 @@ public sealed class ClassificationV2RuntimeTests : IDisposable
         using (var ready = _db.Command("UPDATE classification_v2_work SET retry_after=NULL")) ready.ExecuteNonQuery();
         Assert.True(await worker.ProcessOneAsync(default));
         Assert.Equal(2, prompts.Count);
-        Assert.Contains("classification-indexed-v1", prompts[0]);
-        Assert.DoesNotContain("classification-sparse-v1", prompts[0]);
-        Assert.Contains("classification-sparse-v1", prompts[1]);
-        Assert.DoesNotContain("classification-indexed-v1", prompts[1]);
+        Assert.All(prompts, prompt => Assert.Contains("classification-sparse-v1", prompt));
+        Assert.All(prompts, prompt => Assert.Contains("cue", prompt));
+        Assert.DoesNotContain("上次结果", prompts[0]);
+        Assert.Contains("上次结果", prompts[1]);
         Assert.Equal(1, _repo.Job(job.Id).Succeeded);
         Assert.Equal(2, _repo.Job(job.Id).UsedCalls);
         Assert.Equal(new[] { "scene.outdoor" }, Assert.Single(_repo.Browse(new(new([], []))).Photos).SuggestedIds);
