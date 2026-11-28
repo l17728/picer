@@ -5,16 +5,18 @@ namespace Picer.Tests;
 
 public sealed class GpuEmbeddingRecoveryTests
 {
-    private static ProcessStartInfo Worker(string script)
+    private static ProcessStartInfo Worker(bool respond = false)
     {
-        var info = new ProcessStartInfo("powershell.exe")
+        var info = new ProcessStartInfo("cmd.exe")
         {
             RedirectStandardInput = true, RedirectStandardOutput = true,
             RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true
         };
-        info.ArgumentList.Add("-NoProfile");
-        info.ArgumentList.Add("-Command");
-        info.ArgumentList.Add(script);
+        info.ArgumentList.Add("/d");
+        info.ArgumentList.Add("/q");
+        info.ArgumentList.Add("/c");
+        // The stalled fixture waits on its still-open input pipe after consuming the request.
+        info.ArgumentList.Add(respond ? "set /p request= & echo {}" : "set /p request= & set /p waiting=");
         return info;
     }
 
@@ -23,9 +25,7 @@ public sealed class GpuEmbeddingRecoveryTests
     {
         var starts = 0;
         using var service = new GpuEmbeddingService(TimeSpan.FromSeconds(3), () =>
-            Worker(Interlocked.Increment(ref starts) == 1
-                ? "[Console]::ReadLine() | Out-Null; Start-Sleep -Seconds 60"
-                : "[Console]::ReadLine() | Out-Null; [Console]::WriteLine('{}')"));
+            Worker(respond: Interlocked.Increment(ref starts) > 1));
         await Assert.ThrowsAsync<TimeoutException>(() => service.GetRuntimeAsync());
         var result = await service.GetRuntimeAsync();
         Assert.Equal(System.Text.Json.JsonValueKind.Object, result.ValueKind);
@@ -39,7 +39,7 @@ public sealed class GpuEmbeddingRecoveryTests
         using var service = new GpuEmbeddingService(TimeSpan.FromSeconds(10), () =>
         {
             Interlocked.Increment(ref starts);
-            return Worker("[Console]::ReadLine() | Out-Null; Start-Sleep -Seconds 60");
+            return Worker();
         });
         using var cancel = new CancellationTokenSource(TimeSpan.FromSeconds(2));
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => service.GetRuntimeAsync(cancel.Token));
