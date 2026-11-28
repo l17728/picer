@@ -6,6 +6,57 @@ namespace Picer.Tests;
 
 public sealed class RelaySessionCryptoTests
 {
+    [Theory]
+    [InlineData(0, false)]
+    [InlineData(RelaySessionCryptoContext.MaximumPayloadBytes, false)]
+    [InlineData(RelaySessionCryptoContext.MaximumPayloadBytes + 1, false)]
+    [InlineData(RelayResponseFrames.MaximumResponseBytes, false)]
+    [InlineData(RelayResponseFrames.MaximumResponseBytes + 1, false)]
+    [InlineData(RelaySessionCryptoContext.MaximumPayloadBytes + 1, true)]
+    public async Task EncryptedResponseFramesDeliverOnlyCompleteOrderedBodies(int size, bool omitFirst)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var space = Guid.NewGuid().ToString("N");
+        var session = Guid.NewGuid().ToString("N");
+        var initiator = Guid.NewGuid().ToString("N");
+        var responder = Guid.NewGuid().ToString("N");
+        using var firstKey = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        using var secondKey = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        using var first = RelayKeyExchangeOffer.Create(space, session, initiator, responder, initiator, firstKey, now);
+        using var second = RelayKeyExchangeOffer.Create(space, session, initiator, responder, responder, secondKey, now);
+        using var sender = second.AcceptPeer(first.Share, DeviceAuthorization.ExportPublicKey(firstKey), now);
+        using var receiver = first.AcceptPeer(second.Share, DeviceAuthorization.ExportPublicKey(secondKey), now);
+        var expected = RandomNumberGenerator.GetBytes(size);
+        var count = 0;
+        RelayRequestMultiplexer? client = null;
+        client = new RelayRequestMultiplexer(receiver, new RelayReplayWindow(), (request, token) =>
+            RelayResponseFrames.SendAsync(sender, Guid.Parse(request.RequestId), Guid.Parse(request.IdempotencyKey), expected, (frame, _) =>
+            {
+                count++;
+                if (!omitFirst || count > 1)
+                {
+                    var bytes = RelayWireProtocol.Encode(RelayWireProtocol.ForEncryptedFrame(frame));
+                    client!.Accept(RelayWireProtocol.Decode(bytes).EncryptedFrame!);
+                }
+                return Task.CompletedTask;
+            }, token));
+        using (client)
+        {
+            var result = client.RequestAsync(Guid.NewGuid(), new byte[] { 1 });
+            if (omitFirst || size > RelayResponseFrames.MaximumResponseBytes)
+            {
+                await Assert.ThrowsAsync<InvalidDataException>(() => result);
+                if (size > RelayResponseFrames.MaximumResponseBytes) Assert.Equal(0, count);
+            }
+            else
+            {
+                var actual = await result;
+                Assert.True(expected.AsSpan().SequenceEqual(actual));
+            }
+            Assert.Equal(0, client.PendingCount);
+        }
+    }
+
     [Fact]
     public async Task MultiplexerCorrelatesConcurrentEncryptedResponsesWithinBoundedCapacity()
     {

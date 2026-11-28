@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Buffers.Binary;
 using System.Net.WebSockets;
 using System.Security.Cryptography;
 
@@ -7,7 +8,14 @@ namespace Picer.Core.Identity;
 /// <summary>Correlates bounded concurrent encrypted requests and responses over a shared relay session.</summary>
 public sealed class RelayRequestMultiplexer : IDisposable
 {
-    private sealed record Pending(Guid IdempotencyKey, TaskCompletionSource<byte[]> Completion);
+    private sealed record Pending(Guid IdempotencyKey, TaskCompletionSource<byte[]> Completion)
+    {
+        public byte[]? Buffer;
+        public int Received;
+        public bool Closed;
+    }
+    private const int MaximumBufferedBytes = 32 * 1024 * 1024;
+    private int _bufferedBytes;
     private readonly RelaySessionCryptoContext _crypto;
     private readonly RelayReplayWindow _replayWindow;
     private readonly Func<RelayEncryptedFrame, CancellationToken, Task> _send;
@@ -87,6 +95,11 @@ public sealed class RelayRequestMultiplexer : IDisposable
         finally
         {
             _pending.TryRemove(requestId, out _);
+            lock (pending)
+            {
+                pending.Closed = true;
+                ReleaseBuffer(pending);
+            }
             _capacity.Release();
         }
     }
@@ -98,19 +111,64 @@ public sealed class RelayRequestMultiplexer : IDisposable
         var plaintext = _crypto.Decrypt(frame, _replayWindow);
         try
         {
-            if (frame.Kind is not ("response" or "error") || !Guid.TryParseExact(frame.RequestId, "N", out var requestId))
+            if (frame.Kind is not ("response" or "chunk" or "error") || !Guid.TryParseExact(frame.RequestId, "N", out var requestId))
                 throw new InvalidDataException("relay_response_frame_invalid");
             if (!_pending.TryGetValue(requestId, out var pending)) return;
             if (!Guid.TryParseExact(frame.IdempotencyKey, "N", out var idempotencyKey) || idempotencyKey != pending.IdempotencyKey)
                 throw new InvalidDataException("relay_response_idempotency_mismatch");
-            if (frame.Kind == "error")
-                pending.Completion.TrySetException(new IOException("relay_remote_request_failed"));
-            else if (!pending.Completion.TrySetResult(plaintext))
-                return;
-            else
-                plaintext = [];
+            lock (pending)
+            {
+                if (pending.Closed || pending.Completion.Task.IsCompleted) return;
+                if (frame.Kind == "error")
+                    pending.Completion.TrySetException(new IOException("relay_remote_request_failed"));
+                else if (frame.Kind == "chunk")
+                    AcceptChunk(pending, plaintext);
+                else if (pending.Buffer is not null)
+                    pending.Completion.TrySetException(new InvalidDataException("relay_chunk_sequence_invalid"));
+                else if (pending.Completion.TrySetResult(plaintext))
+                    plaintext = [];
+            }
         }
         finally { CryptographicOperations.ZeroMemory(plaintext); }
+    }
+
+    private void AcceptChunk(Pending pending, ReadOnlySpan<byte> chunk)
+    {
+        var total = chunk.Length >= 8 ? BinaryPrimitives.ReadInt32BigEndian(chunk) : 0;
+        if (total <= RelaySessionCryptoContext.MaximumPayloadBytes || total > RelayResponseFrames.MaximumResponseBytes
+            || BinaryPrimitives.ReadInt32BigEndian(chunk[4..]) != pending.Received
+            || (pending.Buffer is not null && pending.Buffer.Length != total)
+            || chunk.Length - RelayResponseFrames.HeaderBytes != Math.Min(RelayResponseFrames.ChunkBytes, total - pending.Received))
+        {
+            pending.Completion.TrySetException(new InvalidDataException("relay_chunk_sequence_invalid"));
+            return;
+        }
+        if (pending.Buffer is null)
+        {
+            if (Interlocked.Add(ref _bufferedBytes, total) > MaximumBufferedBytes)
+            {
+                Interlocked.Add(ref _bufferedBytes, -total);
+                pending.Completion.TrySetException(new IOException("relay_response_buffer_full"));
+                return;
+            }
+            pending.Buffer = new byte[total];
+        }
+        var data = chunk[RelayResponseFrames.HeaderBytes..];
+        data.CopyTo(pending.Buffer.AsSpan(pending.Received));
+        pending.Received += data.Length;
+        if (pending.Received == total && pending.Completion.TrySetResult(pending.Buffer))
+        {
+            pending.Buffer = null;
+            Interlocked.Add(ref _bufferedBytes, -total);
+        }
+    }
+
+    private void ReleaseBuffer(Pending pending)
+    {
+        if (pending.Buffer is not { } buffer) return;
+        CryptographicOperations.ZeroMemory(buffer);
+        pending.Buffer = null;
+        Interlocked.Add(ref _bufferedBytes, -buffer.Length);
     }
 
     public void Fail(Exception reason)
