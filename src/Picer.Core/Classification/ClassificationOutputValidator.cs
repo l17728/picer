@@ -18,6 +18,14 @@ public static class ClassificationOutputValidator
                 || label.EvidenceIds.Count > 32 || label.EvidenceIds.Any(id => !context.Evidence.ContainsKey(id))
                 || label.Support == "supported" && (label.EvidenceIds.Count == 0 || !label.EvidenceIds.Contains("image:current")))
                 throw new InvalidDataException("classification_evidence_invalid");
+        // Near-total coverage of a large household taxonomy reproduced indiscriminate
+        // model output. Request a fresh judgment before publishing any of its labels.
+        var supportedCount = result.Labels.Count(label => label.Support == "supported");
+        if (expected.Count >= 100 && supportedCount * 10L >= expected.Count * 9L)
+        {
+            Picer.Core.Logging.AppLogger.Warn($"Classification saturated response; supported={supportedCount}; assignable={expected.Count}");
+            throw new InvalidDataException("classification_output_incomplete");
+        }
         foreach (var draft in result.Proposals)
         {
             if (string.IsNullOrWhiteSpace(draft.Name) || draft.Name.Length > 80 || string.IsNullOrWhiteSpace(draft.Definition)

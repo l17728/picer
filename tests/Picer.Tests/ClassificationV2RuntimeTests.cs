@@ -32,8 +32,10 @@ public sealed class ClassificationV2RuntimeTests : IDisposable
     private ClassificationJob Start()
     { var plan = _repo.Plan(Request(), Config); return _repo.Start(plan.Id, Request()); }
 
-    [Fact]
-    public async Task RetryOfOverlappingLabelGroupsRequestsOneJudgmentPerLabel()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task InvalidOrSaturatedLabelGroupsRetryBeforePublishing(bool saturated)
     {
         Add("review.jpg");
         var job = Start();
@@ -47,7 +49,8 @@ public sealed class ClassificationV2RuntimeTests : IDisposable
             var fingerprint = input.RootElement.GetProperty("inputFingerprint").GetString();
             var response = prompts.Count == 1
                 ? System.Text.Json.JsonSerializer.Serialize(new { schemaVersion = "classification-indexed-v1", inputFingerprint = fingerprint,
-                    evaluatedAll = true, supported = new[] { 0 }, uncertain = new[] { 0 }, conflicting = Array.Empty<int>(), proposals = Array.Empty<object>() })
+                    evaluatedAll = true, supported = saturated ? Enumerable.Range(0, input.RootElement.GetProperty("labels").GetArrayLength()).ToArray() : new[] { 0 },
+                    uncertain = saturated ? Array.Empty<int>() : new[] { 0 }, conflicting = Array.Empty<int>(), proposals = Array.Empty<object>() })
                 : System.Text.Json.JsonSerializer.Serialize(new { schemaVersion = "classification-sparse-v1", inputFingerprint = fingerprint,
                     evaluatedAll = true, labels = new[] { new { labelId = "scene.outdoor", support = "supported", evidenceIds = new[] { "image:current" } } },
                     proposals = Array.Empty<object>() });
@@ -524,6 +527,17 @@ public sealed class ClassificationV2RuntimeTests : IDisposable
             page.Taxonomy.Revision, new Dictionary<long, string> { [id] = photo.ManualFingerprint! });
         Assert.Equal(1, _repo.Decide(decision)); Assert.Equal(0, _repo.Decide(decision));
         Assert.Equal(1, _repo.Browse(new(new([], []), IncludeSuggestions: false)).Coverage.Confirmed);
+        var revised = Config with { PromptVersion = "revised-evidence-prompt" };
+        _repo.Configure(revised);
+        var repair = _repo.Plan(Request(), revised);
+        Assert.Equal(id, Assert.Single(repair.Items).ImageId);
+        var repairJob = _repo.Start(repair.Id, Request());
+        var repairLease = _repo.Claim()!;
+        Assert.Equal(repairJob.Id, repairLease.JobId);
+        Assert.True(_repo.Publish(repairLease, Result(repairLease, "scene.outdoor")));
+        var repaired = Assert.Single(_repo.Browse(new(new([], []))).Photos);
+        Assert.Contains("subject.people", repaired.ConfirmedIds!);
+        Assert.Equal(new[] { "scene.outdoor" }, repaired.SuggestedIds);
         using (var update = _db.Command("UPDATE library_identity SET library_id='different-library' WHERE id=1"))
         { update.ExecuteNonQuery(); }
         Assert.Throws<InvalidOperationException>(() => _repo.Decide(decision with { OperationId = Request(), Decision = "reject" }));

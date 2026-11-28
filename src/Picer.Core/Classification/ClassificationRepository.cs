@@ -147,7 +147,7 @@ public sealed partial class ClassificationRepository(PicerDatabase database)
             return new ClassificationContext(row.Image, new(epoch, row.Owner, row.Identity, descriptionEvidence,
                 personEvidence, [new("metadata:current", Digest(metadata), "index")], configuration.Model + "|" + configuration.Endpoint + "|" + configuration.ModelAgentId,
                 configuration.PreprocessingVersion, configuration.PromptVersion, taxonomy.Definitions,
-                taxonomy.DiscoveryRevision, "exhaustive-labels-v1"), evidence);
+                taxonomy.DiscoveryRevision, "evidence-grounded-labels-v2"), evidence);
         }).ToArray();
     }
 
