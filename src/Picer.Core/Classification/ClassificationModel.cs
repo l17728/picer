@@ -31,10 +31,11 @@ public sealed partial class ClassificationModel(
         var assignableLabels = taxonomy.Labels.Where(l => l.Active && l.Assignable).ToArray();
         var input = new
         {
-            inputFingerprint = fingerprint,
-            untrustedEvidence = ModelEvidence(context.Evidence),
+            // Keep the shared taxonomy ahead of per-photo fields so successive requests reuse the model prefix.
             labels = assignableLabels.Select(label => new[] { label.Id, label.Name, label.Definition, label.Exclusions, label.Dimension }),
-            navigation = taxonomy.Labels.Where(l => l.Active && !l.Assignable).Select(l => new { l.Id, l.Name, l.Dimension })
+            navigation = taxonomy.Labels.Where(l => l.Active && !l.Assignable).Select(l => new { l.Id, l.Name, l.Dimension }),
+            inputFingerprint = fingerprint,
+            untrustedEvidence = ModelEvidence(context.Evidence)
         };
         var candidates = DescriptionCandidates(context, taxonomy);
         if (context.ReviewEmpty)

@@ -81,3 +81,11 @@ Release 分类专项 93 项全部通过。正式 GUI 构建零警告、零错误
 本机授权模型复测第 41 张，产生 1 个二维码建议，尚未写入正式分类树。纯色空白图返回零标签、零建议。正式构建 C:\Users\a\AppData\Local\Picer\engineering-backups\relay-photo-20261128\verification\src\Picer.App\bin\Release\net8.0-windows\win-x64\Picer.App.exe ，EXE SHA-256 为 31d3cccaf956fff3ed595aa79be58e1b76265bc1780b20512dfaddcb71d453e4 ，同目录 Picer.Core.dll 为 191ef8f6926e471036b3700793a80a94de958ff1122aeb2e0a6a8c854f834c10 。Release 构建零警告、零错误，分类专项 97 项及正式 GUI 分类端到端 3 项通过。
 
 生产服务 cad6a53（部署号 20261128T180505712Z，二进制 SHA-256 为 77776aba67f565fb45233677e2ffc9aa3ec2069fc83c163441f45bbfb415aad2）通过五库、版本及健康检查。在正常队列中复核原先返回空结果的 10 张照片，9 张得到当前词表的机器建议，其中 7 张匹配屏幕翻拍。实际抽查的第 63 和 73 张均匹配屏幕翻拍，未匹配数字截图。第 41 张产生“二维码”待审建议，使用已配对账号通过正式 GUI 使用的建议接口读到 1 项关联该照片的二维码建议。该轮未替用户批准建议。已确认恢复工作区与远端 main 的功能提交一致。
+
+### 分类词表的模型前缀缓存
+
+生产观察到一次普通分类调用仅复用 307 个输入 token，重新处理 7,886 个 token。此前序列化顺序把每张照片的指纹和描述放在固定词表之前。现将词表及导航放在最前，随后传入原有指纹和证据，模型可复用相邻请求的相同前缀。复核请求保留自己的提示格式。
+
+同一已配对模型、四张真实照片按 1、3、5、30 顺序各跑两组。后面三张的前缀命中均从 307 增至 6,586 token，输入处理时间由 3.88、3.87、3.88 秒降至 1.44、1.35、1.44 秒。三张合计模型 HTTP 时间从 53.41 秒降至 45.11 秒；第 5 张单次耗时反升。加入首张冷启动样本，两组合计为 85.64 和 77.38 秒。两种顺序在三张纸页上给出相同的已支持标签，跑步照均识别出多人、操场和跑步，其余建议有差异。模型生成耗时随输出长度和同时运行的任务波动，本数据仅代表上述样本。
+
+正式 Release 路径 C:\Users\a\AppData\Local\Picer\engineering-backups\relay-photo-20261128\verification\src\Picer.App\bin\Release\net8.0-windows\win-x64\Picer.App.exe ，EXE SHA-256 为 b0baf567c3b2e339cb9f4b4a7f6457ee6f156528e012f8f308fda0257aa711e3 ，Picer.Core.dll 为 33a3d995a60dacaf3a30e88d2d3bce831012fcff01d2136add29ba79bcea93bd 。构建零警告、零错误。分类专项 97 项、正式 GUI 分类端到端 3 项通过。

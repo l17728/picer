@@ -28,6 +28,7 @@ public class ClassificationV2Tests
             Assert.Equal(2048, payload.RootElement.GetProperty("max_tokens").GetInt32());
             var parts = payload.RootElement.GetProperty("messages")[1].GetProperty("content");
             using var input = System.Text.Json.JsonDocument.Parse(parts[0].GetProperty("text").GetString()!);
+            Assert.Equal(new[] { "labels", "navigation" }, input.RootElement.EnumerateObject().Take(2).Select(field => field.Name));
             Assert.Equal(taxonomy.Labels.Where(label => label.Active && label.Assignable).Select(label => label.Id),
                 input.RootElement.GetProperty("labels").EnumerateArray().Select(label => label[0].GetString()));
             var finalPart = parts[parts.GetArrayLength() - 1];
