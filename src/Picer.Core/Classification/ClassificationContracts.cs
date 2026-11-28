@@ -45,7 +45,10 @@ public sealed record ClassificationDecision(string OperationId, string Epoch, st
     long ExpectedTaxonomyRevision = 0, IReadOnlyDictionary<long, string>? ManualFingerprints = null);
 public sealed record ClassificationBrowseResult(string Snapshot, ClassificationTaxonomySnapshot Taxonomy,
     ClassificationCoverage Coverage, IReadOnlyDictionary<string, int> Counts, int Matched,
-    IReadOnlyList<ClassificationPhoto> Photos, string? NextCursor, bool IsOffline = false);
+    IReadOnlyList<ClassificationPhoto> Photos, string? NextCursor, bool IsOffline = false)
+{
+    public string? Epoch { get; init; }
+}
 /// <summary>Besides one entry per label id, <see cref="ClassificationBrowseResult.Counts"/> carries aggregate
 /// entries under these reserved keys. Aggregate counts are deduplicated: a photo with several labels of one
 /// dimension counts once for that dimension, and once for the named-people group.</summary>

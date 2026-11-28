@@ -102,7 +102,7 @@ public sealed partial class ClassificationRepository
         var matches = photos.Where(p => filter.Matches(p.LabelIds)).OrderBy(p => p.ImageId).ToArray();
         var page = matches.Where(p => p.ImageId > after).Take(request.PageSize + 1).ToArray();
         return new(snapshot, replica.Taxonomy, replica.Coverage, counts, matches.Length, page.Take(request.PageSize).ToArray(),
-            page.Length > request.PageSize ? snapshot + ":" + page[request.PageSize - 1].ImageId : null, cached);
+            page.Length > request.PageSize ? snapshot + ":" + page[request.PageSize - 1].ImageId : null, cached) { Epoch = replica.Epoch };
     }
 
     private static IReadOnlyDictionary<string, int> CountLabels(ClassificationTaxonomy graph, IReadOnlyList<ClassificationPhoto> photos)

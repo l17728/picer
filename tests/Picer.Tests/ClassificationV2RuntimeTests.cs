@@ -470,6 +470,7 @@ public sealed class ClassificationV2RuntimeTests : IDisposable
         Assert.Equal(1, _repo.LoadReplica("test-space")!.Coverage.Total);
         var page = ClassificationRepository.BrowseReplica(replica, new(new([], [])));
         Assert.True(page.IsOffline); Assert.Equal(1, page.Matched);
+        Assert.Equal(_repo.Epoch, page.Epoch);
     }
 
     [Fact]
@@ -477,10 +478,12 @@ public sealed class ClassificationV2RuntimeTests : IDisposable
     {
         var id = Add("photo.jpg"); Start(); var lease = _repo.Claim()!;
         _repo.Publish(lease, Result(lease, "subject.people"));
-        var photo = Assert.Single(_repo.Browse(new(new([], []))).Photos);
-        var decision = new ClassificationDecision(Request(), _repo.Epoch, "subject.people", "confirm",
+        var page = _repo.Browse(new(new([], [])));
+        Assert.Equal(_repo.Epoch, page.Epoch);
+        var photo = Assert.Single(page.Photos);
+        var decision = new ClassificationDecision(Request(), page.Epoch!, "subject.people", "confirm",
             new Dictionary<long, string> { [id] = photo.ContentIdentity }, new Dictionary<long, string> { [id] = photo.OwnerId },
-            _repo.Taxonomy().Revision, new Dictionary<long, string> { [id] = photo.ManualFingerprint! });
+            page.Taxonomy.Revision, new Dictionary<long, string> { [id] = photo.ManualFingerprint! });
         Assert.Equal(1, _repo.Decide(decision)); Assert.Equal(0, _repo.Decide(decision));
         Assert.Equal(1, _repo.Browse(new(new([], []), IncludeSuggestions: false)).Coverage.Confirmed);
         using (var update = _db.Command("UPDATE library_identity SET library_id='different-library' WHERE id=1"))

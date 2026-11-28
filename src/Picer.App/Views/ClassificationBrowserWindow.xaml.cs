@@ -70,7 +70,8 @@ public partial class ClassificationBrowserWindow : Window
             foreach (var photo in _browse.Photos) _rows.Add(new PhotoRow(photo, _taxonomy, _closed.Token));
             Photos.ItemsSource = _rows;
             UpdateStatus();
-            SetDecisionButtons(_selectedLabelId is not null);
+            SetDecisionButtons(!string.IsNullOrEmpty(_browse.Epoch)
+                && _taxonomy.Definitions.Any(definition => definition.LabelId == _selectedLabelId));
         }
         catch (OperationCanceledException) { }
         catch (Exception ex)
@@ -307,11 +308,12 @@ public partial class ClassificationBrowserWindow : Window
                 {
                     await Task.Delay(TimeSpan.FromSeconds(5), token);
                     job = await _client.Job(job.Id, token);
-                    if (job.Succeeded > seen) { seen = job.Succeeded; await RefreshAsync(); }
+                    if (job.State is ("queued" or "running") && job.Succeeded > seen) { seen = job.Succeeded; await RefreshAsync(); }
                 }
+                await RefreshAsync();
                 Feedback.Text = $"代表照片匹配：完成 {job.Succeeded}，失败或过期 {job.Failed}，待处理 {job.Pending}。";
             }
-            await RefreshAsync();
+            else await RefreshAsync();
         }
         catch (OperationCanceledException) { }
         catch (Exception ex) { Feedback.Text = "新标签建议：" + ex.Message; }
@@ -320,15 +322,20 @@ public partial class ClassificationBrowserWindow : Window
     private void ClearSelection_Click(object sender, RoutedEventArgs e) { foreach (var row in Photos.Items.OfType<PhotoRow>()) row.Selected = false; }
     private async void Decision_Click(object sender, RoutedEventArgs e)
     {
-        if (sender is not Button button || _browse is null || _selectedLabelId is null) { Feedback.Text = "请先选择左侧分类和照片。"; return; }
+        if (sender is not Button button || _browse?.Epoch is not { Length: > 0 } epoch || _selectedLabelId is null) { Feedback.Text = "请先选择左侧分类和照片。"; return; }
         var selected = Photos.Items.OfType<PhotoRow>().Where(x => x.Selected).ToArray();
         if (selected.Length == 0) { Feedback.Text = "请先勾选照片。"; return; }
         try
         {
-            var decision = new ClassificationDecision(Guid.NewGuid().ToString("N"), _browse.Snapshot, _selectedLabelId,
+            var decision = new ClassificationDecision(Guid.NewGuid().ToString("N"), epoch, _selectedLabelId,
                 button.Tag?.ToString() ?? "confirm", selected.ToDictionary(x => x.Record.ImageId, x => x.Record.ContentIdentity),
-                selected.ToDictionary(x => x.Record.ImageId, x => x.Record.OwnerId));
-            await _client.Decide(decision, _closed.Token); Feedback.Text = $"已提交 {selected.Length} 张照片的分类决定。"; await RefreshAsync();
+                selected.ToDictionary(x => x.Record.ImageId, x => x.Record.OwnerId), _browse.Taxonomy.Revision,
+                selected.ToDictionary(x => x.Record.ImageId, x => x.Record.ManualFingerprint
+                    ?? throw new InvalidOperationException("照片缺少人工审核版本，请刷新后重试。")));
+            var applied = await _client.Decide(decision, _closed.Token);
+            await RefreshAsync();
+            if (_browse is not null)
+                Feedback.Text = applied > 0 ? $"已保存 {applied} 张照片的分类决定。" : "分类决定已保存在本机，等待同步。";
         }
         catch (Exception ex) { Feedback.Text = "提交失败：" + ex.Message; }
     }

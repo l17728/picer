@@ -65,16 +65,26 @@ public sealed class ClassificationV2UiTests
             await RespondAsync(propose: false);
             var dynamicId = "dynamic." + Assert.Single(repo.Proposals()).Id;
             Assert.True(SpinWait.SpinUntil(() => repo.Browse(new(new([], []))).Counts.GetValueOrDefault(dynamicId) == 1, TimeSpan.FromSeconds(30)));
+            Assert.NotNull(Find("代表照片匹配：完成 1，失败或过期 0，待处理 0。", ControlType.Text));
             // Expand the activity branch so UI Automation can reach the new child.
             var activity = Find("活动（1）", ControlType.TreeItem);
             var branch = (ExpandCollapsePattern)activity.GetCurrentPattern(ExpandCollapsePattern.Pattern);
             if (branch.Current.ExpandCollapseState == ExpandCollapseState.Collapsed) branch.Expand();
-            var child = activity.FindFirst(TreeScope.Children, new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.TreeItem));
-            if (child != null && child.TryGetCurrentPattern(ExpandCollapsePattern.Pattern, out var expand)
+            var child = Wait(() => activity.FindFirst(TreeScope.Children, new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.TreeItem)));
+            if (child.TryGetCurrentPattern(ExpandCollapsePattern.Pattern, out var expand)
                 && ((ExpandCollapsePattern)expand).Current.ExpandCollapseState == ExpandCollapseState.Collapsed)
                 ((ExpandCollapsePattern)expand).Expand();
             ((SelectionItemPattern)Find("露天茶席（1）", ControlType.TreeItem).GetCurrentPattern(SelectionItemPattern.Pattern)).Select();
             Assert.NotNull(Find("fixture.png", ControlType.Text));
+            ((InvokePattern)Find("全选当前页", ControlType.Button).GetCurrentPattern(InvokePattern.Pattern)).Invoke();
+            ((InvokePattern)Find("确认分类", ControlType.Button).GetCurrentPattern(InvokePattern.Pattern)).Invoke();
+            Assert.True(SpinWait.SpinUntil(() => repo.Browse(new(new([], []))).Photos.Single()
+                .ConfirmedIds!.Contains(dynamicId), TimeSpan.FromSeconds(10)));
+            Assert.NotNull(Find("已保存 1 张照片的分类决定。", ControlType.Text));
+            ((InvokePattern)Find("全选当前页", ControlType.Button).GetCurrentPattern(InvokePattern.Pattern)).Invoke();
+            ((InvokePattern)Find("不是此类", ControlType.Button).GetCurrentPattern(InvokePattern.Pattern)).Invoke();
+            Assert.True(SpinWait.SpinUntil(() => !repo.Browse(new(new([], []))).Photos.Single()
+                .LabelIds.Contains(dynamicId), TimeSpan.FromSeconds(10)));
 
             async Task RespondAsync(bool propose)
             {

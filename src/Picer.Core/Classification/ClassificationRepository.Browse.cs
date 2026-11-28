@@ -136,7 +136,7 @@ public sealed partial class ClassificationRepository
             var coverage = new ClassificationCoverage(photos.Count, confirmedCount, suggestedCount, legacyCount, without,
                 unprocessed, pending, failed, empty, contexts.Count(c => c.Input.Descriptions.Count == 0), contexts.Count(c => c.Input.People.Count > 0), legacySuggestedCount, evidenceCount);
             if (_captureReplica) _replica = new(Epoch, snapshot, taxonomy, photos, Proposals(), coverage);
-            return new(snapshot, taxonomy, coverage, counts, matched.Length, page.Take(request.PageSize).ToArray(), next);
+            return new(snapshot, taxonomy, coverage, counts, matched.Length, page.Take(request.PageSize).ToArray(), next) { Epoch = Epoch };
 
             HashSet<string> Valid(HashSet<string>? ids) => (ids ?? []).Where(graph.Labels.ContainsKey).Select(graph.CanonicalId)
                 .Where(id => graph.Labels[id].Assignable && graph.Labels[id].Active).ToHashSet(StringComparer.Ordinal);
