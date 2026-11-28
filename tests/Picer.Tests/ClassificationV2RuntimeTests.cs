@@ -261,6 +261,17 @@ public sealed class ClassificationV2RuntimeTests : IDisposable
         Assert.Equal(expected, ClassificationWorker.IsRetryableFailure(new InvalidDataException(code)));
     }
 
+    [Theory]
+    [InlineData("media_agent_offline", true)]
+    [InlineData("media_agent_disconnected", true)]
+    [InlineData("media_channel_busy", true)]
+    [InlineData("media_agent_selection_required", false)]
+    [InlineData("media_preview_too_large", false)]
+    public void MediaReadRetriesOnlyTemporaryFailures(string code, bool expected)
+    {
+        Assert.Equal(expected, ClassificationWorker.IsRetryableFailure(new IOException(code)));
+    }
+
     [Fact]
     public void MalformedModelJsonIsRetryableWithinTheExistingAttemptLimit()
     {

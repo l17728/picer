@@ -1,6 +1,8 @@
 using System.IO;
 using System.Net;
 using System.Net.Http;
+using System.Net.Http.Json;
+using Picer.Core.Gateway;
 using System.Windows.Threading;
 using Picer.App.Infrastructure;
 using Picer.App.ViewModels;
@@ -16,6 +18,7 @@ public sealed class InteractiveReadConcurrencyTests(Xunit.Abstractions.ITestOutp
     {
         var root = Path.Combine(Path.GetTempPath(), "picer-cached-read-" + Guid.NewGuid().ToString("N"));
         var path = Path.Combine(root, "picer.db");
+        VideoDetailsSnapshot details;
         using (var setup = new PicerDatabase(path))
         {
             var source = setup.AddSource(root);
@@ -24,12 +27,13 @@ public sealed class InteractiveReadConcurrencyTests(Xunit.Abstractions.ITestOutp
             var repository = new VideoRepository(setup);
             var video = repository.Upsert(source.Id, media);
             repository.SaveKeyframes(video.Id, [new VideoKeyframe(0, "remote-0.jpg"), new VideoKeyframe(1, "remote-1.jpg")]);
-            var frame = repository.GetKeyframes(video.Id, existingOnly: false)[0];
+            details = VideoDetailsSnapshot.Read(setup, video.Id, "legacy-video")!;
+            var frame = details.Frames[0];
             var directory = Path.Combine(root, "remote-video-keyframes", video.Id.ToString(System.Globalization.CultureInfo.InvariantCulture));
             Directory.CreateDirectory(directory);
             File.WriteAllBytes(Path.Combine(directory, $"v2-{frame.Id}-0-{frame.DifferenceHash}.jpg"), [1]);
         }
-        var handler = new PendingFrameHandler();
+        var handler = new PendingFrameHandler(details);
         Exception? failure = null;
         var thread = new Thread(() =>
         {
@@ -72,12 +76,19 @@ public sealed class InteractiveReadConcurrencyTests(Xunit.Abstractions.ITestOutp
         finally { Directory.Delete(root, true); }
     }
 
-    private sealed class PendingFrameHandler : HttpMessageHandler
+    private sealed class PendingFrameHandler(VideoDetailsSnapshot details) : HttpMessageHandler
     {
         public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
+            var path = request.RequestUri!.AbsolutePath;
+            if (path.EndsWith("/video-search", StringComparison.Ordinal))
+                return new(HttpStatusCode.OK) { Content = JsonContent.Create(new GatewayVideoPage([details.Video], null, 1)) };
+            if (path.EndsWith("/details", StringComparison.Ordinal))
+                return new(HttpStatusCode.OK) { Content = JsonContent.Create(details) };
+            if (path.EndsWith("/people", StringComparison.Ordinal))
+                return new(HttpStatusCode.OK) { Content = JsonContent.Create(Array.Empty<object>()) };
             Started.TrySetResult();
             await Release.Task.WaitAsync(cancellationToken);
             return new(HttpStatusCode.NotFound);

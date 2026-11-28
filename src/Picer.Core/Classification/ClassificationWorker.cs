@@ -46,7 +46,8 @@ public sealed class ClassificationWorker(Func<PicerDatabase> openDatabase, IClas
             if (authorization is not null && !authorization.IsCurrent(lease.Actor))
             { using var revokedDb = openDatabase(); new ClassificationRepository(revokedDb).BlockAuthorization(lease); return true; }
             var retry = IsRetryableFailure(exception);
-            var code = exception is System.Text.Json.JsonException ? "classification_json_invalid"
+            var code = IsTransientMediaFailure(exception) ? "classification_media_temporarily_unavailable"
+                : exception is System.Text.Json.JsonException ? "classification_json_invalid"
                 : exception is InvalidDataException && exception.Message.StartsWith("classification_", StringComparison.Ordinal)
                 ? exception.Message : retry ? "classification_transport_failed" : "classification_failed";
             Picer.Core.Logging.AppLogger.Warn($"Classification item failed; image={lease.ImageId}; job={lease.JobId}; code={code}; type={exception.GetType().Name}; elapsedMs={started.ElapsedMilliseconds}");
@@ -58,8 +59,13 @@ public sealed class ClassificationWorker(Func<PicerDatabase> openDatabase, IClas
 
     internal static bool IsRetryableFailure(Exception exception) => exception is HttpRequestException or TimeoutException or OperationCanceledException
         or System.Text.Json.JsonException
+        || IsTransientMediaFailure(exception)
         || exception is InvalidDataException invalid && invalid.Message is "classification_output_invalid"
             or "classification_output_incomplete" or "classification_evidence_invalid" or "classification_proposal_invalid";
+
+    private static bool IsTransientMediaFailure(Exception exception) => exception is IOException io && io.Message is
+        "media_agent_offline" or "media_agent_disconnected" or "media_channel_busy" or "media_pool_invalidated"
+        or "media_service_stopping" or "media_reader_capacity";
 
     private async Task<bool> ProcessClusterAsync(CancellationToken cancellationToken)
     {

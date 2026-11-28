@@ -351,10 +351,13 @@ public partial class VideoViewModel(VideoRepository repository, VideoIndexServic
             SummaryText = "暂无摘要";
             return;
         }
-        var people = await _services.Gateway.ListPeopleAsync(cancellationToken);
         TranscriptText = ExtractTranscriptText(details.Transcript);
         SummaryText = details.Summary ?? "服务端尚未生成融合摘要";
         PeopleTimelineText = FormatTimeline(details.Timeline);
+        foreach (var cached in GetCachedRemoteFrames(details.Frames, details.Video.Id, _services.RemoteVideoCacheRoot ?? AppServices.RemoteDataRoot, _services.RemoteThumbnails, details.Video))
+            Frames.Add(CreateVideoKeyframeItem(cached, details.Video));
+        var people = await _services.Gateway.ListPeopleAsync(cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
         var frames = await MaterializeRemoteFramesAsync(_services, details.Frames, details.Video, cancellationToken,
             progress: new Progress<VideoKeyframe>(frame =>
             {
@@ -368,15 +371,17 @@ public partial class VideoViewModel(VideoRepository repository, VideoIndexServic
         Frames.Clear();
         await UiWork.AddInBatchesAsync(frames, frame => Frames.Add(CreateVideoKeyframeItem(frame, details.Video)), cancellationToken, batchSize: 30);
         AppLogger.Info($"Video details loaded from IndexService: video={selected.Record.Id}; frames={frames.Count}; faces={details.Timeline.Count}; elapsedMs={started.ElapsedMilliseconds}");
-        StatusText = $"服务端视频详情已加载：关键帧 {frames.Count}/{details.Frames.Count}，人物 {details.Timeline.Count}";
+        StatusText = $"服务端视频详情已加载：关键帧 {frames.Count}/{details.Frames.Count}，人物 {details.Timeline.Count}"
+            + (frames.Count < details.Frames.Count ? "，部分暂不可用，请重试" : "");
     }
 
     partial void OnSelectedVideoFaceGroupChanged(VideoFaceGroupViewModel? value) => ApplyVideoFaceFilter();
 
     private VideoKeyframeItemViewModel CreateVideoKeyframeItem(VideoKeyframe frame, VideoRecord video)
     {
-        if (!remoteMode || !_services.RemoteThumbnails.IsCachePath(frame.Path)) return new(frame);
-        return new(frame, () => _services.RemoteThumbnails.OpenReadPath(frame.Path));
+        var cache = _services.RemoteThumbnails;
+        if (!remoteMode || cache?.IsCachePath(frame.Path) != true) return new(frame);
+        return new(frame, () => cache.OpenReadPath(frame.Path));
     }
 
     private void PopulateVideoFaces(IReadOnlyList<VideoFaceTimelineRecord> faces, IReadOnlyList<PersonSummary>? people = null,
