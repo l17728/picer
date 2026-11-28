@@ -34,6 +34,25 @@ public sealed partial class ClassificationRepository
         return result;
     }
 
+    public ClassificationJob AcceptAndMatch(ClassificationProposalReview review, string? actor = null) => Write(() =>
+    {
+        if (review.Decision != "accept") throw new ArgumentException("classification_review_invalid");
+        var taxonomy = Review(review);
+        var planId = "representatives:" + review.OperationId;
+        var existing = Scalar("SELECT id FROM classification_v2_jobs WHERE plan_id=$plan", ("$plan", planId));
+        if (existing is not null) return Job(existing);
+        var config = Configuration() ?? throw new InvalidOperationException("classification_configuration_required");
+        var proposal = Decode<ClassificationProposal>(Scalar("SELECT payload FROM classification_v2_proposals WHERE id=$id", ("$id", review.ProposalId))!);
+        var items = Contexts(config, imageIds: proposal.ImageIds).Select(c => new ClassificationPlanItem(c.Image.Id,
+            ClassificationInputFingerprint.Compute(c.Input), null, ClassificationUpdateReason.TaxonomyChanged)).ToArray();
+        if (items.Length == 0 || items.Length != proposal.ImageIds.Count) throw new InvalidOperationException("classification_proposal_stale");
+        var request = Guid.NewGuid().ToString("N");
+        var plan = new ClassificationPlan(planId, request, Epoch, taxonomy.Revision, DateTimeOffset.UtcNow.AddMinutes(30),
+            config, items.Length, 0, items, long.Parse(Scalar("SELECT input_revision FROM classification_v2_revision WHERE id=1")!, System.Globalization.CultureInfo.InvariantCulture));
+        Execute("INSERT INTO classification_v2_plans VALUES($id,$request,$now,$payload)", ("$id", planId), ("$request", request), ("$now", Now), ("$payload", Encode(plan)));
+        return Start(planId, request, actor);
+    });
+
     public ClassificationTaxonomySnapshot Review(ClassificationProposalReview review) => Write(() =>
     {
         ValidateRequestId(review.OperationId);

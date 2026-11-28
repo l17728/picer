@@ -350,6 +350,27 @@ public sealed class ClassificationV2RuntimeTests : IDisposable
     }
 
     [Fact]
+    public void AcceptAndMatchQueuesOnlyReviewedExamplesAndPublishesAfterEvaluation()
+    {
+        Add("example.jpg"); Start(); var original = _repo.Claim()!;
+        var draft = new ClassificationProposalDraft("露天茶席", "activity", "户外茶席活动", "单个茶杯不足以确认", ["nav.activity"], ["image:current"]);
+        Assert.True(_repo.Publish(original, Result(original) with { Proposals = [draft] }));
+        Add("other.jpg");
+        var proposal = Assert.Single(_repo.Proposals());
+        var review = new ClassificationProposalReview(Request(), proposal.Id, proposal.Revision, _repo.Taxonomy().Revision, "accept");
+        var job = _repo.AcceptAndMatch(review);
+        Assert.Equal(job.Id, _repo.AcceptAndMatch(review).Id);
+        Assert.Equal(1, job.Total);
+        var label = "dynamic." + proposal.Id;
+        Assert.Equal(0, _repo.Browse(new(new([], []))).Counts.GetValueOrDefault(label));
+        var lease = _repo.Claim()!;
+        Assert.Equal(original.ImageId, lease.ImageId);
+        Assert.True(_repo.Publish(lease, Result(lease, label)));
+        Assert.Equal(1, _repo.Browse(new(new([], []))).Counts[label]);
+        Assert.Null(_repo.Claim());
+    }
+
+    [Fact]
     public void ProposalAcceptanceChangesDiscoveryAndNeverCopiesRepresentativeAssignments()
     {
         Add("photo.jpg"); Start(); var lease = _repo.Claim()!;

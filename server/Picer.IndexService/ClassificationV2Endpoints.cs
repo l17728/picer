@@ -59,6 +59,11 @@ internal static class ClassificationV2Endpoints
             return Results.Ok(repository.Job(id));
         });
         group.MapGet("/proposals", () => Read(repository => repository.Proposals()));
+        group.MapPost("/proposals/accept-and-match", (ClassificationProposalReview review, HttpContext context) =>
+        {
+            var actor = Actor(context);
+            return Write(context, "taxonomy.manage", repository => repository.AcceptAndMatch(review, actor));
+        });
         group.MapGet("/clusters/latest", () => Read(repository => repository.LatestCluster()));
         group.MapPost("/clusters", (ClassificationClusterRequest request, HttpContext context) =>
         {

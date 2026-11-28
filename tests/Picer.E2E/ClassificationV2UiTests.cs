@@ -49,23 +49,7 @@ public sealed class ClassificationV2UiTests
             var retry = Find("重试本任务失败项", ControlType.Button);
             Assert.True(SpinWait.SpinUntil(() => retry.Current.IsEnabled, TimeSpan.FromSeconds(15)));
             ((InvokePattern)retry.GetCurrentPattern(InvokePattern.Pattern)).Invoke();
-            using var socket = await listener.AcceptTcpClientAsync(timeout.Token);
-            using var stream = socket.GetStream();
-            using var reader = new StreamReader(stream, System.Text.Encoding.UTF8, false, leaveOpen: true);
-            int length = 0;
-            while (await reader.ReadLineAsync(timeout.Token) is { Length: > 0 } line)
-                if (line.StartsWith("Content-Length:", StringComparison.OrdinalIgnoreCase)) length = int.Parse(line[15..]);
-            Assert.InRange(length, 1, 2000000);
-            // System.Text.Json serializes this fixture's HTTP body as ASCII (including escaped Chinese).
-            var body = new char[length];
-            await reader.ReadBlockAsync(body, timeout.Token);
-            using var payload = System.Text.Json.JsonDocument.Parse(new string(body));
-            using var input = System.Text.Json.JsonDocument.Parse(payload.RootElement.GetProperty("messages")[1].GetProperty("content")[0].GetProperty("text").GetString()!);
-            var result = System.Text.Json.JsonSerializer.Serialize(new { schemaVersion = "classification-indexed-v1",
-                inputFingerprint = input.RootElement.GetProperty("inputFingerprint").GetString(), evaluatedAll = true,
-                supported = new[] { 0 }, uncertain = Array.Empty<int>(), conflicting = Array.Empty<int>(), proposals = Array.Empty<object>() });
-            var response = System.Text.Json.JsonSerializer.Serialize(new { choices = new[] { new { message = new { content = result } } } });
-            await stream.WriteAsync(System.Text.Encoding.ASCII.GetBytes($"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {response.Length}\r\nConnection: close\r\n\r\n{response}"), timeout.Token);
+            await RespondAsync(propose: true);
             Assert.True(SpinWait.SpinUntil(() => repo.Job(job.Id).Succeeded == 1, TimeSpan.FromSeconds(20)));
             Assert.Equal(0, repo.Job(job.Id).Failed);
             Assert.Equal(2, repo.Job(job.Id).UsedCalls);
@@ -76,6 +60,42 @@ public sealed class ClassificationV2UiTests
             Assert.NotNull(Wait(() => window.FindFirst(TreeScope.Descendants, new AndCondition(
                 new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Text),
                 new PropertyCondition(AutomationElement.NameProperty, "fixture.png")))));
+            ((InvokePattern)Find("新标签建议", ControlType.Button).GetCurrentPattern(InvokePattern.Pattern)).Invoke();
+            ((InvokePattern)Find("接受并匹配", ControlType.Button).GetCurrentPattern(InvokePattern.Pattern)).Invoke();
+            await RespondAsync(propose: false);
+            var dynamicId = "dynamic." + Assert.Single(repo.Proposals()).Id;
+            Assert.True(SpinWait.SpinUntil(() => repo.Browse(new(new([], []))).Counts.GetValueOrDefault(dynamicId) == 1, TimeSpan.FromSeconds(30)));
+            // Expand the activity branch so UI Automation can reach the new child.
+            var activity = Find("活动（1）", ControlType.TreeItem);
+            var branch = (ExpandCollapsePattern)activity.GetCurrentPattern(ExpandCollapsePattern.Pattern);
+            if (branch.Current.ExpandCollapseState == ExpandCollapseState.Collapsed) branch.Expand();
+            var child = activity.FindFirst(TreeScope.Children, new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.TreeItem));
+            if (child != null && child.TryGetCurrentPattern(ExpandCollapsePattern.Pattern, out var expand)
+                && ((ExpandCollapsePattern)expand).Current.ExpandCollapseState == ExpandCollapseState.Collapsed)
+                ((ExpandCollapsePattern)expand).Expand();
+            ((SelectionItemPattern)Find("露天茶席（1）", ControlType.TreeItem).GetCurrentPattern(SelectionItemPattern.Pattern)).Select();
+            Assert.NotNull(Find("fixture.png", ControlType.Text));
+
+            async Task RespondAsync(bool propose)
+            {
+                using var socket = await listener.AcceptTcpClientAsync(timeout.Token);
+                using var stream = socket.GetStream();
+                using var reader = new StreamReader(stream, System.Text.Encoding.UTF8, false, leaveOpen: true);
+                int length = 0;
+                while (await reader.ReadLineAsync(timeout.Token) is { Length: > 0 } line)
+                    if (line.StartsWith("Content-Length:", StringComparison.OrdinalIgnoreCase)) length = int.Parse(line[15..]);
+                Assert.InRange(length, 1, 2000000);
+                // System.Text.Json serializes this fixture's HTTP body as ASCII (including escaped Chinese).
+                var body = new char[length];
+                await reader.ReadBlockAsync(body, timeout.Token);
+                using var payload = System.Text.Json.JsonDocument.Parse(new string(body));
+                using var input = System.Text.Json.JsonDocument.Parse(payload.RootElement.GetProperty("messages")[1].GetProperty("content")[0].GetProperty("text").GetString()!);
+                var result = System.Text.Json.JsonSerializer.Serialize(new { schemaVersion = "classification-indexed-v1",
+                    inputFingerprint = input.RootElement.GetProperty("inputFingerprint").GetString(), evaluatedAll = true,
+                    supported = new[] { propose ? 0 : input.RootElement.GetProperty("labels").EnumerateArray().Single(l => l.GetProperty("Name").GetString() == "露天茶席").GetProperty("index").GetInt32() }, uncertain = Array.Empty<int>(), conflicting = Array.Empty<int>(), proposals = propose ? new[] { new ClassificationProposalDraft("露天茶席", "activity", "户外茶席活动", "单个茶杯不足以确认", ["nav.activity"], ["image:current"]) } : Array.Empty<ClassificationProposalDraft>() });
+                var response = System.Text.Json.JsonSerializer.Serialize(new { choices = new[] { new { message = new { content = result } } } });
+                await stream.WriteAsync(System.Text.Encoding.ASCII.GetBytes($"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {response.Length}\r\nConnection: close\r\n\r\n{response}"), timeout.Token);
+            }
         }
         finally
         {

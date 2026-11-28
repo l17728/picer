@@ -260,6 +260,31 @@ public partial class ClassificationBrowserWindow : Window
         try { var plan = await _client.Plan(_closed.Token); var job = await _client.Start(plan.Id, _closed.Token); ShowJob(job); Feedback.Text = $"分类任务已启动：{job.Total} 张照片"; }
         catch (Exception ex) { Feedback.Text = "启动失败：" + ex.Message; }
     }
+    private async void Suggestions_Click(object sender, RoutedEventArgs e)
+    {
+        var token = _closed.Token;
+        try
+        {
+            var snapshot = await BrowsePage(null);
+            var dialog = new ClassificationSuggestionsWindow(_client, snapshot.Taxonomy, await _client.Proposals(token)) { Owner = this };
+            if (dialog.ShowDialog() != true) return;
+            if (dialog.MatchJob is { } job)
+            {
+                var seen = 0;
+                Feedback.Text = $"已接受新标签，正在匹配 {job.Total} 张代表照片。";
+                while (job.State is "queued" or "running")
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(5), token);
+                    job = await _client.Job(job.Id, token);
+                    if (job.Succeeded > seen) { seen = job.Succeeded; await RefreshAsync(); }
+                }
+                Feedback.Text = $"代表照片匹配：完成 {job.Succeeded}，失败或过期 {job.Failed}，待处理 {job.Pending}。";
+            }
+            await RefreshAsync();
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex) { Feedback.Text = "新标签建议：" + ex.Message; }
+    }
     private void SelectAll_Click(object sender, RoutedEventArgs e) { foreach (var row in Photos.Items.OfType<PhotoRow>()) row.Selected = true; }
     private void ClearSelection_Click(object sender, RoutedEventArgs e) { foreach (var row in Photos.Items.OfType<PhotoRow>()) row.Selected = false; }
     private async void Decision_Click(object sender, RoutedEventArgs e)

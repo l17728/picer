@@ -118,7 +118,10 @@ public sealed partial class ClassificationRepository
             LEFT JOIN classification_v2_work w ON w.image_id=i.image_id
             WHERE j.state IN ('queued','running') AND i.state='pending' AND j.used<j.budget
               AND (w.retry_after IS NULL OR w.retry_after<=$now OR w.attempt_fingerprint<>i.fingerprint)
-            ORDER BY j.created_utc,i.image_id LIMIT 1
+            ORDER BY i.image_id IN (
+                SELECT r.image_id FROM classification_v2_jobs p JOIN classification_v2_items r ON r.job_id=p.id
+                WHERE p.plan_id LIKE 'representatives:%' AND p.state IN ('queued','running') AND r.state IN ('pending','waiting')
+            ) DESC,j.created_utc,i.image_id LIMIT 1
             """, ("$now", Now));
         string job; long image; string fingerprint; ClassificationInput input; string config;
         using (var r = select.ExecuteReader())

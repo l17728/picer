@@ -142,6 +142,15 @@ internal sealed class ClassificationV2Client : IDisposable
         if (_client is null && job?.State is "queued" or "running") StartLocalWorker();
         return job;
     }
+    public Task<ClassificationJob> Job(string id, CancellationToken token) =>
+        Call("jobs/" + id, null, repo => repo.Job(id), false, token);
+
+    public async Task<ClassificationJob> AcceptAndMatch(ClassificationProposalReview review, CancellationToken token)
+    {
+        var job = await Call("proposals/accept-and-match", review, repo => repo.AcceptAndMatch(review), true, token);
+        if (_client is null) StartLocalWorker();
+        return job;
+    }
     public Task<ClassificationJob> Control(string id, string operation, CancellationToken token) =>
         Call($"jobs/{id}/{operation}", new { }, repo => { repo.Control(id, operation); return repo.Job(id); }, true, token);
     public async Task<IReadOnlyList<ClassificationProposal>> Proposals(CancellationToken token)

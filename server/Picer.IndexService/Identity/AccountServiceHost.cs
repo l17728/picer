@@ -303,6 +303,7 @@ public static class SpaceRoutePermissions
             if (method == "GET" || method == "POST" && path.EndsWith("/browse", StringComparison.Ordinal)) return "index.read taxonomy.read";
             if (method == "POST" && (path.EndsWith("/proposals/review", StringComparison.Ordinal) || path.EndsWith("/taxonomy/edit", StringComparison.Ordinal))) return "taxonomy.manage";
             if (method == "POST" && (path.EndsWith("/configuration", StringComparison.Ordinal) || path.EndsWith("/decisions", StringComparison.Ordinal))) return "index.write";
+            if (method == "POST" && path.EndsWith("/proposals/accept-and-match", StringComparison.Ordinal)) return "analysis.run taxonomy.manage";
             if (method == "POST" && path.EndsWith("/clusters", StringComparison.Ordinal)) return "analysis.run taxonomy.propose";
             return method == "POST" ? "analysis.run" : null;
         }
