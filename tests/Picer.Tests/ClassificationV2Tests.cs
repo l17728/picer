@@ -34,7 +34,7 @@ public class ClassificationV2Tests
             Assert.Equal("text", finalPart.GetProperty("type").GetString());
             Assert.Equal("/no_think", finalPart.GetProperty("text").GetString());
             var result = new ClassificationResult("classification-result-v1", ClassificationInputFingerprint.Compute(context.Input),
-                taxonomy.Labels.Where(label => label.Active && label.Assignable).Select(label => new ClassificationLabelEvaluation(label.Id, "absent", [])).ToArray(), []);
+                taxonomy.Labels.Where(label => label.Active && label.Assignable).Select(label => label.Id == "scene.outdoor" ? new ClassificationLabelEvaluation(label.Id, "supported", ["image:current"]) : new ClassificationLabelEvaluation(label.Id, "absent", [])).ToArray(), []);
             return Task.FromResult(System.Text.Json.JsonSerializer.Serialize(new
             { choices = new[] { new { message = new { content = System.Text.Json.JsonSerializer.Serialize(result) } } } }));
         });
@@ -118,6 +118,32 @@ public class ClassificationV2Tests
         Assert.Throws<InvalidDataException>(() => ClassificationModel.DecodeReview(Encode(copiedVocabulary), taxonomy, candidates));
         judgments.Remove("place.playground");
         Assert.Throws<InvalidDataException>(() => ClassificationModel.DecodeReview(Encode(), taxonomy, candidates));
+    }
+
+    [Fact]
+    public void EmptyReviewProposesVisibleUnmappedSubjectAndDistinguishesPhysicalDisplay()
+    {
+        var preset = ClassificationPreset.Load();
+        var taxonomy = new ClassificationTaxonomySnapshot(1, 1, preset.Labels, preset.Edges, []);
+        var candidates = taxonomy.Labels.Where(label => label.Id is "document.screen_photo" or "document.screenshot").ToArray();
+        ClassificationResult Review(string name, bool display)
+        {
+            var content = System.Text.Json.JsonSerializer.Serialize(new { schemaVersion = "classification-reviewed-v2",
+                inputFingerprint = "fixture", evaluatedAll = true, additionalSubjects = Array.Empty<string>(), proposals = Array.Empty<object>(),
+                checks = candidates.ToDictionary(label => label.Id, _ => display),
+                primarySubject = new { kind = name.Length == 0 ? "none" : "visible_subject", name, visible = "可见方形矩阵和定位图案", boundary = "普通装饰格不计", parentId = "nav.document" } });
+            return ClassificationModel.DecodeReview(content, taxonomy, candidates, emptyReview: true);
+        }
+        var novel = Review("二维码", false);
+        Assert.Equal("二维码", Assert.Single(novel.Proposals).Name);
+        Assert.DoesNotContain(novel.Labels, label => label.Support == "supported");
+        Assert.Empty(Review("", false).Proposals);
+        var known = Review("户外", false);
+        Assert.Empty(known.Proposals);
+        Assert.Contains(known.Labels, label => label.LabelId == "scene.outdoor" && label.Support == "supported");
+        var display = Review("屏幕翻拍", true);
+        Assert.Empty(display.Proposals);
+        Assert.Equal("document.screen_photo", Assert.Single(display.Labels.Where(label => label.Support == "supported")).LabelId);
     }
 
     [Theory]

@@ -68,7 +68,7 @@ public sealed partial class ClassificationRepository
 
     public void Control(string id, string operation, string? actor = null) => Write(() =>
     {
-        if (operation is "recheck-saturated" or "recheck-conditions")
+        if (operation is "recheck-saturated" or "recheck-conditions" or "recheck-empty")
         {
             var current = Job(id);
             if (current.State is not ("running" or "queued") || current.UsedCalls >= current.MaximumCalls)
@@ -81,16 +81,17 @@ public sealed partial class ClassificationRepository
                 FROM classification_v2_items i
                 JOIN classification_v2_results r ON r.image_id=i.image_id AND r.fingerprint=i.fingerprint
                 JOIN classification_v2_work w ON w.image_id=i.image_id AND w.success_fingerprint=i.fingerprint
-                WHERE i.job_id=$job AND i.state='succeeded'
-                """, ("$job", id)))
+                WHERE i.job_id=$job AND (i.state='succeeded' AND $empty=0 OR i.state='analyzed_unclassified' AND $empty=1
+                    AND COALESCE(json_extract(r.payload,'$.VisuallyReviewed'),0)=0 AND json_array_length(r.payload,'$.Proposals')=0)
+                """, ("$job", id), ("$empty", operation == "recheck-empty")))
             using (var reader = query.ExecuteReader())
                 while (reader.Read())
-                    if (operation == "recheck-conditions" ? reader.GetInt32(3) >= 3
-                        : !reader.IsDBNull(2) && ClassificationOutputValidator.IsSaturated(reader.GetInt32(1), reader.GetInt32(2)))
+                    if (operation == "recheck-empty" || (operation == "recheck-conditions" ? reader.GetInt32(3) >= 3
+                        : !reader.IsDBNull(2) && ClassificationOutputValidator.IsSaturated(reader.GetInt32(1), reader.GetInt32(2))))
                         images.Add(reader.GetInt64(0));
             foreach (var image in images)
             {
-                Execute("UPDATE classification_v2_work SET success_fingerprint=NULL,outcome='unprocessed',error_code='classification_output_incomplete',retry_after=NULL WHERE image_id=$image", ("$image", image));
+                Execute("UPDATE classification_v2_work SET success_fingerprint=NULL,outcome='unprocessed',error_code=$error,retry_after=NULL WHERE image_id=$image", ("$image", image), ("$error", operation == "recheck-empty" ? "classification_empty_needs_review" : "classification_output_incomplete"));
                 Execute("UPDATE classification_v2_items SET state='waiting',attempts=0,error_code=NULL WHERE job_id=$job AND image_id=$image", ("$job", id), ("$image", image));
             }
             return images.Count;
@@ -141,7 +142,7 @@ public sealed partial class ClassificationRepository
         FinishJobs();
         using var select = Sql("""
             SELECT i.job_id,i.image_id,i.fingerprint,i.input,j.config,
-                   CASE WHEN w.attempt_fingerprint=i.fingerprint AND w.error_code IN ('classification_output_incomplete','classification_json_invalid') THEN 1 ELSE 0 END,j.used+1
+                   CASE WHEN w.attempt_fingerprint=i.fingerprint THEN w.error_code END,j.used+1
             FROM classification_v2_items i
             JOIN classification_v2_jobs j ON j.id=i.job_id
             LEFT JOIN classification_v2_work w ON w.image_id=i.image_id
@@ -152,12 +153,12 @@ public sealed partial class ClassificationRepository
                 WHERE p.plan_id LIKE 'representatives:%' AND p.state IN ('queued','running') AND r.state IN ('pending','waiting')
             ) DESC,j.created_utc,i.image_id LIMIT 1
             """, ("$now", Now));
-        string job; long image; string fingerprint; ClassificationInput input; string config; bool retryIncompleteOutput; int callNumber;
+        string job; long image; string fingerprint; ClassificationInput input; string config; string? previousError; int callNumber;
         using (var r = select.ExecuteReader())
         {
             if (!r.Read()) return null;
             job = r.GetString(0); image = r.GetInt64(1); fingerprint = r.GetString(2); input = Decode<ClassificationInput>(r.GetString(3)); config = r.GetString(4);
-            retryIncompleteOutput = r.GetBoolean(5);
+            previousError = r.IsDBNull(5) ? null : r.GetString(5);
             callNumber = r.GetInt32(6);
         }
         if (Configuration() is not { Enabled: true } settings || Encode(settings) != config)
@@ -166,7 +167,11 @@ public sealed partial class ClassificationRepository
         Execute("UPDATE classification_v2_items SET state='leased',lease=$lease,lease_until=$until,attempts=attempts+1 WHERE job_id=$job AND image_id=$image", ("$lease", token), ("$until", DateTimeOffset.UtcNow.AddMinutes(6).ToString("O")), ("$job", job), ("$image", image));
         Execute("UPDATE classification_v2_jobs SET state='running',used=used+1,updated_utc=$now WHERE id=$id", ("$id", job), ("$now", Now));
         return new ClassificationLease(job, image, token, fingerprint, input, Scalar("SELECT actor FROM classification_v2_jobs WHERE id=$id", ("$id", job)))
-            { RetryIncompleteOutput = retryIncompleteOutput, JobCallNumber = callNumber };
+            {
+                RetryIncompleteOutput = previousError is "classification_output_incomplete" or "classification_json_invalid" or "classification_empty_needs_review",
+                ReviewEmpty = previousError == "classification_empty_needs_review",
+                JobCallNumber = callNumber
+            };
     });
 
     public ClassificationConfiguration JobConfiguration(string id) => Decode<ClassificationConfiguration>(

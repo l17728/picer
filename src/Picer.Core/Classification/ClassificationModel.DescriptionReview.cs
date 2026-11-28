@@ -56,22 +56,33 @@ public sealed partial class ClassificationModel
             required = new[] { "name", "dimension", "definition", "exclusions", "parentIds", "evidenceIds" }, additionalProperties = false };
     }
 
-    private static object ReviewFormat(ClassificationLabel[] candidates, string fingerprint)
+    private static object ReviewFormat(ClassificationLabel[] candidates, string fingerprint, ClassificationTaxonomySnapshot? emptyReview)
     {
         var ids = candidates.Select(label => label.Id).ToArray();
         var extras = new { type = "array", items = new { type = "string", minLength = 1, maxLength = 40 }, maxItems = MaximumReviewExtras };
-        var schema = new { type = "object", properties = new {
-            observation = new { type = "string", maxLength = 160 },
-            schemaVersion = new { type = "string", @enum = new[] { "classification-reviewed-v2" } },
-            inputFingerprint = new { type = "string", @enum = new[] { fingerprint } },
-            evaluatedAll = new { type = "boolean" },
-            checks = new { type = "object", properties = ids.ToDictionary(id => id, _ => new { type = "boolean" }), required = ids, additionalProperties = false },
-            additionalSubjects = extras, proposals = new { type = "array", items = ProposalFormat(), maxItems = 4 } },
-            required = new[] { "observation", "schemaVersion", "inputFingerprint", "evaluatedAll", "checks", "additionalSubjects", "proposals" }, additionalProperties = false };
+        var properties = new Dictionary<string, object> { ["observation"] = new { type = "string", maxLength = 160 } };
+        if (emptyReview is not null)
+        {
+            var parents = emptyReview.Labels.Where(label => label.Active && !label.Assignable).Select(label => label.Id).ToArray();
+            properties["primarySubject"] = new { type = "object", properties = new {
+                name = new { type = "string", minLength = 1, maxLength = 32 },
+                visible = new { type = "string", minLength = 1, maxLength = 160 },
+                boundary = new { type = "string", minLength = 1, maxLength = 96 },
+                parentId = new { type = "string", @enum = parents.Append("").ToArray() },
+                kind = new { type = "string", @enum = new[] { "visible_subject", "none" } } },
+                required = new[] { "name", "visible", "boundary", "parentId", "kind" }, additionalProperties = false };
+        }
+        properties["schemaVersion"] = new { type = "string", @enum = new[] { "classification-reviewed-v2" } };
+        properties["inputFingerprint"] = new { type = "string", @enum = new[] { fingerprint } };
+        properties["evaluatedAll"] = new { type = "boolean" };
+        properties["checks"] = new { type = "object", properties = ids.ToDictionary(id => id, _ => new { type = "boolean" }), required = ids, additionalProperties = false };
+        properties["additionalSubjects"] = extras;
+        properties["proposals"] = new { type = "array", items = ProposalFormat(), maxItems = 4 };
+        var schema = new { type = "object", properties, required = properties.Keys, additionalProperties = false };
         return new { type = "json_schema", json_schema = new { name = "review_visible_photo_topics", schema } };
     }
 
-    internal static ClassificationResult DecodeReview(string content, ClassificationTaxonomySnapshot taxonomy, ClassificationLabel[] candidates)
+    internal static ClassificationResult DecodeReview(string content, ClassificationTaxonomySnapshot taxonomy, ClassificationLabel[] candidates, bool emptyReview = false)
     {
         using var document = JsonDocument.Parse(ExtractJsonObject(content));
         var root = document.RootElement;
@@ -103,9 +114,30 @@ public sealed partial class ClassificationModel
             var matches = names[extra.GetString()!.Trim()].ToArray();
             if (matches.Length == 1 && !checks.TryGetProperty(matches[0], out _)) positive.Add(matches[0]);
         }
+        var drafts = proposals.Deserialize<ClassificationProposalDraft[]>(ClassificationRepository.Json)
+            ?? throw ReviewIncomplete("invalid_proposals");
+        if (emptyReview)
+        {
+            if (!root.TryGetProperty("primarySubject", out var subject) || subject.ValueKind != JsonValueKind.Object
+                || !subject.TryGetProperty("kind", out var kind) || kind.ValueKind != JsonValueKind.String
+                || kind.GetString() is not ("none" or "visible_subject"))
+                throw ReviewIncomplete("missing_primary_subject");
+            var term = kind.GetString() == "none" ? "" :
+                subject.TryGetProperty("name", out var name) && name.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(name.GetString())
+                    ? name.GetString()!.Trim() : throw ReviewIncomplete("missing_primary_subject_name");
+            var matches = names[term].ToArray();
+            if (matches.Length == 1 && !checks.TryGetProperty(matches[0], out _)) positive.Add(matches[0]);
+            if (term.Length is > 0 and <= 32 && positive.Count == 0 && drafts.Length == 0 && matches.Length == 0
+                && subject.TryGetProperty("parentId", out var parentId) && parentId.ValueKind == JsonValueKind.String
+                && taxonomy.Labels.SingleOrDefault(label => label.Active && !label.Assignable && label.Id == parentId.GetString()) is { } parent
+                && subject.TryGetProperty("visible", out var visible) && visible.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(visible.GetString())
+                && subject.TryGetProperty("boundary", out var boundary) && boundary.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(boundary.GetString()))
+                drafts = [new(term, parent.Dimension, visible.GetString()!, boundary.GetString()!, [parent.Id], ["image:current"])];
+            if (positive.Contains("document.screen_photo")) positive.Remove("document.screenshot");
+        }
         return new("classification-result-v1", fingerprint.GetString()!, active.Select(id => positive.Contains(id)
             ? new ClassificationLabelEvaluation(id, "supported", ["image:current"]) : new ClassificationLabelEvaluation(id, "absent", [])).ToArray(),
-            proposals.Deserialize<ClassificationProposalDraft[]>(ClassificationRepository.Json)!);
+            drafts);
     }
     private static InvalidDataException ReviewIncomplete(string reason)
     {

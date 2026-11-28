@@ -33,7 +33,7 @@ public sealed class ClassificationWorker(Func<PicerDatabase> openDatabase, IClas
             }
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeout.CancelAfter(TimeSpan.FromMinutes(5));
-            var result = await RunAuthorized(lease.Actor, token => model.ClassifyAsync(context with { Actor = lease.Actor, RetryIncompleteOutput = lease.RetryIncompleteOutput, JobCallNumber = lease.JobCallNumber }, taxonomy, config, token), timeout.Token).ConfigureAwait(false);
+            var result = await RunAuthorized(lease.Actor, token => model.ClassifyAsync(context with { Actor = lease.Actor, RetryIncompleteOutput = lease.RetryIncompleteOutput, ReviewEmpty = lease.ReviewEmpty, JobCallNumber = lease.JobCallNumber }, taxonomy, config, token), timeout.Token).ConfigureAwait(false);
             Commit(lease.Actor, () => { using var db = openDatabase(); new ClassificationRepository(db).Publish(lease, result); });
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -61,7 +61,7 @@ public sealed class ClassificationWorker(Func<PicerDatabase> openDatabase, IClas
         or System.Text.Json.JsonException
         || IsTransientMediaFailure(exception)
         || exception is InvalidDataException invalid && invalid.Message is "classification_output_invalid"
-            or "classification_output_incomplete" or "classification_evidence_invalid" or "classification_proposal_invalid";
+            or "classification_empty_needs_review" or "classification_output_incomplete" or "classification_evidence_invalid" or "classification_proposal_invalid";
 
     private static bool IsTransientMediaFailure(Exception exception) => exception is IOException io && io.Message is
         "media_agent_offline" or "media_agent_disconnected" or "media_channel_busy" or "media_pool_invalidated"

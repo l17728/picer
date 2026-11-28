@@ -122,6 +122,45 @@ public sealed class ClassificationV2RuntimeTests : IDisposable
     }
 
     [Fact]
+    public async Task UndescribedEmptyPhotoReceivesVisualReviewAndTheReviewedResultIsReusable()
+    {
+        Add("photo.jpg"); Add("queued.jpg");
+        var config = Config with { Model = "Qwen3" };
+        _repo.Configure(config);
+        var job = _repo.Start(_repo.Plan(Request(), config).Id, Request());
+        var calls = 0;
+        var model = new ClassificationModel((_, _) => Task.FromResult(new byte[] { 255, 216, 255, 217 }), (_, bytes, _) =>
+        {
+            using var wire = System.Text.Json.JsonDocument.Parse(bytes);
+            var messages = wire.RootElement.GetProperty("messages");
+            using var input = System.Text.Json.JsonDocument.Parse(messages[1].GetProperty("content")[0].GetProperty("text").GetString()!);
+            var fingerprint = input.RootElement.GetProperty("inputFingerprint").GetString();
+            string content;
+            if (++calls == 1)
+                content = System.Text.Json.JsonSerializer.Serialize(new { schemaVersion = "classification-sparse-v1", inputFingerprint = fingerprint,
+                    evaluatedAll = true, labels = Array.Empty<object>(), proposals = Array.Empty<object>() });
+            else
+            {
+                var properties = wire.RootElement.GetProperty("response_format").GetProperty("json_schema").GetProperty("schema").GetProperty("properties");
+                var checks = properties.GetProperty("checks").GetProperty("properties").EnumerateObject().ToDictionary(entry => entry.Name, _ => false);
+                Assert.Contains("document.screen_photo", checks.Keys);
+                content = System.Text.Json.JsonSerializer.Serialize(new { schemaVersion = "classification-reviewed-v2", inputFingerprint = fingerprint,
+                    evaluatedAll = true, primarySubject = new { kind = "none", name = "", visible = "", boundary = "", parentId = "" }, checks, additionalSubjects = Array.Empty<string>(), proposals = Array.Empty<object>() });
+            }
+            return Task.FromResult(System.Text.Json.JsonSerializer.Serialize(new { choices = new[] { new { message = new { content } } } }));
+        });
+        var worker = new ClassificationWorker(_db.OpenIndependentConnection, model);
+        Assert.True(await worker.ProcessOneAsync(default));
+        Assert.Equal(0, _repo.Job(job.Id).Succeeded);
+        using (var ready = _db.Command("UPDATE classification_v2_work SET retry_after=NULL")) ready.ExecuteNonQuery();
+        Assert.True(await worker.ProcessOneAsync(default));
+        Assert.Equal(1, _repo.Job(job.Id).Succeeded);
+        _repo.Control(job.Id, "recheck-empty");
+        Assert.Equal(1, _repo.Job(job.Id).Succeeded);
+        Assert.Equal(2, _repo.Job(job.Id).UsedCalls);
+    }
+
+    [Fact]
     public async Task ReclaimedMalformedResponsesUseDifferentSamplingSeedsWithinTheJobBudget()
     {
         Add("sample.jpg");

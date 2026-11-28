@@ -12,11 +12,15 @@ public sealed record ClassificationContext(ImageRecord Image, ClassificationInpu
     IReadOnlyDictionary<string, string> Evidence, string? Actor = null)
 {
     public bool RetryIncompleteOutput { get; init; }
+    public bool ReviewEmpty { get; init; }
     public int JobCallNumber { get; init; }
 }
 public sealed record ClassificationLabelEvaluation(string LabelId, string Support, IReadOnlyList<string> EvidenceIds);
 public sealed record ClassificationResult(string SchemaVersion, string InputFingerprint,
-    IReadOnlyList<ClassificationLabelEvaluation> Labels, IReadOnlyList<ClassificationProposalDraft> Proposals);
+    IReadOnlyList<ClassificationLabelEvaluation> Labels, IReadOnlyList<ClassificationProposalDraft> Proposals)
+{
+    public bool VisuallyReviewed { get; init; }
+}
 public sealed record ClassificationProposalDraft(string Name, string Dimension, string Definition, string Exclusions,
     IReadOnlyList<string> ParentIds, IReadOnlyList<string> EvidenceIds);
 public sealed record ClassificationPlanItem(long ImageId, string Fingerprint, ClassificationInput? Input, ClassificationUpdateReason Reasons);
@@ -36,6 +40,7 @@ public sealed record ClassificationJob(string Id, string State, int Total, int S
 public sealed record ClassificationLease(string JobId, long ImageId, string Token, string Fingerprint, ClassificationInput Input, string? Actor = null)
 {
     public bool RetryIncompleteOutput { get; init; }
+    public bool ReviewEmpty { get; init; }
     public int JobCallNumber { get; init; }
 }
 public sealed record ClassificationCoverage(int Total, int Confirmed, int Suggested, int Legacy, int WithoutContent,
