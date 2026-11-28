@@ -44,6 +44,7 @@ jobs:
         run: dotnet restore picer.sln
 
       - name: Build
+        id: build
         run: dotnet build picer.sln --configuration Debug --no-restore --warnaserror
 
       - name: Verify real service with built gateway (trusted main only)
@@ -59,9 +60,11 @@ jobs:
         run: dotnet run --project tools/Picer.ServiceProbe/Picer.ServiceProbe.csproj -c Release -- src/Picer.App/bin/Debug/net8.0-windows
 
       - name: Unit and integration tests
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: dotnet test tests/Picer.Tests/Picer.Tests.csproj --configuration Debug --no-build --no-restore --filter "Category!=RuntimeComponent" --logger "trx;LogFileName=unit.trx" --logger "console;verbosity=normal" --blame-hang --blame-hang-timeout 10m
 
       - name: Desktop tests
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: dotnet test tests/Picer.E2E/Picer.E2E.csproj --configuration Debug --no-build --no-restore --filter "Category!=RuntimeComponent" --logger "trx;LogFileName=desktop.trx" --logger "console;verbosity=normal" --blame-hang --blame-hang-timeout 10m
 
       - name: Cleanup desktop processes
