@@ -133,3 +133,7 @@ ServiceMode 的共享远程缩略图、人脸裁剪、视频关键帧和视频�
 - 分类任务在维护前暂停，升级后恢复同一任务。成功数从 1,656 增至 1,659，观测时失败数为 0，仍在处理余下照片。D 盘仍离线，本次未替换正式 Windows GUI。
 
 当 GitHub 直连和已记录的 IP 均超时，本机已验证可通过现有的受信 SSH 主机 47.103.99.229 临时转发。使用仅绑定 127.0.0.1 临时端口的 SSH 动态转发（`ssh -N -D 127.0.0.1:<端口> -o BatchMode=yes -o StrictHostKeyChecking=yes root@47.103.99.229`），在单条 Git 命令中设置 `-c http.proxy=socks5h://127.0.0.1:<端口>`。推送和 `ls-remote origin refs/heads/main` 复核后关闭临时转发。Git HTTPS 证书验证、origin 地址和全局配置保持原值。
+
+### 2026-11-28 分类人工审核部署
+
+新服务器 47.103.99.229 的 IndexService 部署号为 `20261128T112439668Z`，源码提交 `b389bac`。恢复工作区的发布文件为 `artifacts/indexservice-deploy/20261128T112439668Z/publish/Picer.IndexService`，SHA-256 为 `2b3a10dc3b9ec088e83c000e599cddb823452893e49c3d00ed0cedcd2cebe76a`。部署器完成 5 个数据库的停写备份、升级和版本探测。生产只读浏览请求在升级前复现缺少审核上下文，升级后同一请求验证图库标识、分类版本、内容标识、归属和审核指纹齐备。驻留程序重新连接，原任务已恢复。人工确认、排除与批量勾选的真实 GUI 读写验收使用隔离图库；见[分类审核记录](CLASSIFICATION_SUGGESTIONS_GUI_2026-11-28.md)。
