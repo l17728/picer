@@ -30,6 +30,7 @@ internal sealed class ClassificationSuggestionsWindow : Window
         DockPanel.SetDock(_details, Dock.Top); detail.Children.Add(_details);
         detail.Children.Add(new ScrollViewer { Content = _examples, VerticalScrollBarVisibility = ScrollBarVisibility.Auto });
         layout.Children.Add(detail); Content = layout;
+        var reviews = new Dictionary<(string Proposal, string Decision, string? MergeTarget), ClassificationProposalReview>();
         AddButton("接受并匹配", "accept"); AddButton("拒绝建议", "reject");
         _merge.ItemsSource = taxonomy.Labels.Where(l => l.Active && l.Assignable).OrderBy(l => l.Name).ToArray();
         actions.Children.Add(_merge); AddButton("合并到已有标签", "merge");
@@ -67,12 +68,14 @@ internal sealed class ClassificationSuggestionsWindow : Window
             button.Click += async (_, _) =>
             {
                 if (_candidates.SelectedItem is not ClassificationProposal p) return;
-                var target = (_merge.SelectedItem as ClassificationLabel)?.Id;
+                var target = decision == "merge" ? (_merge.SelectedItem as ClassificationLabel)?.Id : null;
                 if (decision == "merge" && target == null) { _feedback.Text = "请先选择已有标签。"; return; }
                 IsEnabled = false;
                 try
                 {
-                    var review = new ClassificationProposalReview(Guid.NewGuid().ToString("N"), p.Id, p.Revision, taxonomy.Revision, decision, target);
+                    var key = (p.Id, decision, target);
+                    if (!reviews.TryGetValue(key, out var review))
+                        reviews[key] = review = new(Guid.NewGuid().ToString("N"), p.Id, p.Revision, taxonomy.Revision, decision, target);
                     if (decision == "accept") MatchJob = await client.AcceptAndMatch(review, _closed.Token);
                     else { await client.Synchronize(_closed.Token); await client.Review(review, _closed.Token); }
                     if (IsVisible) DialogResult = true;

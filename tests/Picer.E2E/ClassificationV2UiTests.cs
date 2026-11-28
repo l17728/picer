@@ -125,7 +125,8 @@ public sealed class ClassificationV2UiTests
                 new Dictionary<long, string> { [photo.ImageId] = photo.ManualFingerprint! }));
         }
         var directory = Path.GetDirectoryName(typeof(Picer.App.App).Assembly.Location)!;
-        using var process = Process.Start(new ProcessStartInfo(Path.Combine(directory, "Picer.App.exe"))
+        var executable = Environment.GetEnvironmentVariable("PICER_E2E_GUI_EXE") ?? Path.Combine(directory, "Picer.App.exe");
+        using var process = Process.Start(new ProcessStartInfo(executable)
         {
             UseShellExecute = false,
             Environment = { ["PICER_DATA_ROOT"] = root, ["PICER_BOOTSTRAP_ROOT"] = Path.Combine(root, "bootstrap"), ["PICER_MODEL_SERVER_URL"] = "http://127.0.0.1:1" }

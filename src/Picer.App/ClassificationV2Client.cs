@@ -147,7 +147,14 @@ internal sealed class ClassificationV2Client : IDisposable
 
     public async Task<ClassificationJob> AcceptAndMatch(ClassificationProposalReview review, CancellationToken token)
     {
-        var job = await Call("proposals/accept-and-match", review, repo => repo.AcceptAndMatch(review), true, token);
+        Task<ClassificationJob> Submit() => Call("proposals/accept-and-match", review, repo => repo.AcceptAndMatch(review), true, token);
+        ClassificationJob job;
+        try { job = await Submit(); }
+        catch (HttpRequestException error) when (_client is not null && error.StatusCode is null && !token.IsCancellationRequested)
+        {
+            // The service may already have committed the job before the response was lost.
+            job = await Submit();
+        }
         if (_client is null) StartLocalWorker();
         return job;
     }

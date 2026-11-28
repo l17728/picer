@@ -14,6 +14,24 @@ public sealed class ClassificationReadFailureTests : IDisposable
     private readonly PicerDatabase _db;
     public ClassificationReadFailureTests() => _db = new(Path.Combine(_root, "index.db"));
     [Fact]
+    public async Task AcceptAndMatchRecoversLostResponseUsingSameReview()
+    {
+        var received = new List<ClassificationProposalReview>();
+        var expected = new ClassificationProposalReview(Guid.NewGuid().ToString("N"), "proposal", 3, 4, "accept");
+        var job = new ClassificationJob("original", "queued", 1, 0, 0, 1, 0, 0, 100);
+        using var http = new HttpClient(new AsyncCallbackHandler(async request =>
+        {
+            Assert.Equal("/proposals/accept-and-match", request.RequestUri!.AbsolutePath);
+            received.Add((await request.Content!.ReadFromJsonAsync<ClassificationProposalReview>())!);
+            if (received.Count == 1) throw new HttpRequestException("response lost");
+            return new(HttpStatusCode.OK) { Content = JsonContent.Create(job) };
+        })) { BaseAddress = new Uri("http://localhost/") };
+        using var client = new ClassificationV2Client(http, _db);
+        Assert.Equal(job, await client.AcceptAndMatch(expected, default));
+        Assert.Equal(new[] { expected, expected }, received);
+    }
+
+    [Fact]
     public async Task BusyClassificationRetriesWithBackoffAndPreservesWritePayload()
     {
         var payloads = new List<string>();
