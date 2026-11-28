@@ -7,7 +7,7 @@ using Picer.Core.Vision;
 namespace Picer.Core.Classification;
 
 /// <summary>Transport and authorized media access are injected by the hosting application.</summary>
-public sealed class ClassificationModel(
+public sealed partial class ClassificationModel(
     Func<ImageRecord, CancellationToken, Task<byte[]>> readVerifiedJpeg,
     Func<ClassificationConfiguration, byte[], CancellationToken, Task<string>> send,
     Action<string?>? authorizeNetwork = null) : IClassificationModel, IClassificationClusterModel
@@ -36,6 +36,8 @@ public sealed class ClassificationModel(
             labels = assignableLabels.Select(label => new[] { label.Id, label.Name, label.Definition, label.Exclusions, label.Dimension }),
             navigation = taxonomy.Labels.Where(l => l.Active && !l.Assignable).Select(l => new { l.Id, l.Name, l.Dimension })
         };
+        var candidates = DescriptionCandidates(context, taxonomy);
+        var review = context.RetryIncompleteOutput && candidates.Length > 0;
         var prompt = Prompt + "\n" + ProposalInstructions;
         var userContent = new List<object>
         {
@@ -44,6 +46,8 @@ public sealed class ClassificationModel(
         };
         var instruction = EvidenceFormat;
         if (context.RetryIncompleteOutput) instruction += " 上次结果未通过校验。若为独立纸质文字页，请使用 classification-paper-v1，对 paperLabels 中每个主题分别填写 true 或 false。其他照片只写有证据的标签，每个 ID 只出现一次。";
+        if (review)
+            instruction = ReviewInstruction + JsonSerializer.Serialize(candidates.Select(l => new[] { l.Id, l.Name, l.Definition, l.Exclusions }), ModelJson);
         userContent.Add(new { type = "text", text = instruction });
         if (RequiresNoThinkMode(configuration.Model)) userContent.Add(new { type = "text", text = "/no_think" });
         var structured = RequiresNoThinkMode(configuration.Model) && assignableLabels.Length > 0;
@@ -55,7 +59,8 @@ public sealed class ClassificationModel(
             ["max_tokens"] = structured && !context.RetryIncompleteOutput
                 ? Math.Min(configuration.MaximumOutputTokens, 2048) : configuration.MaximumOutputTokens,
             ["response_format"] = structured
-                ? EvidenceResponseFormat(assignableLabels, fingerprint, context.RetryIncompleteOutput) : new { type = "json_object" },
+                ? (review ? ReviewFormat(candidates, assignableLabels, fingerprint) : EvidenceResponseFormat(assignableLabels, fingerprint, context.RetryIncompleteOutput))
+                : new { type = "json_object" },
             ["messages"] = new object[]
             {
                 new { role = "system", content = prompt },
@@ -75,7 +80,7 @@ public sealed class ClassificationModel(
         if (string.IsNullOrWhiteSpace(content)) throw new InvalidDataException("classification_empty_response");
         if (Encoding.UTF8.GetByteCount(content) > MaximumContentBytes) throw new InvalidDataException("classification_response_too_large");
         ClassificationResult result;
-        try { result = DecodeResult(content, taxonomy); }
+        try { result = review ? DecodeReview(content, taxonomy, candidates) : DecodeResult(content, taxonomy); }
         catch (JsonException exception)
         {
             var trimmed = content.Trim();
@@ -83,6 +88,8 @@ public sealed class ClassificationModel(
             throw;
         }
         ClassificationOutputValidator.Validate(result, context, taxonomy);
+        if (!review && candidates.Length > 0 && !result.Labels.Any(label => label.Support == "supported"))
+            throw new InvalidDataException("classification_output_incomplete");
         return result;
     }
 
@@ -103,13 +110,7 @@ public sealed class ClassificationModel(
             required = new[] { "labelId", "cue", "support", "evidenceIds" },
             additionalProperties = false
         };
-        var draft = new
-        {
-            type = "object",
-            properties = new { name = text, dimension = text, definition = text, exclusions = text, parentIds = strings, evidenceIds = strings },
-            required = new[] { "name", "dimension", "definition", "exclusions", "parentIds", "evidenceIds" },
-            additionalProperties = false
-        };
+        var draft = ProposalFormat();
         object Branch(string[] surfaces, ClassificationLabel[] eligible) => new
         {
             type = "object",

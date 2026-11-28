@@ -80,6 +80,68 @@ public class ClassificationV2Tests
     }
 
     [Fact]
+    public void ReviewChecksDescriptionCandidatesWithoutAutomaticallyAssigningThem()
+    {
+        var preset = ClassificationPreset.Load();
+        var taxonomy = new ClassificationTaxonomySnapshot(1, 1, preset.Labels, preset.Edges, []);
+        var context = new ClassificationContext(new(), Input(), new Dictionary<string, string>
+        {
+            ["description:fixture"] = """{"Scenes":["操场"],"Objects":["多人合影"],"LocationDisplayName":"图书馆"}""",
+            ["image:current"] = "fixture"
+        });
+        var candidates = ClassificationModel.DescriptionCandidates(context, taxonomy);
+        Assert.Contains(candidates, label => label.Id == "subject.people");
+        Assert.Contains(candidates, label => label.Id == "place.playground");
+        Assert.DoesNotContain(candidates, label => label.Id == "place.library");
+        var judgments = candidates.ToDictionary(label => label.Id, _ => false);
+        string Encode(params string[] extras) => System.Text.Json.JsonSerializer.Serialize(new
+        {
+            schemaVersion = "classification-reviewed-v1",
+            inputFingerprint = "sample",
+            evaluatedAll = true,
+            checks = judgments,
+            additionalIds = extras,
+            proposals = Array.Empty<object>()
+        });
+        var rejected = ClassificationModel.DecodeReview(Encode(), taxonomy, candidates);
+        Assert.All(rejected.Labels, label => Assert.Equal("absent", label.Support));
+        judgments["place.playground"] = true;
+        var accepted = ClassificationModel.DecodeReview(Encode("scene.outdoor"), taxonomy, candidates);
+        Assert.Equal(new[] { "place.playground", "scene.outdoor" }, accepted.Labels.Where(label => label.Support == "supported").Select(label => label.LabelId).Order().ToArray());
+        Assert.Throws<InvalidDataException>(() => ClassificationModel.DecodeReview(Encode("place.playground"), taxonomy, candidates));
+        judgments.Remove("place.playground");
+        Assert.Throws<InvalidDataException>(() => ClassificationModel.DecodeReview(Encode(), taxonomy, candidates));
+    }
+
+    [Fact]
+    public async Task EmptyFirstPassWithDescribedSubjectsRequiresIndependentVisualReview()
+    {
+        var preset = ClassificationPreset.Load();
+        var taxonomy = new ClassificationTaxonomySnapshot(1, 1, preset.Labels, preset.Edges, []);
+        var context = new ClassificationContext(new(), Input(), new Dictionary<string, string>
+        {
+            ["description:fixture"] = """{"Scenes":["操场"]}""",
+            ["image:current"] = "fixture"
+        });
+        var fingerprint = ClassificationInputFingerprint.Compute(context.Input);
+        var checks = ClassificationModel.DescriptionCandidates(context, taxonomy).ToDictionary(label => label.Id, _ => false);
+        var attempts = 0;
+        var model = new ClassificationModel((_, _) => Task.FromResult(new byte[] { 255, 216, 255, 217 }), (_, _, _) =>
+        {
+            var content = ++attempts == 1
+                ? System.Text.Json.JsonSerializer.Serialize(new { schemaVersion = "classification-sparse-v1", inputFingerprint = fingerprint, evaluatedAll = true, labels = Array.Empty<object>(), proposals = Array.Empty<object>() })
+                : System.Text.Json.JsonSerializer.Serialize(new { schemaVersion = "classification-reviewed-v1", inputFingerprint = fingerprint, evaluatedAll = true, checks, additionalIds = Array.Empty<string>(), proposals = Array.Empty<object>() });
+            return Task.FromResult(System.Text.Json.JsonSerializer.Serialize(new { choices = new[] { new { message = new { content } } } }));
+        });
+        var config = new ClassificationConfiguration(true, "Qwen3", "local", false);
+        var first = await Assert.ThrowsAsync<InvalidDataException>(() => model.ClassifyAsync(context, taxonomy, config, default));
+        Assert.Equal("classification_output_incomplete", first.Message);
+        var second = await model.ClassifyAsync(context with { RetryIncompleteOutput = true }, taxonomy, config, default);
+        Assert.DoesNotContain(second.Labels, label => label.Support == "supported");
+        Assert.Equal(2, attempts);
+    }
+
+    [Fact]
     public void SparseModelOutputRequiresCompleteEvaluationAndKnownUniqueLabels()
     {
         var preset = ClassificationPreset.Load();
@@ -152,7 +214,7 @@ public class ClassificationV2Tests
             Assert.Equal(preset.Labels.Count(label => label.Active && label.Assignable), decoded.RootElement.GetProperty("labels").GetArrayLength());
             Assert.Equal("户外花园与人物", decoded.RootElement.GetProperty("untrustedEvidence").GetProperty("description:fixture").GetProperty("summary").GetString());
             var result = new ClassificationResult("classification-result-v1", ClassificationInputFingerprint.Compute(context.Input),
-                taxonomy.Labels.Where(l => l.Assignable && l.Active).Select(l => new ClassificationLabelEvaluation(l.Id, "absent", [])).ToArray(), []);
+                taxonomy.Labels.Where(l => l.Assignable && l.Active).Select(l => new ClassificationLabelEvaluation(l.Id, l.Id == "scene.outdoor" ? "supported" : "absent", l.Id == "scene.outdoor" ? ["image:current"] : [])).ToArray(), []);
             var response = System.Text.Json.JsonSerializer.Serialize(new { choices = new[] { new { message = new { content = System.Text.Json.JsonSerializer.Serialize(result) } } } });
             return Task.FromResult(response);
         });
