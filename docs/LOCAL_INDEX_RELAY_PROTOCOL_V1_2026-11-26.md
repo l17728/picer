@@ -78,3 +78,13 @@ Release 定向测试涵盖空响应、单帧临界值、超过单帧一个字节
 隔离测试启动账号服务、来源索引服务及测试代理。代理通过实际 WebSocket 协议和 MediaFileSession 读取授权目录中的 JPEG。两段响应拼接后与源文件逐字节相同。相同设备另开连接复用租约及归还后再读取均被拒绝。媒体流、Relay 及账号路由共 51 项 Release 测试通过。Debug 全解决方案按警告即错误构建通过，零警告、零错误。正式桌面的双击操作和生产部署待验收。
 
 D 盘仍离线。本次验证构建根目录为 C:\Users\a\AppData\Local\Picer\engineering-backups\relay-photo-20261128\verification。其下 src/Picer.Core/bin/Release/net8.0/Picer.Core.dll 的 SHA-256 为 4DAE56978FA71123E352E20CDB383B1C426C07E854829EFB7F3544D412776DBA，server/Picer.IndexService/bin/Release/net8.0/Picer.IndexService.dll 的 SHA-256 为 B6FAFF8794570E1AE3E27AEBBA2883812E153A32FE63731BF7E3D0A96D738740。本阶段未替换正式 GUI。
+
+### 2026-11-28 驻留端缩略图跨重启读取与视频并行分段
+
+当索引服务不能在本机打开照片时，HTTPS 与 Relay 均通过同一个来源预览回调获得 256 像素缩略图。以前回调只写进程内存缓存。本次让回调在未命中内存时读取索引服务已有的加密缩略图目录，并将首次成功获取的 JPEG 原样原子写入。缓存文件按索引记录、来源和内容版本区分，并随对应记录的缩略图清理。
+
+验收使用隔离目录，第一次 HTTPS 请求由测试驻留端返回图片。随后停止服务，使用相同数据根重新启动 IndexService，未启动驻留端，第二次 HTTPS 请求获得与第一次逐字节相同的 JPEG。另验证磁盘内容加密、版本变化时重新获取和按记录清理。
+
+Relay 集成验收使用 2 MiB 加 257 字节的二进制样例，经视频资源路径取得租约。GUI 使用的 ParallelMediaReader 并发读取三段，完整内容及跨块跳读的 128 KiB 均与源文件一致，关闭后原租约失效。此测试覆盖流传输，视频解码与桌面播放另行验收。
+
+Release 验证构建位于 C:\Users\a\AppData\Local\Picer\engineering-backups\relay-photo-20261128\verification\server\Picer.IndexService\bin\Release\net8.0\Picer.IndexService.dll，SHA-256 为 23257A3B44C5DBBE94EE508EA6DDD4543F0739FA2035B18575F41A4023DAD3C3。正式工程所在 D 盘仍离线。

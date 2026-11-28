@@ -160,6 +160,23 @@ public sealed class IndexRelayConnectorWorkerTests
                 Assert.Equal(original, assembled.ToArray());
                 await secondGateway.ManageMediaLeaseAsync(info.ETag, true, deadline.Token);
                 await Assert.ThrowsAsync<InvalidDataException>(() => secondGateway.OpenMediaRangeAsync(photo.Id, false, info, 0, 1, deadline.Token));
+                var videoPath = Path.Combine(root, "blocks.mp4");
+                var videoBytes = RandomNumberGenerator.GetBytes(2 * MediaWire.BlockSize + 257);
+                await File.WriteAllBytesAsync(videoPath, videoBytes, deadline.Token);
+                var video = new VideoRepository(db).Upsert(source.Id, videoPath);
+                var videoInfo = await secondGateway.GetMediaInfoAsync(video.Id, true, deadline.Token);
+                Assert.Equal("video/mp4", videoInfo.ContentType);
+                await using (var reader = new ParallelMediaReader(secondGateway, video.Id, true, videoInfo, 3))
+                {
+                    using var downloaded = new MemoryStream();
+                    await reader.CopyRangeAsync(downloaded, 0, videoInfo.Length, deadline.Token);
+                    Assert.Equal(videoBytes, downloaded.ToArray());
+                    using var seek = new MemoryStream();
+                    var start = MediaWire.BlockSize - 32;
+                    await reader.CopyRangeAsync(seek, start, 128 * 1024, deadline.Token);
+                    Assert.Equal(videoBytes.AsSpan(start, 128 * 1024).ToArray(), seek.ToArray());
+                }
+                await Assert.ThrowsAsync<InvalidDataException>(() => secondGateway.OpenMediaRangeAsync(video.Id, true, videoInfo, 0, 1, deadline.Token));
                 var concurrent = await Task.WhenAll(Enumerable.Range(0, 6).Select(i =>
                     i % 2 == 0 ? gateway.SearchAsync(filters, 2, cancellationToken: deadline.Token)
                         : secondGateway.SearchAsync(filters, 1, cancellationToken: deadline.Token)));

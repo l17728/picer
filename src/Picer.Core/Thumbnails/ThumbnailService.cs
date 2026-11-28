@@ -21,6 +21,39 @@ public sealed class ThumbnailService : IDisposable
 
     public string CacheDir => _cacheDir;
 
+    public async Task<byte[]> GetAgentThumbnailAsync(long imageId, string version, Func<CancellationToken, Task<byte[]>> fetch, CancellationToken token)
+    {
+        var digest = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(version)));
+        var path = Path.Combine(_cacheDir, $"{imageId}.agent-{digest}.v{CacheVersion}.jpg");
+        try
+        {
+            if (File.Exists(path))
+            {
+                using var stream = OpenRead(path);
+                using var copy = new MemoryStream();
+                await stream.CopyToAsync(copy, token).ConfigureAwait(false);
+                return copy.ToArray();
+            }
+        }
+        catch (Exception e) when (e is IOException or System.Security.Cryptography.CryptographicException or InvalidDataException) { }
+
+        var bytes = await fetch(token).ConfigureAwait(false);
+        token.ThrowIfCancellationRequested();
+        if (bytes.Length < 4 || bytes[0] != 0xff || bytes[1] != 0xd8) throw new InvalidDataException("thumbnail_jpeg_invalid");
+        try
+        {
+            if (_cipher is not null) SaveProtectedAtomic(path, bytes);
+            else
+            {
+                var temp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+                try { await File.WriteAllBytesAsync(temp, bytes, token).ConfigureAwait(false); File.Move(temp, path, true); }
+                finally { CleanupFailed(temp); }
+            }
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { /* The requested image is available even if the cache is full. */ }
+        return bytes;
+    }
+
     public string GetCachePath(long imageId) => Path.Combine(_cacheDir, $"{imageId}.v{CacheVersion}.jpg");
 
     public string GetCachePath(long imageId, string? sha256) =>

@@ -729,8 +729,11 @@ public static class IndexServiceHost
         handlers.AgentPhotoPreview = (image, agentId, size, ct) =>
         {
             var key = $"photo:{agentId}:{image.Sha256 ?? image.Path}:{image.FileSize}:{image.ModifiedUtc.Ticks}:{size}";
-            return mediaPreviews.GetAsync(key, token => MediaAssetResults.PreviewAsync(agents, agentId,
-                IndexApiHandlers.NormalizeAgentPath(image.Path), size, token), ct);
+            Task<byte[]> Fetch(CancellationToken token) => MediaAssetResults.PreviewAsync(agents, agentId,
+                IndexApiHandlers.NormalizeAgentPath(image.Path), size, token);
+            return mediaPreviews.GetAsync(key, token => size == 256
+                ? thumbnails.GetAgentThumbnailAsync(image.Id, key, Fetch, token)
+                : Fetch(token), ct);
         };
         var app = builder.Build();
         if (!isolatedSpace)
