@@ -144,8 +144,10 @@ public sealed class RemoteThumbnailCacheTests
         }
     }
 
-    [Fact]
-    public async Task EncryptedCacheStoresCiphertextAndServesPlaintextOnlyFromReadStream()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task EncryptedCacheStoresCiphertextAndServesPlaintextOnlyFromReadStream(bool legacyClassificationKey)
     {
         var root = Path.Combine(Path.GetTempPath(), "picer-thumb-encrypted-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
@@ -156,7 +158,9 @@ public sealed class RemoteThumbnailCacheTests
             string path;
             using (var cache = new RemoteThumbnailCache(root, new MediaFileCipher(key)))
             {
-                path = Assert.IsType<string>(await cache.GetOrDownloadAsync(record,
+                var initial = legacyClassificationKey
+                    ? new ImageRecord { Id = record.Id, ContentSha256 = "sha256:" + record.ContentSha256 } : record;
+                path = Assert.IsType<string>(await cache.GetOrDownloadAsync(initial,
                     () => Task.FromResult<Stream?>(new MemoryStream("private-thumbnail"u8.ToArray()))));
                 var stored = await File.ReadAllBytesAsync(path);
                 Assert.NotEqual("private-thumbnail"u8.ToArray(), stored);
@@ -169,8 +173,12 @@ public sealed class RemoteThumbnailCacheTests
                 var migrated = reopened.ProtectExistingCacheFiles();
                 Assert.Equal((0, 0), migrated);
                 Assert.Equal(path, reopened.TryGet(record));
-                using var decoded = new StreamReader(reopened.OpenReadPath(path));
-                Assert.Equal("private-thumbnail", await decoded.ReadToEndAsync());
+                Assert.Equal(path, await reopened.GetOrDownloadAsync(record, _ => throw new InvalidOperationException("unexpected download")));
+                using (var decoded = new StreamReader(reopened.OpenRead(record)))
+                    Assert.Equal("private-thumbnail", await decoded.ReadToEndAsync());
+                reopened.Invalidate(record);
+                Assert.Null(reopened.TryGet(record));
+                Assert.False(File.Exists(path));
             }
         }
         finally

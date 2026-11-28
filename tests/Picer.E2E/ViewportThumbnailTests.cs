@@ -10,8 +10,10 @@ namespace Picer.E2E;
 
 public sealed class ViewportThumbnailTests
 {
-    [Fact]
-    public void SharedPresenterReusesDirectoryCacheAcrossDifferentReferences() => Run(async root =>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ClassificationAndDirectoryShareDisplayedThumbnailAcrossDifferentReferences(bool classificationFirst) => Run(async root =>
     {
         var calls = 0;
         using var gateway = new ServiceBrowseWindowTests.StubGateway
@@ -21,16 +23,24 @@ public sealed class ViewportThumbnailTests
         var services = new ClientServices { ServiceMode = true, Gateway = gateway, RemoteThumbnails = new(root) };
         var hash = new string('a', 64);
         var directory = new ImageItemViewModel(new ImageRecord { Id = 1, Sha256 = hash }, services: services);
-        directory.EnsureThumbnailLoad();
-        await Until(() => directory.HasThumbnail);
-        var classification = new ImageItemViewModel(new ImageRecord { Id = 2, Sha256 = hash }, services: services);
+        var projected = Picer.App.Views.ClassificationBrowserWindow.MediaRecord(new(2, "photo.jpg", null, [], "succeeded", "sha256:" + hash));
+        Assert.Equal(hash, projected.Sha256);
+        var classification = new ImageItemViewModel(projected, services: services);
+        var first = classificationFirst ? classification : directory;
+        first.EnsureThumbnailLoad();
+        await Until(() => first.HasThumbnail);
         var image = new System.Windows.Controls.Image();
-        Picer.App.Controls.ThumbnailPresenter.SetItem(image, classification);
+        Picer.App.Controls.ThumbnailPresenter.SetItem(image, classificationFirst ? directory : classification);
         var window = new System.Windows.Window { Content = image, Width = 300, Height = 300 };
         try
         {
             window.Show();
             await Until(() => image.Source is not null);
+            var source = Assert.IsAssignableFrom<System.Windows.Media.Imaging.BitmapSource>(image.Source);
+            var decoded = new System.Windows.Media.Imaging.FormatConvertedBitmap(source, System.Windows.Media.PixelFormats.Bgra32, null, 0);
+            var pixel = new byte[4];
+            decoded.CopyPixels(new System.Windows.Int32Rect(0, 0, 1, 1), pixel, 4, 0);
+            Assert.Equal(new byte[] { 255, 255, 255, 255 }, pixel);
             Assert.Equal(1, calls);
             window.Hide();
             window.Show();

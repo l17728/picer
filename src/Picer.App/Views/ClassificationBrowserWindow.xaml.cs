@@ -346,7 +346,7 @@ public partial class ClassificationBrowserWindow : Window
         try
         {
             if (AppServices.ServiceMode && AppServices.Gateway is HttpIndexGateway remote)
-                await Services.RemotePhotoPreview.OpenAsync(remote, row.Record.ImageId, row.Record.Path, row.Record.ContentIdentity);
+                await Services.RemotePhotoPreview.OpenAsync(remote, row.Record.ImageId, row.Record.Path, row.Preview.Record.Sha256);
             else if (File.Exists(row.Record.Path))
             {
                 using var stream = File.OpenRead(row.Record.Path); var bitmap = new BitmapImage();
@@ -355,6 +355,19 @@ public partial class ClassificationBrowserWindow : Window
             }
         }
         catch (Exception ex) { Feedback.Text = "预览失败：" + ex.Message; }
+    }
+
+    internal static ImageRecord MediaRecord(ClassificationPhoto photo)
+    {
+        var identity = photo.ContentIdentity;
+        var digest = identity.StartsWith("sha256:", StringComparison.OrdinalIgnoreCase) ? identity[7..] : identity;
+        var sha256 = digest.Length == 64 && digest.All(Uri.IsHexDigit) ? digest : null;
+        return new ImageRecord
+        {
+            Id = photo.ImageId, Path = photo.Path, ThumbPath = photo.ThumbnailPath, Sha256 = sha256,
+            // Keep the versioned thumbnail key for local identities without presenting it as an original file hash.
+            ContentSha256 = sha256 ?? identity
+        };
     }
 
     private sealed class PhotoRow : ObservableObject
@@ -368,7 +381,7 @@ public partial class ClassificationBrowserWindow : Window
         public PhotoRow(ClassificationPhoto photo, ClassificationTaxonomySnapshot taxonomy, CancellationToken token)
         {
             Record = photo; Labels = string.Join("、", photo.LabelIds.Select(id => taxonomy.Labels.FirstOrDefault(x => x.Id == id)?.Name ?? id));
-            Preview = new ImageItemViewModel(new ImageRecord { Id = photo.ImageId, Path = photo.Path, ThumbPath = photo.ThumbnailPath, ContentSha256 = photo.ContentIdentity }, token, AppServices.GetClientServices());
+            Preview = new ImageItemViewModel(MediaRecord(photo), token, AppServices.GetClientServices());
         }
     }
 

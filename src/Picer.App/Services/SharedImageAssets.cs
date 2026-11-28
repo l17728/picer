@@ -14,11 +14,14 @@ public static class SharedImageAssets
     public static async Task<string> GetAsync(IMediaAssetGateway gateway, long id, string path, string? hash,
         bool preview, CancellationToken token)
     {
+        var scope = (gateway as HttpIndexGateway)?.MediaCacheScope ?? AppServices.RemoteDataRoot;
+        if (hash is { Length: 64 } && hash.All(Uri.IsHexDigit))
+            return await GetCachedAsync(Cache.Value, scope, hash.ToLowerInvariant(), gateway, id, path, hash, preview, token);
+
         var snapshot = await UiWork.ReadSnapshotAsync("ImageAsset.Identity", AppServices.Db,
             db => (Record: db.GetImage(id), Epoch: db.GetMirrorCheckpoint()?.Epoch), token);
         var record = snapshot.Record;
         hash = record?.ContentSha256 ?? record?.Sha256 ?? hash;
-        var scope = (gateway as HttpIndexGateway)?.MediaCacheScope ?? AppServices.RemoteDataRoot;
         var identity = hash is { Length: 64 } ? hash.ToLowerInvariant()
             : $"{id}:{record?.FileSize}:{record?.ModifiedUtc.Ticks}:{snapshot.Epoch}";
         if (record is null && hash is not { Length: 64 } && gateway is IRangeMediaGateway range)

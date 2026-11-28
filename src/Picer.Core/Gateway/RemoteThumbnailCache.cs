@@ -62,12 +62,28 @@ public sealed class RemoteThumbnailCache : IDisposable
     public string? TryGet(ImageRecord record)
     {
         var path = Path.Combine(_root, GetKey(record) + ".jpg");
-        if (!File.Exists(path)) return null;
+        if (!File.Exists(path))
+        {
+            var legacy = LegacyClassificationPath(record);
+            if (legacy is null || !File.Exists(legacy)) return null;
+            path = legacy;
+        }
         try { File.SetLastAccessTimeUtc(path, DateTime.UtcNow); } catch { }
         return path;
     }
 
-    public Stream OpenRead(ImageRecord record) => OpenReadPath(Path.Combine(_root, GetKey(record) + ".jpg"));
+    // Older classification windows hashed the tagged identity, including the "sha256:" prefix.
+    // Read under its original filename because encrypted entries authenticate the filename.
+    private string? LegacyClassificationPath(ImageRecord record)
+    {
+        var digest = string.IsNullOrWhiteSpace(record.ContentSha256) ? record.Sha256 : record.ContentSha256;
+        if (digest is not { Length: 64 } || !digest.All(Uri.IsHexDigit)) return null;
+        var hash = SHA256.HashData(System.Text.Encoding.ASCII.GetBytes("sha256:" + digest.ToLowerInvariant()));
+        return Path.Combine(_root, $"{CacheVersion}-{Convert.ToHexString(hash).ToLowerInvariant()}.jpg");
+    }
+
+    public Stream OpenRead(ImageRecord record) =>
+        OpenReadPath(TryGet(record) ?? Path.Combine(_root, GetKey(record) + ".jpg"));
 
     public Stream OpenReadPath(string path)
     {
@@ -120,7 +136,13 @@ public sealed class RemoteThumbnailCache : IDisposable
     {
         lock (_sync)
         {
-            try { File.Delete(Path.Combine(_root, GetKey(record) + ".jpg")); }
+            DeleteEntry(Path.Combine(_root, GetKey(record) + ".jpg"));
+            if (LegacyClassificationPath(record) is { } legacy) DeleteEntry(legacy);
+        }
+
+        static void DeleteEntry(string path)
+        {
+            try { File.Delete(path); }
             catch (IOException) { }
             catch (UnauthorizedAccessException) { }
         }
