@@ -1,4 +1,5 @@
 ﻿using System.Collections.ObjectModel;
+using CommunityToolkit.Mvvm.ComponentModel;
 using System.IO;
 using System.Net.Http;
 using System.Windows;
@@ -356,10 +357,11 @@ public partial class ClassificationBrowserWindow : Window
         catch (Exception ex) { Feedback.Text = "预览失败：" + ex.Message; }
     }
 
-    private sealed class PhotoRow
+    private sealed class PhotoRow : ObservableObject
     {
         public ClassificationPhoto Record { get; }
-        public bool Selected { get; set; }
+        private bool _selected;
+        public bool Selected { get => _selected; set => SetProperty(ref _selected, value); }
         public string Name => Path.GetFileName(Record.Path);
         public string Labels { get; }
         public ImageItemViewModel Preview { get; }

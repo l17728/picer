@@ -77,6 +77,12 @@ public sealed class ClassificationV2UiTests
             ((SelectionItemPattern)Find("露天茶席（1）", ControlType.TreeItem).GetCurrentPattern(SelectionItemPattern.Pattern)).Select();
             Assert.NotNull(Find("fixture.png", ControlType.Text));
             ((InvokePattern)Find("全选当前页", ControlType.Button).GetCurrentPattern(InvokePattern.Pattern)).Invoke();
+            ToggleState RowSelection() => ((TogglePattern)Find("选择", ControlType.CheckBox)
+                .GetCurrentPattern(TogglePattern.Pattern)).Current.ToggleState;
+            Assert.Equal(ToggleState.On, RowSelection());
+            ((InvokePattern)Find("清除选择", ControlType.Button).GetCurrentPattern(InvokePattern.Pattern)).Invoke();
+            Assert.Equal(ToggleState.Off, RowSelection());
+            ((InvokePattern)Find("全选当前页", ControlType.Button).GetCurrentPattern(InvokePattern.Pattern)).Invoke();
             ((InvokePattern)Find("确认分类", ControlType.Button).GetCurrentPattern(InvokePattern.Pattern)).Invoke();
             Assert.True(SpinWait.SpinUntil(() => repo.Browse(new(new([], []))).Photos.Single()
                 .ConfirmedIds!.Contains(dynamicId), TimeSpan.FromSeconds(10)));
