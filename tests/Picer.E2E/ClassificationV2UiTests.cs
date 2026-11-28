@@ -116,7 +116,13 @@ public sealed class ClassificationV2UiTests
             var source = db.AddSource(root);
             db.UpsertImage(new ImageRecord { SourceId = source.Id, Path = Path.Combine(root, "test-photo.jpg"),
                 FileSize = 10, ModifiedUtc = DateTime.UtcNow, IndexedUtc = DateTime.UtcNow });
-            new ClassificationRepository(db).Configure(new(false, "test-no-network", "local", false));
+            var repository = new ClassificationRepository(db);
+            repository.Configure(new(false, "test-no-network", "local", false));
+            var photo = Assert.Single(repository.Browse(new(new([], []))).Photos);
+            repository.Decide(new(Guid.NewGuid().ToString("N"), repository.Epoch, "subject.people", "confirm",
+                new Dictionary<long, string> { [photo.ImageId] = photo.ContentIdentity },
+                new Dictionary<long, string> { [photo.ImageId] = photo.OwnerId }, repository.Taxonomy().Revision,
+                new Dictionary<long, string> { [photo.ImageId] = photo.ManualFingerprint! }));
         }
         var directory = Path.GetDirectoryName(typeof(Picer.App.App).Assembly.Location)!;
         using var process = Process.Start(new ProcessStartInfo(Path.Combine(directory, "Picer.App.exe"))
@@ -147,16 +153,16 @@ public sealed class ClassificationV2UiTests
                 new PropertyCondition(AutomationElement.NameProperty, "照片分类与审核"),
                 new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Window))));
             Assert.NotNull(Wait(() => window.FindFirst(TreeScope.Descendants, new PropertyCondition(AutomationElement.NameProperty, "分类树"))));
-            // Every tree node carries its photo count; a library without classifications falls
-            // back to showing the whole taxonomy with zero counts instead of an empty tree.
+            // This fixture has one confirmed photo. Empty taxonomy branches stay hidden.
             Assert.True(SpinWait.SpinUntil(() => window.FindAll(TreeScope.Descendants,
                     new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.TreeItem))
-                .Cast<AutomationElement>().Any(item => item.Current.Name.Contains('（')), TimeSpan.FromSeconds(10)),
+                .Cast<AutomationElement>().Any(item => item.Current.Name.EndsWith("（1）", StringComparison.Ordinal)), TimeSpan.FromSeconds(10)),
                 "分类树节点未显示照片计数");
             // Selecting a node only changes the photo list: the tree must keep exactly the same
             // nodes in the same order, and the clicked node stays selected.
             var treeBefore = DescendantNames(window, ControlType.TreeItem);
             Assert.NotEmpty(treeBefore);
+            Assert.All(treeBefore, name => Assert.EndsWith("（1）", name));
             var firstNode = window.FindFirst(TreeScope.Descendants,
                 new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.TreeItem));
             Assert.NotNull(firstNode);
