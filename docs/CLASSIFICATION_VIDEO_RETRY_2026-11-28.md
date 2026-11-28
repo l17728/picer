@@ -29,3 +29,5 @@ Windows PowerShell 5.1 的全量测试脚本曾在日志记录失败时返回成
 工作线程现在仅在同一输入指纹上次返回 `classification_output_incomplete` 时，使用已有的 `classification-sparse-v1` 格式重新请求，每个标签 ID 对应一项判断。首次调用继续使用数字索引格式。两种格式均验证标签来自当前分类体系、每个标签只有一个判断、依据有效、输入指纹相符。重试仍计入同一任务的调用预算。回归用例让第一次返回跨组重复索引，验证没有发布该结果；第二次使用另一格式，并读回唯一有效标签，两次调用均入账。
 
 分类运行时与模型协议 Release 定向测试 85 项通过，含上述工作线程完整流程。Windows x64 Release 零警告、零错误，构建路径为恢复工作区的 `src/Picer.App/bin/Release/net8.0-windows/win-x64/Picer.App.exe`，同目录 Picer.Core.dll SHA-256 为 `ba5280edd157c3fa8603f3e3dbb74e5b8c53e83a6f11d4939f722673379f4509`。
+
+生产服务已部署 `20261128T114401254Z`（源码 `669bcd58650f`），恢复工作区发布文件为 `artifacts/indexservice-deploy/20261128T114401254Z/publish/Picer.IndexService`，SHA-256 为 `6dc22c281ad2df2ed79eba8bee91415d101201a0860a76dc83369980c15cd6c6`。发布前备份 5 个数据库，版本与健康检查通过，驻留程序已重连。通过正式任务接口只重排失败项，在同一任务读回照片 1766 状态 succeeded、本轮 attempts=1、error_code 为空、已写入 11 个标签。此时任务运行中，成功 1,777 张、无适用标签 4 张、处理中 1 张、等待 6,821 张、失败 0 张。配对账号也通过了审核上下文和两次缩略图读取复验。
