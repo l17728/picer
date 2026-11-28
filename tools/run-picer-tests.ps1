@@ -22,6 +22,8 @@ try {
     $arguments = @('test', $projectPath, '-c', 'Debug', '--no-build', '--no-restore', '--filter', $Filter, '--logger', 'console;verbosity=normal')
     $process = Start-Process -FilePath 'dotnet' -ArgumentList $arguments -WorkingDirectory $repo `
         -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru -WindowStyle Hidden
+    # Windows PowerShell needs a retained process handle to read the exit code after Refresh().
+    $null = $process.Handle
     $started = Get-Date
     while (-not $process.HasExited) {
         Start-Sleep -Seconds ([Math]::Max(5, $HeartbeatSeconds))
@@ -30,6 +32,8 @@ try {
         $elapsed = ((Get-Date) - $started).ToString('hh\:mm\:ss')
         Write-Host "[$elapsed] Picer.Tests is still running; last output: $last"
     }
+    $process.WaitForExit()
+    if ($null -eq $process.ExitCode) { throw 'The test host exit code is unavailable.' }
     exit $process.ExitCode
 }
 finally {
