@@ -108,6 +108,26 @@ public sealed class ImageCodecRegressionTests
     }
 
     [Fact]
+    public void ForwardOnlyStreamDecodesFromItsCurrentPositionAndRemainsOpen()
+    {
+        using var source = new RasterImage(9, 4);
+        using var encoded = new MemoryStream();
+        source.SaveAsJpeg(encoded);
+        using var pipe = new ForwardOnlyFixture(encoded.ToArray());
+        using var decoded = RasterImage.Load(pipe);
+        Assert.Equal((9, 4), (decoded.Width, decoded.Height));
+        Assert.True(pipe.CanRead);
+        using var invalid = new ForwardOnlyFixture("<svg/>"u8.ToArray());
+        Assert.Throws<InvalidDataException>(() => RasterImage.Identify(invalid));
+    }
+
+    private sealed class ForwardOnlyFixture(byte[] bytes) : MemoryStream(bytes)
+    {
+        public override bool CanSeek => false;
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+    }
+
+    [Fact]
     public async Task CanceledLoad_DoesNotConsumeCallerStream()
     {
         using var stream = new MemoryStream([1, 2, 3]);
