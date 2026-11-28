@@ -41,6 +41,44 @@ public class ClassificationV2Tests
         await model.ClassifyAsync(context, taxonomy, new(true, "Qwen/Qwen3-VL-8B-Instruct-GGUF:Q4_K_M", "local", false), default);
     }
 
+    [Theory]
+    [InlineData("paper_text_only", false)]
+    [InlineData("other_or_mixed", true)]
+    public void PaperTextDoesNotTurnDepictedSubjectsIntoSceneEvidence(string surface, bool sceneSupported)
+    {
+        var preset = ClassificationPreset.Load();
+        var taxonomy = new ClassificationTaxonomySnapshot(1, 1, preset.Labels, preset.Edges, []);
+        var labels = new[] { "document.general", "document.screen_photo", "subject.people", "scene.indoor" };
+        var raw = System.Text.Json.JsonSerializer.Serialize(new { surface, schemaVersion = "classification-sparse-v1",
+            inputFingerprint = "sample", evaluatedAll = true, proposals = Array.Empty<object>(),
+            labels = labels.Select(id => new { labelId = id, support = "supported", evidenceIds = new[] { "image:current" } }) });
+        var result = ClassificationModel.DecodeResult(raw, taxonomy);
+        Assert.Equal("supported", result.Labels.Single(label => label.LabelId == "document.general").Support);
+        foreach (var id in labels.Skip(1))
+            Assert.Equal(sceneSupported ? "supported" : "absent", result.Labels.Single(label => label.LabelId == id).Support);
+    }
+
+    [Fact]
+    public void PaperVerdictsMustCoverEveryEligibleIdExactlyOnce()
+    {
+        var preset = ClassificationPreset.Load();
+        var taxonomy = new ClassificationTaxonomySnapshot(1, 1, preset.Labels, preset.Edges, []);
+        var verdicts = preset.Labels.Where(label => label.Active && label.Assignable &&
+                ((label.Dimension == "document" && label.Id is not ("document.screenshot" or "document.old_photo" or "document.screen_photo"))
+                || label.Id is "object.book" or "object.art"))
+            .ToDictionary(label => label.Id, label => label.Id == "document.general");
+        string Encode() => System.Text.Json.JsonSerializer.Serialize(new { schemaVersion = "classification-paper-v1",
+            surface = "paper_text_only", inputFingerprint = "sample", evaluatedAll = true, paperLabels = verdicts, proposals = Array.Empty<object>() });
+        var result = ClassificationModel.DecodeResult(Encode(), taxonomy);
+        Assert.Equal("document.general", Assert.Single(result.Labels.Where(label => label.Support == "supported")).LabelId);
+        var duplicate = Encode().Replace("\"document.general\":true", "\"document.general\":true,\"document.general\":false");
+        Assert.Throws<InvalidDataException>(() => ClassificationModel.DecodeResult(duplicate, taxonomy));
+        verdicts.Remove("document.receipt");
+        Assert.Throws<InvalidDataException>(() => ClassificationModel.DecodeResult(Encode(), taxonomy));
+        verdicts["scene.indoor"] = false;
+        Assert.Throws<InvalidDataException>(() => ClassificationModel.DecodeResult(Encode(), taxonomy));
+    }
+
     [Fact]
     public void SparseModelOutputRequiresCompleteEvaluationAndKnownUniqueLabels()
     {
