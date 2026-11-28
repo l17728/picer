@@ -61,8 +61,9 @@ public partial class PhotoClassificationWindow : Window
             {
                 repairError = exception.Message;
             }
-            await LoadClusterSettingsAsync();
-            await LoadItemsAsync();
+            // Screenshot repair changes classification rows only. Keep the settings version
+            // the user saw, including edits made while the background repair was running.
+            if (repaired > 0) await LoadItemsAsync();
             if (repairError is not null) FeedbackText.Text = "旧截图分类修复未完成：" + repairError;
             else if (repaired > 0) FeedbackText.Text = $"已修复 {repaired} 张照片的旧“屏幕截图”分类，并根据已有描述和元数据重新整理标签。";
             }
@@ -126,7 +127,11 @@ public partial class PhotoClassificationWindow : Window
         if (AppServices.ServiceMode) { await StopRemoteAsync("cancel"); return; }
         await ClassificationJobCoordinator.CancelAsync();
     }
-    private async void Refresh_Click(object sender, RoutedEventArgs e) => await LoadItemsAsync();
+    private async void Refresh_Click(object sender, RoutedEventArgs e)
+    {
+        FeedbackText.Text = "";
+        await LoadItemsAsync();
+    }
 
     private async void Items_MouseDoubleClick(object sender, MouseButtonEventArgs e)
     {
@@ -246,9 +251,12 @@ public partial class PhotoClassificationWindow : Window
     }
     private async void Tabs_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (IsLoaded) await LoadItemsAsync();
+        if (!IsLoaded || !ReferenceEquals(e.OriginalSource, Tabs)) return;
+        FeedbackText.Text = "";
+        await LoadItemsAsync();
     }
 
+    private string? _itemSummary;
     private async Task LoadItemsAsync()
     {
         if (Tabs.SelectedItem is not TabItem tab) return;
@@ -277,7 +285,10 @@ public partial class PhotoClassificationWindow : Window
         if (generation != Volatile.Read(ref _itemsGeneration) || _previewCancellation.IsCancellationRequested) return;
         Items.ItemsSource = rows;
         if (!AppServices.ServiceMode && !_refreshingLabels) _ = RefreshLabelsAsync();
-        FeedbackText.Text = $"当前页签：分类项 {rows.Length} 条，涉及照片 {rows.Select(row => row.ImageId).Distinct().Count()} 张。";
+        var summary = $"当前页签：分类项 {rows.Length} 条，涉及照片 {rows.Select(row => row.ImageId).Distinct().Count()} 张。";
+        if (string.IsNullOrEmpty(FeedbackText.Text) || FeedbackText.Text == _itemSummary)
+            FeedbackText.Text = summary;
+        _itemSummary = summary;
     }
 
     private async Task<ContentClusterPreview> PreviewLocalAsync(float threshold)

@@ -45,3 +45,9 @@ Release 构建目录为 C:\Users\a\AppData\Local\Picer\engineering-backups\relay
 2026-11-29 实际交付的图像核对修复提交为 95c9743。分类专项 91 项和正式 GUI 端到端 2 项通过。正式 Windows x64 Release 构建零警告、零错误，路径仍为本文记录的恢复工作区 src/Picer.App/bin/Release/net8.0-windows/win-x64/Picer.App.exe。EXE SHA-256 为 16d4e9bbbb39b7c549f774e60e27bacf69c2f545cfb160f1ff1a276106574176，配套 Picer.Core.dll 为 96735769536dc78e6f33109c9f92c4d35e5da2c121a5f805f29c9225695b180a。服务 47.103.99.229 部署号为 20261128T162351094Z，二进制 SHA-256 为 8e0ce56647d93b76734208d20d5f722d6bf34d7e080a24ea94f7f3d7a403b926。部署程序已备份并校验数据库，通过健康和版本检查。
 
 2026-11-29 首批在线重算 6 张均返回有效建议。三个纸页样本分别得到文档与书籍、仅文档、仅文档。操场实景已匹配多人和操场，同时多出一项缺少可见证据的“教室”建议。此处通过的是指定样本的关键主题、纸页边界以及队列接手验收，机器建议的逐项准确率仍有改进空间。用户授权的旧队列接手已执行，三个前序任务的完成记录（6、7、1,790）均已保留。队列有重叠，当前任务总量仍为 8,603 张。
+
+### 2026-11-29 分类窗口设置与后台刷新
+
+桌面全量测试发现，打开分类审核窗口时，后台截图修复结束后会再次读取聚类设置，可能覆盖用户正在编辑的值及冲突检查使用的版本。后台列表刷新也可能覆盖操作反馈。窗口现在仅在截图修复实际更改分类时刷新列表，保留用户看到的设置版本和操作反馈。用户主动切换页签或刷新时仍会显示最新计数。
+
+Release 构建零警告、零错误。历史拒绝恢复与聚类设置冲突、新标签审核与分类树切换的 3 项桌面回归全部通过。验证程序为 C:\Users\a\AppData\Local\Picer\engineering-backups\relay-photo-20261128\verification\src\Picer.App\bin\Release\net8.0-windows\win-x64\Picer.App.exe。EXE SHA-256 为 c9b648189d74449e3f0706410d5abfeec77a5b4a34070fca8ee509254fe33dc3，同目录 Picer.App.dll 为 fbf647163a642462deeb8201a6c605bf92c6500d6b5890a10ee78608ad9ac450。
