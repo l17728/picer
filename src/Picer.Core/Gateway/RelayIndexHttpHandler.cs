@@ -47,7 +47,7 @@ public sealed class RelayIndexHttpHandler : HttpMessageHandler
             var address = new Uri(DeviceAuthorization.SpaceAddress(account.Connection.Origin, offer.Share.SpaceId) +
                 "/relay/" + serviceId + "/" + offer.Share.SenderDeviceId + "/");
             var handler = new RelayIndexHttpHandler(socket, wire, session, address);
-            return new HttpIndexGateway(new HttpClient(handler) { BaseAddress = address }, ownsClient: true);
+            return new HttpIndexGateway(new HttpClient(handler) { BaseAddress = address }, ownsClient: true) { UsesRelay = true };
         }
         catch { wire.Dispose(); socket.Dispose(); throw; }
     }
@@ -81,6 +81,8 @@ public sealed class RelayIndexHttpHandler : HttpMessageHandler
             var response = await _requests.RequestAsync(Guid.NewGuid(), query, linked.Token).ConfigureAwait(false);
             if (asset || path == RelayIndexQuery.LeasePath) return RelayAssetResponse.Decode(response);
             if (RelayIndexQuery.TryPhoto(path, out _, out _)) return RelayPhotoResponse.Decode(response);
+            if (RelayIndexQuery.TryRecord(path, out _, out _) && response.AsSpan().SequenceEqual("null"u8))
+                return new(HttpStatusCode.NotFound);
             return new(HttpStatusCode.OK) { Content = new ByteArrayContent(response) };
         }
         finally
@@ -114,14 +116,24 @@ public sealed class RelayIndexHttpHandler : HttpMessageHandler
                 _disposing = true;
                 if (_active == 0) _idle.TrySetResult();
             }
-            _closed.Cancel();
+            var cancelled = _closed.CancelAsync();
             _socket.Abort();
-            Task.WhenAll(_reader, _idle.Task).GetAwaiter().GetResult();
+            // A failed request may dispose its gateway from the reader's cancellation callback.
+            // Close admission immediately and release cryptographic state once all users exit.
+            _ = ReleaseWhenIdleAsync(cancelled);
+        }
+        base.Dispose(disposing);
+    }
+
+    private async Task ReleaseWhenIdleAsync(Task cancelled)
+    {
+        try { await Task.WhenAll(cancelled, _reader, _idle.Task).ConfigureAwait(false); }
+        finally
+        {
             _wire.Dispose();
             _session.Dispose();
             _socket.Dispose();
             _closed.Dispose();
         }
-        base.Dispose(disposing);
     }
 }

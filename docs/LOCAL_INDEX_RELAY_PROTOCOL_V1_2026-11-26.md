@@ -88,3 +88,11 @@ D 盘仍离线。本次验证构建根目录为 C:\Users\a\AppData\Local\Picer\e
 Relay 集成验收使用 2 MiB 加 257 字节的二进制样例，经视频资源路径取得租约。GUI 使用的 ParallelMediaReader 并发读取三段，完整内容及跨块跳读的 128 KiB 均与源文件一致，关闭后原租约失效。此测试覆盖流传输，视频解码与桌面播放另行验收。
 
 Release 验证构建位于 C:\Users\a\AppData\Local\Picer\engineering-backups\relay-photo-20261128\verification\server\Picer.IndexService\bin\Release\net8.0\Picer.IndexService.dll，SHA-256 为 23257A3B44C5DBBE94EE508EA6DDD4543F0739FA2035B18575F41A4023DAD3C3。正式工程所在 D 盘仍离线。
+
+### 2026-11-28 Relay 单条索引读取、来源分页和断线关闭
+
+GUI 的分类建议会按 ID 回读索引，目录浏览也会按来源分页。Relay 现可按 ID 读取照片和视频记录。不存在的记录按普通 HTTP 网关约定返回未找到，连接检查使用的 ID 0 同样适用。来源列表通过已有加密查询传递来源 ID、缺失标志、页大小与游标，沿用本机索引服务的排序与过滤。
+
+隔离账号服务、本机索引和测试驻留端的集成用例验证照片和视频记录、无效 ID、空来源、两页照片的合并顺序及视频来源过滤。断线回归中，在驻留端处理预览期间停止连接器，GUI 失败回调随即关闭网关。原实现会从接收任务的取消回调同步等待同一个接收任务，现场托管栈确认了死锁。现在关闭时立即拒绝新请求并中止套接字，所有读取和在途请求退出后释放会话密钥。集成用例要求关闭回调在 10 秒内结束。
+
+验证构建根目录为 C:\Users\a\AppData\Local\Picer\engineering-backups\relay-photo-20261128\verification。其下 src/Picer.Core/bin/Release/net8.0/Picer.Core.dll 的 SHA-256 为 4462A22E03907AC344ADA5EF18509F9A14F2F81B225DB470D26F1FF638BB4A76，server/Picer.IndexService/bin/Release/net8.0/Picer.IndexService.dll 为 D3C5CB17D14641F6E783D5916B731D23B33E6E447C54AC29ECA7E25ED4C89535。

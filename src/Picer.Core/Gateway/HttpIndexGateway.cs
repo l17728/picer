@@ -16,6 +16,7 @@ public sealed partial class HttpIndexGateway : IIndexGateway, IMediaAssetGateway
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
     private readonly HttpClient _client;
     private readonly bool _ownsClient;
+    internal bool UsesRelay { get; init; }
     private string? _mirrorEpoch;
     private string? _readSnapshot;
     public async Task ReleaseReadSnapshotAsync(CancellationToken cancellationToken = default)
@@ -99,6 +100,9 @@ public sealed partial class HttpIndexGateway : IIndexGateway, IMediaAssetGateway
 
     public async Task<GatewayPage> ListImagesAsync(long? sourceId = null, bool includeMissing = false, int pageSize = 200, string? cursor = null, CancellationToken cancellationToken = default)
     {
+        if (UsesRelay)
+            return await SearchAsync(new SearchFilters { SourceId = sourceId, IncludeMissing = includeMissing },
+                Math.Clamp(pageSize, 1, 500), cursor, cancellationToken).ConfigureAwait(false);
         var query = new List<string> { $"pageSize={Math.Clamp(pageSize, 1, 500)}", $"includeMissing={includeMissing}" };
         if (sourceId is not null) query.Add($"sourceId={sourceId}");
         if (!string.IsNullOrEmpty(cursor)) query.Add($"cursor={Uri.EscapeDataString(cursor)}");
@@ -204,6 +208,8 @@ public sealed partial class HttpIndexGateway : IIndexGateway, IMediaAssetGateway
 
     public async Task<GatewayVideoPage> ListVideosAsync(long? sourceId = null, int pageSize = 200, string? cursor = null, CancellationToken cancellationToken = default)
     {
+        if (UsesRelay)
+            return await SearchVideosAsync(new(SourceId: sourceId), Math.Clamp(pageSize, 1, 500), cursor, cancellationToken).ConfigureAwait(false);
         var query = new List<string> { $"pageSize={Math.Clamp(pageSize, 1, 500)}" };
         if (sourceId is not null) query.Add($"sourceId={sourceId}");
         if (!string.IsNullOrWhiteSpace(cursor)) query.Add($"cursor={Uri.EscapeDataString(cursor)}");

@@ -98,7 +98,7 @@ internal sealed class RelayLocalIndexReader(IndexApiHandlers handlers)
             catch (Exception e) when (e is IOException or TimeoutException or WebSocketException or InvalidOperationException)
             { return RelayPhotoResponse.Status(HttpStatusCode.ServiceUnavailable); }
         }
-        object value = query.Path switch
+        object? value = query.Path switch
         {
             "health" => reader.Health(),
             "api/gateway/v1/sources" => reader.ListSources(),
@@ -108,6 +108,8 @@ internal sealed class RelayLocalIndexReader(IndexApiHandlers handlers)
             "api/gateway/v1/browser-metadata" => reader.GetBrowseMetadata(),
             "api/gateway/v1/search" => await reader.SearchAsync(ReadBody<GatewaySearchRequest>(query), token),
             "api/gateway/v1/video-search" => await SearchVideosAsync(ReadBody<GatewayVideoSearchRequest>(query)),
+            _ when RelayIndexQuery.TryRecord(query.Path, out var recordId, out var video) =>
+                video ? await reader.GetVideoAsync(recordId, token) : await reader.GetAsync(recordId, token),
             _ => throw new InvalidDataException("relay_query_unsupported")
         };
         token.ThrowIfCancellationRequested();

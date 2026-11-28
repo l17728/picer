@@ -27,7 +27,7 @@ public sealed class IndexRelayConnectorWorkerTests
         listener.Stop();
         var origin = $"https://127.0.0.1:{port}";
         var accountService = AccountServiceHost.Build(Path.Combine(root, "account"), origin, port, enableRelayData: true);
-        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(90));
         IndexRelayConnectorWorker? worker = null;
         IndexServiceInstance? sourceService = null;
         try
@@ -109,6 +109,15 @@ public sealed class IndexRelayConnectorWorkerTests
                 using var secondGateway = await RelayIndexHttpHandler.ConnectAsync(secondGui, target.DeviceId, deadline.Token);
                 Assert.NotEqual(gateway.MediaCacheScope, secondGateway.MediaCacheScope);
                 var photo = direct.Items.Single(i => i.Path == photoPath);
+                Assert.Equal(photo.Path, (await gateway.GetImageAsync(photo.Id, deadline.Token))?.Path);
+                Assert.Null(await gateway.GetImageAsync(0, deadline.Token));
+                Assert.Null(await gateway.GetVideoAsync(long.MaxValue, deadline.Token));
+                var firstListed = await gateway.ListImagesAsync(source.Id, pageSize: 1, cancellationToken: deadline.Token);
+                Assert.NotNull(firstListed.NextCursor);
+                var lastListed = await gateway.ListImagesAsync(source.Id, pageSize: 1, cursor: firstListed.NextCursor, cancellationToken: deadline.Token);
+                var directList = await handlers.ListAsync(source.Id, false, 2, null, deadline.Token);
+                Assert.Equal(directList.Items.Select(i => i.Id), firstListed.Items.Concat(lastListed.Items).Select(i => i.Id));
+                Assert.Empty((await gateway.ListImagesAsync(long.MaxValue, cancellationToken: deadline.Token)).Items);
                 var cache = thumbs.GetCachePath(photo.Id);
                 Assert.False(File.Exists(cache));
                 using var firstThumb = await gateway.OpenThumbnailAsync(photo.Id, deadline.Token);
@@ -164,6 +173,9 @@ public sealed class IndexRelayConnectorWorkerTests
                 var videoBytes = RandomNumberGenerator.GetBytes(2 * MediaWire.BlockSize + 257);
                 await File.WriteAllBytesAsync(videoPath, videoBytes, deadline.Token);
                 var video = new VideoRepository(db).Upsert(source.Id, videoPath);
+                Assert.Equal(videoPath, (await gateway.GetVideoAsync(video.Id, deadline.Token))?.Path);
+                Assert.Equal(video.Id, Assert.Single((await gateway.ListVideosAsync(source.Id, cancellationToken: deadline.Token)).Items).Id);
+                Assert.Empty((await gateway.ListVideosAsync(long.MaxValue, cancellationToken: deadline.Token)).Items);
                 var videoInfo = await secondGateway.GetMediaInfoAsync(video.Id, true, deadline.Token);
                 Assert.Equal("video/mp4", videoInfo.ContentType);
                 await using (var reader = new ParallelMediaReader(secondGateway, video.Id, true, videoInfo, 3))
@@ -187,9 +199,23 @@ public sealed class IndexRelayConnectorWorkerTests
                 var next = await gateway.SearchAsync(filters, 1, first.NextCursor, deadline.Token);
                 Assert.Equal(2, direct.Items.Count);
                 Assert.Equal(direct.Items.Select(i => i.Path), first.Items.Concat(next.Items).Select(i => i.Path));
+                var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                handlers.AgentPhotoPreview = async (_, _, _, ct) =>
+                {
+                    entered.TrySetResult();
+                    await Task.Delay(Timeout.InfiniteTimeSpan, ct);
+                    return [];
+                };
+                var interrupted = secondGateway.OpenPreviewAsync(photo.Id, deadline.Token);
+                await entered.Task.WaitAsync(deadline.Token);
+                var closed = interrupted.ContinueWith(_ => secondGateway.Dispose(), CancellationToken.None,
+                    TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+                await worker.StopAsync(deadline.Token);
+                await closed.WaitAsync(TimeSpan.FromSeconds(10), deadline.Token);
+                Assert.False(interrupted.IsCompletedSuccessfully);
+                _ = interrupted.Exception;
             }
 
-            await worker.StopAsync(deadline.Token);
             Assert.False(worker.State.Connected);
             while (registry.GetStatus(grantId) is not null)
             {
