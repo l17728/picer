@@ -145,11 +145,12 @@ try
                 HttpStatusCode.ServiceUnavailable or HttpStatusCode.GatewayTimeout)
             { continue; }
             if (stream is null) continue;
+            using var thumbnail = stream;
             stage = video ? "video-thumbnail-read" : "photo-thumbnail-read";
             using var bytes = new MemoryStream();
             var buffer = new byte[16384];
             int read;
-            while ((read = await stream.ReadAsync(buffer, deadline.Token)) > 0)
+            while ((read = await thumbnail.ReadAsync(buffer, deadline.Token)) > 0)
             {
                 if (bytes.Length + read > 4 * 1024 * 1024) throw new InvalidDataException();
                 bytes.Write(buffer, 0, read);
@@ -318,9 +319,13 @@ catch (Exception error)
 {
     // Exception messages and HTTP bodies may contain private endpoint/media data.
     Console.Error.WriteLine("Live service verification failed at stage: " + stage);
-    while (error.InnerException is not null) error = error.InnerException;
-    Console.Error.WriteLine("Failure type: " + error.GetType().Name);
-    if (error is HttpRequestException { StatusCode: { } statusCode })
-        Console.Error.WriteLine("HTTP status: " + (int)statusCode);
+    for (Exception? cause = error; cause is not null; cause = cause.InnerException)
+    {
+        Console.Error.WriteLine("Failure type: " + cause.GetType().Name);
+        if (cause is HttpRequestException { StatusCode: { } statusCode })
+            Console.Error.WriteLine("HTTP status: " + (int)statusCode);
+        if (cause is System.Net.Sockets.SocketException socket)
+            Console.Error.WriteLine("Socket error: " + socket.SocketErrorCode);
+    }
     return 1;
 }

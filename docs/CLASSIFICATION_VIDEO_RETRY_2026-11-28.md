@@ -5,3 +5,11 @@
 桌面全量测试首轮 179 项中有 3 项失败。远程视频帧显示在缺少共享缓存服务时访问了空引用。另一个用例把远程视频目录请求也阻塞了，无法走到要验证的帧下载。修复后，视频详情先显示已有关键帧，并在下载部分失败时显示可用数量。测试通过正常的远程视频搜索和详情接口模拟延迟下载。5 个相关桌面测试全部通过。
 
 Windows x64 Release 构建为零警告、零错误。D 盘离线期间的恢复构建位于 `C:\Users\a\AppData\Local\Picer\engineering-backups\relay-photo-20261128\verification\src\Picer.App\bin\Release\net8.0-windows\win-x64\Picer.App.exe`。同目录 Picer.App.dll SHA-256 为 `536085edae772a4db884a6558547d4528964150c9ee5326450c9e0412040df58`。
+
+## 部署和单张照片复验
+
+新索引服务器 47.103.99.229 已部署 `20261128T104410264Z`。发布文件为恢复工作区 `artifacts/indexservice-deploy/20261128T104410264Z/publish/Picer.IndexService`，SHA-256 为 `5560dd0ebf38201ccef5475a58d341112d23c5beb2176550b892c7b0eb935d39`。停写期间备份了 5 个数据库，版本和健康检查通过，原分类任务已恢复。
+
+本机恢复构建的驻留程序位于同一工作区的 `src/Picer.MediaAgent/bin/Release/net8.0-windows/Picer.MediaAgent.exe`。它使用已有设备认证重新接入。通过已配对账号的 GUI 网关对索引项 1700 连续读取两次，均取得同一张 9,870 字节的 192×256 图片。通过正式任务接口重试失败项后，该项分类成功，错误码为空。
+
+CI 的服务地址和公钥指纹已更新，并与本机已配对设备和新服务握手结果核对。服务探针现在记录各层异常类型、HTTP 状态码和套接字错误类型，便于区分拨号、远程响应和超时。每次缩略图检查完成后释放响应流。探针的 Windows Release 构建通过。
